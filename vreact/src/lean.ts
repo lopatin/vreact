@@ -47,13 +47,17 @@ export function runLake(outDir: string): { messages: LeanMessage[]; raw: string;
   if (r.error) throw new Error(`could not run lake (is Lean installed? see SKILL.md): ${r.error.message}`);
   const raw = (r.stdout ?? "") + (r.stderr ?? "");
   const status = r.status ?? 1;
+  return { messages: lakeMessages(raw, status, r.signal), raw, status };
+}
+
+/** Lean's messages in lake's output; a failed build is never read as "nothing to report". */
+export function lakeMessages(raw: string, status: number, signal?: string | null): LeanMessage[] {
   const messages = parseMessages(raw);
-  // a failed build must never be read as "nothing to report"
   if (status !== 0 && !messages.some((m) => m.severity === "error")) {
     const tail = raw.trim().split("\n").slice(-12).join("\n");
-    messages.push({ severity: "error", file: "", line: 0, col: 0, text: `lake build failed (exit ${status}${r.signal ? `, ${r.signal}` : ""})${tail ? ":\n" + tail : ""}` });
+    messages.push({ severity: "error", file: "", line: 0, col: 0, text: `lake build failed (exit ${status}${signal ? `, ${signal}` : ""})${tail ? ":\n" + tail : ""}` });
   }
-  return { messages, raw, status };
+  return messages;
 }
 
 const HEAD = /^(error|warning|info): (.+?\.lean):(\d+):(\d+): ?(.*)$/;
@@ -96,10 +100,14 @@ export function parseMessages(raw: string): LeanMessage[] {
   return out;
 }
 
-/** Locate the `/-⟦obN⟧-/` markers in the generated files. */
+/** Generated files (as opposed to user proofs, copied to `Proofs/`) live under `VTS/`. */
+export const isGenerated = (rel: string) => /^VTS(?:\/|\\|\.lean$)/.test(rel);
+
+/** Locate the `/-⟦obN⟧-/` markers in the generated files (never in user proofs: an error there is never an obligation's). */
 export function findMarkers(outDir: string): Marker[] {
   const markers: Marker[] = [];
   const walk = (d: string) => {
+    if (!fs.existsSync(d)) return;
     for (const f of fs.readdirSync(d)) {
       const p = path.join(d, f);
       if (fs.statSync(p).isDirectory()) {
@@ -115,7 +123,7 @@ export function findMarkers(outDir: string): Marker[] {
       }
     }
   };
-  walk(outDir);
+  walk(path.join(outDir, "VTS"));
   return markers;
 }
 
@@ -129,8 +137,11 @@ export interface LeanDecl {
   kind: string;
 }
 
-const DECL_KW = /^(?:@\[[^\]]*\]\s*)?(?:(?:private|protected|noncomputable|partial|unsafe|nonrec)\s+)*(def|theorem|lemma|abbrev|axiom|structure|inductive|instance|example|opaque|class)\b\s*([^\s:({[⦃]*)/;
-const CMD_KW = /^(\/--|@\[|#[a-z]|namespace\b|end\b|section\b|noncomputable section\b|open\b|set_option\b|import\b|attribute\b|deriving instance\b|macro_rules\b|macro\b|syntax\b|elab\b|grind_pattern\b|universe\b|variable\b|mutual\b)/;
+// A keyword opens a command only when followed by white space or the end of the line: a
+// translated VTS name that is a Lean keyword carries a `'` (`end'`, `open'`, `def'`), and such
+// a name may begin a continuation line of a term at column 0 (`end')`).
+const DECL_KW = /^(?:@\[[^\]]*\]\s*)?(?:(?:private|protected|noncomputable|partial|unsafe|nonrec)\s+)*(def|theorem|lemma|abbrev|axiom|structure|inductive|instance|example|opaque|class)(?=\s|$)\s*([^\s:({[⦃]*)/;
+const CMD_KW = /^(\/--|@\[|#[a-z]+(?=\s|$)|(?:namespace|end|section|noncomputable section|open|set_option|import|attribute|deriving instance|macro_rules|macro|syntax|elab|grind_pattern|universe|variable|mutual)(?=\s|$))/;
 
 /**
  * Split generated Lean text into its top-level commands. The generator writes every
@@ -215,11 +226,21 @@ export interface Verdict {
   reasons: Map<number, string>;
   /** generated declarations that did not elaborate cleanly: name → first error */
   declErrors: Map<string, string>;
+  /**
+   * generated commands with an error that is not an obligation's (at no marker) or that a
+   * runtime limit aborted: such a declaration may be missing from the environment, or another
+   * declaration of that name (e.g. from a user proof) may stand in for it
+   */
+  brokenDecls: { name: string | null; kind: string; file: string; error: string }[];
   /** `declaration uses 'sorry'` warnings in generated files and user proofs */
   sorries: LeanMessage[];
   /** generated files Lean elaborated to the end */
   checkedFiles: Set<string>;
 }
+
+/** `#print axioms X` (the generator writes one per line) */
+const PRINT_AXIOMS = /^#print axioms (\S+)\s*$/;
+const SENTINEL_CMD = '#eval "vreact:checked"';
 
 /** Modules lake reports as built (✔ Built/Replayed) or attempted (✖ Building). */
 export function builtModules(raw: string): Set<string> {
@@ -239,6 +260,10 @@ export function builtModules(raw: string): Set<string> {
  * declaration has no other error: an error elsewhere in the declaration (a timeout at the
  * declaration start, an elaboration error, an aborting runtime limit) means Lean may never
  * have finished the obligation. Lake errors without a position are kept as `build` errors.
+ * Axiom reports and the sentinel count only when Lean printed them at the generator's
+ * `#print axioms X` / sentinel line of a generated file (a user proof cannot fake them by
+ * printing the same text); an error at the marker of no known obligation is not an
+ * obligation's failure.
  */
 export function judge(obligations: Obligation[], messages: LeanMessage[], markers: Marker[], outDir: string, _built?: Set<string>): Verdict {
   const decls = findDecls(outDir);
@@ -252,31 +277,46 @@ export function judge(obligations: Obligation[], messages: LeanMessage[], marker
   const bad = new Map<LeanDecl, { errs: LeanMessage[]; aborted: boolean; failedObs: number }>();
   const badOf = (d: LeanDecl) => bad.get(d) ?? (bad.set(d, { errs: [], aborted: false, failedObs: 0 }), bad.get(d)!);
   const generated = (rel: string) => decls.has(rel);
-  const firstErrLine = new Map<string, number>();
+  const known = new Set(obligations.map((ob) => ob.id));
+  const firstErr = new Map<string, LeanMessage>();
+  // the lines of the generated files: an axiom report or the sentinel counts only when Lean
+  // printed it for the command the generator wrote at that line (never from a user proof)
+  const texts = new Map<string, string[]>();
+  const linesOf = (rel: string) => {
+    if (!isGenerated(rel) || !decls.has(rel)) return undefined;
+    if (!texts.has(rel)) texts.set(rel, fs.readFileSync(path.join(outDir, rel), "utf8").split("\n"));
+    return texts.get(rel)!;
+  };
   for (const msg of messages) {
-    const rel = msg.file && path.isAbsolute(msg.file) ? path.relative(outDir, msg.file) : msg.file;
+    const rel = msg.file ? path.normalize(path.isAbsolute(msg.file) ? path.relative(outDir, msg.file) : msg.file) : msg.file;
     msg.file = rel;
     const d = msg.line ? declAt(decls.get(rel), msg.line) : undefined;
     msg.decl = d?.name ?? null;
     if (msg.severity === "info") {
-      // (Lean names may themselves contain `'`, e.g. `VTS.m.max'`)
-      const am = /^'(.+?)' depends on axioms: \[([^\]]*)\]/.exec(msg.text);
-      if (am) axioms.set(am[1], am[2].split(",").map((s) => s.trim()).filter(Boolean));
-      const none = /^'(.+?)' does not depend on any axioms/.exec(msg.text);
-      if (none) axioms.set(none[1], []);
-      if (SENTINEL.test(msg.text.trim())) checkedFiles.add(rel);
+      const lines = msg.line ? linesOf(rel) : undefined;
+      const cmd = lines?.[msg.line - 1]?.trim();
+      const pa = cmd ? PRINT_AXIOMS.exec(cmd) : null;
+      if (pa) {
+        // keyed by the name the generator wrote (Lean names may themselves contain `'`);
+        // several reports for one name are joined (a further report can only add axioms)
+        const am = /^'(.+?)' depends on axioms: \[([^\]]*)\]/.exec(msg.text);
+        const got = am ? am[2].split(",").map((s) => s.trim()).filter(Boolean) : /^'(.+?)' does not depend on any axioms/.test(msg.text) ? [] : null;
+        if (got) axioms.set(pa[1], [...new Set([...(axioms.get(pa[1]) ?? []), ...got])]);
+      }
+      if (cmd === SENTINEL_CMD && SENTINEL.test(msg.text.trim()) && lines!.slice(msg.line).every((l) => !l.trim())) checkedFiles.add(rel);
       continue;
     }
     if (msg.severity === "warning") {
       if (generated(rel) && /declaration uses [`']sorry[`']/.test(msg.text)) sorries.push(msg);
       continue;
     }
-    if (generated(rel) && msg.line && (firstErrLine.get(rel) ?? Infinity) > msg.line) firstErrLine.set(rel, msg.line);
+    if (generated(rel) && msg.line && (firstErr.get(rel)?.line ?? Infinity) > msg.line) firstErr.set(rel, msg);
     if (d?.name && !declErrors.has(d.name)) declErrors.set(d.name, msg.text);
     // the marker on that line closest to the left of the error column
     const cands = markers.filter((mk) => mk.file === rel && mk.line === msg.line && mk.col <= msg.col && msg.col <= mk.col + 40);
     const mk = cands.length ? cands.reduce((a, b) => (b.col > a.col ? b : a)) : null;
-    if (mk && mk.id !== 0) {
+    // (a marker of no known obligation cannot take the error: it stays an error of the declaration)
+    if (mk && mk.id !== 0 && known.has(mk.id)) {
       if (!failedIds.has(mk.id)) failedIds.set(mk.id, msg.text);
       if (d) {
         badOf(d).failedObs++;
@@ -294,37 +334,51 @@ export function judge(obligations: Obligation[], messages: LeanMessage[], marker
       : !msg.file || !msg.line || (BUILD.test(msg.text) && !msg.decl) ? "build"
       : msg.file.startsWith("Proofs" + path.sep) || msg.file.startsWith("Proofs/") ? "proof"
       : isAbort(msg.text) ? "timeout"
-      : FOLLOW_ON.test(msg.text) && (firstErrLine.get(msg.file) ?? Infinity) < msg.line ? "follow-on"
+      : FOLLOW_ON.test(msg.text) && (firstErr.get(msg.file)?.line ?? Infinity) < msg.line ? "follow-on"
       : "internal";
+  }
+  const brokenDecls: Verdict["brokenDecls"] = [];
+  for (const [d, b] of bad) {
+    if (!isGenerated(d.file) || !(b.errs.length || b.aborted)) continue;
+    brokenDecls.push({ name: d.name, kind: d.kind, file: d.file, error: b.errs[0]?.text.split("\n")[0] ?? "a runtime limit aborted the declaration" });
   }
   const proved: Obligation[] = [];
   const failed: { ob: Obligation; message: string }[] = [];
   const unchecked: Obligation[] = [];
   const reasons = new Map<number, string>();
-  const markerOf = new Map(markers.map((mk) => [mk.id, mk]));
+  // an obligation may have several copies (a precondition binder is repeated in the
+  // postcondition theorems): it is proved only if every copy is
+  const markersOf = new Map<number, Marker[]>();
+  for (const mk of markers) markersOf.set(mk.id, [...(markersOf.get(mk.id) ?? []), mk]);
   const pending = new Map<LeanDecl, Obligation[]>();
   for (const ob of obligations) {
     const f = failedIds.get(ob.id);
-    const mk = markerOf.get(ob.id);
+    const mks = markersOf.get(ob.id) ?? [];
     if (f !== undefined) {
       failed.push({ ob, message: f });
       continue;
     }
-    if (!mk) {
+    if (!mks.length) {
       unchecked.push(ob);
       reasons.set(ob.id, "its proof is missing from the generated Lean (translator bug)");
       internal.push({ severity: "error", file: "", line: 0, col: 0, text: `obligation ${ob.where} [${ob.kind}] is missing from the generated Lean`, cause: "internal" });
       continue;
     }
-    if (!checkedFiles.has(mk.file)) {
+    const notChecked = mks.find((mk) => !checkedFiles.has(mk.file));
+    if (notChecked) {
       unchecked.push(ob);
-      reasons.set(ob.id, `${mk.file} was not checked: a module it imports failed, or the file stopped at an error in its imports`);
+      const own = firstErr.get(notChecked.file);
+      reasons.set(ob.id, own
+        ? `Lean did not get to the end of ${notChecked.file}: it stopped after an error in it (line ${own.line}: ${own.text.split("\n")[0].slice(0, 100)})`
+        : `${notChecked.file} was not checked: a module it imports failed, or the file stopped at an error in its imports`);
       continue;
     }
-    const d = declAt(decls.get(mk.file), mk.line);
-    const b = d && bad.get(d);
-    if (d && b && (b.errs.length || b.aborted)) {
-      pending.set(d, [...(pending.get(d) ?? []), ob]);
+    const broken = mks.map((mk) => declAt(decls.get(mk.file), mk.line)).find((d) => {
+      const b = d && bad.get(d);
+      return !!b && (b.errs.length > 0 || b.aborted);
+    });
+    if (broken) {
+      pending.set(broken, [...(pending.get(broken) ?? []), ob]);
       continue;
     }
     proved.push(ob);
@@ -343,7 +397,7 @@ export function judge(obligations: Obligation[], messages: LeanMessage[], marker
         reasons.set(ob.id, `${dn} did not elaborate (${why}), so Lean may not have finished this obligation`);
       }
   }
-  return { proved, failed, unchecked, internal, axioms, reasons, declErrors, sorries, checkedFiles };
+  return { proved, failed, unchecked, internal, axioms, reasons, declErrors, brokenDecls, sorries, checkedFiles };
 }
 
 /** Keep the informative part of a Lean failure (the goal). */

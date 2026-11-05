@@ -49,7 +49,8 @@ first one that fails.
    import VTS.model.Defs
    open VReact
 
-   -- a rewrite rule the automation will use everywhere in this module's views
+   -- a rewrite rule the automation will use in this module's views and
+   -- everywhere in the modules that import it
    @[vreact_simp] theorem allCards_len (b : VTS.model.Board) :
        (VTS.model.allCards b).length = b.todo.length + b.doing.length + b.done.length := by
      simp [VTS.model.allCards]; omega
@@ -67,9 +68,26 @@ first one that fails.
 
    `Defs.lean` holds types, constants and functions, each function followed by
    its `ensures` theorems (so later function bodies, here and in importing
-   modules, can use them); `proofs/<Module>.lean` comes after it and helps the
-   component obligations in `View.lean`. Function bodies and contracts cannot
-   use those lemmas: help them with `assert(…)` or contracts of helper functions.
+   modules, can use them). `proofs/<Module>.lean` imports that `Defs.lean`, so
+   it comes after it: it helps the component obligations in the module's own
+   `View.lean` and **everything in the modules that import `<Module>`** (their
+   `Defs.lean` imports `Proofs.<Module>`: function bodies, `ensures`, views).
+   It cannot help `<Module>`'s own function bodies and contracts. So, for a
+   lemma about a function `f` of module `A`:
+
+   * needed by a function of module `B` that imports `A`, or by `A`'s
+     components: put it in `proofs/A.lean`;
+   * needed by `f`'s own `ensures`, or by another function of `A`: state it
+     generically (about lists, integers, … — not about `VTS.A.f`) in
+     `proofs/Base.lean`, which every `Defs.lean` imports; or move the function
+     that needs it to a module that imports `A`; or help it with `assert(…)`
+     and contracts of helper functions.
+
+   (A `proofs/A.lean` that itself imports `VTS.B.…` of a module `B` importing
+   `A` would form an import cycle; `B` then sees only `A`'s definitions.)
+   Declare lemmas outside the generated names: a user declaration named like a
+   generated one (`VTS.A.f`, `VTS.A.f.post`) keeps the generated one out of
+   Lean, and then `f` and everything that uses it is `INCOMPLETE`.
 5. **Large constants.** Transparent constants (`@[vreact_simp, reducible]` in
    the generated Lean) are unfolded into every goal that mentions them; a list
    literal of dozens of records turns into long disjunctions. Mark such constants

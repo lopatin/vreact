@@ -77,17 +77,21 @@ export type Status = "verified" | "relative" | "trusted" | "assumes" | "incomple
 /** `assume(…)` facts: the axiom `VReact.assumed` (printed `assumed` under `open VReact`). */
 const ASSUMED = new Set(["VReact.assumed", "assumed"]);
 
-function classify(axioms: string[] | undefined, own?: string): Status {
+/**
+ * `trustedAxioms`: the axioms the translator emits for @trusted declarations; any other
+ * axiom (outside Lean's standard ones and `VReact.assumed`, e.g. one declared in a user
+ * proof, also in a `VTS.` namespace) makes the item TRUSTED, never VERIFIED*.
+ */
+function classify(axioms: string[] | undefined, own: string, trustedAxioms: Set<string>): Status {
   if (!axioms) return "unchecked";
   if (axioms.includes("sorryAx")) return "incomplete";
-  const vts = axioms.filter((a) => a.startsWith("VTS."));
-  const ownTrusted = vts.some((a) => !own || a.startsWith(own + "."));
-  if (ownTrusted) return "trusted";
+  const vts = axioms.filter((a) => trustedAxioms.has(a));
+  if (vts.some((a) => a === own || a.startsWith(own + "."))) return "trusted";
+  if (axioms.some((a) => !STD_AXIOMS.has(a) && !ASSUMED.has(a) && !trustedAxioms.has(a))) return "trusted";
   if (axioms.some((a) => ASSUMED.has(a))) return "assumes";
   // only trusted *dependencies* (not the declaration's own namespace): verified relative to them
   if (vts.length) return "relative";
-  if (axioms.every((a) => STD_AXIOMS.has(a))) return "verified";
-  return "trusted";
+  return "verified";
 }
 
 const ORDER: Status[] = ["unchecked", "incomplete", "trusted", "assumes", "relative", "verified"];
@@ -96,17 +100,131 @@ const worst = (sts: Status[]) => sts.reduce((a, b) => (ORDER.indexOf(a) <= ORDER
 /**
  * Status of a reported item: its obligations, the generated declarations it consists of
  * (any error in one of them, even where `#print axioms` looks clean, means it did not
- * elaborate), then the axioms of its main declarations.
+ * elaborate), the items it uses (`broken`: one of them has a declaration that did not
+ * elaborate — it may be missing, or another declaration of that name may stand in for it,
+ * which `#print axioms` cannot show), then the axioms of its main declarations.
  */
-function itemStatus(v: Verdict, obs: number[], ownsDecl: (lean: string) => boolean, axiomNames: string[], own: string): Status {
-  const ids = new Set(obs);
+function itemStatus(v: Verdict, it: Item, trustedAxioms: Set<string>, broken: boolean): Status {
+  const ids = new Set(it.obs);
   if (v.failed.some((f) => ids.has(f.ob.id))) return "incomplete";
-  const decl = [...v.declErrors.keys()].some(ownsDecl) || v.sorries.some((s) => !!s.decl && ownsDecl(s.decl));
-  if (decl) return "incomplete";
-  const sts = axiomNames.map((q) => classify(v.axioms.get(q), own));
+  const decl = [...v.declErrors.keys()].some(it.owns) || v.sorries.some((s) => !!s.decl && it.owns(s.decl));
+  if (decl || broken) return "incomplete";
+  const sts = it.axiomNames.map((q) => classify(v.axioms.get(q), it.own, trustedAxioms));
   // obligations Lean did not finish although their file was elaborated
   if (v.unchecked.some((u) => ids.has(u.id)) && !sts.includes("unchecked")) return "incomplete";
   return worst(sts);
+}
+
+/** A reported item as the report sees it (see `items`). */
+interface Item {
+  key: string;
+  module: string;
+  /** the obligations its status depends on; `ownObs`: those generated for it (not for a part reported on its own) */
+  obs: number[];
+  ownObs: number[];
+  refs: string[];
+  /** whether a generated declaration (by full Lean name) is part of the item */
+  owns: (lean: string) => boolean;
+  /** the declarations whose axioms make up its status */
+  axiomNames: string[];
+  /** its own namespace (for its own @trusted axioms) */
+  own: string;
+}
+
+function items(tr: TranslateResult): { comps: Item[]; certs: Item[]; fns: Item[]; consts: Item[] } {
+  const out = { comps: [] as Item[], certs: [] as Item[], fns: [] as Item[], consts: [] as Item[] };
+  for (const mr of tr.modules) {
+    for (const c of mr.components) {
+      const root = new Set(["root_pre", "element", "certificate"].map((s) => `${c.ns}.${s}`));
+      out.comps.push({ key: c.ns, module: mr.ns, obs: c.obs, ownObs: c.obs, refs: c.refs, owns: (q) => q.startsWith(c.ns + ".") && !root.has(q), axiomNames: [`${c.ns}.component`], own: c.ns });
+    }
+    for (const c of mr.certificates) {
+      const base = c.qname.replace(/\.certificate$/, "");
+      const root = new Set(["root_pre", "element", "certificate"].map((s) => `${base}.${s}`));
+      // (its obligations include its root component's, which belong to the component)
+      const comp = new Set(mr.components.find((x) => x.ns === base)?.obs ?? []);
+      out.certs.push({ key: c.qname, module: mr.ns, obs: c.obs, ownObs: c.obs.filter((o) => !comp.has(o)), refs: c.refs, owns: (q) => root.has(q), axiomNames: [c.qname], own: base });
+    }
+    for (const f of mr.functions) {
+      // a function is as verified as its definition and all its postcondition theorems
+      const names = new Set([f.qname, ...f.posts]);
+      out.fns.push({ key: f.qname, module: mr.ns, obs: f.obs, ownObs: f.obs, refs: f.refs, owns: (q) => names.has(q), axiomNames: [...names], own: f.qname });
+    }
+    for (const c of mr.constants) {
+      const names = new Set([c.qname, ...c.facts]);
+      out.consts.push({ key: c.qname, module: mr.ns, obs: c.obs, ownObs: c.obs, refs: c.refs, owns: (q) => names.has(q), axiomNames: [...names], own: c.qname });
+    }
+  }
+  return out;
+}
+
+/**
+ * For every item: the broken declaration its dependency cone contains, if any. A generated
+ * declaration that did not elaborate (`brokenDecls`) breaks its item. When Lean nevertheless
+ * reports axioms without `sorryAx` for its name, another declaration of that name (e.g. from
+ * a user proof) stands in for it: then it also breaks every item that uses that item,
+ * directly or not, since those were checked against something that is not the translation
+ * of the source (a missing declaration breaks its users by their own errors; one added with
+ * `sorryAx` shows in their axioms). A broken declaration that belongs to no item (a type, …)
+ * breaks its whole module and the modules importing it.
+ */
+function brokenCones(tr: TranslateResult, v: Verdict, all: Item[]): Map<string, string> {
+  const why = (b: Verdict["brokenDecls"][number]) => `${b.name ?? `the command at ${b.file}`} did not elaborate (${b.error.slice(0, 120)})`;
+  const own = new Map<string, string>();
+  /** broken items whose breakage dependents cannot see in their axioms */
+  const hidden = new Map<string, string>();
+  const brokenMods = new Map<string, string>();
+  const modOf = (file: string) => "VTS." + file.split(/[\\/]/).slice(1, -1).join(".");
+  for (const b of v.brokenDecls) {
+    // (a failing `#print axioms` defines nothing: its constant is missing, see above)
+    if (b.kind === "#print") continue;
+    const it = b.name ? all.find((x) => x.owns(b.name!)) : undefined;
+    if (it) {
+      if (!own.has(it.key)) own.set(it.key, why(b));
+      // (a part without its own report, e.g. a component's render: the item's reports)
+      const reports = it.axiomNames.map((q) => v.axioms.get(q));
+      const ax = v.axioms.get(b.name!) ?? (reports.every((r) => r !== undefined) ? reports.flat() : undefined);
+      if (ax && !ax.includes("sorryAx") && !hidden.has(it.key)) hidden.set(it.key, why(b));
+    } else if (!brokenMods.has(modOf(b.file))) brokenMods.set(modOf(b.file), why(b));
+  }
+  // modules importing a broken module are broken
+  let grew = true;
+  while (grew) {
+    grew = false;
+    for (const mr of tr.modules) {
+      const up = mr.imports.find((i) => brokenMods.has(i));
+      if (up && !brokenMods.has(mr.ns)) brokenMods.set(mr.ns, brokenMods.get(up)!), (grew = true);
+    }
+  }
+  for (const it of all) {
+    const m = brokenMods.get(it.module);
+    if (m === undefined) continue;
+    if (!own.has(it.key)) own.set(it.key, m);
+    if (!hidden.has(it.key)) hidden.set(it.key, m);
+  }
+  const byKey = new Map(all.map((x) => [x.key, x]));
+  const out = new Map<string, string>();
+  for (const it of all) {
+    const seen = new Set<string>([it.key]);
+    const go = (k: string): string | undefined => {
+      if (seen.has(k)) return undefined;
+      seen.add(k);
+      return hidden.get(k) ?? (byKey.get(k)?.refs ?? []).map(go).find((x) => x !== undefined);
+    };
+    const w = own.get(it.key) ?? it.refs.map(go).find((x) => x !== undefined);
+    if (w !== undefined) out.set(it.key, w);
+  }
+  return out;
+}
+
+/** The axioms the translator emits for @trusted functions and components. */
+function trustedAxiomsOf(tr: TranslateResult): Set<string> {
+  const out = new Set<string>();
+  for (const mr of tr.modules) {
+    for (const f of mr.functions) if (f.trusted) [f.qname, ...f.posts].forEach((q) => out.add(q));
+    for (const c of mr.components) if (c.trusted) ["init_inv", "stable", "renderTrusted"].forEach((s) => out.add(`${c.ns}.${s}`));
+  }
+  return out;
 }
 
 export interface Report {
@@ -163,37 +281,72 @@ export function verify(cfg: Config, opts: { json?: boolean; quiet?: boolean; ful
     if (!opts.json) printTranslationErrors(tr, cfg.root);
     return report;
   }
-  report.stage = "lean";
   if (!opts.json && !opts.quiet) console.log(C.d(`translated ${tr.modules.length} module(s), ${tr.obligations.length} proof obligation(s) → ${relp(cfg.root, cfg.outDir)}/ ; checking with Lean…`));
   const lk = runLake(cfg.outDir);
+  const { report: r, v } = reportFrom(cfg, tr, lk.messages);
+  if (!opts.json) printReport(r, tr, v, cfg, Date.now() - t0, !!opts.full);
+  return r;
+}
+
+/**
+ * The report of a translated program from Lean's messages (`runLake`; exported so that the
+ * regression suite can check the report against doctored Lean output).
+ */
+export function reportFrom(cfg: Config, tr: TranslateResult, messages: LeanMessage[]): { report: Report; v: Verdict } {
+  const report: Report = {
+    ok: false,
+    verdict: "not-verified",
+    stage: "lean",
+    obligations: { total: tr.obligations.length, proved: 0, failed: 0, unchecked: 0 },
+    components: [],
+    functions: [],
+    constants: [],
+    certificates: [],
+    failures: [],
+    notChecked: [],
+    sorries: [],
+    errors: [],
+  };
   const markers = findMarkers(cfg.outDir);
-  const v: Verdict = judge(tr.obligations, lk.messages, markers, cfg.outDir);
+  const v: Verdict = judge(tr.obligations, messages, markers, cfg.outDir);
+  const its = items(tr);
+  const all = [...its.comps, ...its.certs, ...its.fns, ...its.consts];
+  const broken = brokenCones(tr, v, all);
+  // an obligation of an item whose cone has a broken declaration is not about the translated code
+  for (const it of all) {
+    const w = broken.get(it.key);
+    if (w === undefined) continue;
+    const ids = new Set(it.ownObs);
+    for (const ob of v.proved.filter((o) => ids.has(o.id))) {
+      v.unchecked.push(ob);
+      v.reasons.set(ob.id, `${w}: it is part of, or used by, this obligation's item, so the obligation is not about the translated code`);
+    }
+    v.proved = v.proved.filter((o) => !ids.has(o.id));
+  }
+  const trustedAxioms = trustedAxiomsOf(tr);
   report.obligations = { total: tr.obligations.length, proved: v.proved.length, failed: v.failed.length, unchecked: v.unchecked.length };
   for (const f of v.failed) report.failures.push({ where: f.ob.where, kind: f.ob.kind, desc: f.ob.desc, lean: summarizeLeanError(f.message), leanFull: f.message });
   for (const u of v.unchecked) report.notChecked.push({ where: u.where, kind: u.kind, desc: u.desc, reason: v.reasons.get(u.id) ?? "not checked" });
   for (const i of v.internal) report.errors.push(`${errorWhere(i)}: ${i.text.split("\n").slice(0, 12).join("\n")}`);
   for (const s of v.sorries) report.sorries.push(`${s.file}:${s.line}:${s.col}${s.decl ? ` (${s.decl})` : ""}`);
+  const status = (it: Item) => itemStatus(v, it, trustedAxioms, broken.has(it.key));
+  const k = { comp: 0, cert: 0, fn: 0, cst: 0 };
   for (const mr of tr.modules) {
     for (const c of mr.components) {
-      const ax = v.axioms.get(`${c.ns}.component`);
-      const root = new Set(["root_pre", "element", "certificate"].map((s) => `${c.ns}.${s}`));
-      const owns = (q: string) => q.startsWith(c.ns + ".") && !root.has(q);
-      report.components.push({ name: c.name, file: `${relp(cfg.root, mr.tsFile)}:${c.line}`, status: c.trusted ? "trusted" : itemStatus(v, c.obs, owns, [`${c.ns}.component`], c.ns), axioms: ax ?? [] });
+      const it = its.comps[k.comp++];
+      report.components.push({ name: c.name, file: `${relp(cfg.root, mr.tsFile)}:${c.line}`, status: c.trusted ? "trusted" : status(it), axioms: v.axioms.get(`${c.ns}.component`) ?? [] });
     }
     for (const c of mr.certificates) {
-      const ax = v.axioms.get(c.qname);
-      const base = c.qname.replace(/\.certificate$/, "");
-      const root = new Set(["root_pre", "element", "certificate"].map((s) => `${base}.${s}`));
-      report.certificates.push({ name: c.name, theorem: c.qname, status: itemStatus(v, c.obs, (q) => root.has(q), [c.qname], base), axioms: ax ?? [] });
+      const it = its.certs[k.cert++];
+      report.certificates.push({ name: c.name, theorem: c.qname, status: status(it), axioms: v.axioms.get(c.qname) ?? [] });
     }
     for (const f of mr.functions) {
-      // a function is as verified as its definition and all its postcondition theorems
-      const names = new Set([f.qname, ...f.posts]);
-      report.functions.push({ name: f.name, file: relp(cfg.root, mr.tsFile), status: f.trusted ? "trusted" : itemStatus(v, f.obs, (q) => names.has(q), [...names], f.qname) });
+      const it = its.fns[k.fn++];
+      report.functions.push({ name: f.name, file: relp(cfg.root, mr.tsFile), status: f.trusted ? "trusted" : status(it) });
     }
     for (const c of mr.constants) {
-      const names = new Set([c.qname, ...c.facts]);
-      report.constants.push({ name: c.name, file: relp(cfg.root, mr.tsFile), status: itemStatus(v, c.obs, (q) => names.has(q), [...names], c.qname) });
+      const it = its.consts[k.cst++];
+      report.constants.push({ name: c.name, file: relp(cfg.root, mr.tsFile), status: status(it) });
     }
   }
   const statuses = [...report.components, ...report.functions, ...report.constants, ...report.certificates].map((x) => x.status);
@@ -203,8 +356,7 @@ export function verify(cfg: Config, opts: { json?: boolean; quiet?: boolean; ful
     : statuses.some((s) => s === "incomplete" || s === "unchecked") || v.unchecked.length || v.sorries.length ? "incomplete"
     : statuses.some((s) => s === "trusted" || s === "assumes" || s === "relative") ? "verified-modulo-trusted"
     : "verified";
-  if (!opts.json) printReport(report, tr, v, cfg, Date.now() - t0, !!opts.full);
-  return report;
+  return { report, v };
 }
 
 function printReport(r: Report, tr: TranslateResult, v: Verdict, cfg: Config, ms: number, full: boolean) {
@@ -295,6 +447,9 @@ function printReport(r: Report, tr: TranslateResult, v: Verdict, cfg: Config, ms
   if (trusted.length) console.log(C.y(`\ntrusted (not verified, contracts assumed): ${trusted.join(", ")}`));
   if (assumes.length) console.log(C.y(`${trusted.length ? "" : "\n"}assumes (checked, but relies on unproved assume(…) facts): ${assumes.join(", ")}`));
   if (items.some((x) => x.status === "relative")) console.log(C.y(`VERIFIED* = all own obligations proved; relies on the contracts of the trusted declarations above`));
+  const trustedAx = trustedAxiomsOf(tr);
+  const foreign = [...new Set([...v.axioms.values()].flat())].filter((a) => !STD_AXIOMS.has(a) && !ASSUMED.has(a) && a !== "sorryAx" && !trustedAx.has(a));
+  if (foreign.length) console.log(C.y(`axioms from outside the translation (TRUSTED wherever used; declared in user proofs?): ${foreign.join(", ")}`));
   if (holes.length && !r.failures.length) console.log(C.y(`pending (hole() / sorry): ${holes.join(", ")}`));
   else if (r.sorries.length && !r.failures.length) console.log(C.y(`pending (sorry in the generated Lean or proofs): ${r.sorries.join(", ")}`));
   console.log(

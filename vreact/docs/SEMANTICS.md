@@ -354,7 +354,10 @@ hook rules hold (static checks). For every function: its body is safe and its
   Each source file is one Lean module `VTS.<path>` (`Defs.lean`: types,
   constants, functions each followed by its `ensures` theorems; `View.lean`:
   components and certificates); files whose module names coincide, also up to
-  letter case, are rejected.
+  letter case, are rejected. User lemmas `proofs/<path>.lean` are imported by
+  that module's `View.lean` and by the `Defs.lean` of every module importing it
+  (unless that would close an import cycle); `proofs/Base.lean` by every
+  `Defs.lean`.
 * **The report.** `vreact verify` reads Lean's messages: an error at an
   obligation's marker fails it; an obligation counts as proved only if its file
   was elaborated to the end (the `vreact:checked` sentinel), and its declaration
@@ -364,7 +367,20 @@ hook rules hold (static checks). For every function: its body is safe and its
   errors without a position (imports, build cycles) are shown and make the
   result not verified. Each obligation runs with its own heartbeat budget
   (`vreact_ob`, `VReact/Budget.lean`): running out is a failure of that
-  obligation (its goal is closed with `sorry`), never a proof.
+  obligation (its goal is closed with `sorry`), never a proof. An axiom report
+  or the sentinel counts only when Lean printed it at the generator's own
+  `#print axioms X` / sentinel line (a user proof printing the same text is
+  ignored; several reports for one name are joined). A generated declaration
+  with an error makes every obligation of its item unproved; when Lean still
+  reports clean axioms for its name, something else (e.g. a declaration of a
+  user proof) stands in for it, so every item that uses it, directly or not, is
+  `INCOMPLETE` as well. An axiom that is neither Lean's standard ones, nor
+  `VReact.assumed`, nor emitted for a `@trusted` declaration (e.g. one declared
+  in a user proof) makes the items that depend on it `TRUSTED`.
+* **User proofs** (`proofs/*.lean`) are imported into generated files. Their
+  theorems are checked by Lean's kernel like everything else, but the macros,
+  syntax and elaborators they declare run while the generated files are
+  elaborated; the report trusts them not to forge Lean's output.
 * **The JS runtime model** (`JS.lean`): e.g. that `Array.prototype.slice` behaves
   like `JS.slice`. Definitions follow ECMA-262 directly; where ECMA-262 leaves a
   result implementation-defined (`toSorted` with an inconsistent comparator) the
