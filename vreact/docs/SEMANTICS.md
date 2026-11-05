@@ -134,7 +134,7 @@ Every expression maps to a Lean term whose value is the JavaScript value.
 | `forall exists distinct implies`  | bounded quantifiers, key uniqueness (`List.Nodup`), implication |
 | `/** @opaque */` on a function    | callers see only its `ensures` (modular verification) |
 | `/** @trusted */`                 | body not verified; contract assumed (reported, appears as a Lean axiom) |
-| `hole<T>()`                       | a placeholder for `vreact synth` |
+| `hole<T>()`                       | a placeholder for `vreact synth`: `sorry`; while a function has one, its `ensures` theorems are `sorry` too (reported INCOMPLETE) |
 
 A contract is a proposition with JS's evaluation order: the right operand of
 `a && b` is translated under the hypothesis `a` (`∃ (h : a), b` when `b` has
@@ -396,3 +396,11 @@ hook rules hold (static checks). For every function: its body is safe and its
 Lean's kernel checks every proof; `sorry`, `@trusted` and `assume(…)`
 (`VReact.assumed`, reported `ASSUMES`) show up in the axiom report, so nothing
 unverified can be mistaken for verified.
+
+`vreact synth` is not part of the trusted base: its random tests only prune
+candidates. It reports "proved by Lean" (and `--write` writes a fill) only when
+Lean elaborated the function and all its postcondition theorems, none of the
+function's obligations failed, and their axioms contain no `sorryAx` — so a
+function with several holes is proved once all are filled, a `@trusted`
+function is refused, and a failure elsewhere that keeps the function from being
+checked is reported as "not proved". The written text is the text Lean checked.

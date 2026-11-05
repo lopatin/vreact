@@ -29,6 +29,23 @@ export interface Config {
   leanLib: string;
   /** heartbeat budget (in thousands) of each proof obligation (vreact.json "heartbeats") */
   heartbeats?: number;
+  /** In-memory source texts that replace files on disk (used by `vreact synth`, which never edits sources it checks). */
+  overrides?: Map<string, string>;
+}
+
+/** A compiler host that reads the given files from memory instead of disk. */
+export function overrideHost(options: ts.CompilerOptions, overrides: Map<string, string>): ts.CompilerHost {
+  const host = ts.createCompilerHost(options);
+  const norm = (f: string) => path.resolve(f);
+  const texts = new Map([...overrides].map(([f, t]) => [norm(f), t]));
+  const getSourceFile = host.getSourceFile.bind(host);
+  host.getSourceFile = (f, lang, onError, shouldCreate) => {
+    const t = texts.get(norm(f));
+    return t !== undefined ? ts.createSourceFile(f, t, lang, true) : getSourceFile(f, lang, onError, shouldCreate);
+  };
+  const readFile = host.readFile.bind(host);
+  host.readFile = (f) => texts.get(norm(f)) ?? readFile(f);
+  return host;
 }
 
 export interface ModuleResult {
@@ -75,7 +92,7 @@ function loadProgram(cfg: Config): { program: ts.Program; diags: string[] } {
   }
   const diags: string[] = [];
   if (!options.strict && !options.strictNullChecks) diags.push("tsconfig: VTS requires \"strict\": true (null safety is part of the model)");
-  const program = ts.createProgram(cfg.files, options);
+  const program = ts.createProgram(cfg.files, options, cfg.overrides ? overrideHost(options, cfg.overrides) : undefined);
   const host: ts.FormatDiagnosticsHost = {
     getCanonicalFileName: (f) => f,
     getCurrentDirectory: () => cfg.root,
