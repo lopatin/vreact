@@ -238,6 +238,20 @@ hook rules hold (static checks). For every function: its body is safe and its
 
 * **The translation** from TypeScript to Lean (≈3k lines of TypeScript). It is
   structural and syntax-directed; the regression suite pins its behaviour.
+  Each source file is one Lean module `VTS.<path>` (`Defs.lean`: types,
+  constants, functions each followed by its `ensures` theorems; `View.lean`:
+  components and certificates); files whose module names coincide, also up to
+  letter case, are rejected.
+* **The report.** `vreact verify` reads Lean's messages: an error at an
+  obligation's marker fails it; an obligation counts as proved only if its file
+  was elaborated to the end (the `vreact:checked` sentinel), and its declaration
+  has no other error. Every component, certificate, function, contract, constant
+  and fact has a `#print axioms`; `sorryAx`, a `declaration uses 'sorry'`
+  warning or an error in one of its declarations makes it `INCOMPLETE`; lake
+  errors without a position (imports, build cycles) are shown and make the
+  result not verified. Each obligation runs with its own heartbeat budget
+  (`vreact_ob`, `VReact/Budget.lean`): running out is a failure of that
+  obligation (its goal is closed with `sorry`), never a proof.
 * **The JS runtime model** (`JS.lean`): e.g. that `Array.prototype.slice` behaves
   like `JS.slice`. Definitions follow ECMA-262 directly.
 * **The React model**: that React 18 behaves as described in §2–3 (discrete-event
@@ -253,5 +267,6 @@ hook rules hold (static checks). For every function: its body is safe and its
   `onX` or a user component; a submit button with `onClick` inside
   `<form onSubmit>`).
 
-Lean's kernel checks every proof; `sorry` and `@trusted` show up in the axiom
-report, so nothing unverified can be mistaken for verified.
+Lean's kernel checks every proof; `sorry`, `@trusted` and `assume(…)`
+(`VReact.assumed`, reported `ASSUMES`) show up in the axiom report, so nothing
+unverified can be mistaken for verified.

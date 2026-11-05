@@ -10,6 +10,15 @@ verified modules — no cycles), `type`/`interface` declarations, `const`s,
 functions, and components (capitalised functions returning JSX). Nothing else
 at top level.
 
+Each file becomes the Lean module `VTS.<path>`: its path under `src` without
+`.ts`/`.tsx`, characters other than letters, digits and `_` replaced by `_`.
+Two files that map to the same module, or to names differing only in letter
+case, are rejected (`module name clash`): e.g. `limits.ts` + `limits.tsx`,
+`my-x.ts` + `my_x.ts`, `todo.ts` + `Todo.tsx`. Rename one of them.
+
+The tsconfig needs `"strict": true` and `"lib": ["ES2023", "DOM"]` (for
+`toSorted`/`toReversed`/`with`); without a tsconfig, vreact uses these defaults.
+
 ## Types
 
 | write                                   | notes |

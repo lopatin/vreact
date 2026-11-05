@@ -183,13 +183,14 @@ export class ModCtx {
     this.hyp++;
     return `${base}_${this.hyp}`;
   }
-  /** Emit a proof obligation discharged by `vreact_auto`, tagged with a source marker. */
+  /** Emit a proof obligation discharged by `vreact_auto`, tagged with a source marker;
+   * `vreact_ob` gives it its own heartbeat budget (VReact/Budget.lean). */
   ob(node: ts.Node, kind: string, desc: string, tactic = "vreact_auto"): string {
     const id = ++this.counter.n;
     const sf = node.getSourceFile();
     const { line } = sf.getLineAndCharacterOfPosition(node.getStart(sf));
     this.obligations.push({ id, kind, desc, where: relLoc(node, this.prog.root), file: sf.fileName, line: line + 1 });
-    return `(/-⟦ob${id}⟧-/ by ${tactic})`;
+    return `(/-⟦ob${id}⟧-/ by vreact_ob ${tactic})`;
   }
   obCount(): number {
     return this.obligations.length;

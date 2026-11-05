@@ -24,7 +24,8 @@ npm create vite@latest kanban -- --template react-ts   # or any React+TS project
 cd kanban && npm i ../../vreact                         # provides `vreact` and `vreact/spec`
 ```
 
-`tsconfig.json` must have `"strict": true`. Add `vreact.json`:
+`tsconfig.json` must have `"strict": true` and `"lib": ["ES2023", "DOM"]` (VTS uses
+`toSorted`, `toReversed`, `with`). Add `vreact.json`:
 
 ```json
 { "src": "src", "exclude": ["main.tsx"], "proofs": "proofs", "out": ".vreact" }

@@ -11,7 +11,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { translate, type Config, type TranslateResult } from "./module.ts";
-import { runLake, findMarkers, judge, summarizeLeanError, type Verdict } from "./lean.ts";
+import { runLake, findMarkers, judge, summarizeLeanError, type Verdict, type ErrorCause, type LeanMessage } from "./lean.ts";
 import { VtsError } from "./util.ts";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -23,11 +23,14 @@ interface ProjectConfig {
   exclude?: string[];
   proofs?: string;
   out?: string;
+  /** heartbeat budget (in thousands) of each proof obligation; default 1000000 */
+  heartbeats?: number;
 }
 
 export function loadConfig(root: string, only?: string[]): Config {
   const cfgFile = path.join(root, "vreact.json");
   const pc: ProjectConfig = fs.existsSync(cfgFile) ? JSON.parse(fs.readFileSync(cfgFile, "utf8")) : {};
+  if (pc.heartbeats !== undefined && !(Number.isInteger(pc.heartbeats) && pc.heartbeats >= 0)) throw new Error(`${cfgFile}: "heartbeats" must be a non-negative integer (thousands of heartbeats per obligation)`);
   const srcDir = path.resolve(root, pc.src ?? "src");
   const exclude = new Set((pc.exclude ?? ["main.tsx", "main.ts", "vite-env.d.ts"]).map((e) => path.resolve(srcDir, e)));
   const files: string[] = [];
@@ -48,6 +51,7 @@ export function loadConfig(root: string, only?: string[]): Config {
     outDir: path.resolve(root, pc.out ?? ".vreact"),
     proofsDir: path.resolve(root, pc.proofs ?? "proofs"),
     leanLib: LEAN_LIB,
+    ...(pc.heartbeats !== undefined ? { heartbeats: pc.heartbeats } : {}),
   };
 }
 
@@ -70,16 +74,39 @@ const STD_AXIOMS = new Set(["propext", "Classical.choice", "Quot.sound"]);
 
 export type Status = "verified" | "relative" | "trusted" | "assumes" | "incomplete" | "unchecked";
 
+/** `assume(…)` facts: the axiom `VReact.assumed` (printed `assumed` under `open VReact`). */
+const ASSUMED = new Set(["VReact.assumed", "assumed"]);
+
 function classify(axioms: string[] | undefined, own?: string): Status {
   if (!axioms) return "unchecked";
   if (axioms.includes("sorryAx")) return "incomplete";
   const vts = axioms.filter((a) => a.startsWith("VTS."));
+  const ownTrusted = vts.some((a) => !own || a.startsWith(own + "."));
+  if (ownTrusted) return "trusted";
+  if (axioms.some((a) => ASSUMED.has(a))) return "assumes";
   // only trusted *dependencies* (not the declaration's own namespace): verified relative to them
-  if (vts.length && own && vts.every((a) => !a.startsWith(own + "."))) return "relative";
-  if (vts.length) return "trusted";
-  if (axioms.includes("VReact.assumed")) return "assumes";
+  if (vts.length) return "relative";
   if (axioms.every((a) => STD_AXIOMS.has(a))) return "verified";
   return "trusted";
+}
+
+const ORDER: Status[] = ["unchecked", "incomplete", "trusted", "assumes", "relative", "verified"];
+const worst = (sts: Status[]) => sts.reduce((a, b) => (ORDER.indexOf(a) <= ORDER.indexOf(b) ? a : b), "verified" as Status);
+
+/**
+ * Status of a reported item: its obligations, the generated declarations it consists of
+ * (any error in one of them, even where `#print axioms` looks clean, means it did not
+ * elaborate), then the axioms of its main declarations.
+ */
+function itemStatus(v: Verdict, obs: number[], ownsDecl: (lean: string) => boolean, axiomNames: string[], own: string): Status {
+  const ids = new Set(obs);
+  if (v.failed.some((f) => ids.has(f.ob.id))) return "incomplete";
+  const decl = [...v.declErrors.keys()].some(ownsDecl) || v.sorries.some((s) => !!s.decl && ownsDecl(s.decl));
+  if (decl) return "incomplete";
+  const sts = axiomNames.map((q) => classify(v.axioms.get(q), own));
+  // obligations Lean did not finish although their file was elaborated
+  if (v.unchecked.some((u) => ids.has(u.id)) && !sts.includes("unchecked")) return "incomplete";
+  return worst(sts);
 }
 
 export interface Report {
@@ -88,10 +115,29 @@ export interface Report {
   stage: "typescript" | "translation" | "lean";
   obligations: { total: number; proved: number; failed: number; unchecked: number };
   components: { name: string; file: string; status: Status; axioms: string[] }[];
-  functions: { name: string; status: Status }[];
+  functions: { name: string; file: string; status: Status }[];
+  constants: { name: string; file: string; status: Status }[];
   certificates: { name: string; theorem: string; status: Status; axioms: string[] }[];
   failures: { where: string; kind: string; desc: string; lean: string; leanFull: string }[];
+  /** obligations that were not (completely) checked, with the reason */
+  notChecked: { where: string; kind: string; desc: string; reason: string }[];
+  /** `sorry` left in generated Lean or user proofs (`hole()`, pending contracts, …) */
+  sorries: string[];
   errors: string[];
+}
+
+export const CAUSE_LABEL: Record<ErrorCause, string> = {
+  build: "Lean build error (imports, lakefile, missing or clashing files)",
+  proof: "user proof",
+  timeout: "timeout",
+  "follow-on": "follow-on error (a declaration above failed)",
+  internal: "internal (generated Lean)",
+};
+
+function errorWhere(i: LeanMessage): string {
+  const pos = i.line ? `:${i.line}:${i.col}` : "";
+  if (i.cause === "proof") return `user proof proofs/${i.file.replace(/^Proofs[\\/]/, "")}${pos}`;
+  return `${CAUSE_LABEL[i.cause ?? "internal"]}${i.file ? " " + i.file + pos : ""}${i.decl ? ` (in ${i.decl})` : ""}`;
 }
 
 export function verify(cfg: Config, opts: { json?: boolean; quiet?: boolean; full?: boolean } = {}): Report {
@@ -104,8 +150,11 @@ export function verify(cfg: Config, opts: { json?: boolean; quiet?: boolean; ful
     obligations: { total: tr.obligations.length, proved: 0, failed: 0, unchecked: 0 },
     components: [],
     functions: [],
+    constants: [],
     certificates: [],
     failures: [],
+    notChecked: [],
+    sorries: [],
     errors: [],
   };
   if (!tr.ok) {
@@ -121,32 +170,37 @@ export function verify(cfg: Config, opts: { json?: boolean; quiet?: boolean; ful
   const v: Verdict = judge(tr.obligations, lk.messages, markers, cfg.outDir);
   report.obligations = { total: tr.obligations.length, proved: v.proved.length, failed: v.failed.length, unchecked: v.unchecked.length };
   for (const f of v.failed) report.failures.push({ where: f.ob.where, kind: f.ob.kind, desc: f.ob.desc, lean: summarizeLeanError(f.message), leanFull: f.message });
-  for (const i of v.internal) {
-    const where = i.file.startsWith("Proofs/") ? `user proof proofs/${i.file.slice(7)}` : `internal (generated Lean) ${i.file}`;
-    report.errors.push(`${where}:${i.line}:${i.col}: ${i.text.split("\n").slice(0, 12).join("\n")}`);
-  }
+  for (const u of v.unchecked) report.notChecked.push({ where: u.where, kind: u.kind, desc: u.desc, reason: v.reasons.get(u.id) ?? "not checked" });
+  for (const i of v.internal) report.errors.push(`${errorWhere(i)}: ${i.text.split("\n").slice(0, 12).join("\n")}`);
+  for (const s of v.sorries) report.sorries.push(`${s.file}:${s.line}:${s.col}${s.decl ? ` (${s.decl})` : ""}`);
   for (const mr of tr.modules) {
     for (const c of mr.components) {
       const ax = v.axioms.get(`${c.ns}.component`);
-      report.components.push({ name: c.name, file: `${relp(cfg.root, mr.tsFile)}:${c.line}`, status: c.trusted ? "trusted" : classify(ax, c.ns), axioms: ax ?? [] });
+      const root = new Set(["root_pre", "element", "certificate"].map((s) => `${c.ns}.${s}`));
+      const owns = (q: string) => q.startsWith(c.ns + ".") && !root.has(q);
+      report.components.push({ name: c.name, file: `${relp(cfg.root, mr.tsFile)}:${c.line}`, status: c.trusted ? "trusted" : itemStatus(v, c.obs, owns, [`${c.ns}.component`], c.ns), axioms: ax ?? [] });
     }
     for (const c of mr.certificates) {
       const ax = v.axioms.get(c.qname);
-      report.certificates.push({ name: c.name, theorem: c.qname, status: classify(ax, c.qname.replace(/\.certificate$/, "")), axioms: ax ?? [] });
+      const base = c.qname.replace(/\.certificate$/, "");
+      const root = new Set(["root_pre", "element", "certificate"].map((s) => `${base}.${s}`));
+      report.certificates.push({ name: c.name, theorem: c.qname, status: itemStatus(v, c.obs, (q) => root.has(q), [c.qname], base), axioms: ax ?? [] });
     }
     for (const f of mr.functions) {
       // a function is as verified as its definition and all its postcondition theorems
-      const order: Status[] = ["unchecked", "incomplete", "trusted", "assumes", "relative", "verified"];
-      const sts = [f.qname, ...f.posts].map((q) => classify(v.axioms.get(q), f.qname));
-      const worst = sts.reduce((a, b) => (order.indexOf(a) <= order.indexOf(b) ? a : b), "verified" as Status);
-      report.functions.push({ name: f.name, status: f.trusted ? "trusted" : worst });
+      const names = new Set([f.qname, ...f.posts]);
+      report.functions.push({ name: f.name, file: relp(cfg.root, mr.tsFile), status: f.trusted ? "trusted" : itemStatus(v, f.obs, (q) => names.has(q), [...names], f.qname) });
+    }
+    for (const c of mr.constants) {
+      const names = new Set([c.qname, ...c.facts]);
+      report.constants.push({ name: c.name, file: relp(cfg.root, mr.tsFile), status: itemStatus(v, c.obs, (q) => names.has(q), [...names], c.qname) });
     }
   }
-  const statuses = [...report.components, ...report.functions, ...report.certificates].map((x) => x.status);
-  report.ok = v.failed.length === 0 && v.internal.length === 0 && v.unchecked.length === 0 && statuses.every((s) => s === "verified");
+  const statuses = [...report.components, ...report.functions, ...report.constants, ...report.certificates].map((x) => x.status);
+  report.ok = v.failed.length === 0 && v.internal.length === 0 && v.unchecked.length === 0 && v.sorries.length === 0 && statuses.every((s) => s === "verified");
   report.verdict =
     v.failed.length || v.internal.length ? "not-verified"
-    : statuses.some((s) => s === "incomplete" || s === "unchecked") || v.unchecked.length ? "incomplete"
+    : statuses.some((s) => s === "incomplete" || s === "unchecked") || v.unchecked.length || v.sorries.length ? "incomplete"
     : statuses.some((s) => s === "trusted" || s === "assumes" || s === "relative") ? "verified-modulo-trusted"
     : "verified";
   if (!opts.json) printReport(report, tr, v, cfg, Date.now() - t0, !!opts.full);
@@ -173,6 +227,12 @@ function printReport(r: Report, tr: TranslateResult, v: Verdict, cfg: Config, ms
     console.log(C.b("Functions"));
     for (const f of r.functions) console.log(`  ${badge(f.status).padEnd(18)} ${f.name}`);
   }
+  // constants are listed only when something is wrong with them (most are plain data)
+  const badConsts = r.constants.filter((c) => c.status !== "verified");
+  if (badConsts.length) {
+    console.log(C.b("Constants"));
+    for (const c of badConsts) console.log(`  ${badge(c.status).padEnd(18)} ${c.name}`);
+  }
   if (r.certificates.length) {
     console.log(C.b("App certificates (VReact.run_allInv instantiated)"));
     for (const c of r.certificates) console.log(`  ${badge(c.status).padEnd(18)} ${c.theorem}  ${C.d("axioms: " + (c.axioms.join(", ") || "none"))}`);
@@ -180,7 +240,7 @@ function printReport(r: Report, tr: TranslateResult, v: Verdict, cfg: Config, ms
   console.log(C.b("Obligations by file"));
   for (const [f, e] of byFile) {
     const mark = e.failed ? C.r("✗") : e.unchecked ? C.y("?") : C.g("✓");
-    const note = e.unchecked ? C.y(`  (${e.unchecked} not checked: a dependency failed)`) : "";
+    const note = e.unchecked ? C.y(`  (${e.unchecked} not checked)`) : "";
     console.log(`  ${mark} ${f.padEnd(40)} ${e.total - e.failed - e.unchecked}/${e.total}${note}`);
   }
   if (v.failed.length) {
@@ -192,30 +252,51 @@ function printReport(r: Report, tr: TranslateResult, v: Verdict, cfg: Config, ms
       console.log(C.d(text.split("\n").map((l) => "    │ " + l).join("\n")));
     }
   }
-  if (v.unchecked.length) console.log(C.y(`\n${v.unchecked.length} obligation(s) not checked because a dependency failed to build.`));
-  if (v.internal.length) {
-    const user = v.internal.filter((i) => i.file.startsWith("Proofs/"));
-    const gen = v.internal.filter((i) => !i.file.startsWith("Proofs/"));
-    if (user.length) {
-      console.log(C.r("\nErrors in user proofs (proofs/*.lean):"));
-      for (const i of user.slice(0, 8)) console.log(`  proofs/${i.file.slice(7)}:${i.line}:${i.col}: ${i.text.split("\n").slice(0, 10).join("\n    ")}`);
+  if (v.unchecked.length) {
+    console.log(C.y(`\n${v.unchecked.length} obligation(s) not checked:`));
+    // one line per reason (the reasons name the file or declaration that failed)
+    const byWhy = new Map<string, string[]>();
+    for (const u of v.unchecked) {
+      const why = v.reasons.get(u.id) ?? "not checked";
+      byWhy.set(why, [...(byWhy.get(why) ?? []), u.where]);
     }
-    if (gen.length) {
-      console.log(C.r("\nInternal errors in generated Lean (translator bug or unsupported pattern):"));
-      for (const i of gen.slice(0, 8)) console.log(`  ${i.file}:${i.line}:${i.col}: ${i.text.split("\n").slice(0, 10).join("\n    ")}`);
+    for (const [why, wheres] of byWhy) console.log(C.y(`  ${wheres.slice(0, 4).join(", ")}${wheres.length > 4 ? `, … (${wheres.length})` : ""}: ${why}`));
+  }
+  if (v.internal.length) {
+    const sections: [ErrorCause, string][] = [
+      ["build", "Lean build errors (imports, lakefile, missing or clashing files) — fix these first:"],
+      ["proof", "Errors in user proofs (proofs/*.lean):"],
+      ["timeout", "Timeouts outside a single obligation (the declaration was not finished):"],
+      ["internal", "Internal errors in generated Lean (translator bug or unsupported pattern):"],
+      ["follow-on", "Follow-on errors (uses of a declaration that failed above):"],
+    ];
+    for (const [cause, title] of sections) {
+      const msgs = v.internal.filter((i) => (i.cause ?? "internal") === cause);
+      if (!msgs.length) continue;
+      console.log(C.r(`\n${title}`));
+      for (const i of msgs.slice(0, 8)) {
+        const loc = cause === "proof" ? `proofs/${i.file.replace(/^Proofs[\\/]/, "")}:${i.line}:${i.col}` : i.file ? `${i.file}${i.line ? `:${i.line}:${i.col}` : ""}` : "lake";
+        console.log(`  ${loc}${i.decl ? ` (in ${i.decl})` : ""}: ${i.text.split("\n").slice(0, 10).join("\n    ")}`);
+      }
+      if (msgs.length > 8) console.log(`  … ${msgs.length - 8} more (--json lists all)`);
     }
   }
   const o = r.obligations;
+  const items = [...r.components, ...r.functions, ...r.constants];
+  const trusted = items.filter((x) => x.status === "trusted").map((x) => x.name);
+  const assumes = items.filter((x) => x.status === "assumes").map((x) => x.name);
+  const modulo = [trusted.length ? "@trusted declarations" : "", assumes.length ? "assume(…) facts" : ""].filter(Boolean).join(" and ") || "@trusted declarations";
   const head =
     r.verdict === "verified" ? C.g("✔ VERIFIED")
-    : r.verdict === "verified-modulo-trusted" ? C.y("✔ VERIFIED modulo @trusted declarations")
+    : r.verdict === "verified-modulo-trusted" ? C.y(`✔ VERIFIED modulo ${modulo}`)
     : r.verdict === "incomplete" ? C.y("◐ INCOMPLETE (holes / trusted stubs / unchecked parts remain)")
     : C.r("✗ NOT VERIFIED");
-  const trusted = [...r.components, ...r.functions].filter((x) => x.status === "trusted").map((x) => x.name);
-  const holes = r.functions.filter((x) => x.status === "incomplete").map((x) => x.name);
+  const holes = [...r.functions, ...r.constants].filter((x) => x.status === "incomplete").map((x) => x.name);
   if (trusted.length) console.log(C.y(`\ntrusted (not verified, contracts assumed): ${trusted.join(", ")}`));
-  if ([...r.components, ...r.functions].some((x) => x.status === "relative")) console.log(C.y(`VERIFIED* = all own obligations proved; relies on the contracts of the trusted declarations above`));
+  if (assumes.length) console.log(C.y(`${trusted.length ? "" : "\n"}assumes (checked, but relies on unproved assume(…) facts): ${assumes.join(", ")}`));
+  if (items.some((x) => x.status === "relative")) console.log(C.y(`VERIFIED* = all own obligations proved; relies on the contracts of the trusted declarations above`));
   if (holes.length && !r.failures.length) console.log(C.y(`pending (hole() / sorry): ${holes.join(", ")}`));
+  else if (r.sorries.length && !r.failures.length) console.log(C.y(`pending (sorry in the generated Lean or proofs): ${r.sorries.join(", ")}`));
   console.log(
     `\n${head}  ${o.proved}/${o.total} obligations proved` +
       (o.failed ? `, ${o.failed} failed` : "") +

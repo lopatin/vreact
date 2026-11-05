@@ -56,6 +56,12 @@ hypotheses often *are* a counterexample.
    `VTS.<module>.<Comp>.{Props, Cb, State, pre, inv, render}`. Run
    `vreact explain src/<file>.tsx` to see them. `proofs/Base.lean` (no imports of
    generated code) is visible to every module.
+
+   `Defs.lean` holds types, constants and functions, each function followed by
+   its `ensures` theorems (so later function bodies, here and in importing
+   modules, can use them); `proofs/<Module>.lean` comes after it and helps the
+   component obligations in `View.lean`. Function bodies and contracts cannot
+   use those lemmas: help them with `assert(…)` or contracts of helper functions.
 5. **Large constants.** Transparent constants (`@[vreact_simp, reducible]` in
    the generated Lean) are unfolded into every goal that mentions them; a list
    literal of dozens of records turns into long disjunctions. Mark such constants
@@ -63,12 +69,19 @@ hypotheses often *are* a counterexample.
 6. **Inspect.** `vreact verify --full` prints complete goals; `vreact explain
    src/X.tsx` prints the generated Lean; the project in `.vreact/` can be opened
    in a Lean editor or re-checked file by file with `lake env lean <file>`; each
-   obligation is `(/-⟦obN⟧-/ by vreact_auto)`.
+   obligation is `(/-⟦obN⟧-/ by vreact_ob vreact_auto)`.
+7. **Timeouts.** Every obligation has its own heartbeat budget (`vreact_ob`,
+   `"heartbeats"` in vreact.json, default 1000000). One that runs out fails
+   *at that obligation* with `(deterministic) timeout`; the others are still
+   checked. Make the goal smaller (`@opaque` helpers with `ensures`, `assert`)
+   before raising the budget. A timeout or error Lean reports for a whole
+   declaration leaves its obligations unproved ("not checked", with the reason).
 
 ## What not to do
 
 * Do not add `assume(…)` or `@trusted` to silence a failure; they are reported
-  (`ASSUMES` / `TRUSTED`) and the app is then not verified.
+  (`ASSUMES` / `TRUSTED`, verdict "VERIFIED modulo assume(…) facts / @trusted
+  declarations") and the app is then not verified.
 * Do not weaken an `invariant` until it says nothing; check with `vreact synth`
   or by asking "what would a buggy implementation be allowed to do?".
 * Do not "fix" a `props-stability` failure by removing the prop from the

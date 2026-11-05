@@ -2,11 +2,13 @@
  * Program-level driver: loads the TypeScript program, checks it, collects
  * declarations, and emits one Lean project with two files per TS module:
  *
- *   VTS/<Mod>/Defs.lean — types, constants, pure functions (+ inline obligations)
- *   VTS/<Mod>/View.lean — postconditions, component specs and renders
+ *   VTS/<Mod>/Defs.lean — types, constants, pure functions (+ inline obligations), each
+ *                         function followed by its postconditions (usable by later bodies)
+ *   VTS/<Mod>/View.lean — component specs and renders, root certificates
  *
  * User lemmas in `proofs/<Mod>.lean` sit between the two (they may mention the
- * definitions and are available to every obligation of the views).
+ * definitions and are available to every obligation of the views). Each file ends with
+ * `#print axioms` for every declaration it reports and the `vreact:checked` sentinel.
  */
 import ts from "typescript";
 import fs from "node:fs";
@@ -16,6 +18,7 @@ import { T, type VType, typeOfNode, typeOfDecl, emitTypeDecl, leanType } from ".
 import { VtsError, fail, leanIdent, leanField, leanStr, paren, capitalize, nodeText } from "./util.ts";
 import { expr, prop, valueBlock, specFn, symbolOf, bindParam, typeOf } from "./translate.ts";
 import { translateComponent, compSignature, baseEnv } from "./component.ts";
+import { leanDecls } from "./lean.ts";
 
 export interface Config {
   root: string;
@@ -24,6 +27,8 @@ export interface Config {
   outDir: string;
   proofsDir: string;
   leanLib: string;
+  /** heartbeat budget (in thousands) of each proof obligation (vreact.json "heartbeats") */
+  heartbeats?: number;
 }
 
 export interface ModuleResult {
@@ -31,9 +36,12 @@ export interface ModuleResult {
   ns: string;
   defsModule: string;
   viewModule: string;
-  components: { name: string; ns: string; trusted: boolean; line: number }[];
-  certificates: { name: string; qname: string }[];
-  functions: { name: string; qname: string; trusted: boolean; posts: string[] }[];
+  /** `obs`: ids of the obligations generated for the item (for its status) */
+  components: { name: string; ns: string; trusted: boolean; line: number; obs: number[] }[];
+  certificates: { name: string; qname: string; obs: number[] }[];
+  functions: { name: string; qname: string; trusted: boolean; posts: string[]; obs: number[] }[];
+  /** module constants; `facts`: Lean names of their module-level assert(…) theorems */
+  constants: { name: string; qname: string; facts: string[]; obs: number[] }[];
 }
 
 export interface TranslateResult {
@@ -52,6 +60,8 @@ function loadProgram(cfg: Config): { program: ts.Program; diags: string[] } {
     strict: true,
     jsx: ts.JsxEmit.ReactJSX,
     target: ts.ScriptTarget.ES2022,
+    // ES2023: toSorted / toReversed / with are part of VTS
+    lib: ["lib.es2023.d.ts", "lib.dom.d.ts"],
     module: ts.ModuleKind.ESNext,
     moduleResolution: ts.ModuleResolutionKind.Bundler,
     skipLibCheck: true,
@@ -121,6 +131,25 @@ export function translate(cfg: Config): TranslateResult {
   const prog = new Program(checker, cfg.root, (sf) => nsOfFile(sf.fileName));
   const sfs = cfg.files.map((f) => program.getSourceFile(f)!);
   const counter = { n: 0 };
+
+  // ---- one Lean module per source file: two files whose names map to the same Lean
+  // namespace (e.g. limits.ts / limits.tsx, my-limits.ts / my_limits.ts), or to output
+  // paths that differ only in case (todo.ts / Todo.tsx on a case-insensitive disk), would
+  // overwrite each other's generated Lean ----
+  const byNs = new Map<string, ts.SourceFile>();
+  for (const sf of sfs) {
+    const ns = nsOfFile(sf.fileName);
+    const other = byNs.get(ns.toLowerCase());
+    if (!other) {
+      byNs.set(ns.toLowerCase(), sf);
+      continue;
+    }
+    const a = path.relative(cfg.root, other.fileName), b = path.relative(cfg.root, sf.fileName);
+    const otherNs = nsOfFile(other.fileName);
+    const same = otherNs === ns ? `the same Lean module ${ns}` : `Lean modules ${otherNs} and ${ns}, whose files differ only in letter case`;
+    res.errors.push(new VtsError(sf, `module name clash: ${a} and ${b} translate to ${same} (a module is named after its path without the .ts/.tsx extension, other characters than letters, digits and _ become _); rename one of the files`));
+  }
+  if (res.errors.length) return res;
 
   // ---- import graph & topological order ----
   const importsOf = new Map<ts.SourceFile, ts.SourceFile[]>();
@@ -198,7 +227,13 @@ export function translate(cfg: Config): TranslateResult {
   for (const sf of order) {
     const m = mods.get(sf)!;
     const ns = m.ns;
-    const modRes: ModuleResult = { tsFile: sf.fileName, ns, defsModule: `${ns}.Defs`, viewModule: `${ns}.View`, components: [], functions: [], certificates: [] };
+    const modRes: ModuleResult = { tsFile: sf.fileName, ns, defsModule: `${ns}.Defs`, viewModule: `${ns}.View`, components: [], functions: [], certificates: [], constants: [] };
+    // ids of the obligations generated by `f()`
+    const obsOf = <R>(f: () => R): { r: R; obs: number[] } => {
+      const from = counter.n;
+      const r = f();
+      return { r, obs: Array.from({ length: counter.n - from }, (_, k) => from + k + 1) };
+    };
     const deps = (importsOf.get(sf) ?? []).map((d) => nsOfFile(d.fileName));
     const rel = ns.split(".").join(path.sep);
     const proofMod = "Proofs." + ns.split(".").slice(1).join(".");
@@ -212,24 +247,33 @@ export function translate(cfg: Config): TranslateResult {
         if (nt.def.k === "rec" && nt.def.fields.some((f) => f.type.k === "fn" || (f.type.k === "opt" && f.type.elem.k === "fn"))) continue;
         defs += emitTypeDecl(nt, prog.reg) + "\n";
       }
-      // constants & functions, dependency-ordered
+      // constants & functions, dependency-ordered; each function's postconditions right
+      // after it, so that the bodies of later functions (in this module and in importing
+      // modules' Defs) can use them through `vreact_contracts`
       const decls = sortDecls(sf, m);
       for (const d of decls) {
         const g = prog.globals.get(d)!;
-        if (g.k === "const") defs += translateConst(d as ts.VariableDeclaration, g.info, m) + "\n";
+        if (g.k === "const") {
+          const { r, obs } = obsOf(() => translateConst(d as ts.VariableDeclaration, g.info, m));
+          defs += r + "\n";
+          const short = g.info.qname.split(".").pop()!;
+          const facts = g.info.facts.map((_, k) => `${ns}.${leanIdent(short)}.${k === 0 ? "post" : `post${k + 1}`}`);
+          modRes.constants.push({ name: short, qname: `${ns}.${leanIdent(short)}`, facts, obs });
+        }
         if (g.k === "fn") {
-          const r = translateFunction(d as ts.FunctionDeclaration, g.info, m);
+          const { r, obs } = obsOf(() => translateFunction(d as ts.FunctionDeclaration, g.info, m));
           defs += r.def + "\n";
-          if (r.post) view += r.post + "\n";
-          modRes.functions.push({ name: g.info.name, qname: g.info.qname, trusted: g.info.trusted, posts: r.postNames });
+          if (r.post) defs += r.post + "\n";
+          modRes.functions.push({ name: g.info.name, qname: `${ns}.${leanIdent(g.info.name)}`, trusted: g.info.trusted, posts: r.postNames, obs });
         }
       }
       // components, children first
       for (const c of sortComponents(sf, m)) {
         const g = prog.globals.get(c) as { k: "comp"; info: CompInfo };
-        view += translateComponent(c as ts.FunctionDeclaration, g.info, m) + "\n";
+        const { r, obs } = obsOf(() => translateComponent(c as ts.FunctionDeclaration, g.info, m));
+        view += r + "\n";
         const { line } = sf.getLineAndCharacterOfPosition(c.getStart(sf));
-        modRes.components.push({ name: g.info.name, ns: g.info.ns, trusted: g.info.trusted, line: line + 1 });
+        modRes.components.push({ name: g.info.name, ns: g.info.ns, trusted: g.info.trusted, line: line + 1, obs });
       }
       // application roots (no props): element + whole-app soundness certificate
       for (const c of sortComponents(sf, m)) {
@@ -238,11 +282,13 @@ export function translate(cfg: Config): TranslateResult {
         if (info.data.length || info.callbacks.length) continue;
         const N = info.ns;
         view += `/-- \`<${info.name}/>\` as the root element of an application. -/\n`;
-        view += `theorem ${info.name}.root_pre : ${N}.pre ${N}.Props.mk :=\n  ${m.ob(c, "root-precondition", `<${info.name}/> can be mounted as the application root`)}\n\n`;
+        const rootOb = obsOf(() => m.ob(c, "root-precondition", `<${info.name}/> can be mounted as the application root`));
+        view += `theorem ${info.name}.root_pre : ${N}.pre ${N}.Props.mk :=\n  ${rootOb.r}\n\n`;
         view += `noncomputable def ${info.name}.element : VReact.CompNode Empty :=\n  ⟨${N}.spec, ${N}.Props.mk, ${N}.Cb.mk, ${N}.root_pre,\n   fun s h => ${N}.component.render ${N}.Props.mk ${N}.Cb.mk s ${N}.root_pre h⟩\n\n`;
         view += `/-- **Certificate.** In every run of the application rooted at \`<${info.name}/>\` — any sequence of\nuser events, effect flushes and timer callbacks — every mounted component instance satisfies\nits invariant (instantiation of \`VReact.run_allInv\`). -/\n`;
         view += `theorem ${info.name}.certificate (fuel : Nat) (acts : List VReact.Action) :\n    (VReact.run fuel ${info.name}.element acts).AllInv :=\n  VReact.run_allInv fuel ${info.name}.element acts\n\n`;
-        modRes.certificates.push({ name: info.name, qname: `${ns}.${info.name}.certificate` });
+        const compObs = modRes.components.find((x) => x.ns === N)?.obs ?? [];
+        modRes.certificates.push({ name: info.name, qname: `${ns}.${info.name}.certificate`, obs: [...compObs, ...rootOb.obs] });
       }
       // (axiom reports are printed after the namespace is closed, with full names)
     } catch (e) {
@@ -252,17 +298,18 @@ export function translate(cfg: Config): TranslateResult {
       }
       throw e;
     }
-    defs += `\nend ${ns}\n#eval "vreact:checked"\n`;
+    // every declaration's axioms are reported, in the file that declares it (so a failure in
+    // a function body still leaves the other functions of the module with a real status)
+    defs += `\nend ${ns}\n\n`;
+    for (const c of modRes.constants) for (const q of [c.qname, ...c.facts]) defs += `#print axioms ${q}\n`;
+    for (const f of modRes.functions) for (const q of [f.qname, ...f.posts]) defs += `#print axioms ${q}\n`;
+    defs += `#eval "vreact:checked"\n`;
     view += `\nend ${ns}\n\n`;
     for (const c of modRes.components) view += `#print axioms ${c.ns}.component\n`;
     for (const c of modRes.certificates) view += `#print axioms ${c.qname}\n`;
-    for (const f of modRes.functions) {
-      view += `#print axioms ${f.qname}\n`;
-      for (const p of f.posts) view += `#print axioms ${p}\n`;
-    }
     view += `#eval "vreact:checked"\n`;
-    leanFiles.push({ rel: path.join(rel, "Defs.lean"), text: defs });
-    leanFiles.push({ rel: path.join(rel, "View.lean"), text: view });
+    leanFiles.push({ rel: path.join(rel, "Defs.lean"), text: withBudget(defs, cfg.heartbeats) });
+    leanFiles.push({ rel: path.join(rel, "View.lean"), text: withBudget(view, cfg.heartbeats) });
     res.modules.push(modRes);
   }
   if (res.errors.length) return res;
@@ -274,6 +321,14 @@ export function translate(cfg: Config): TranslateResult {
   const lakefile = `name = "vts"\ndefaultTargets = ["VTS"]\n\n[[require]]\nname = "VReact"\npath = ${JSON.stringify(cfg.leanLib)}\n\n${libs.join("\n")}`;
   leanFiles.push({ rel: "lakefile.toml", text: lakefile });
   leanFiles.push({ rel: "lean-toolchain", text: fs.readFileSync(path.join(cfg.leanLib, "lean-toolchain"), "utf8") });
+  // backstop: no two generated files may share a path (also on case-insensitive disks)
+  const paths = new Map<string, string>();
+  for (const f of leanFiles) {
+    const prev = paths.get(f.rel.toLowerCase());
+    if (prev !== undefined) res.errors.push(new VtsError(undefined, `generated Lean files ${prev} and ${f.rel} would overwrite each other (rename one of the source or proof files)`));
+    paths.set(f.rel.toLowerCase(), f.rel);
+  }
+  if (res.errors.length) return res;
   // write, removing stale generated files
   fs.rmSync(path.join(cfg.outDir, "VTS"), { recursive: true, force: true });
   fs.rmSync(path.join(cfg.outDir, "Proofs"), { recursive: true, force: true });
@@ -286,6 +341,30 @@ export function translate(cfg: Config): TranslateResult {
   return res;
 }
 
+/** Heartbeats (in thousands) of each proof obligation (`vreact_ob`, see VReact/Budget.lean). */
+const OB_HEARTBEATS = 1000000;
+/** Heartbeats (in thousands) for a declaration's own elaboration and kernel check. */
+const DECL_HEARTBEATS = 1000000;
+const BUDGET_SLOT = "set_option maxHeartbeats @BUDGET@";
+
+/**
+ * Every obligation runs with its own budget (`vreact.heartbeats`); since heartbeats spent
+ * in an obligation still count for the enclosing command, the per-command `maxHeartbeats`
+ * covers all obligations of the largest declaration of the file plus the declaration's own
+ * elaboration and kernel check.
+ */
+function withBudget(text: string, perOb = OB_HEARTBEATS): string {
+  const lines = text.split("\n");
+  let most = 0;
+  for (const d of leanDecls(text)) {
+    const body = lines.slice(d.start - 1, d.end).join("\n");
+    most = Math.max(most, (body.match(/\/-⟦ob\d+⟧-\//g) ?? []).length);
+  }
+  // 0 = no limit (for obligations, hence also for their declarations)
+  const outer = perOb === 0 ? 0 : DECL_HEARTBEATS + perOb * most;
+  return text.replace(BUDGET_SLOT, `set_option maxHeartbeats ${outer}\nset_option vreact.heartbeats ${perOb}`);
+}
+
 function header(imports: string[]): string {
   return [
     "/- Generated by vreact from VTS sources. Do not edit: edit the .tsx file. -/",
@@ -293,7 +372,7 @@ function header(imports: string[]): string {
     ...imports.map((i) => `import ${i}`),
     "open VReact",
     "set_option linter.unusedVariables false",
-    "set_option maxHeartbeats 1000000",
+    BUDGET_SLOT,
     "noncomputable section",
     "",
   ].join("\n");
@@ -516,7 +595,7 @@ function translateFunction(fn: ts.FunctionDeclaration, info: FnInfo, m: ModCtx):
       if (ts.isBlock(body)) fail(body, "ensures body must be an expression");
       const stmt = prop(body, e2);
       const name = k === 0 ? `${short}.post` : `${short}.post${k + 1}`;
-      postNames.push(`${info.qname}.${k === 0 ? "post" : `post${k + 1}`}`);
+      postNames.push(`${info.module}.${short}.${k === 0 ? "post" : `post${k + 1}`}`);
       // opaque functions are not unfolded by callers: their postconditions are proved by
       // unfolding once here, then used through E-matching on calls (grind_pattern below)
       // a function whose body still contains hole() has no implementation yet: contract pending

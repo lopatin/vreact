@@ -14,7 +14,7 @@ every component into proof obligations that Lean's kernel checks. The same
 
 **Done means:** `vreact verify` prints `✔ VERIFIED` and the app certificate's
 axioms are exactly `propext, Classical.choice, Quot.sound`. Anything else —
-`INCOMPLETE`, `TRUSTED`, `VERIFIED*`, `sorryAx`, `VReact.assumed` — is not done;
+`INCOMPLETE`, `UNCHECKED`, `TRUSTED`, `ASSUMES`, `VERIFIED*`, `sorryAx`, `VReact.assumed` (`assumed`) — is not done;
 say so plainly when reporting.
 
 The tool lives in this skill's directory under `tool/` (the `vreact` package):
@@ -34,7 +34,7 @@ bash <skill>/scripts/setup.sh /path/to/app    # also: npm i the tool into the ap
 
 Installing Lean (elan, ~400 MB) changes the user's machine: ask first if it is
 missing. All the app needs from npm is that `vreact` (and `react`, `@types/react`)
-resolve from its folder — `npm i <tool>` or a symlinked `node_modules` both work. The app needs `"strict": true` in tsconfig and `vreact.json`
+resolve from its folder — `npm i <tool>` or a symlinked `node_modules` both work. The app needs `"strict": true` and `"lib": ["ES2023", "DOM"]` in tsconfig and `vreact.json`
 (`{"src":"src","exclude":["main.tsx"],"proofs":"proofs","out":".vreact"}`).
 Keep `main.tsx` (createRoot) outside the verified program.
 
@@ -110,9 +110,12 @@ export function ItemList(props: ItemListProps) {
 
 ## Reading results
 
-`vreact verify` reports, per component/function: `VERIFIED`, `VERIFIED*`
-(own obligations proved, relies on `@trusted` contracts), `TRUSTED`,
-`INCOMPLETE` (failed obligation or `hole()`), plus each failed obligation as
+`vreact verify` reports, per component/function (and per constant, when not
+`VERIFIED`): `VERIFIED`, `VERIFIED*` (own obligations proved, relies on
+`@trusted` contracts), `TRUSTED`, `ASSUMES` (relies on `assume(…)` facts),
+`INCOMPLETE` (failed obligation, `hole()`/`sorry`, or a declaration Lean could
+not finish), `UNCHECKED` (Lean never got to it because a module it imports
+failed), plus each failed obligation as
 `file:line:col [kind] description` followed by the Lean goal. In the goal, the
 hypotheses are what is known (props precondition, invariant, branch
 conditions, `h_…` facts); `⊢ False` after `grind` means the facts were
@@ -121,8 +124,12 @@ Goals are abridged; `vreact verify --full` prints them completely (`--json`
 has both `lean` and `leanFull`). `vreact explain <file>` prints the generated
 Lean; `.vreact/` is an ordinary Lake project, so `cd .vreact && lake env lean
 VTS/<module>/View.lean` (with `~/.elan/bin` on PATH) re-checks one file.
-A file marked `?` in the table was not checked because a module it depends on
-failed — fix the first failure and re-run.
+A file marked `?` in the table has obligations that were not checked (the
+reason is printed: a module it depends on failed, or its declaration did not
+elaborate) — fix the first failure or the listed Lean build error and re-run.
+Each obligation has its own time budget; one that runs out fails with
+`(deterministic) timeout` at that obligation (help the prover, or raise
+`"heartbeats"` in vreact.json — default 1000000).
 
 Kinds → usual fix: see `reference/obligations.md` (handler, handler-robust,
 effect-robust, init-invariant, props-stability, unique-keys, child-precondition,
@@ -141,7 +148,9 @@ postcondition, root-precondition, unreachable, assert).
 2. Split work: make a large function `@opaque` with precise `ensures`.
 3. Add an intermediate fact: `assert(cond)` (proved, then available).
 4. Write a Lean lemma in `proofs/<Module>.lean` (`import VTS.<Module>.Defs`);
-   tag it `@[vreact_simp]` if it is a rewrite rule. See `reference/obligations.md`.
+   tag it `@[vreact_simp]` if it is a rewrite rule. It helps the module's
+   component obligations (function contracts are proved before it, in
+   `Defs.lean`). See `reference/obligations.md`.
 5. Never use `assume(…)` or `@trusted` to make a failure go away without telling
    the user; both are reported and keep the result from being `VERIFIED`.
 

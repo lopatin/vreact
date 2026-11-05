@@ -7,3 +7,5 @@ import VReact.Tactic
 import VReact.Normalize
 import VReact.Runtime
 import VReact.SelfTest
+import VReact.Budget
+import VReact.BudgetTest
