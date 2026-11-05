@@ -1,0 +1,14 @@
+hole in addCard: Board   scope: b, b.todo, b.doing, b.done, b.nextId, b.wipLimit, title, points
+  13698 candidates tested in 23.8s
+  no verified solution found up to size 9: write this one by hand (or strengthen the spec)
+hole in deleteCard: Board   scope: b, b.todo, b.doing, b.done, b.nextId, b.wipLimit, id
+  candidate passes 400 random tests: removeEverywhere(b, id)
+  28 candidates tested in 0.1s
+  ✔ proved by Lean: removeEverywhere(b, id)
+hole in moveCard: Board   scope: b, b.todo, b.doing, b.done, b.nextId, b.wipLimit, id, to
+  13668 candidates tested in 22.9s
+  no verified solution found up to size 9: write this one by hand (or strengthen the spec)
+hole in setWipLimit: Board   scope: b, b.todo, b.doing, b.done, b.nextId, b.wipLimit, limit
+  13344 candidates tested in 21.8s
+  no verified solution found up to size 9: write this one by hand (or strengthen the spec)
+wrote src/model.ts

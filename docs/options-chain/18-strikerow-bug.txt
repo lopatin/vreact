@@ -1,0 +1,87 @@
+translated 7 module(s), 98 proof obligation(s) → .vreact/ ; checking with Lean…
+
+Components
+  TRUSTED            TermRow                src/TermRow.tsx:19
+  VERIFIED           PriceCell              src/StrikeRow.tsx:12
+  INCOMPLETE         StrikeRow              src/StrikeRow.tsx:37
+  TRUSTED            OrderTicket            src/OrderTicket.tsx:16
+  UNCHECKED          OptionsChain           src/OptionsChain.tsx:32
+  UNCHECKED          App                    src/App.tsx:79
+Functions
+  VERIFIED           validChain
+  VERIFIED           legOf
+  VERIFIED           theoOf
+  VERIFIED           quotePrice
+  VERIFIED           withinSpread
+  VERIFIED           isMid
+  VERIFIED           midPrice
+  VERIFIED           inTheMoney
+  VERIFIED           dist
+  VERIFIED           nearest
+  VERIFIED           atmIndex
+  VERIFIED           inWindow
+  VERIFIED           strikeWindow
+  VERIFIED           filterLabel
+  VERIFIED           levelsOf
+  VERIFIED           edge
+  VERIFIED           heatOf
+  VERIFIED           legFor
+  VERIFIED           labelOf
+  VERIFIED           marketOf
+  VERIFIED           validQty
+  VERIFIED           validOrder
+  VERIFIED           fmtPrice
+  VERIFIED           contractText
+  VERIFIED           fmtVol
+  VERIFIED           wellFormed
+  VERIFIED           heldPrice
+  VERIFIED           sameView
+  VERIFIED           keepsHolds
+  VERIFIED           toggle
+  VERIFIED           setCollapsed
+  VERIFIED           setFilter
+  VERIFIED           holdAt
+  VERIFIED           follow
+  VERIFIED           jump
+  VERIFIED           setHeat
+  VERIFIED           place
+  VERIFIED           cancel
+  VERIFIED           chainReducer
+App certificates (VReact.run_allInv instantiated)
+  UNCHECKED          VTS.App.App.certificate  axioms: none
+Obligations by file
+  ✓ src/model.ts                             22/22
+  ✓ src/reducer.ts                           22/22
+  ✗ src/StrikeRow.tsx                        21/22
+  ? src/OptionsChain.tsx                     0/27  (27 not checked)
+  ? src/App.tsx                              1/5  (4 not checked)
+
+Failed obligations
+✗ src/StrikeRow.tsx:55:110  [callback-contract] callback contract of onPick("put", "ask", x)
+    │ `grind` failed
+    │ case grind.1.1.1.1.1.1
+    │ E : Type
+    │ props : Props
+    │ κ : Cb props E
+    │ σ : State
+    │ hpre_1 : props.heat ≥ 1
+    │ hinv : True
+    │ s : model.Strike := props.strike
+    │ t : Int := props.heat
+    │ p : Option Int := props.price
+    │ callItm : Bool :=
+    │   match h₂ : p with
+    │   | some p_1 => model.inTheMoney model.Right.call s.strike p_1
+    │   | none => false
+    │ putItm : Bool :=
+    │   match h₂ : p with
+    │   | some p_1 => model.inTheMoney model.Right.put s.strike p_1
+    │   …
+
+31 obligation(s) not checked:
+  src/OptionsChain.tsx:32:17, src/OptionsChain.tsx:32:17, src/OptionsChain.tsx:54:15, src/OptionsChain.tsx:51:15, … (27): VTS/OptionsChain/View.lean was not checked: a module it imports failed, or the file stopped at an error in its imports
+  src/App.tsx:79:17, src/App.tsx:79:17, src/App.tsx:86:7, src/App.tsx:79:1: VTS/App/View.lean was not checked: a module it imports failed, or the file stopped at an error in its imports
+
+trusted (not verified, contracts assumed): TermRow, OrderTicket
+
+✗ NOT VERIFIED  66/98 obligations proved, 1 failed, 31 unchecked; components: 1/6 verified  (2.6s)

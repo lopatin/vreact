@@ -1,0 +1,34 @@
+translated 8 module(s), 39 proof obligation(s) → .vreact/ ; checking with Lean…
+
+Components
+  TRUSTED            ColumnView             src/components/ColumnView.tsx:16
+  TRUSTED            AddCardForm            src/components/AddCardForm.tsx:7
+  TRUSTED            Stats                  src/components/Stats.tsx:6
+  TRUSTED            WipControl             src/components/WipControl.tsx:6
+  TRUSTED            Details                src/components/Details.tsx:6
+  VERIFIED*          App                    src/App.tsx:13
+Functions
+  VERIFIED           validTitle
+  VERIFIED           validPoints
+  VERIFIED           allCards
+  VERIFIED           wellFormed
+  VERIFIED           cardsIn
+  VERIFIED           findCard
+  VERIFIED           keepsCards
+  VERIFIED           removeEverywhere
+  VERIFIED           addCard
+  VERIFIED           deleteCard
+  VERIFIED           moveCard
+  VERIFIED           setWipLimit
+  VERIFIED           boardReducer
+App certificates (VReact.run_allInv instantiated)
+  VERIFIED*          VTS.App.App.certificate  axioms: propext, Classical.choice, Quot.sound, VTS.components.AddCardForm.AddCardForm.init_inv, VTS.components.AddCardForm.AddCardForm.renderTrusted, VTS.components.AddCardForm.AddCardForm.stable, VTS.components.ColumnView.ColumnView.init_inv, VTS.components.ColumnView.ColumnView.renderTrusted, VTS.components.ColumnView.ColumnView.stable, VTS.components.Details.Details.init_inv, VTS.components.Details.Details.renderTrusted, VTS.components.Details.Details.stable, VTS.components.Stats.Stats.init_inv, VTS.components.Stats.Stats.renderTrusted, VTS.components.Stats.Stats.stable, VTS.components.WipControl.WipControl.init_inv, VTS.components.WipControl.WipControl.renderTrusted, VTS.components.WipControl.WipControl.stable
+Obligations by file
+  ✓ src/model.ts                             12/12
+  ✓ src/reducer.ts                           2/2
+  ✓ src/App.tsx                              25/25
+
+trusted (not verified, contracts assumed): ColumnView, AddCardForm, Stats, WipControl, Details
+VERIFIED* = all own obligations proved; relies on the contracts of the trusted declarations above
+
+✔ VERIFIED modulo @trusted declarations  39/39 obligations proved; components: 0/6 verified  (22.9s)
