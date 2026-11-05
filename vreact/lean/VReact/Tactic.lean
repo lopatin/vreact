@@ -38,15 +38,92 @@ attribute [vreact_simp] dite_eq_ite List.foldl_cons List.foldl_nil decide_eq_tru
   forall_eq_or_imp exists_eq_or_imp List.length_cons List.length_nil List.length_append forall_eq exists_eq_left
   or_false false_or or_assoc and_true true_and not_false_eq_true forall_const implies_true false_implies
   not_true_eq_false and_false false_and
+-- quantifiers over a `map` result: `∀ c ∈ xs.map f, P c` ↦ `∀ a ∈ xs, P (f a)` (before
+-- `mem_map` rewrites the membership); then conditional record updates (`pushProjIte` in
+-- `Simprocs.lean`) collapse field by field with `ite_self`
+attribute [vreact_simp ↓] List.forall_mem_map
+attribute [vreact_simp] ite_self
+
+-- Bool `if`-chains (`a && b` / `a || b` with narrowing compile to `if a then b else false`)
+-- become propositions, so that invariants are conjunctions in hypotheses and goals.
+attribute [vreact_simp] Bool.ite_eq_true_distrib Bool.ite_eq_false_distrib ite_false_right ite_false_left
+  ite_true_left ite_true_right Bool.false_eq_true
+
+open Lean Meta Elab Tactic in
+/-- `simp … at *` skips hypotheses that other locals depend on.  A render-level
+`const cur = xs[i]` is `let cur := JS.get xs i (proof)`, and that proof uses the
+invariant `hinv` (or the precondition `hpre`), so `hinv` would stay folded for every
+later obligation.  Add a copy of each such hypothesis; `simp` normalises the copy. -/
+elab "vreact_expose" : tactic => withMainContext do
+  let decls := (← getLCtx).foldl (init := #[]) fun acc d => if d.isImplementationDetail then acc else acc.push d
+  let mut g ← getMainGoal
+  for d in decls do
+    let ty ← instantiateMVars d.type
+    unless ← isProp ty do continue
+    let mut used := false
+    for d' in decls do
+      if d'.index ≤ d.index then continue
+      if (← instantiateMVars d'.type).containsFVar d.fvarId then used := true; break
+      if let some v := d'.value? then
+        if (← instantiateMVars v).containsFVar d.fvarId then used := true; break
+    if used then
+      (_, g) ← (← g.assert d.userName ty (mkFVar d.fvarId)).intro1P
+  replaceMainGoal [g]
 
 /-- Normalise hypotheses and goal with the model's simp set. -/
 macro "vreact_norm" : tactic => `(tactic|
   (try simp (config := { zetaDelta := true, failIfUnchanged := false }) only [vreact_simp] at *))
 
+open Lean Meta Elab Tactic in
+/-- Close the main goal (normalised) by `grind`, `omega` or `simp_all`.  Returns the error
+to report when all of them fail: `grind`'s (it shows the hypotheses and the case it got
+stuck in) or, if `grind` did not run to a verdict, one that shows the goal — never the last
+alternative's message such as `simp_all made no progress`. -/
+private def finishOne : TacticM (Option Exception) := withMainContext do
+  let goal ← getMainGoal
+  let s ← saveState
+  let attempt (tac : TSyntax `tactic) : TacticM (Option Exception) := do
+    try
+      evalTactic tac
+      if (← getUnsolvedGoals).isEmpty then return none
+      throwError "unsolved goals"
+    catch e =>
+      s.restore
+      return some e
+  if (← attempt (← `(tactic| done))).isNone then return none
+  let grindErr ← attempt (← `(tactic| grind))
+  if grindErr.isNone then return none
+  if (← attempt (← `(tactic| omega))).isNone then return none
+  if (← attempt (← `(tactic| (simp_all; done)))).isNone then return none
+  if (← attempt (← `(tactic| (simp_all; grind)))).isNone then return none
+  match grindErr with
+  | some e => return some e
+  | none => return some (.error (← getRef) m!"vreact_auto could not prove the goal{indentD (MessageData.ofGoal goal)}")
+
+open Lean Meta Elab Tactic in
+/-- `vreact_finish`: close a normalised goal; when that fails on a conjunction, prove the
+conjuncts one by one (smaller goals, and the report names only the conjuncts that fail). -/
+partial def vreactFinish : TacticM Unit := do
+  let some err ← finishOne | return
+  let g ← getMainGoal
+  let tgt ← whnfR (← instantiateMVars (← g.getType))
+  if tgt.isAppOfArity ``And 2 then
+    let [g1, g2] ← g.apply (mkConst ``And.intro) | throw err
+    let mut firstErr : Option Exception := none
+    for gi in [g1, g2] do
+      setGoals [gi]
+      try vreactFinish catch e => if firstErr.isNone then firstErr := some e
+    setGoals []
+    if let some e := firstErr then throw e
+  else throw err
+
+elab "vreact_finish" : tactic => vreactFinish
+
 syntax "vreact_auto" : tactic
 macro_rules
   | `(tactic| vreact_auto) => `(tactic|
       (intros
+       vreact_expose
        vreact_contracts
        (repeat' split)
        all_goals vreact_norm
@@ -57,11 +134,6 @@ macro_rules
          -- calls exposed by the last split (e.g. in match arms of a transparent reducer)
          all_goals vreact_contracts
          all_goals vreact_norm
-         all_goals (first
-           | done
-           | grind
-           | omega
-           | (simp_all; done)
-           | (simp_all; grind)))))
+         all_goals vreact_finish)))
 
 end VReact

@@ -173,9 +173,35 @@ def atOpt {α} (xs : List α) (i : Int) : Option α :=
 def withAt {α} (xs : List α) (i : Int) (v : α) (_h : 0 ≤ i ∧ i < xs.length) : List α :=
   xs.set i.toNat v
 
-/-- `xs.toSorted(cmp)`: a stable sort; `a` stays before `b` when `cmp(a, b) ≤ 0`. -/
-def toSorted {α} (xs : List α) (cmp : α → α → Int) : List α :=
-  xs.mergeSort (fun a b => decide (cmp a b ≤ 0))
+/-- ECMA-262 (SortIndexedProperties): `cmp` is a *consistent comparator* for the
+elements of `xs` — reflexive and symmetric `=`, transitive `=`, `<` and `>`. -/
+def Consistent {α} (cmp : α → α → Int) (xs : List α) : Prop :=
+  ∀ a ∈ xs, ∀ b ∈ xs, ∀ c ∈ xs,
+    cmp a a = 0 ∧ (cmp a b = 0 → cmp b a = 0) ∧
+    (cmp a b = 0 → cmp b c = 0 → cmp a c = 0) ∧
+    (cmp a b < 0 → cmp b c < 0 → cmp a c < 0) ∧
+    (0 < cmp a b → 0 < cmp b c → 0 < cmp a c)
+
+instance {α} (cmp : α → α → Int) (xs : List α) : Decidable (Consistent cmp xs) := by
+  unfold Consistent; infer_instance
+
+/-- The order an engine produces for a comparator that is *not* consistent: ECMA-262
+leaves it implementation-defined, so the model only knows it is a permutation (an
+unspecified function of the list and the comparator). -/
+noncomputable def unspecifiedSort {α} : List α → (α → α → Int) → List α :=
+  Classical.choose (⟨fun xs _ => xs, fun _ _ => List.Perm.refl _⟩ :
+    ∃ f : List α → (α → α → Int) → List α, ∀ xs cmp, (f xs cmp).Perm xs)
+
+theorem unspecifiedSort_perm {α} (xs : List α) (cmp : α → α → Int) : (unspecifiedSort xs cmp).Perm xs :=
+  Classical.choose_spec (⟨fun xs _ => xs, fun _ _ => List.Perm.refl _⟩ :
+    ∃ f : List α → (α → α → Int) → List α, ∀ xs cmp, (f xs cmp).Perm xs) xs cmp
+
+/-- `xs.toSorted(cmp)`. For a consistent comparator ECMA-262 fixes the result: the stable
+sort (`a` stays before `b` when `cmp(a, b) ≤ 0`). Otherwise the order is
+implementation-defined (V8 and Lean's merge sort differ), and the model only promises a
+permutation. -/
+noncomputable def toSorted {α} (xs : List α) (cmp : α → α → Int) : List α :=
+  if Consistent cmp xs then xs.mergeSort (fun a b => decide (cmp a b ≤ 0)) else unspecifiedSort xs cmp
 
 /-- `xs.join(sep)` -/
 def join (xs : List Str) (sep : Str) : Str := ⟨sep.units.intercalate (xs.map (·.units))⟩
@@ -261,5 +287,178 @@ theorem findIndex_spec {α} (xs : List α) (p : α → Bool) (h : 0 ≤ findInde
 
 grind_pattern get_mem => get xs i h
 grind_pattern findIndex_bounds => findIndex xs p
+
+theorem findIndex_eq_neg_one_iff {α} (xs : List α) (p : α → Bool) :
+    findIndex xs p = -1 ↔ ∀ x ∈ xs, p x = false := by
+  unfold findIndex
+  split
+  · rename_i i h
+    simp only [List.findIdx?_eq_some_iff_getElem] at h
+    obtain ⟨hlt, hp, -⟩ := h
+    constructor
+    · intro h; omega
+    · intro h'; have := h' _ (List.getElem_mem hlt); simp_all
+  · rename_i h
+    simpa using h
+grind_pattern findIndex_eq_neg_one_iff => findIndex xs p
+
+/-! ### `indexOf`: the facts of `findIndex`, plus what the found index points to -/
+
+theorem indexOf_bounds {α} [BEq α] (xs : List α) (x : α) :
+    indexOf xs x = -1 ∨ (0 ≤ indexOf xs x ∧ indexOf xs x < xs.length) := findIndex_bounds _ _
+grind_pattern indexOf_bounds => indexOf xs x
+
+theorem indexOf_eq_neg_one_iff {α} [BEq α] [LawfulBEq α] (xs : List α) (x : α) :
+    indexOf xs x = -1 ↔ x ∉ xs := by
+  unfold indexOf; rw [findIndex_eq_neg_one_iff]
+  constructor
+  · intro h hx; have := h x hx; simp at this
+  · intro h y hy; simp only [beq_eq_false_iff_ne, ne_eq]; rintro rfl; exact h hy
+grind_pattern indexOf_eq_neg_one_iff => indexOf xs x
+
+theorem getElem_indexOf {α} [BEq α] [LawfulBEq α] (xs : List α) (x : α) (h0 : 0 ≤ indexOf xs x)
+    (h : (indexOf xs x).toNat < xs.length) : xs[(indexOf xs x).toNat] = x := by
+  obtain ⟨_, hp⟩ := findIndex_spec xs (· == x) h0
+  simpa [indexOf] using hp
+grind_pattern getElem_indexOf => xs[(indexOf xs x).toNat]
+
+/-! ### `with` keeps the length; reading back what was written -/
+
+@[simp] theorem withAt_eq_set {α} (xs : List α) (i : Int) (v : α) (h : 0 ≤ i ∧ i < xs.length) :
+    withAt xs i v h = xs.set i.toNat v := rfl
+@[simp] theorem length_withAt {α} (xs : List α) (i : Int) (v : α) (h : 0 ≤ i ∧ i < xs.length) :
+    (withAt xs i v h).length = xs.length := by simp
+attribute [grind =] length_withAt
+
+/-! ### `slice` is a sublist: membership and distinct keys carry over -/
+
+theorem slice_sublist {α} (xs : List α) (a : Int) (b : Option Int) : (slice xs a b).Sublist xs := by
+  unfold slice; exact (List.take_sublist _ _).trans (List.drop_sublist _ _)
+@[grind →] theorem mem_of_mem_slice {α} {xs : List α} {a : Int} {b : Option Int} {x : α}
+    (h : x ∈ slice xs a b) : x ∈ xs := (slice_sublist xs a b).subset h
+theorem nodup_map_slice {α β} (f : α → β) (xs : List α) (a : Int) (b : Option Int) (h : (xs.map f).Nodup) :
+    ((slice xs a b).map f).Nodup := h.sublist ((slice_sublist xs a b).map f)
+grind_pattern nodup_map_slice => (slice xs a b).map f, (xs.map f).Nodup
+theorem nodup_slice {α} (xs : List α) (a : Int) (b : Option Int) (h : xs.Nodup) : (slice xs a b).Nodup :=
+  h.sublist (slice_sublist xs a b)
+grind_pattern nodup_slice => slice xs a b, xs.Nodup
+theorem length_filter_slice_le {α} (p : α → Bool) (xs : List α) (a : Int) (b : Option Int) :
+    ((slice xs a b).filter p).length ≤ (xs.filter p).length := ((slice_sublist xs a b).filter p).length_le
+grind_pattern length_filter_slice_le => (slice xs a b).filter p, xs.filter p
+
+/-! ### `range(n)` has distinct elements -/
+
+@[simp] theorem nodup_range (n : Int) : (range n).Nodup := by
+  unfold range
+  exact List.Pairwise.map (fun (i : Nat) => (i : Int)) (fun a b h h' => h (by omega)) List.nodup_range
+
+/-! ### `toSorted`: a permutation; for a consistent comparator, the stable sort -/
+
+theorem toSorted_perm {α} (xs : List α) (cmp : α → α → Int) : (toSorted xs cmp).Perm xs := by
+  unfold toSorted; split
+  · exact List.mergeSort_perm _ _
+  · exact unspecifiedSort_perm _ _
+
+@[simp, grind =] theorem length_toSorted {α} (xs : List α) (cmp : α → α → Int) :
+    (toSorted xs cmp).length = xs.length := (toSorted_perm xs cmp).length_eq
+@[simp, grind =] theorem mem_toSorted {α} (xs : List α) (cmp : α → α → Int) (a : α) :
+    a ∈ toSorted xs cmp ↔ a ∈ xs := (toSorted_perm xs cmp).mem_iff
+@[simp, grind =] theorem nodup_map_toSorted {α β} (xs : List α) (cmp : α → α → Int) (f : α → β) :
+    ((toSorted xs cmp).map f).Nodup ↔ (xs.map f).Nodup := ((toSorted_perm xs cmp).map f).nodup_iff
+@[simp, grind =] theorem nodup_toSorted {α} (xs : List α) (cmp : α → α → Int) :
+    (toSorted xs cmp).Nodup ↔ xs.Nodup := (toSorted_perm xs cmp).nodup_iff
+@[simp, grind =] theorem length_filter_toSorted {α} (xs : List α) (cmp : α → α → Int) (p : α → Bool) :
+    ((toSorted xs cmp).filter p).length = (xs.filter p).length := ((toSorted_perm xs cmp).filter p).length_eq
+@[simp] theorem toSorted_nil {α} (cmp : α → α → Int) : toSorted [] cmp = [] := (toSorted_perm [] cmp).eq_nil
+@[simp] theorem toSorted_singleton {α} (a : α) (cmp : α → α → Int) : toSorted [a] cmp = [a] :=
+  List.perm_singleton.mp (toSorted_perm [a] cmp)
+
+theorem toSorted_of_consistent {α} {xs : List α} {cmp : α → α → Int} (h : Consistent cmp xs) :
+    toSorted xs cmp = xs.mergeSort (fun a b => decide (cmp a b ≤ 0)) := by
+  simp [toSorted, h]
+
+/-- The usual "compare by key" comparators are consistent. -/
+theorem consistent_sub {α} (f : α → Int) (xs : List α) : Consistent (fun a b => f a - f b) xs := by
+  intro a _ b _ c _; simp only; omega
+theorem consistent_sub_rev {α} (f : α → Int) (xs : List α) : Consistent (fun a b => f b - f a) xs := by
+  intro a _ b _ c _; simp only; omega
+
+/-- On the elements of `xs` a consistent comparator is a total preorder. -/
+theorem Consistent.total_preorder {α} {xs : List α} {cmp : α → α → Int} (h : Consistent cmp xs) :
+    (∀ a ∈ xs, ∀ b ∈ xs, ∀ c ∈ xs, cmp a b ≤ 0 → cmp b c ≤ 0 → cmp a c ≤ 0) ∧
+    (∀ a ∈ xs, ∀ b ∈ xs, cmp a b ≤ 0 ∨ cmp b a ≤ 0) := by
+  have anti : ∀ a ∈ xs, ∀ b ∈ xs, cmp a b < 0 → 0 < cmp b a := by
+    intro a ha b hb hab
+    rcases Int.lt_trichotomy (cmp b a) 0 with hba | hba | hba
+    · have := (h a ha b hb a ha).2.2.2.1 hab hba; have := (h a ha a ha a ha).1; omega
+    · have := (h b hb a ha b hb).2.1 hba; omega
+    · exact hba
+  have anti' : ∀ a ∈ xs, ∀ b ∈ xs, 0 < cmp a b → cmp b a < 0 := by
+    intro a ha b hb hab
+    rcases Int.lt_trichotomy (cmp b a) 0 with hba | hba | hba
+    · exact hba
+    · have := (h b hb a ha b hb).2.1 hba; omega
+    · have := (h a ha b hb a ha).2.2.2.2 hab hba; have := (h a ha a ha a ha).1; omega
+  refine ⟨?_, ?_⟩
+  · intro a ha b hb c hc hab hbc
+    rcases Int.lt_trichotomy (cmp a c) 0 with hac | hac | hac
+    · omega
+    · omega
+    · exfalso
+      have hca := anti' a ha c hc hac
+      rcases Int.lt_trichotomy (cmp a b) 0 with hab' | hab' | hab'
+      · have hcb := (h c hc a ha b hb).2.2.2.1 hca hab'
+        have := anti c hc b hb hcb; omega
+      · rcases Int.lt_trichotomy (cmp b c) 0 with hbc' | hbc' | hbc'
+        · have := (h a ha b hb a ha).2.1 hab'
+          have := (h b hb c hc a ha).2.2.2.1 hbc' hca
+          omega
+        · have := (h a ha b hb c hc).2.2.1 hab' hbc'; omega
+        · omega
+      · omega
+  · intro a ha b hb
+    rcases Int.lt_trichotomy (cmp a b) 0 with hab | hab | hab
+    · left; omega
+    · left; omega
+    · right; have := anti' a ha b hb hab; omega
+
+private theorem mergeSort_attach {α} (xs : List α) (cmp : α → α → Int) :
+    xs.mergeSort (fun a b => decide (cmp a b ≤ 0)) =
+      (xs.attach.mergeSort (fun a b => decide (cmp a.1 b.1 ≤ 0))).map Subtype.val := by
+  rw [List.map_mergeSort (s := fun a b => decide (cmp a b ≤ 0)) (by intros; rfl)]
+  simp
+
+/-- Sorted: for a consistent comparator, no element is `cmp`-greater than a later one. -/
+theorem pairwise_toSorted {α} {xs : List α} {cmp : α → α → Int} (h : Consistent cmp xs) :
+    (toSorted xs cmp).Pairwise (fun a b => cmp a b ≤ 0) := by
+  obtain ⟨trans, total⟩ := h.total_preorder
+  rw [toSorted_of_consistent h, mergeSort_attach, List.pairwise_map]
+  have := List.pairwise_mergeSort (le := fun (a b : {a // a ∈ xs}) => decide (cmp a.1 b.1 ≤ 0))
+    (fun a b c hab hbc => by simp at *; exact trans a.1 a.2 b.1 b.2 c.1 c.2 hab hbc)
+    (fun a b => by simp; exact total a.1 a.2 b.1 b.2) xs.attach
+  exact this.imp (fun h => by simpa using h)
+
+/-- Stable: for a consistent comparator, of two elements in order with `cmp(a, b) ≤ 0`
+the first stays first. -/
+theorem pair_sublist_toSorted {α} {xs : List α} {cmp : α → α → Int} (h : Consistent cmp xs)
+    {a b : α} (hab : cmp a b ≤ 0) (hs : [a, b].Sublist xs) : [a, b].Sublist (toSorted xs cmp) := by
+  obtain ⟨trans, total⟩ := h.total_preorder
+  rw [toSorted_of_consistent h, mergeSort_attach]
+  rw [← List.attach_map_subtype_val xs, List.sublist_map_iff] at hs
+  obtain ⟨l', hl', heq⟩ := hs
+  match l', heq with
+  | [a', b'], heq =>
+    simp only [List.map_cons, List.map_nil, List.cons.injEq, and_true] at heq
+    obtain ⟨rfl, rfl⟩ := heq
+    have := List.pair_sublist_mergeSort (le := fun (a b : {a // a ∈ xs}) => decide (cmp a.1 b.1 ≤ 0))
+      (fun a b c hab hbc => by simp at *; exact trans a.1 a.2 b.1 b.2 c.1 c.2 hab hbc)
+      (fun a b => by simp; exact total a.1 a.2 b.1 b.2) (by simpa using hab) hl'
+    simpa using this.map Subtype.val
+
+/-- An already sorted list is unchanged by a consistent comparator. -/
+theorem toSorted_of_pairwise {α} {xs : List α} {cmp : α → α → Int} (h : Consistent cmp xs)
+    (hs : xs.Pairwise (fun a b => cmp a b ≤ 0)) : toSorted xs cmp = xs := by
+  rw [toSorted_of_consistent h]
+  exact List.mergeSort_of_pairwise (hs.imp (fun h => by simpa using h))
 
 end VReact.JS
