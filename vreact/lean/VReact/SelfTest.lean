@@ -23,4 +23,19 @@ example : JS.strLen (JS.Str.ofString "Write the spec") = 14 := by vreact_auto
 example : JS.Str.ofString "a" ≠ JS.Str.ofString "b" := by vreact_auto
 example : JS.strLen (JS.Str.ofString "😀") = 2 := by vreact_auto
 
+-- `vreact_noemit` (emit-freedom of robust handlers / effect setups), incl. `if` and `let`
+example (b : Bool) : (if h : b = true then Outcome.mk (S := St) (E := Empty) [] none
+    else Outcome.mk [fun t => { t with count := 1 }] none).emit = none := by vreact_noemit
+example : ∀ (e : DomEvent), ((fun (_ : DomEvent) => let c := (3 : Int);
+    if c < 2 then Outcome.mk (S := St) (E := Empty) [] none else Outcome.mk [] none) e).emit = none := by
+  vreact_noemit
+example : (Outcome.mk (S := St) (E := Empty) [] none).emit = none := by vreact_noemit
+example (s : St) (xs : List Int) : True := by
+  let c := s.count  -- a render-local discriminant
+  have : ∀ (_ : DomEvent), (match h : xs.find? (fun x => x == c) with
+      | some v => if v < c then Outcome.mk (S := St) (E := Empty) [fun t => { t with count := v }] none
+                  else Outcome.mk [] none
+      | none => Outcome.mk [] none).emit = none := by vreact_noemit
+  trivial
+
 end VReact.SelfTest

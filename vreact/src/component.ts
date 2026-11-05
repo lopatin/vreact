@@ -13,8 +13,88 @@ import { type Env, ModCtx, type CompCtx, type CompInfo, type StateVar, type FnIn
 import { expr, prop, block, branch, handlerFn, checkDeps, hookName, specFn, symbolOf, bindParam, type BlockCtx, typeOf, valueBlock, lambda, outcome } from "./translate.ts";
 import { fail, leanField, leanIdent, leanStr, jsStr, paren, nodeText, indent } from "./util.ts";
 
-const CONTINUOUS = new Set(["drag", "dragenter", "dragexit", "dragleave", "dragover", "mousemove", "mouseout", "mouseover", "pointermove", "pointerout", "pointerover", "scroll", "toggle", "touchmove", "wheel", "mouseenter", "mouseleave", "pointerenter", "pointerleave"]);
+/* ─────────────────────── React 18.3.1 event model ───────────────────────
+ * Native DOM events → React handler props, and their priorities, as in
+ * react-dom 18.3.1 (SimpleEventPlugin, EnterLeaveEventPlugin, ChangeEventPlugin,
+ * BeforeInputEventPlugin; `getEventPriority`).  All names are lower-case.        */
+
+/** `getEventPriority`: native events with DiscreteEventPriority (flushed synchronously). */
+const DISCRETE_NATIVE = new Set(["cancel", "click", "close", "contextmenu", "copy", "cut", "auxclick", "dblclick", "dragend", "dragstart", "drop", "focusin", "focusout", "input", "invalid", "keydown", "keypress", "keyup", "mousedown", "mouseup", "paste", "pause", "play", "pointercancel", "pointerdown", "pointerup", "ratechange", "reset", "resize", "seeked", "submit", "touchcancel", "touchend", "touchstart", "volumechange", "change", "selectionchange", "textinput", "compositionstart", "compositionend", "compositionupdate", "beforeblur", "afterblur", "beforeinput", "blur", "fullscreenchange", "focus", "hashchange", "popstate", "select", "selectstart"]);
+/** SimpleEventPlugin: `on${Name}` is dispatched by the native event `name` (lower-cased). */
+const SIMPLE_EVENTS = ["abort", "auxClick", "cancel", "canPlay", "canPlayThrough", "click", "close", "contextMenu", "copy", "cut", "drag", "dragEnd", "dragEnter", "dragExit", "dragLeave", "dragOver", "dragStart", "drop", "durationChange", "emptied", "encrypted", "ended", "error", "gotPointerCapture", "input", "invalid", "keyDown", "keyPress", "keyUp", "load", "loadedData", "loadedMetadata", "loadStart", "lostPointerCapture", "mouseDown", "mouseMove", "mouseOut", "mouseOver", "mouseUp", "paste", "pause", "play", "playing", "pointerCancel", "pointerDown", "pointerMove", "pointerOut", "pointerOver", "pointerUp", "progress", "rateChange", "reset", "resize", "seeked", "seeking", "stalled", "submit", "suspend", "timeUpdate", "touchCancel", "touchEnd", "touchStart", "volumeChange", "scroll", "toggle", "touchMove", "waiting", "wheel"];
+/** React prop (without `on`) → the native events that can dispatch it (onChange: see `changeNatives`). */
+const REACT_EVENTS: Record<string, string[]> = {
+  ...Object.fromEntries(SIMPLE_EVENTS.map((n) => [n[0].toUpperCase() + n.slice(1), [n.toLowerCase()]])),
+  AnimationEnd: ["animationend"], AnimationIteration: ["animationiteration"], AnimationStart: ["animationstart"],
+  TransitionEnd: ["transitionend"], DoubleClick: ["dblclick"], Focus: ["focusin"], Blur: ["focusout"],
+  // EnterLeaveEventPlugin: one native mouseout/mouseover dispatches leave *and* enter
+  MouseEnter: ["mouseout", "mouseover"], MouseLeave: ["mouseout", "mouseover"],
+  PointerEnter: ["pointerout", "pointerover"], PointerLeave: ["pointerout", "pointerover"],
+  // BeforeInputEventPlugin (native textInput, or the keypress/paste/composition fallback)
+  BeforeInput: ["textinput", "keypress", "paste", "compositionend"],
+  // composition events (native, or the keydown/keyup/keypress/mousedown/focusout fallback)
+  CompositionStart: ["compositionstart", "focusout", "keydown", "keypress", "keyup", "mousedown"],
+  CompositionEnd: ["compositionend", "focusout", "keydown", "keypress", "keyup", "mousedown"],
+  CompositionUpdate: ["compositionupdate", "focusout", "keydown", "keypress", "keyup", "mousedown"],
+};
+/** ChangeEventPlugin `isTextInputElement`: input types whose onChange comes from `input`/`change`. */
+const TEXT_INPUT_TYPES = new Set(["color", "date", "datetime", "datetime-local", "email", "month", "number", "password", "range", "search", "tel", "text", "time", "url", "week"]);
 const EVENT_RENAME: Record<string, string> = { doubleclick: "dblclick" };
+
+/** A static string value of attribute `name` on element `e` (`"x"` or `{"x"}`); null if absent, undefined if not static. */
+function staticAttr(e: ts.JsxElement | ts.JsxSelfClosingElement, name: string): string | null | undefined {
+  const a = attrs(e).find((x) => ts.isJsxAttribute(x) && x.name.getText() === name) as ts.JsxAttribute | undefined;
+  if (!a) return null;
+  const v = a.initializer && ts.isJsxExpression(a.initializer) ? a.initializer.expression : a.initializer;
+  return v && ts.isStringLiteralLike(v) ? v.text : undefined;
+}
+
+/** ChangeEventPlugin: the native events that dispatch `onChange` on `<tag>` (also bubbled from descendants). */
+function changeNatives(tag: string, e: ts.JsxElement | ts.JsxSelfClosingElement): string[] {
+  const any = ["click", "input", "change"];
+  if (tag === "select") return ["change"];
+  if (tag === "textarea") return ["input", "change"];
+  if (tag !== "input") return any; // a change of any form control inside bubbles here
+  const t = staticAttr(e, "type");
+  if (t === undefined) return any; // dynamic type: checkbox/radio (click) or text-like (input)
+  const ty = (t ?? "text").toLowerCase();
+  if (ty === "checkbox" || ty === "radio") return ["click"]; // shouldUseClickEvent
+  if (ty === "file") return ["change"];
+  // isTextInputElement (an unknown type is "text"); hidden/button/submit/reset/image: conservatively any
+  return TEXT_INPUT_TYPES.has(ty) || !["hidden", "button", "submit", "reset", "image"].includes(ty) ? ["input", "change"] : any;
+}
+
+interface EventInfo {
+  /** handler name in the model (`Handler.event`) */
+  model: string;
+  /** native events that can run this handler */
+  natives: string[];
+  /** discrete iff every native event has DiscreteEventPriority */
+  discrete: boolean;
+}
+
+/** Classify the handler prop `name` (`onX`) on the intrinsic element `<tag>`; rejects what React would not dispatch faithfully. */
+function eventInfo(name: string, tag: string, e: ts.JsxElement | ts.JsxSelfClosingElement, at: ts.Node): EventInfo {
+  const x = name.slice(2);
+  if (x === "Select") fail(at, `onSelect is not supported in VTS: React dispatches it to the focused element from mouseup/keydown/keyup/selectionchange, alongside other handlers`);
+  const natives = x === "Change" ? changeNatives(tag, e) : REACT_EVENTS[x];
+  if (!natives) {
+    const base = x.endsWith("Capture") ? x.slice(0, -7) : "";
+    if (base && (REACT_EVENTS[base] || base === "Change" || base === "Select")) fail(at, `capture-phase handlers (${name}) are not supported in VTS: use on${base}`);
+    fail(at, `unknown event handler ${name}: React 18 does not dispatch it (check the spelling)`);
+  }
+  let model = x.toLowerCase();
+  model = EVENT_RENAME[model] ?? model;
+  return { model, natives, discrete: natives.every((n) => DISCRETE_NATIVE.has(n)) };
+}
+
+/** Whether `onX` (on an intrinsic element) is a discrete handler; unknown or rejected names count as not discrete. */
+function isDiscreteProp(name: string): boolean {
+  const x = name.slice(2);
+  if (x === "Change") return true; // click / input / change: all discrete
+  const natives = REACT_EVENTS[x];
+  return !!natives && natives.every((n) => DISCRETE_NATIVE.has(n));
+}
 
 const RESERVED = ["E", "σ", "τ", "κ", "hpre", "hinv", "props", "ev", "acc"];
 
@@ -85,6 +165,7 @@ export function translateComponent(fn: ts.FunctionDeclaration, info: CompInfo, m
   if (!body) fail(fn, "component without body");
   const pp = prepass(body.statements, env, comp, m);
   comp.stateVars = pp.stateVars;
+  deferredFields.set(comp, computeDeferred(body, comp, env));
 
   // ---- declarations ----
   let out = `namespace ${info.name}\n\n`;
@@ -136,12 +217,92 @@ export function translateComponent(fn: ts.FunctionDeclaration, info: CompInfo, m
     (bc as BlockCtx & { onEffect?: (c: ts.CallExpression, env: Env) => void }).onEffect = (c, env2) => {
       effects.push(effectCode(c, env2, info));
     };
-    const renderBody = renderBlock(pp.renderStmts, renv, bc);
+    const renderBody = withBubble(NO_BUBBLE, () => renderBlock(pp.renderStmts, renv, bc));
     out += `${sig} :=\n  ${lets}${renderBody}\n\n`;
   }
   out += `def component : VReact.Component spec := ⟨fun d cb s hpre hinv => render d cb s hpre hinv⟩\n\n`;
   out += `end ${info.name}\n`;
   return out;
+}
+
+/* ───────────── deferred updates (React 18 lanes; SEMANTICS §2.2) ─────────────
+ * Updates queued by effects (setup or timers) and by continuous/default-priority
+ * handlers are rendered later than discrete ones.  React keeps one queue per hook
+ * and rebases: a discrete update is rendered first, skipping a pending deferred
+ * one, and is later re-applied on top of it.  So in a component with deferred
+ * sources, the discrete handlers and the callbacks it implements for children are
+ * checked `RebaseSafe`: from every invariant state that agrees with the snapshot
+ * on the fields no deferred source writes.  Without deferred sources this is the
+ * plain snapshot check.                                                        */
+
+const deferredFields = new WeakMap<CompCtx, StateVar[]>();
+
+/** State fields of `comp` that a deferred source may write (in state order). */
+function deferredOf(comp: CompCtx): StateVar[] {
+  return deferredFields.get(comp) ?? [];
+}
+
+/** Syntactic over-approximation: setters/dispatches reachable (through local closures) from an effect or a non-discrete handler. */
+function computeDeferred(body: ts.Block, comp: CompCtx, env: Env): StateVar[] {
+  const checker = env.m.checker;
+  const setters = new Map<ts.Symbol, StateVar>();
+  const closures = new Map<ts.Symbol, ts.Node>();
+  const collect = (n: ts.Node) => {
+    if (ts.isVariableDeclaration(n) && n.initializer) {
+      if (ts.isIdentifier(n.name)) {
+        const sym = checker.getSymbolAtLocation(n.name);
+        if (sym) closures.set(sym, n.initializer);
+      } else if (ts.isArrayBindingPattern(n.name) && ts.isCallExpression(n.initializer) && ["useState", "useReducer"].includes(hookName(env, n.initializer.expression) ?? "")) {
+        const [a, b] = n.name.elements;
+        if (a && b && ts.isBindingElement(a) && ts.isIdentifier(a.name) && ts.isBindingElement(b) && ts.isIdentifier(b.name)) {
+          const sv = comp.stateVars.find((x) => x.name === (a.name as ts.Identifier).text);
+          const sym = checker.getSymbolAtLocation(b.name);
+          if (sv && sym) setters.set(sym, sv);
+        }
+      }
+    }
+    if (ts.isFunctionDeclaration(n) && n.name) {
+      const sym = checker.getSymbolAtLocation(n.name);
+      if (sym) closures.set(sym, n);
+    }
+    ts.forEachChild(n, collect);
+  };
+  collect(body);
+  const acc = new Set<StateVar>();
+  const seen = new Set<ts.Node>();
+  const writes = (n: ts.Node) => {
+    if (ts.isIdentifier(n)) {
+      const sym = checker.getSymbolAtLocation(n);
+      const sv = sym && setters.get(sym);
+      if (sv) acc.add(sv);
+      const c = sym && closures.get(sym);
+      if (c && !seen.has(c)) {
+        seen.add(c);
+        writes(c);
+      }
+    }
+    ts.forEachChild(n, writes);
+  };
+  const visit = (n: ts.Node) => {
+    if (ts.isCallExpression(n) && ["useEffect", "useLayoutEffect"].includes(hookName(env, n.expression) ?? "")) n.arguments.forEach(writes);
+    if (ts.isJsxAttribute(n) && n.initializer && /^on[A-Z]/.test(n.name.getText()) && /^[a-z]/.test(n.parent.parent.tagName.getText()) && !isDiscreteProp(n.name.getText())) writes(n.initializer);
+    ts.forEachChild(n, visit);
+  };
+  visit(body);
+  return comp.stateVars.filter((s) => acc.has(s));
+}
+
+/** `vary` (the snapshot with the deferred fields replaced by `x`) and `x₀` (their snapshot values), for `RebaseSafe`. */
+function rebase(comp: CompCtx): { vary: string; x0: string; names: string } {
+  const d = deferredOf(comp);
+  const snap = comp.snap;
+  const ts1 = d.map((s) => leanType(s.type));
+  const X = ts1.length === 1 ? ts1[0] : `(${ts1.join(" × ")})`;
+  const proj = (i: number) => (d.length === 1 ? "x" : i < d.length - 1 ? `x${".2".repeat(i)}.1` : `x${".2".repeat(i)}`);
+  const vary = `(fun (x : ${X}) => { ${snap} with ${d.map((s, i) => `${leanField(s.field)} := ${proj(i)}`).join(", ")} })`;
+  const fields = d.map((s) => `${snap}.${leanField(s.field)}`);
+  const x0 = d.length === 1 ? fields[0] : `(${fields.join(", ")})`;
+  return { vary, x0, names: d.map((s) => s.name).join(", ") };
 }
 
 function bindStateVars(env: Env, stmts: readonly ts.Statement[], svs: StateVar[]): Env {
@@ -210,7 +371,22 @@ function prepass(stmts: readonly ts.Statement[], env: Env, comp: CompCtx, m: Mod
         const lam = c.arguments[1];
         if (!lam || !(ts.isArrowFunction(lam) || ts.isFunctionExpression(lam))) fail(c, "callbackRequires(cb, (args) => condition)");
         const l = lambda(lam, env, cb.params.map((p) => p.type), T.bool);
-        pp.contracts.set(cb.name, { binders: l.binders, prop: `${paren(l.body.code)} = true` });
+        const prop = `${paren(l.body.code)} = true`;
+        const prev = pp.contracts.get(cb.name);
+        if (!prev) pp.contracts.set(cb.name, { binders: l.binders, prop });
+        else {
+          // several contracts for one callback: all of them hold (conjunction), the
+          // later one's parameters renamed to the first one's binders (simultaneously)
+          const binders = [...prev.binders];
+          for (let i = binders.length; i < l.binders.length; i++) {
+            let nb = l.binders[i];
+            for (let k = 1; binders.includes(nb); k++) nb = `${l.binders[i]}_${k}`;
+            binders.push(nb);
+          }
+          const same = l.binders.every((b, i) => b === binders[i]);
+          const later = same ? paren(prop) : `((fun ${l.typed.join(" ")} => ${prop})${l.binders.map((_, i) => " " + binders[i]).join("")})`;
+          pp.contracts.set(cb.name, { binders, prop: `${prev.prop} ∧ ${later}` });
+        }
         continue;
       }
       if (sf) fail(c, `${sf}(…) is not allowed in a component body`);
@@ -358,8 +534,8 @@ function effectCode(c: ts.CallExpression, env: Env, info: CompInfo): string {
   const okSetup = m.ob(c, "effect-robust", `effect at ${nodeText(c, 40)} preserves the invariant of ${info.name} from any state (effects may run with stale snapshots)`);
   const okTasks = tasks.length
     ? m.ob(c, "effect-robust", `timer callbacks of the effect preserve the invariant of ${info.name} from any state`)
-    : `(by simp)`;
-  return `(VReact.Effect.mk (S := ${info.ns}.State) (E := E) (inv := ${info.ns}.inv props) (${deps}) ${paren(setup)} ${okSetup} rfl\n     [${tasks.join(", ")}] ${okTasks})`;
+    : `(/-⟦gen⟧-/ by simp)`;
+  return `(VReact.Effect.mk (S := ${info.ns}.State) (E := E) (inv := ${info.ns}.inv props) (${deps}) ${paren(setup)} ${okSetup}\n     (/-⟦gen⟧-/ by vreact_noemit)\n     [${tasks.join(", ")}] ${okTasks})`;
 }
 
 function containsSetter(n: ts.Node, env: Env): boolean {
@@ -409,7 +585,8 @@ export function jsxNode(e0: ts.Expression, env: Env): string {
     case "enum":
       return `(VReact.VNode.text (VReact.JS.str ${paren(v.code)}))`;
     case "bool":
-      return "VReact.VNode.empty"; // React renders nothing for booleans
+      // React renders nothing for booleans, but JS evaluates the expression: keep it (and its obligations)
+      return `(VReact.VNode.ofBool ${paren(v.code)})`;
     case "opt":
       if (v.type.elem.k === "str") return `(match ${v.code} with | some s => VReact.VNode.text s | none => VReact.VNode.empty)`;
       if (["int", "enum"].includes(v.type.elem.k)) return `(match ${v.code} with | some s => VReact.VNode.text (VReact.JS.str s) | none => VReact.VNode.empty)`;
@@ -475,57 +652,100 @@ function attrValue(a: ts.JsxAttribute): ts.Expression | null {
 }
 
 /**
- * Event bubbling: one DOM event runs the handlers of the target and of all its
- * ancestors.  The model runs exactly one handler per event, so VTS rejects
- * layouts where an event could reach two handlers of the same component tree:
- * an element with `onX` containing a descendant with `onX` or a user component,
- * and a submit button with `onClick` inside a `<form onSubmit>`.
+ * Event bubbling and multi-handler events.  One native DOM event runs, in one
+ * batch and from one render snapshot, the handlers of its target and of all its
+ * ancestors — and every React prop it maps to: a checkbox click runs `onClick`
+ * and `onChange`, an `input` event runs `onInput` and `onChange` (react-dom
+ * ChangeEventPlugin).  The model runs exactly one handler per event, so VTS
+ * rejects every layout in which one native event could reach two handlers:
+ * two handler props of one element sharing a native event, an element with
+ * handlers containing a descendant handler that shares a native event or a user
+ * component, and a submit button with `onClick` inside a `<form onSubmit>`.
+ *
+ * `bubble` describes the handlers of the enclosing elements during the
+ * (synchronous, recursive) translation of a component's JSX, so it also covers
+ * JSX reached through local consts, conditionals and `.map`.
  */
-function checkBubbling(e: ts.JsxElement | ts.JsxSelfClosingElement, events: string[], env: Env) {
-  if (!events.length || !ts.isJsxElement(e)) return;
-  const isSubmitForm = e.openingElement.tagName.getText() === "form" && events.includes("onSubmit");
-  const visit = (n: ts.Node) => {
-    if (ts.isJsxElement(n) || ts.isJsxSelfClosingElement(n)) {
-      const tag = (ts.isJsxElement(n) ? n.openingElement.tagName : n.tagName).getText();
-      const as = attrs(n).filter(ts.isJsxAttribute).map((a) => a.name.getText());
-      if (/^[A-Z]/.test(tag)) fail(n, `<${tag}> is nested inside an element with ${events.join("/")}: its events would bubble into a second handler (move the handler, or the component, out)`);
-      const clash = as.filter((x) => events.includes(x));
-      if (clash.length) fail(n, `${clash.join(", ")} on <${tag}> is nested inside an element with the same handler: one event would run both (event bubbling)`);
-      if (isSubmitForm && tag === "button" && as.includes("onClick")) {
-        const typeAttr = attrs(n).find((a) => ts.isJsxAttribute(a) && a.name.getText() === "type") as ts.JsxAttribute | undefined;
-        const t = typeAttr?.initializer && ts.isStringLiteral(typeAttr.initializer) ? typeAttr.initializer.text : "submit";
-        if (t === "submit") fail(n, `a submit button with onClick inside <form onSubmit>: one click runs both handlers (use type="button", or put the logic in onSubmit)`);
-      }
+interface Bubble {
+  /** native event → the enclosing handler it reaches (`onClick on <li>`) */
+  natives: Map<string, string>;
+  handlers: string[];
+  submitForm: boolean;
+}
+const NO_BUBBLE: Bubble = { natives: new Map(), handlers: [], submitForm: false };
+let bubble: Bubble = NO_BUBBLE;
+
+function withBubble<T>(b: Bubble, f: () => T): T {
+  const saved = bubble;
+  bubble = b;
+  try {
+    return f();
+  } finally {
+    bubble = saved;
+  }
+}
+
+/** Check the handler props of `<tag>` against each other and the enclosing handlers; returns the context for its children. */
+function checkEvents(tag: string, e: ts.JsxElement | ts.JsxSelfClosingElement, handlers: ts.JsxAttribute[], infos: Map<ts.JsxAttribute, EventInfo>): Bubble {
+  if (!handlers.length) return bubble;
+  const own = new Map<string, string>();
+  for (const a of handlers) {
+    const name = a.name.getText();
+    for (const n of infos.get(a)!.natives) {
+      // Handlers of continuous/default-priority events are robust and cannot call
+      // parents: several of them in one batch compose.  Discrete ones cannot.
+      if (!DISCRETE_NATIVE.has(n)) continue;
+      const other = own.get(n);
+      if (other && other !== name) fail(a, `${other} and ${name} on <${tag}> both run on one native "${n}" event: React calls both in one batch, from the same snapshot (keep one handler)`);
+      const anc = bubble.natives.get(n);
+      if (anc) fail(a, `${name} on <${tag}> is nested inside an element with ${anc}: one native "${n}" event would run both (event bubbling)`);
+      own.set(n, name);
     }
-    ts.forEachChild(n, visit);
-  };
-  for (const c of e.children) visit(c);
+  }
+  const names = handlers.map((a) => a.name.getText());
+  if (bubble.submitForm && tag === "button" && names.includes("onClick")) {
+    const t = staticAttr(e, "type"); // missing, dynamic or invalid: a submit button
+    if (typeof t !== "string" || !["button", "reset"].includes(t.toLowerCase())) fail(e, `a submit button with onClick inside <form onSubmit>: one click runs both handlers (use type="button", or put the logic in onSubmit)`);
+  }
+  const natives = new Map(bubble.natives);
+  for (const [n, p] of own) natives.set(n, `${p} on <${tag}>`);
+  return { natives, handlers: [...bubble.handlers, ...names], submitForm: bubble.submitForm || (tag === "form" && names.includes("onSubmit")) };
 }
 
 function intrinsic(tag: string, e: ts.JsxElement | ts.JsxSelfClosingElement, kids: ts.NodeArray<ts.JsxChild> | undefined, env: Env): string {
   const m = env.m;
-  checkBubbling(e, attrs(e).filter(ts.isJsxAttribute).map((a) => a.name.getText()).filter((n) => /^on[A-Z]/.test(n)), env);
+  const comp = env.comp!;
+  const handlerAttrs = attrs(e).filter(ts.isJsxAttribute).filter((a) => /^on[A-Z]/.test(a.name.getText()));
+  const infos = new Map(handlerAttrs.map((a) => [a, eventInfo(a.name.getText(), tag, e, a)] as const));
+  const inner = checkEvents(tag, e, handlerAttrs, infos);
   const as: string[] = [];
   const hs: string[] = [];
+  let key: string | null = null;
   for (const a of attrs(e)) {
     if (ts.isJsxSpreadAttribute(a)) fail(a, "spread attributes are not supported");
     const name = a.name.getText();
-    if (name === "key") continue;
+    if (name === "key") {
+      key = keyExpr(a, e, env);
+      continue;
+    }
     if (name === "ref" || name === "dangerouslySetInnerHTML") fail(a, `${name} is not supported in VTS`);
     const val = attrValue(a);
     if (/^on[A-Z]/.test(name)) {
       if (!val) fail(a, "handler attribute needs a value");
-      let ev = name.slice(2).toLowerCase();
-      ev = EVENT_RENAME[ev] ?? ev;
-      const continuous = CONTINUOUS.has(ev);
-      const h = handlerFn(val, env, continuous ? "robust" : "discrete", "event");
+      const info = infos.get(a)!;
+      const ev = info.model;
+      const h = handlerFn(val, env, info.discrete ? "discrete" : "robust", "event");
       const run = `(fun ${h.params[0] ?? "_"} => ${h.code})`;
-      if (continuous) {
-        const ok = m.ob(a, "handler-robust", `${name} handler on <${tag}> (continuous event) preserves the invariant of ${env.comp!.info.name} from any state`);
-        hs.push(`(VReact.Handler.continuous ${leanStr(ev)} ${run} ${ok} (by intros; rfl))`);
+      if (!info.discrete) {
+        const ok = m.ob(a, "handler-robust", `${name} handler on <${tag}> (continuous/default-priority event: rendered later, may see a stale snapshot) preserves the invariant of ${comp.info.name} from any state`);
+        hs.push(`(VReact.Handler.continuous ${leanStr(ev)} ${run} ${ok}\n    (/-⟦gen⟧-/ by vreact_noemit))`);
+      } else if (deferredOf(comp).length) {
+        const r = rebase(comp);
+        const ok = m.ob(a, "handler-rebased", `${name} handler on <${tag}> preserves the invariant of ${comp.info.name} also when React rebases it onto pending updates of ${r.names} (timers/effects/continuous handlers)`);
+        hs.push(`(VReact.Handler.rebased ${leanStr(ev)} ${run}\n    ${r.vary} ${r.x0} (/-⟦gen⟧-/ rfl) hinv\n    ${ok}\n    (/-⟦gen⟧-/ by decide))`);
       } else {
-        const ok = m.ob(a, "handler", `${name} handler on <${tag}> preserves the invariant of ${env.comp!.info.name}`);
-        hs.push(`(VReact.Handler.discrete ${leanStr(ev)} ${run} ${ok} (by decide))`);
+        const ok = m.ob(a, "handler", `${name} handler on <${tag}> preserves the invariant of ${comp.info.name}`);
+        hs.push(`(VReact.Handler.discrete ${leanStr(ev)} ${run} ${ok}\n    (/-⟦gen⟧-/ by decide))`);
       }
       continue;
     }
@@ -567,12 +787,29 @@ function intrinsic(tag: string, e: ts.JsxElement | ts.JsxSelfClosingElement, kid
     }
     as.push(`⟨${leanStr(name)}, ${av}⟩`);
   }
-  const ch = kids ? children(kids, env) : "VReact.VList.nil";
-  return `(VReact.VNode.elem ${leanStr(tag)} [${as.join(", ")}]\n  [${hs.join(",\n   ")}]\n  ${ch})`;
+  const ch = kids ? withBubble(inner, () => children(kids, env)) : "VReact.VList.nil";
+  return withKey(key, `(VReact.VNode.elem ${leanStr(tag)} [${as.join(", ")}]\n  [${hs.join(",\n   ")}]\n  ${ch})`);
+}
+
+/** Elements returned by `xs.map(…)`, whose key is translated (as the key function) by `keyedMap`. */
+const keyedByMap = new WeakSet<ts.Node>();
+
+/** The translated `key={…}` of an element outside a keyed map: JS evaluates it on every render, so its obligations count. */
+function keyExpr(a: ts.JsxAttribute, e: ts.Node, env: Env): string | null {
+  if (keyedByMap.has(e)) return null;
+  const val = attrValue(a);
+  if (!val) fail(a, "key needs a value");
+  if (ts.isStringLiteral(val)) return null;
+  return expr(val, env).code;
+}
+
+function withKey(key: string | null, node: string): string {
+  return key === null ? node : `(VReact.VNode.withKey ${paren(key)}\n  ${node})`;
 }
 
 function componentElement(tagNode: ts.JsxTagNameExpression, e: ts.JsxElement | ts.JsxSelfClosingElement, kids: ts.NodeArray<ts.JsxChild> | undefined, env: Env): string {
   const m = env.m;
+  if (bubble.handlers.length) fail(e, `<${tagNode.getText()}> is nested inside an element with ${bubble.handlers.join("/")}: its events would bubble into a second handler (move the handler, or the component, out)`);
   let sym = m.checker.getSymbolAtLocation(tagNode);
   if (sym && sym.flags & ts.SymbolFlags.Alias) sym = m.checker.getAliasedSymbol(sym);
   const g = sym?.declarations?.[0] ? m.prog.globals.get(sym.declarations[0]) : undefined;
@@ -606,13 +843,21 @@ function componentElement(tagNode: ts.JsxTagNameExpression, e: ts.JsxElement | t
     if (!val) fail(a, "callback prop needs a function");
     const hName = m.fresh("hcb");
     const h = handlerFn(val, env, "discrete", cb.params);
-    const ok = m.ob(a, "callback", `${info.name}.${cb.name} handler (passed from ${env.comp!.info.name}) preserves the invariant of ${env.comp!.info.name}, assuming ${info.name}'s callback contract`);
+    const comp = env.comp!;
+    if (deferredOf(comp).length) {
+      const r = rebase(comp);
+      const ok = m.ob(a, "callback-rebased", `${info.name}.${cb.name} handler (passed from ${comp.info.name}) preserves the invariant of ${comp.info.name}, assuming ${info.name}'s callback contract, also when React rebases it onto pending updates of ${r.names} (timers/effects/continuous handlers)`);
+      return `(fun ${[...h.params, hName].join(" ")} => VReact.Emit.rebased ${paren(h.code)}\n        ${r.vary} ${r.x0} (/-⟦gen⟧-/ rfl) hinv\n        ${ok})`;
+    }
+    const ok = m.ob(a, "callback", `${info.name}.${cb.name} handler (passed from ${comp.info.name}) preserves the invariant of ${comp.info.name}, assuming ${info.name}'s callback contract`);
     return `(fun ${[...h.params, hName].join(" ")} => VReact.Emit.mk ${paren(h.code)} ${ok})`;
   });
   const cbLit = `(${info.ns}.Cb.mk${cbParts.map((c) => "\n      " + c).join("")})`;
+  const keyA = given.get("key");
+  const key = keyA ? keyExpr(keyA, e, env) : null;
   const ob = m.ob(e, "child-precondition", `props passed to <${info.name}> satisfy its requires(…)`);
   m.deps.add(info.ns);
-  return `(${info.ns}.component.node ${dataLit}\n    ${cbLit}\n    ${ob})`;
+  return withKey(key, `(${info.ns}.component.node ${dataLit}\n    ${cbLit}\n    ${ob})`);
 }
 
 /** xs.map(x => <El key={…} …/>) — a keyed list with a distinct-keys obligation. */
@@ -637,6 +882,7 @@ function keyedMap(c: ts.CallExpression, env: Env): string {
   const keyAttr = attrs(retEl).find((a) => ts.isJsxAttribute(a) && a.name.getText() === "key") as ts.JsxAttribute | undefined;
   if (!keyAttr) fail(retEl, "elements rendered from a list need a key prop (React reconciliation)");
   const keyE = attrValue(keyAttr)!;
+  keyedByMap.add(retEl); // its key is translated here, as the key function
   const p = fn.parameters[0];
   // key function
   const kEnvR = bindParam(p.name, xs.type.elem, env);

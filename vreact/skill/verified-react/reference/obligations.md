@@ -8,7 +8,9 @@ hypotheses often *are* a counterexample.
 | kind | the claim | first thing to check |
 |------|-----------|----------------------|
 | `handler` | this discrete handler, run on the render snapshot, keeps the component invariant | guards before updates; two `setX(v)` from one snapshot do not compose (use `setX(p => …)`); update all fields the invariant relates |
-| `handler-robust` | a continuous-event handler keeps the invariant from **any** valid state | use functional updates; avoid relying on render values |
+| `handler-robust` | a continuous- or default-priority-event handler (`onMouseMove`, `onScroll`, `onTransitionEnd`, `onLoad`, …) keeps the invariant from **any** valid state | use functional updates; avoid relying on render values |
+| `handler-rebased` | in a component with effects/timers/continuous handlers that set state, a discrete handler keeps the invariant also when React re-applies it on top of their pending updates (fields they write may differ from the snapshot) | guard inside the functional update (`setR(p => p.lo < p.hi ? … : p)`) instead of on the snapshot |
+| `callback-rebased` | the same for a callback you pass to a child, in such a component | as for `handler-rebased` |
 | `effect-robust` | an effect / timer callback keeps the invariant from any valid state (stale closure) | functional update over the whole related state (one record) |
 | `init-invariant` | initial state satisfies the invariant | initial values; literal data in `useState(...)` |
 | `props-stability` | the invariant survives a re-render with new props (React keeps state) | do not tie state invariants to changeable props; clamp in render |

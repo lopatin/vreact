@@ -101,12 +101,18 @@ export function ItemList(props: ItemListProps) {
 * Handlers may call setters, `dispatch`, and **at most one** parent callback per path.
 * `setX(v)` uses the render snapshot; two of them in one handler do not compose — use
   `setX(prev => …)` when updates must accumulate.
-* Effects/timers must preserve the invariant from **any** state (stale closures):
-  prefer functional updates there; effect deps must be exhaustive.
+* Effects/timers and continuous/default-priority handlers (`onMouseMove`,
+  `onScroll`, `onTransitionEnd`, `onLoad`, …) must preserve the invariant from
+  **any** state (stale closures): prefer functional updates there; effect deps
+  must be exhaustive. In such a component, clicks etc. must also be safe on top
+  of their pending updates (React rebases): guard inside `setX(p => …)`.
 * Invariants must not depend on props that can change (React keeps state across
   prop changes): clamp when rendering instead.
 * Lists need `key={…}` with provably distinct keys (usually from an invariant).
-* No `onX` element may wrap another `onX` element or a user component (bubbling).
+* One native event may reach only one discrete handler: no `onX` element may wrap
+  a handler fired by the same native event (`onClick` around a checkbox's
+  `onChange`: both run on click) or a user component, and one element may not
+  combine such handlers (checkbox `onClick` + `onChange`; `onInput` + `onChange`).
 
 ## Reading results
 
@@ -125,8 +131,9 @@ A file marked `?` in the table was not checked because a module it depends on
 failed — fix the first failure and re-run.
 
 Kinds → usual fix: see `reference/obligations.md` (handler, handler-robust,
-effect-robust, init-invariant, props-stability, unique-keys, child-precondition,
-callback, callback-contract, index, nonzero-divisor, non-null, precondition,
+handler-rebased, effect-robust, init-invariant, props-stability, unique-keys,
+child-precondition, callback, callback-rebased, callback-contract, index,
+nonzero-divisor, non-null, precondition,
 postcondition, root-precondition, unreachable, assert).
 
 ## Helping the prover (only after the code and spec are right)
