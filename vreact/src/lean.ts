@@ -108,9 +108,10 @@ export function judge(obligations: Obligation[], messages: LeanMessage[], marker
     const rel = path.isAbsolute(msg.file) ? path.relative(outDir, msg.file) : msg.file;
     builtFiles.add(rel);
     if (msg.severity === "info") {
-      const am = /'([^']+)' depends on axioms: \[([^\]]*)\]/.exec(msg.text);
+      // (Lean names may themselves contain `'`, e.g. `VTS.m.max'`)
+      const am = /'(.+)' depends on axioms: \[([^\]]*)\]/.exec(msg.text);
       if (am) axioms.set(am[1], am[2].split(",").map((s) => s.trim()).filter(Boolean));
-      const none = /'([^']+)' does not depend on any axioms/.exec(msg.text);
+      const none = /'(.+)' does not depend on any axioms/.exec(msg.text);
       if (none) axioms.set(none[1], []);
       continue;
     }

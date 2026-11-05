@@ -153,7 +153,8 @@ export function showType(t: VType): string {
     case "enum":
     case "rec":
     case "union":
-      return t.name.split(".").pop()!;
+      // the TypeScript name (Lean names may be quoted or primed, see leanIdent)
+      return t.name.split(".").pop()!.replace(/^«(.*)»$/, "$1").replace(/'$/, "");
     case "arr":
       return `readonly ${showType(t.elem)}[]`;
     case "opt":
@@ -384,12 +385,12 @@ function recordFromMembers(
   sf: ts.SourceFile,
   decl?: ts.Declaration,
 ): VType {
-  const qname = `${env.nsOf(sf)}.${name}`;
+  const qname = `${env.nsOf(sf)}.${leanIdent(name)}`;
   const key = decl ?? where;
   const existing = env.reg.byDecl.get(key);
   if (existing) return { k: "rec", name: existing.qname };
   // register first (fields filled below) so recursive references are detected
-  const nt: NamedType = { qname, short: name, module: env.nsOf(sf), def: { k: "rec", fields: [] }, decl: key };
+  const nt: NamedType = { qname, short: leanIdent(name), module: env.nsOf(sf), def: { k: "rec", fields: [] }, decl: key };
   const fields: Field[] = [];
   for (const m of members) {
     if (!ts.isPropertySignature(m)) fail(m, "only property signatures are allowed in VTS object types (no methods/index signatures)");
@@ -405,7 +406,7 @@ function recordFromMembers(
 }
 
 function enumType(lits: string[], env: TypeEnv, name: string, decl: ts.Declaration | undefined, sf: ts.SourceFile): VType {
-  const qname = `${env.nsOf(sf)}.${name}`;
+  const qname = `${env.nsOf(sf)}.${leanIdent(name)}`;
   if (decl) {
     const existing = env.reg.byDecl.get(decl);
     if (existing) return { k: "enum", name: existing.qname };
@@ -413,7 +414,7 @@ function enumType(lits: string[], env: TypeEnv, name: string, decl: ts.Declarati
     const existing = env.reg.byName.get(qname);
     if (existing && existing.def.k === "enum" && existing.def.lits.join("|") === lits.join("|")) return { k: "enum", name: qname };
   }
-  env.reg.add({ qname, short: name, module: env.nsOf(sf), def: { k: "enum", lits }, decl });
+  env.reg.add({ qname, short: leanIdent(name), module: env.nsOf(sf), def: { k: "enum", lits }, decl });
   return { k: "enum", name: qname };
 }
 
@@ -475,7 +476,7 @@ function unionOf(
     objs.every((o) => o.members.some((p) => ts.isPropertySignature(p) && p.name.getText() === c && p.type && ts.isLiteralTypeNode(p.type) && ts.isStringLiteral(p.type.literal))),
   );
   if (!tag) fail(node, `union of object types needs a common string-literal discriminant property (e.g. kind: "add")`);
-  const qname = `${env.nsOf(sf)}.${name}`;
+  const qname = `${env.nsOf(sf)}.${leanIdent(name)}`;
   const key = decl ?? node;
   const existing = env.reg.byDecl.get(key);
   if (existing) return { k: "union", name: existing.qname };
@@ -495,6 +496,6 @@ function unionOf(
     }
     variants.push({ lit, ctor: lit, fields });
   }
-  env.reg.add({ qname, short: name, module: env.nsOf(sf), def: { k: "union", tag, variants }, decl: key });
+  env.reg.add({ qname, short: leanIdent(name), module: env.nsOf(sf), def: { k: "union", tag, variants }, decl: key });
   return { k: "union", name: qname };
 }
