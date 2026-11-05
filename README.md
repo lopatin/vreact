@@ -6,6 +6,7 @@
 | **The tool** | `vreact/`: TS→Lean 4 translator, React semantic model and runtime soundness proof in Lean, proof automation, synthesizer. See `vreact/README.md`. |
 | **The model** | `vreact/docs/SEMANTICS.md`: what "verified" means here, and exactly what is trusted. |
 | **The walkthrough** | `docs/WALKTHROUGH.md`: building `examples/kanban` incrementally, spec-first, synthesis, top-down with trusted stubs, bugs caught, to a fully verified app (79 obligations, certificate on standard axioms only). Raw outputs are in `docs/walkthrough/`. |
+| **Options chain walkthrough** | [`docs/OPTIONS_CHAIN_WALKTHROUGH.md`](docs/OPTIONS_CHAIN_WALKTHROUGH.md): a medium-complexity trading widget (`examples/options-chain`: expiries, ATM strike, strike filter, heat map, order ticket, simulated feed) built step by step with real tool output; every step's snapshot and log in `docs/options-chain/`, re-checked by `docs/options-chain/replay.sh` (129 obligations, certificate on standard axioms only). |
 | **The app** | `examples/kanban` (`npm run dev` in that folder) and its verification (`npx vreact verify`). |
 | **More examples** | `examples/seats` (seat booking, opaque constant data), `examples/cart` (a small cart built step by step: model, synthesis, top-down App with a trusted stub, two bugs caught). |
 

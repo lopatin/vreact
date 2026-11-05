@@ -1,0 +1,28 @@
+translated 1 module(s), 6 proof obligation(s) → .vreact/ ; checking with Lean…
+
+Components
+Functions
+  VERIFIED           validChain
+  VERIFIED           legOf
+  VERIFIED           theoOf
+  INCOMPLETE         quotePrice
+  VERIFIED           withinSpread
+  INCOMPLETE         midPrice
+  VERIFIED           inTheMoney
+  VERIFIED           dist
+  VERIFIED           nearest
+  INCOMPLETE         atmIndex
+  VERIFIED           inWindow
+  INCOMPLETE         strikeWindow
+  VERIFIED           levelsOf
+  VERIFIED           edge
+  INCOMPLETE         heatOf
+  VERIFIED           validQty
+  VERIFIED           validOrder
+  VERIFIED           fmtPrice
+  VERIFIED           fmtVol
+Obligations by file
+  ✓ src/model.ts                             6/6
+pending (hole() / sorry): quotePrice, midPrice, atmIndex, strikeWindow, heatOf
+
+◐ INCOMPLETE (holes / trusted stubs / unchecked parts remain)  6/6 obligations proved; components: 0/0 verified  (2.5s)
