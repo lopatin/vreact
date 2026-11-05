@@ -93,7 +93,8 @@ Every expression maps to a Lean term whose value is the JavaScript value.
   when it leaves one variant (else branch, code after an early return, the right
   of `||`, a ternary's false branch); with more variants left, the complement is
   split into one arm per variant only when later code needs it (a later test
-  excludes all but one).
+  excludes all but one, or a field the remaining variants share). A variant
+  narrowing of a `T | null` path (tested non-null first) also makes it present.
   Assigning a present value to an optional `let`
   narrows it as well; any later assignment (also in a `for…of`) drops what was
   known. A null test, `??`, `?.` or `!` on a value known to be present is decided
@@ -469,3 +470,10 @@ function's obligations failed, and their axioms contain no `sorryAx` — so a
 function with several holes is proved once all are filled, a `@trusted`
 function is refused, and a failure elsewhere that keeps the function from being
 checked is reported as "not proved". The written text is the text Lean checked.
+A proof whose axioms include @trusted declarations or `assume(…)` facts is
+reported relative to them (`--json`: `"status": "proved-relative"` and
+`relative_to`). Synth types candidates with the narrowing the translator has at
+the hole (with the variants left after exclusions, which the translator splits
+on when a fill needs them), and searches a hole once per fill of the earlier holes a call can
+also evaluate (holes in different cases or branches are searched once); both
+only steer the search — Lean still checks every fill of a function together.

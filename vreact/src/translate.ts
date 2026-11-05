@@ -196,10 +196,34 @@ function pathKey(env: Env, e: ts.Expression): string | null {
   return null;
 }
 
-/** Is `e` (a variable or property path) narrowed to a non-null value here? */
+/**
+ * The narrowing in effect in `env` on the paths rooted at the given variables, keyed by
+ * path text (`s`, `s.inner`): what `vreact synth` may assume at a hole.
+ */
+export function narrowingAt(env: Env, roots: readonly { sym: ts.Symbol; name: string }[]): Map<string, Narrowed> {
+  const out = new Map<string, Narrowed>();
+  for (const { sym, name } of roots) {
+    const k = `#${symId(sym)}`;
+    for (const [key, n] of env.narrow) if (key === k || key.startsWith(k + ".")) out.set(name + key.slice(k.length), n);
+  }
+  return out;
+}
+
+/** `remaining` (see Env) on the paths rooted at the given variables, keyed by path text as narrowingAt. */
+export function remainingAt(env: Env, roots: readonly { sym: ts.Symbol; name: string }[]): Map<string, string[]> {
+  const out = new Map<string, string[]>();
+  for (const { sym, name } of roots) {
+    const k = `#${symId(sym)}`;
+    for (const [key, vs] of env.remaining ?? []) if (key === k || key.startsWith(k + ".")) out.set(name + key.slice(k.length), vs);
+  }
+  return out;
+}
+
+/** Is `e` (a variable or property path) narrowed to a non-null value here (to a variant: also present)? */
 function narrowedSome(env: Env, e: ts.Expression): boolean {
   const k = pathKey(env, e);
-  return !!k && env.narrow.get(k)?.kind === "some";
+  const n = k ? env.narrow.get(k) : undefined;
+  return !!n && (n.kind === "some" || n.kind === "variant");
 }
 
 function isNullLit(e: ts.Expression): boolean {
@@ -377,11 +401,12 @@ export function expr(e: ts.Expression, env: Env, expected?: VType): Val {
 
 function expr0(e: ts.Expression, env: Env, expected?: VType): Val {
   const m = env.m;
-  // narrowed path?
+  // narrowed path? (a variant narrowing replaces a `some` one: `s: T | null` tested non-null,
+  // then to be a variant, is that present value)
   const key = pathKey(env, e);
   if (key) {
     const n = env.narrow.get(key);
-    if (n && n.kind === "some") return { code: n.code, type: n.type };
+    if (n && (n.kind === "some" || n.kind === "variant")) return { code: n.code, type: n.type };
   }
   switch (e.kind) {
     case ts.SyntaxKind.ParenthesizedExpression:
@@ -852,7 +877,7 @@ function objectLiteral(o: ts.ObjectLiteralExpression, env: Env, expected?: VType
       const vs = env.m.checker.getShorthandAssignmentValueSymbol(p);
       const key = vs ? `#${symId(vs)}` : null;
       const n = key ? env.narrow.get(key) : undefined;
-      if (n && n.kind === "some") return coerce({ code: n.code, type: n.type }, t, p, env);
+      if (n && (n.kind === "some" || n.kind === "variant")) return coerce({ code: n.code, type: n.type }, t, p, env);
       return coerce(identifier(p.name, env, t, vs), t, p, env);
     }
     return expr(p, env, t);
@@ -1355,6 +1380,8 @@ function specCall(name: string, c: ts.CallExpression, env: Env): Val {
       // an unfilled synthesis placeholder: translated as `sorry` (reported INCOMPLETE)
       const t = c.typeArguments?.[0] ? typeOfNode(c.typeArguments[0], env.m.prog.typeEnv, "Hole") : undefined;
       if (!t) fail(c, "write hole<T>() with an explicit type");
+      // vreact synth types its candidates with the narrowing in effect here
+      if (!env.m.dry) env.m.prog.holeEnvs?.push({ node: c, env });
       return { code: `(sorry : ${leanType(t)})`, type: t };
     }
     default:
@@ -1418,6 +1445,7 @@ function narrowTest(e: ts.Expression, env: Env): NarrowTest | null {
 /** A throw-away module context for type queries (obligations are discarded). */
 function dryCtx(m: ModCtx): ModCtx {
   const d = Object.create(m) as ModCtx;
+  d.dry = true;
   d.obligations = [];
   d.counter = { n: 0 };
   d.ob = () => "(by sorry)";
@@ -1530,12 +1558,22 @@ function narrowBranch(nt: NarrowTest, env: Env, onTrue: (e: Env) => string, onFa
     const m = env.m;
     const nObs = m.obligations.length;
     const nCount = m.counter.n;
+    const nHoles = m.prog.holeEnvs?.length ?? 0;
+    // (vreact synth only: which variants are left in the `_` arm; the term is the same)
+    let restEnv = env;
+    if (m.prog.holeEnvs) {
+      const before = env.remaining?.get(key);
+      const remaining = new Map(env.remaining ?? []);
+      remaining.set(key, others.map((v) => v.lit).filter((l) => !before || before.includes(l)));
+      restEnv = { ...env, remaining };
+    }
     try {
-      arms += `\n  | _ => ${paren(whenNot(env))}`;
+      arms += `\n  | _ => ${paren(whenNot(restEnv))}`;
     } catch (err) {
       if (!(err instanceof VtsError)) throw err;
       m.obligations.length = nObs;
       m.counter.n = nCount;
+      if (m.prog.holeEnvs) m.prog.holeEnvs.length = nHoles;
       for (const v of others) {
         const a = arm(v);
         arms += `\n  | ${a.pat} => ${paren(whenNot(a.env))}`;
@@ -1911,7 +1949,8 @@ function dropNarrowing(env: Env, s: ts.Symbol): Env {
 function forgetNarrowing(env: Env, s: ts.Symbol): Env {
   const key = `#${symId(s)}`;
   const narrow = new Map([...env.narrow].filter(([k]) => k !== key && !k.startsWith(key + ".")));
-  return { ...env, narrow };
+  const remaining = env.remaining && new Map([...env.remaining].filter(([k]) => k !== key && !k.startsWith(key + ".")));
+  return { ...env, narrow, remaining };
 }
 
 /**

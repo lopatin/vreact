@@ -59,14 +59,21 @@ change (it is incremental and usually takes seconds).
    fields), record/variant literals, `[...xs, e]`, `[...xs, ...ys]`,
    `xs.filter(x => x.k !== v)`, `xs.map(x => x.k === v ? { ...x, f: e } : x)`,
    calls of the module's total helpers, `± 1` and comparisons — smallest first,
-   up to size 9. Each hole costs up to ~60 s of search plus a Lean check per
-   candidate that passes the random tests. Guarded updates (`if … return s;`)
+   up to size 9. Each hole costs up to ~60 s of search plus up to 5 Lean checks
+   of candidates that pass the random tests; a function with n holes takes up
+   to about n times that. Guarded updates (`if … return s;`)
    are not in the grammar: write the guard by hand and leave a hole in each
    branch (or `case`) — the holes of one function are filled and proved
-   together. `✔ proved by Lean` means Lean checked the whole function; a
-   `? not proved` line names what kept Lean from checking it (often a failing
-   obligation elsewhere in the module or an import: fix that first). Synth
-   never edits the file while searching; `--write` writes only proved fills.
+   together (holes in different branches or cases are searched once each,
+   whatever the others are filled with). `✔ proved by Lean` means Lean checked
+   the whole function; `(relative to …)` — `"status": "proved-relative"` with
+   `relative_to` under `--json` — means the proof assumes those @trusted
+   contracts or `assume(…)` facts. A `? not proved` line names what kept Lean
+   from checking it (often a failing obligation elsewhere in the module or an
+   import: fix that first); a contract whose statement depends on a function
+   that still has a hole (through calls, their bodies and `requires`; not
+   through `@trusted` bodies) is reported as such: fill that function first. Synth never edits the
+   file while searching; `--write` writes only proved fills.
 3. **Reducer** — a total `switch` over a discriminated-union action type,
    delegating to the model; `ensures` that it preserves the invariant.
 4. **Components top-down.** Write the root for real; stub children as

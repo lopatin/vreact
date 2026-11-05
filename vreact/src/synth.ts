@@ -2,8 +2,9 @@
  * vreact synth — fill `hole<T>()` placeholders against the function's contract.
  *
  *   1. Scope: parameters of the enclosing function, refined by the narrowing in
- *      effect at the hole (switch/if on a discriminant, null tests, early returns),
- *      mirroring the translator's narrowing.
+ *      effect at the hole (switch/if on a discriminant, null tests, early returns,
+ *      else branches, `&&`/`||`, `?:`), read from the translator's own environment
+ *      at the hole (the narrowing every translation of the hole agrees on).
  *   2. Enumerate well-typed VTS expressions of type T, smallest first, from a
  *      grammar of idiomatic immutable updates: field updates `{ ...s, f: e }`,
  *      append `[...xs, e]`, remove-by-key `xs.filter(x => x.k !== v)`,
@@ -17,7 +18,11 @@
  *      only when Lean elaborated the function and all its postcondition theorems,
  *      no obligation of the function failed, and their axioms contain no sorry.
  *      The holes of one function are filled together (the contract is only
- *      checked once the function is complete).
+ *      checked once the function is complete): a depth-first search over
+ *      tentative fills, where the search of a hole that no execution reaching it
+ *      shares with an earlier hole (another `case`, the other branch, after an
+ *      early return) runs once and is reused whatever the earlier fills are, and
+ *      a hole without survivors backjumps over the holes it does not depend on.
  *
  * The source file is never modified while searching: candidates are checked
  * from memory (`Config.overrides`). With `--write`, the proved fills are written
@@ -29,11 +34,11 @@ import path from "node:path";
 import { createRequire } from "node:module";
 import { pathToFileURL } from "node:url";
 import { loadConfig } from "./cli.ts";
-import { translate, overrideHost, type Config, type TranslateResult } from "./module.ts";
-import { runLake, findMarkers, judge, summarizeLeanError, type Verdict } from "./lean.ts";
-import { Program, ModCtx } from "./ctx.ts";
+import { translate, overrideHost, moduleNs, type Config, type TranslateResult } from "./module.ts";
+import { runLake, findMarkers, judge, type Verdict } from "./lean.ts";
+import { Program, ModCtx, type HoleEnv } from "./ctx.ts";
 import { type VType, type Field, T, typeOfNode, typeOfDecl, showType, sharedFields } from "./types.ts";
-import { specFn } from "./translate.ts";
+import { specFn, narrowingAt, remainingAt } from "./translate.ts";
 import { baseEnv } from "./component.ts";
 import { VtsError, capitalize } from "./util.ts";
 
@@ -71,7 +76,7 @@ const key = (t: VType) => JSON.stringify(t);
 const MAX_TERMS = 3000;
 const MAX_CANDIDATES = 30000;
 const TIME_LIMIT_MS = 60000;
-/** Lean checks per hole before giving up on further survivors */
+/** Lean checks per hole before giving up on further survivors (a function with n holes gets n × this in all) */
 const MAX_LEAN_CHECKS = 5;
 /** Lean checks of the last hole of a function with several holes, per fill of the earlier ones */
 const MAX_LEAN_CHECKS_JOINT = 2;
@@ -131,9 +136,38 @@ function fillText(h: Hole, cand: string): string {
   return h.parens && !isAtomic(cand) ? `(${cand})` : cand;
 }
 
+/** A single-file program (nothing resolved, no lib) whose checker binds the file's own names. */
+function fileChecker(fileName: string, text: string): { sf: ts.SourceFile; checker: ts.TypeChecker } {
+  const sf = ts.createSourceFile(fileName, text, ts.ScriptTarget.ES2022, true, fileName.endsWith(".tsx") ? ts.ScriptKind.TSX : ts.ScriptKind.TS);
+  const host: ts.CompilerHost = {
+    getSourceFile: (f) => (f === fileName ? sf : undefined),
+    getDefaultLibFileName: () => "lib.d.ts",
+    writeFile: () => {},
+    getCurrentDirectory: () => path.dirname(fileName),
+    getCanonicalFileName: (f) => f,
+    useCaseSensitiveFileNames: () => true,
+    getNewLine: () => "\n",
+    fileExists: (f) => f === fileName,
+    readFile: (f) => (f === fileName ? text : undefined),
+  };
+  const program = ts.createProgram({ rootNames: [fileName], options: { noResolve: true, noLib: true, types: [], jsx: ts.JsxEmit.Preserve }, host });
+  return { sf, checker: program.getTypeChecker() };
+}
+
+/** An identifier that names a property (`x.f`, `{ f: e }`, `{ f: T }`, `{ f: y } = e`), never a variable. */
+function isPropertyName(n: ts.Identifier): boolean {
+  const p = n.parent;
+  if (ts.isPropertyAccessExpression(p)) return p.name === n;
+  if (ts.isQualifiedName(p)) return p.right === n;
+  if (ts.isPropertyAssignment(p) || ts.isPropertySignature(p) || ts.isPropertyDeclaration(p) || ts.isMethodDeclaration(p) || ts.isMethodSignature(p) || ts.isGetAccessor(p) || ts.isSetAccessor(p) || ts.isEnumMember(p)) return p.name === n;
+  if (ts.isBindingElement(p)) return p.propertyName === n;
+  if (ts.isJsxAttribute(p)) return p.name === n;
+  return false;
+}
+
 /** Drop `hole` from the vreact/spec import when the text no longer uses it (noUnusedLocals). */
 function dropUnusedHoleImport(text: string, fileName: string): string {
-  const sf = ts.createSourceFile(fileName, text, ts.ScriptTarget.ES2022, true, fileName.endsWith(".tsx") ? ts.ScriptKind.TSX : ts.ScriptKind.TS);
+  const { sf, checker } = fileChecker(fileName, text);
   for (const st of sf.statements) {
     if (!ts.isImportDeclaration(st) || !ts.isStringLiteral(st.moduleSpecifier) || !SPEC_RE.test(st.moduleSpecifier.text)) continue;
     const nb = st.importClause?.namedBindings;
@@ -142,10 +176,18 @@ function dropUnusedHoleImport(text: string, fileName: string): string {
     const i = els.findIndex((e) => (e.propertyName ?? e.name).text === "hole" && !e.isTypeOnly);
     if (i < 0) continue;
     const local = els[i].name.text;
+    // only references to the imported binding count: not a field or property spelled `hole`,
+    // nor a local (parameter, destructured name) that shadows it
+    const imported = checker.getSymbolAtLocation(els[i].name);
     let used = false;
     const visit = (n: ts.Node) => {
       if (used || n === st) return;
-      if (ts.isIdentifier(n) && n.text === local) used = true;
+      if (ts.isIdentifier(n) && n.text === local && !isPropertyName(n)) {
+        const p = n.parent;
+        const s = ts.isShorthandPropertyAssignment(p) && p.name === n ? checker.getShorthandAssignmentValueSymbol(p) : checker.getSymbolAtLocation(n);
+        // (no symbol at all: keep the import, to be safe)
+        if (!imported || !s || s === imported) used = true;
+      }
       ts.forEachChild(n, visit);
     };
     ts.forEachChild(sf, visit);
@@ -226,20 +268,90 @@ function annotateRegistry(prog: Program, checker: ts.TypeChecker) {
 
 /* ───────────────────────── scope at the hole ───────────────────────── */
 
-type Narrow = Map<string, { variant?: string; some?: boolean }>;
+/**
+ * What is known at a hole about a parameter path (`s`, `s.inner`): the variants it can have (one
+ * when it is narrowed to a variant; absent: any), and whether it is present (not null).
+ */
+type Narrow = Map<string, { variants?: string[]; some?: boolean }>;
 
-function pathText(e: ts.Expression): string | null {
-  while (ts.isParenthesizedExpression(e)) e = e.expression;
-  if (ts.isIdentifier(e)) return e.text;
-  if (ts.isPropertyAccessExpression(e) && !e.questionDotToken) {
-    const b = pathText(e.expression);
-    return b ? `${b}.${e.name.text}` : null;
+/**
+ * The narrowing at each hole of the program, by the hole's start offset in its file: read from
+ * the translator's environments at the hole (`Config.holeEnvs`), so that synth types candidates
+ * exactly as the translator will. A variant narrowing implies a present value (`s: Shape | null`
+ * tested to be a "rect"). Where tests excluded variants but several are left, the translator
+ * keeps one arm and splits it when the code there needs a variant (`Env.remaining`): the
+ * variants left are what synth may assume. A hole translated several times (the code after an
+ * `if` without `else` is translated in both branches) keeps only what holds in every
+ * translation: the union of the variants, and presence when every translation has it.
+ */
+function narrowingAtHoles(holeEnvs: HoleEnv[]): Map<string, Narrow> {
+  const all = new Map<string, Narrow[]>();
+  for (const { node, env } of holeEnvs) {
+    let fn: ts.Node | undefined = node;
+    while (fn && !(ts.isFunctionDeclaration(fn) && ts.isSourceFile(fn.parent))) fn = fn.parent;
+    if (!fn) continue;
+    const roots: { sym: ts.Symbol; name: string }[] = [];
+    for (const p of (fn as ts.FunctionDeclaration).parameters) {
+      const sym = ts.isIdentifier(p.name) ? env.m.checker.getSymbolAtLocation(p.name) : undefined;
+      if (sym) roots.push({ sym, name: (p.name as ts.Identifier).text });
+    }
+    const facts: Narrow = new Map();
+    for (const [p, n] of narrowingAt(env, roots)) facts.set(p, n.kind === "variant" && n.variant ? { variants: [n.variant], some: true } : { some: true });
+    for (const [p, vs] of remainingAt(env, roots)) {
+      const f = facts.get(p);
+      if (!f?.variants) facts.set(p, { ...f, variants: vs });
+    }
+    const sf = node.getSourceFile();
+    const k = `${path.resolve(sf.fileName)}:${node.getStart(sf)}`;
+    all.set(k, [...(all.get(k) ?? []), facts]);
   }
-  return null;
+  const out = new Map<string, Narrow>();
+  for (const [k, facts] of all) {
+    const agreed: Narrow = new Map();
+    for (const p of new Set(facts.flatMap((f) => [...f.keys()]))) {
+      const some = facts.every((f) => f.get(p)?.some);
+      const variants = facts.every((f) => f.get(p)?.variants) ? [...new Set(facts.flatMap((f) => f.get(p)!.variants!))] : undefined;
+      if (some || variants) agreed.set(p, { ...(variants ? { variants } : {}), ...(some ? { some } : {}) });
+    }
+    out.set(k, agreed);
+  }
+  return out;
 }
 
-const isNullLit = (e: ts.Expression) => e.kind === ts.SyntaxKind.NullKeyword || (ts.isIdentifier(e) && e.text === "undefined");
+function holeScope(narrowed: Narrow, prog: Program, params: Map<string, VType>): Atom[] {
+  const reg = prog.reg;
+  // the fields of a value of type t (of a union: those its possible variants share)
+  const fieldsOf = (t: VType, variants?: string[]): Field[] => {
+    if (t.k === "rec") return reg.rec(t);
+    if (t.k === "union") {
+      const u = reg.union(t);
+      return sharedFields(variants ? u.variants.filter((v) => variants.includes(v.lit)) : u.variants);
+    }
+    return [];
+  };
+  const scope: Atom[] = [];
+  const narrowT = (p: string, t: VType) => (narrowed.get(p)?.some && t.k === "opt" ? t.elem : t);
+  for (const [name, t0] of params) {
+    const t = narrowT(name, t0);
+    scope.push({ code: name, type: t, size: 1 });
+    // one level of field access (two for records of records / narrowed variants)
+    for (const f of fieldsOf(t, narrowed.get(name)?.variants)) {
+      const p = `${name}.${f.name}`;
+      const ft = narrowT(p, f.type);
+      scope.push({ code: p, type: ft, size: 1 });
+      if (ft.k === "rec" || (ft.k === "union" && narrowed.get(p)?.variants)) {
+        for (const g of fieldsOf(ft, narrowed.get(p)?.variants)) scope.push({ code: `${p}.${g.name}`, type: narrowT(`${p}.${g.name}`, g.type), size: 2 });
+      }
+    }
+  }
+  return scope;
+}
 
+/* ───────────────────────── holes that share executions ───────────────────────── */
+
+const isFunctionLike = (n: ts.Node) => ts.isArrowFunction(n) || ts.isFunctionExpression(n) || ts.isFunctionDeclaration(n) || ts.isMethodDeclaration(n);
+
+/** The statements end the function (as the translator's `terminates`: return/throw, or an if/else whose branches both do). */
 function terminates(stmts: readonly ts.Statement[]): boolean {
   const last = stmts[stmts.length - 1];
   if (!last) return false;
@@ -250,121 +362,90 @@ function terminates(stmts: readonly ts.Statement[]): boolean {
 }
 const blockOf = (s: ts.Statement): readonly ts.Statement[] => (ts.isBlock(s) ? s.statements : [s]);
 
-function holeScope(hole: ts.CallExpression, fn: ts.FunctionDeclaration, prog: Program, params: Map<string, VType>): Atom[] {
-  const reg = prog.reg;
-  const fieldsOf = (t: VType, variant?: string): Field[] => {
-    if (t.k === "rec") return reg.rec(t);
-    if (t.k === "union") {
-      const u = reg.union(t);
-      if (variant) return u.variants.find((v) => v.lit === variant)?.fields ?? [];
-      return sharedFields(u.variants);
-    }
-    return [];
-  };
-  // the (un-narrowed) type of a path p or p.f or p.f.g
-  const typeOfPath = (p: string): VType | null => {
-    const [head, ...rest] = p.split(".");
-    let t = params.get(head) ?? null;
-    for (const f of rest) {
-      if (!t) return null;
-      t = fieldsOf(t).find((x) => x.name === f)?.type ?? null;
-    }
-    return t;
-  };
-  // narrowing established by condition `c` evaluating to `pos` (as the translator's `branch` does)
-  const cond = (c: ts.Expression, pos: boolean): Narrow => {
-    const out: Narrow = new Map();
-    while (ts.isParenthesizedExpression(c)) c = c.expression;
-    if (ts.isPrefixUnaryExpression(c) && c.operator === ts.SyntaxKind.ExclamationToken) return cond(c.operand, !pos);
-    if (ts.isBinaryExpression(c)) {
-      const k = c.operatorToken.kind;
-      const K = ts.SyntaxKind;
-      if ((k === K.AmpersandAmpersandToken && pos) || (k === K.BarBarToken && !pos)) {
-        for (const [p, v] of [...cond(c.left, pos), ...cond(c.right, pos)]) if (!out.has(p)) out.set(p, v);
-        return out;
-      }
-      const eq = k === K.EqualsEqualsEqualsToken || k === K.EqualsEqualsToken;
-      const neq = k === K.ExclamationEqualsEqualsToken || k === K.ExclamationEqualsToken;
-      if (!eq && !neq) return out;
-      if (isNullLit(c.left) || isNullLit(c.right)) {
-        const p = pathText(isNullLit(c.right) ? c.left : c.right);
-        // the value is non-null when the test "is null" is false
-        if (p && (pos ? neq : eq)) out.set(p, { some: true });
-        return out;
-      }
-      const tag = (acc: ts.Expression, lit: ts.Expression) => {
-        if (!ts.isPropertyAccessExpression(acc) || !ts.isStringLiteralLike(lit)) return;
-        const p = pathText(acc.expression);
-        const t = p ? typeOfPath(p) : null;
-        // only the matching branch is narrowed (the translator does not narrow the complement)
-        if (p && t?.k === "union" && reg.union(t).tag === acc.name.text && (pos ? eq : neq)) out.set(p, { variant: lit.text });
-      };
-      tag(c.left, c.right);
-      tag(c.right, c.left);
-      return out;
-    }
-    // truthiness of an optional object/array
-    const p = pathText(c);
-    const t = p ? typeOfPath(p) : null;
-    if (p && pos && t?.k === "opt" && ["rec", "arr", "union", "tuple"].includes(t.elem.k)) out.set(p, { some: true });
-    return out;
-  };
-  const narrowed: Narrow = new Map();
-  const add = (m: Narrow) => {
-    for (const [p, v] of m) if (!narrowed.has(p)) narrowed.set(p, v);
-  };
-  let n: ts.Node = hole;
-  while (n.parent && n !== fn) {
-    const parent = n.parent;
-    if (ts.isCaseClause(parent) && parent.statements.includes(n as ts.Statement) && ts.isSwitchStatement(parent.parent.parent)) {
-      const sw = parent.parent.parent;
-      const clauses = parent.parent.clauses;
-      const i = clauses.indexOf(parent);
-      const fallsInto = i > 0 && clauses[i - 1].statements.length === 0; // `case "a": case "b": …` — not narrowed
-      const p = ts.isPropertyAccessExpression(sw.expression) ? pathText(sw.expression.expression) : null;
-      const t = p ? typeOfPath(p) : null;
-      if (p && !fallsInto && t?.k === "union" && reg.union(t).tag === (sw.expression as ts.PropertyAccessExpression).name.text && ts.isStringLiteralLike(parent.expression)) {
-        add(new Map([[p, { variant: parent.expression.text }]]));
-      }
-    }
-    if (ts.isIfStatement(parent)) {
-      if (parent.thenStatement === n) add(cond(parent.expression, true));
-      else if (parent.elseStatement === n) add(cond(parent.expression, false));
-    }
-    if (ts.isConditionalExpression(parent)) {
-      if (parent.whenTrue === n) add(cond(parent.condition, true));
-      else if (parent.whenFalse === n) add(cond(parent.condition, false));
-    }
-    // early exits before the hole's statement: `if (c) return …;` narrows by !c
-    if ((ts.isBlock(parent) || ts.isCaseClause(parent) || ts.isDefaultClause(parent)) && parent.statements.includes(n as ts.Statement)) {
-      const stmts = parent.statements;
-      for (let j = stmts.indexOf(n as ts.Statement) - 1; j >= 0; j--) {
-        const st = stmts[j];
-        if (!ts.isIfStatement(st)) continue;
-        const thenExits = terminates(blockOf(st.thenStatement));
-        const elseExits = !!st.elseStatement && terminates(blockOf(st.elseStatement));
-        if (thenExits && !elseExits) add(cond(st.expression, false));
-        else if (elseExits && !thenExits) add(cond(st.expression, true));
-      }
-    }
-    n = parent;
+/**
+ * Does every execution that evaluates `h` (inside statement `top`) leave the function before
+ * `top` completes? Yes when `h` is evaluated in a `return`/`throw` of the function itself (not of
+ * a nested arrow function), or in a statement whose remaining statements in its block end the
+ * function. (VTS has no `break` other than the one ending a `case`, and no `continue`.)
+ */
+function exitsAfter(h: ts.Node, top: ts.Node): boolean {
+  let exits = false;
+  for (let n = h; n !== top && n.parent; n = n.parent) {
+    const p = n.parent;
+    if (isFunctionLike(p)) exits = false; // its returns end the nested function, not this one
+    else if (ts.isReturnStatement(p) || ts.isThrowStatement(p)) exits = true;
+    else if ((ts.isBlock(p) || ts.isCaseClause(p) || ts.isDefaultClause(p)) && terminates(p.statements.slice(p.statements.indexOf(n as ts.Statement)))) exits = true;
   }
-  const scope: Atom[] = [];
-  const narrowT = (p: string, t: VType) => (narrowed.get(p)?.some && t.k === "opt" ? t.elem : t);
-  for (const [name, t0] of params) {
-    const t = narrowT(name, t0);
-    scope.push({ code: name, type: t, size: 1 });
-    // one level of field access (two for records of records / narrowed variants)
-    for (const f of fieldsOf(t, narrowed.get(name)?.variant)) {
-      const p = `${name}.${f.name}`;
-      const ft = narrowT(p, f.type);
-      scope.push({ code: p, type: ft, size: 1 });
-      if (ft.k === "rec" || (ft.k === "union" && narrowed.get(p)?.variant)) {
-        for (const g of fieldsOf(ft, narrowed.get(p)?.variant)) scope.push({ code: `${p}.${g.name}`, type: narrowT(`${p}.${g.name}`, g.type), size: 2 });
-      }
+  return exits;
+}
+
+/**
+ * Can one call of `fn` evaluate both holes `a` and `b` (`a` first in the source)? Conservatively
+ * yes, unless the holes are in different branches of an `if`/`?:`, in different cases of a
+ * `switch` (VTS cases never fall through), or `a` is in a statement that leaves the function
+ * once `a` is evaluated (an early return before `b`) — all outside any loop or nested function,
+ * in a function that does not call itself. Exclusive holes are searched independently (the
+ * inputs that reach one never evaluate the other); this only saves time: Lean checks all fills
+ * of a function together whatever this says.
+ */
+function mayShareExecution(a: ts.Node, b: ts.Node, fn: ts.FunctionDeclaration, recursive: boolean): boolean {
+  if (recursive) return true;
+  const chain = (n: ts.Node) => {
+    const xs: ts.Node[] = [];
+    for (let x: ts.Node | undefined = n; x && x !== fn; x = x.parent) xs.push(x);
+    return xs;
+  };
+  const pa = chain(a);
+  const pb = chain(b);
+  const inB = new Set(pb);
+  const i = pa.findIndex((x) => inB.has(x));
+  if (i <= 0) return true;
+  const lca = pa[i];
+  const ca = pa[i - 1];
+  const cb = pb[pb.indexOf(lca) - 1];
+  if (!cb) return true;
+  // the common ancestor runs at most once per call
+  if (pa.slice(i).some((x) => isFunctionLike(x) || ts.isIterationStatement(x, false))) return true;
+  const apart = (x: ts.Node, y: ts.Node) => (ca === x && cb === y) || (ca === y && cb === x);
+  if (ts.isIfStatement(lca)) return !(lca.elseStatement && apart(lca.thenStatement, lca.elseStatement));
+  if (ts.isConditionalExpression(lca)) return !apart(lca.whenTrue, lca.whenFalse);
+  if (ts.isCaseBlock(lca)) return !((ts.isCaseClause(ca) || ts.isDefaultClause(ca)) && (ts.isCaseClause(cb) || ts.isDefaultClause(cb)) && ca.statements.length > 0);
+  if (ts.isBlock(lca) || ts.isCaseClause(lca) || ts.isDefaultClause(lca)) return !exitsAfter(a, ca);
+  return true;
+}
+
+/** Does `fn` call itself (directly, through other functions, or from its contract)? */
+function callsItself(fn: ts.FunctionDeclaration, checker: ts.TypeChecker, refs: Set<ts.FunctionDeclaration>): boolean {
+  if (refs.has(fn)) return true;
+  let found = false;
+  const visit = (n: ts.Node) => {
+    if (found) return;
+    if (ts.isIdentifier(n) && n !== fn.name) {
+      let s = checker.getSymbolAtLocation(n);
+      if (s && s.flags & ts.SymbolFlags.Alias) s = checker.getAliasedSymbol(s);
+      if (s?.declarations?.includes(fn)) found = true;
     }
-  }
-  return scope;
+    ts.forEachChild(n, visit);
+  };
+  if (fn.body) visit(fn.body);
+  return found;
+}
+
+/* ───────────────────────── candidate texts ───────────────────────── */
+
+/** A candidate up to whitespace and redundant parentheses: its syntax tree without the parenthesized-expression nodes. */
+function canonical(code: string): string {
+  const sf = ts.createSourceFile("c.ts", `(${code});`, ts.ScriptTarget.ES2022, false);
+  const walk = (n: ts.Node): string => {
+    if (ts.isParenthesizedExpression(n)) return walk(n.expression);
+    const kids: string[] = [];
+    n.forEachChild((c) => {
+      kids.push(walk(c));
+    });
+    const op = ts.isPrefixUnaryExpression(n) || ts.isPostfixUnaryExpression(n) ? `${n.operator}` : "";
+    return kids.length ? `${n.kind}${op}(${kids.join(",")})` : `${n.kind}:${n.getText(sf)}`;
+  };
+  return walk(sf);
 }
 
 /* ───────────────────────── enumeration ───────────────────────── */
@@ -646,7 +727,8 @@ function wrap(code: string): string {
 
 /* ───────────────────────── random inputs ───────────────────────── */
 
-const BASE_INTS = [-1, 0, 0, 1, 1, 2, 3, 4, 5, 7, 10];
+// (values well below -1: with -1 the smallest, `a + b + 1 >= a` holds on every sample)
+const BASE_INTS = [-10, -5, -2, -1, 0, 0, 1, 1, 2, 3, 4, 5, 7, 10];
 const BASE_STRS = ["", "a", "b", "ab", " a ", "hello", "x y"];
 
 /** Constants of the function (contracts included), with their neighbours: boundary values for the tests. */
@@ -806,6 +888,8 @@ const OWN_REQUIRES = "__vreactOwnRequires__";
 const TARGET = "__vreactSynthTarget__";
 const OTHER_HOLE = { other: "hole" };
 const OWN_PRE = { own: "precondition" };
+/** what vreact/spec's hole() throws outside test mode (the contracts are evaluated outside it) */
+const isUnfilledHoleError = (e: unknown) => e instanceof Error && e.message.startsWith("vreact: unfilled hole()");
 
 function makeRunner(sb: Sandbox, target: string, fname: string, paramTypes: VType[], prog: Program, pools: Pools, textFor: (cand: string) => string): Runner {
   // fixed sample set (re-used across candidates; counterexamples are moved to the front)
@@ -823,6 +907,7 @@ function makeRunner(sb: Sandbox, target: string, fname: string, paramTypes: VTyp
       let valid = 0;
       let pre = 0;
       let other = 0;
+      let contract = 0;
       for (let i = 0; i < samples.length; i++) {
         const args = structuredClone(samples[i]);
         const own: ((r: unknown) => boolean)[] = [];
@@ -856,21 +941,32 @@ function makeRunner(sb: Sandbox, target: string, fname: string, paramTypes: VTyp
           g[OWN_ENSURES] = undefined;
           g[OWN_REQUIRES] = undefined;
         }
-        valid++;
+        let verdict: "pass" | "fail" | "skip" = "pass";
         for (const p of own) {
-          let okp = false;
           try {
-            okp = !!p(r);
-          } catch {
-            okp = false;
+            if (!p(r)) verdict = "fail";
+          } catch (e) {
+            // the contract calls a function that still has a hole: this input cannot judge the candidate
+            verdict = isUnfilledHoleError(e) ? "skip" : "fail";
           }
-          if (!okp) {
-            samples.unshift(samples.splice(i, 1)[0]); // counterexample first next time
-            return { ok: false, valid, why: `postcondition fails on ${JSON.stringify(args)} ↦ ${JSON.stringify(r)}`, cat: "postcondition fails" };
-          }
+          if (verdict !== "pass") break;
+        }
+        if (verdict === "skip") {
+          contract++;
+          continue;
+        }
+        valid++;
+        if (verdict === "fail") {
+          samples.unshift(samples.splice(i, 1)[0]); // counterexample first next time
+          return { ok: false, valid, why: `postcondition fails on ${JSON.stringify(args)} ↦ ${JSON.stringify(r)}`, cat: "postcondition fails" };
         }
       }
       if (valid > 0) return { ok: true, valid };
+      if (contract > 0) {
+        // (not "postcondition fails": the contract cannot be evaluated, e.g. it calls a @trusted stub whose body is a hole)
+        const why = `no generated input can test this hole: the contract of ${fname} runs into a hole (unfinished code it calls) on every input that reaches it (${contract} of ${samples.length})`;
+        return { ok: false, valid: 0, why, untestable: why };
+      }
       const why =
         pre === samples.length ? `no generated input satisfies the precondition of ${fname} (is it satisfiable?)`
         : other + pre === samples.length ? `no generated input can test this hole (${other} of ${samples.length} reach another unfilled hole)`
@@ -895,18 +991,140 @@ interface Checked {
   diag: string;
 }
 
+/* ───────────────────────── search of one hole ───────────────────────── */
+
+interface Survivor {
+  code: string;
+  valid: number;
+  untested?: boolean;
+}
+
+/**
+ * The enumerate-and-test search of one hole in one context (the fills of the earlier holes it
+ * may share an execution with). Lazy and resumable: `next(k)` is the k-th candidate that passes
+ * the tests (searching on only when needed), so a search reused under other fills of
+ * independent holes yields the same candidates without re-running anything.
+ */
+interface Search {
+  next(k: number): Survivor | null;
+  tested: number;
+  passed: number;
+  sizeReached: number;
+  stop: string;
+  untestable: string | null;
+  searchMs: number;
+  fails: Map<string, { n: number; example: string }>;
+}
+
+function newSearch(h: Hole, en: Enumerator, runner: Runner, maxSize: number, limitMs: number): Search {
+  const S: Search = { next: () => null, tested: 0, passed: 0, sizeReached: 0, stop: "", untestable: null, searchMs: 0, fails: new Map() };
+  const seenText = new Set<string>();
+  const seenCanon = new Set<string>();
+  // the same candidate up to whitespace and parentheses goes to Lean once
+  const fresh = (code: string) => {
+    const k = canonical(code);
+    if (seenCanon.has(k)) return false;
+    seenCanon.add(k);
+    return true;
+  };
+  let untested = 0;
+  function* run(): Generator<Survivor> {
+    // search time excludes the Lean checks done while the generator is suspended
+    let resume = Date.now();
+    const pause = () => {
+      S.searchMs += Date.now() - resume;
+      resume = -1;
+    };
+    try {
+      for (let size = 1; size <= maxSize; size++) {
+        S.sizeReached = size;
+        for (const c of en.build(h.type, size)) {
+          if (S.searchMs + (Date.now() - resume) > limitMs) {
+            S.stop = `the ${(limitMs / 1000).toFixed(0)}s time limit was reached at size ${size}`;
+            return;
+          }
+          if (S.tested >= MAX_CANDIDATES) {
+            S.stop = `the cap of ${MAX_CANDIDATES} candidates was reached at size ${size}`;
+            return;
+          }
+          if (seenText.has(c.code)) continue;
+          seenText.add(c.code);
+          if (S.untestable) {
+            // the inputs cannot exercise this hole: the smallest candidates go to Lean untested
+            if (untested++ >= MAX_UNTESTED) {
+              S.stop = `${MAX_UNTESTED} untested candidates were tried`;
+              return;
+            }
+            if (!fresh(c.code)) continue;
+            pause();
+            yield { code: c.code, valid: 0, untested: true };
+            resume = Date.now();
+            continue;
+          }
+          S.tested++;
+          const r = runner.run(c.code);
+          if (process.env.VREACT_SYNTH_DEBUG && S.tested <= 12) console.log(`    [${r.ok ? "pass" : "fail"}] ${c.code}  ${r.why ?? ""}`);
+          if (r.untestable) {
+            S.untestable = r.untestable;
+            console.log(`  ${r.untestable}: the smallest candidates are checked by Lean only`);
+            untested++;
+            fresh(c.code);
+            pause();
+            yield { code: c.code, valid: 0, untested: true };
+            resume = Date.now();
+            continue;
+          }
+          if (!r.ok) {
+            const cat = r.cat ?? "fails";
+            const e = S.fails.get(cat) ?? { n: 0, example: `${c.code}: ${r.why}` };
+            e.n++;
+            S.fails.set(cat, e);
+            continue;
+          }
+          if (!fresh(c.code)) continue;
+          S.passed++;
+          pause();
+          yield { code: c.code, valid: r.valid };
+          resume = Date.now();
+        }
+      }
+      S.stop = `all candidates up to size ${maxSize} were tried` + (en.capped ? ` (sub-expression lists were capped at ${MAX_TERMS} per type and size, so some larger candidates were never built)` : "");
+    } finally {
+      if (resume >= 0) pause();
+    }
+  }
+  const it = run();
+  const found: Survivor[] = [];
+  let done = false;
+  S.next = (k) => {
+    while (found.length <= k && !done) {
+      const r = it.next();
+      if (r.done) done = true;
+      else found.push(r.value);
+    }
+    return found[k] ?? null;
+  };
+  return S;
+}
+
 /* ───────────────────────── command ───────────────────────── */
 
-export { Enumerator };
+export { Enumerator, mayShareExecution, canonical };
 
 export interface SynthResult {
   fn: string;
   hole: string;
   solution: string | null;
   tested: number;
+  /** Lean proved the function with this fill (`status` says whether that proof assumes anything) */
   proved: boolean;
-  /** proved | not-proved | skipped */
+  /**
+   * proved: by Lean, with only the standard axioms; proved-relative: by Lean, assuming the
+   * declarations in `relative_to` (@trusted contracts, assume(…) facts); not-proved; skipped
+   */
   status: string;
+  /** the non-standard axioms the proof relies on (proved-relative only) */
+  relative_to?: string[];
   note?: string;
 }
 
@@ -926,7 +1144,7 @@ export async function synthCommand(root: string, files: string[], opts: { write?
   const rel = path.relative(root, target);
   const raw = fs.readFileSync(target, "utf8");
   // offsets are computed on the text without a byte-order mark; the mark is restored on --write
-  const bom = raw.startsWith("\uFEFF") ? "\uFEFF" : "";
+  const bom = raw.startsWith("﻿") ? "﻿" : "";
   const base = raw.slice(bom.length);
   const results: SynthResult[] = [];
   const fmtErr = (e: VtsError) => `${e.file ? path.relative(root, e.file) : "?"}:${e.line}:${e.col}: ${e.message}`;
@@ -947,20 +1165,24 @@ export async function synthCommand(root: string, files: string[], opts: { write?
     return c;
   };
 
-  // ---- the program must translate before synthesis (holes are fine: they become sorry) ----
-  const baseTr = translate({ ...cfg, overrides: new Map([[target, base]]) } as Config);
+  // ---- the program must translate before synthesis (holes are fine: they become sorry);
+  // the translator also reports the narrowing in effect at each hole ----
+  const holeEnvs: HoleEnv[] = [];
+  const baseTr = translate({ ...cfg, overrides: new Map([[target, base]]), holeEnvs } as Config);
   if (!baseTr.ok) {
     console.log("synth needs a project that translates (holes may stay); fix these first:");
     for (const d of [...baseTr.tsDiagnostics, ...baseTr.errors.map(fmtErr)]) console.log("  " + d);
     process.exitCode = 1;
     return results;
   }
+  const narrowings = narrowingAtHoles(holeEnvs);
 
   // ---- program, holes, tasks ----
   const options: ts.CompilerOptions = { strict: true, jsx: ts.JsxEmit.ReactJSX, target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext, moduleResolution: ts.ModuleResolutionKind.Bundler, skipLibCheck: true, noEmit: true, allowImportingTsExtensions: true };
   const program = ts.createProgram(cfg.files, options, overrideHost(options, new Map([[target, base]])));
   const checker = program.getTypeChecker();
-  const prog = new Program(checker, root, (sf) => "VTS." + path.relative(cfg.srcDir, sf.fileName).replace(/\.(tsx?)$/, "").split(path.sep).join("."));
+  // (the translator's module names, so that type names agree with the translation's)
+  const prog = new Program(checker, root, (sf) => moduleNs(cfg.srcDir, sf.fileName));
   const sf = program.getSourceFile(target)!;
   const env = baseEnv(new ModCtx(prog, "VTS.Synth", sf, [], { n: 0 }));
   const isTrusted = (n: ts.Node) => ts.getJSDocTags(n).some((t) => t.tagName.text === "trusted");
@@ -1024,28 +1246,81 @@ export async function synthCommand(root: string, files: string[], opts: { write?
     task.holes.push({ index, node, span: [node.getStart(sf), node.getEnd()], type, fn: fd, scope: [], parens: needsParens(node) });
   });
 
-  // functions referenced (transitively) by a declaration, any file of the program
+  // functions referenced (transitively) from a node, any file of the program
   const refsCache = new Map<ts.Node, Set<ts.FunctionDeclaration>>();
-  const refsOf = (d: ts.FunctionDeclaration): Set<ts.FunctionDeclaration> => {
-    const done = refsCache.get(d);
-    if (done) return done;
+  const refsFrom = (node: ts.Node, self?: ts.FunctionDeclaration): Set<ts.FunctionDeclaration> => {
     const out = new Set<ts.FunctionDeclaration>();
-    refsCache.set(d, out);
     const visit = (n: ts.Node) => {
       if (ts.isIdentifier(n)) {
         let s = checker.getSymbolAtLocation(n);
         if (s && s.flags & ts.SymbolFlags.Alias) s = checker.getAliasedSymbol(s);
         const dd = s?.declarations?.[0];
-        if (dd && dd !== d && ts.isFunctionDeclaration(dd) && ts.isSourceFile(dd.parent) && !out.has(dd)) {
+        if (dd && dd !== self && ts.isFunctionDeclaration(dd) && ts.isSourceFile(dd.parent) && !out.has(dd)) {
           out.add(dd);
           for (const x of refsOf(dd)) out.add(x);
         }
       }
       ts.forEachChild(n, visit);
     };
-    if (d.body) visit(d.body);
+    visit(node);
     return out;
   };
+  // functions referenced (transitively) by a declaration
+  const refsOf = (d: ts.FunctionDeclaration): Set<ts.FunctionDeclaration> => {
+    const done = refsCache.get(d);
+    if (done) return done;
+    const out = new Set<ts.FunctionDeclaration>();
+    refsCache.set(d, out);
+    if (d.body) for (const x of refsFrom(d.body, d)) out.add(x);
+    return out;
+  };
+  /**
+   * The functions that a node depends on, transitively: for each function it names, that
+   * function's `requires` and its body without the contract, but not its `ensures` (separate
+   * theorems that a statement never mentions; at run time, a callee's ensures are recorded and
+   * ignored). `lean`: what the node's Lean translation mentions through types and values (what
+   * `#print axioms` follows), where a @trusted function is an axiom whose type has the `requires`
+   * (the `h_pre` binder) but which has no value; otherwise what runs, @trusted bodies included.
+   */
+  const dependsOn = (lean: boolean) => {
+    const cache = new Map<ts.FunctionDeclaration, Set<ts.FunctionDeclaration>>();
+    const from = (node: ts.Node, self: ts.FunctionDeclaration | undefined, out = new Set<ts.FunctionDeclaration>()): Set<ts.FunctionDeclaration> => {
+      const visit = (n: ts.Node) => {
+        if (ts.isIdentifier(n)) {
+          let s = checker.getSymbolAtLocation(n);
+          if (s && s.flags & ts.SymbolFlags.Alias) s = checker.getAliasedSymbol(s);
+          const dd = s?.declarations?.[0];
+          if (dd && dd !== self && ts.isFunctionDeclaration(dd) && ts.isSourceFile(dd.parent) && !out.has(dd)) {
+            out.add(dd);
+            for (const x of of(dd)) out.add(x);
+          }
+        }
+        ts.forEachChild(n, visit);
+      };
+      visit(node);
+      return out;
+    };
+    const of = (d: ts.FunctionDeclaration): Set<ts.FunctionDeclaration> => {
+      const done = cache.get(d);
+      if (done) return done;
+      const out = new Set<ts.FunctionDeclaration>();
+      cache.set(d, out);
+      const stmts = d.body?.statements ?? [];
+      let i = 0;
+      for (; i < stmts.length; i++) {
+        const st = stmts[i];
+        if (!ts.isExpressionStatement(st) || !ts.isCallExpression(st.expression)) break;
+        const k = specFn(env, st.expression.expression);
+        if (k === "requires") from(st, d, out);
+        else if (k !== "ensures" && k !== "decreases") break;
+      }
+      if (!(lean && isTrusted(d))) for (const st of stmts.slice(i)) from(st, d, out);
+      return out;
+    };
+    return { from, of };
+  };
+  const leanDeps = dependsOn(true);
+  const runDeps = dependsOn(false);
   const holesIn = (d: ts.FunctionDeclaration) => {
     const hs: ts.CallExpression[] = [];
     if (d.body) findHoles(d.body, hs);
@@ -1069,6 +1344,11 @@ export async function synthCommand(root: string, files: string[], opts: { write?
   const acceptedTasks: Task[] = [];
   const editsOf = (fills: Map<Hole, string>): Edit[] => [...fills].map(([h, text]) => ({ at: h.span, text }));
   const leanText = (fills: Map<Hole, string>) => dropUnusedHoleImport(applyEdits(base, editsOf(fills)), target);
+  /** the functions among `ds` whose Lean definition still has a hole (`sorry`): not filled by `fills`, not @trusted (axiomatized) */
+  const unfinished = (ds: Iterable<ts.FunctionDeclaration>, fills: Map<Hole, string>) => [...ds].filter((d) => !isTrusted(d) && holesIn(d).some((h) => ![...fills.keys()].some((x) => x.node === h)));
+  /** a function whose body still has a hole that no proved fill replaces (@trusted or not: the tests run its body) */
+  const unfilled = (d: ts.FunctionDeclaration) => holesIn(d).some((h) => ![...accepted.keys()].some((x) => x.node === h));
+  const fnNames = (ds: ts.FunctionDeclaration[]) => ds.map((d) => d.name?.text ?? "?").join(", ");
 
   // the status of task `t` in a checked text
   const statusOf = (c: Checked, text: string, t: Task, fills: Map<Hole, string>): Status => {
@@ -1098,18 +1378,21 @@ export async function synthCommand(root: string, files: string[], opts: { write?
       return { status: "blocked", why: `Lean did not check ${t.name} and its postcondition(s): ${cause} (fix that first)` };
     }
     if (names.some((q) => v.axioms.get(q)!.includes("sorryAx"))) {
-      const pending = [...refsOf(t.fn)].filter((d) => holesIn(d).some((h) => ![...fills.keys()].some((x) => x.node === h))).map((d) => d.name?.text ?? "?");
+      const pending = unfinished(refsOf(t.fn), fills).map((d) => d.name?.text ?? "?");
       return { status: "pending", why: pending.length ? `its proof depends on unfinished code (hole) in ${pending.join(", ")}` : `its proof depends on a sorry (a hole or an unfinished proof it relies on)` };
     }
     const relative = [...new Set(names.flatMap((q) => v.axioms.get(q)!))].filter((a) => !STD_AXIOMS.has(a));
     return { status: "proved", relative };
   };
+  const provedStatus = (relative: string[]) => (relative.length ? "proved-relative" : "proved");
+  const relNote = (relative: string[]) => `proved assuming ${relative.join(", ")} (@trusted contracts or assume(…) facts, not proved)`;
 
   for (const task of ordered) {
     const fd = task.fn;
-    const holesLabel = task.holes.length > 1 ? `${task.holes.length} holes in ${task.name}` : `hole in ${task.name}`;
-    const record = (h: Hole, solution: string | null, tested: number, status: string, note?: string) => {
-      results.push({ fn: task.name, hole: showType(h.type), solution, tested, proved: status === "proved", status, note });
+    const n = task.holes.length;
+    const holesLabel = n > 1 ? `${n} holes in ${task.name}` : `hole in ${task.name}`;
+    const record = (h: Hole, solution: string | null, tested: number, status: string, note?: string, relative?: string[]) => {
+      results.push({ fn: task.name, hole: showType(h.type), solution, tested, proved: status === "proved" || status === "proved-relative", status, ...(relative?.length ? { relative_to: relative } : {}), note });
     };
     if (isTrusted(fd)) {
       console.log(`${holesLabel}`);
@@ -1128,13 +1411,16 @@ export async function synthCommand(root: string, files: string[], opts: { write?
     const helpers: Helper[] = [];
     try {
       params = paramTypes(fd);
-      for (const h of task.holes) h.scope = holeScope(h.node, fd, prog, params);
+      for (const h of task.holes) h.scope = holeScope(narrowings.get(`${path.resolve(target)}:${h.span[0]}`) ?? new Map(), prog, params);
       for (const st of sf.statements) {
         if (!ts.isFunctionDeclaration(st) || !st.name || st === fd || !st.type) continue;
         if (/^[A-Z]/.test(st.name.text)) continue;
         const hasPre = st.body?.statements.some((x) => ts.isExpressionStatement(x) && ts.isCallExpression(x.expression) && specFn(env, x.expression.expression) === "requires");
-        // (a function whose holes were filled above is a helper like any other)
-        if (hasPre || st.parameters.some((p) => !p.type) || holesIn(st).some((x) => ![...accepted.keys()].some((a) => a.node === x))) continue;
+        // (a function whose holes were filled above is a helper like any other; one that calls
+        // this function is not: VTS has no recursion, so such a fill would never translate; nor
+        // one that runs into a hole, e.g. a @trusted stub calling unfinished code: no input could
+        // test a candidate calling it, and the first such candidate would make the hole look untestable)
+        if (hasPre || st.parameters.some((p) => !p.type) || refsOf(st).has(fd) || [st, ...runDeps.of(st)].some(unfilled)) continue;
         try {
           const h = { name: st.name.text, params: st.parameters.map((p) => typeOfNode(p.type!, prog.typeEnv, sigHint(st, p))), ret: typeOfNode(st.type, prog.typeEnv, capitalize(st.name.text) + "Result") };
           st.parameters.forEach((p, i) => annotateOpt(h.params[i], checker.getTypeFromTypeNode(p.type!), checker));
@@ -1161,6 +1447,7 @@ export async function synthCommand(root: string, files: string[], opts: { write?
     }
     // the function's own contract, renamed for the test harness (helpers' contracts are not this function's)
     const ownContract: Edit[] = [];
+    const contractStmts: ts.Statement[] = [];
     for (const st of fd.body?.statements ?? []) {
       if (!ts.isExpressionStatement(st) || !ts.isCallExpression(st.expression)) break;
       const callee = st.expression.expression;
@@ -1170,139 +1457,148 @@ export async function synthCommand(root: string, files: string[], opts: { write?
         task.ensures++;
       } else if (k === "requires") ownContract.push({ at: [callee.getStart(sf), callee.getEnd()], text: OWN_REQUIRES });
       else if (k !== "decreases") break;
+      contractStmts.push(st);
+    }
+    // a contract whose Lean statement mentions a function with a hole cannot be proved (its
+    // theorems then depend on that function's `sorry`) until that function is finished. Only what
+    // the statement mentions counts: not the bodies of @trusted callees (axioms) nor the ensures of
+    // callees; anything else a proof may use is left to Lean (status "pending")
+    const contractNeeds = unfinished(new Set(contractStmts.flatMap((st) => [...leanDeps.from(st, fd)]).filter((d) => d !== fd)), accepted);
+    if (contractNeeds.length) {
+      const why = `the contract of ${task.name} depends on unfinished function${contractNeeds.length > 1 ? "s" : ""} ${fnNames(contractNeeds)} (a hole remains): finish ${contractNeeds.length > 1 ? "them" : "it"} first`;
+      console.log(`${holesLabel}`);
+      console.log(`  ✗ not searched: ${why}`);
+      for (const h of task.holes) record(h, null, 0, "not-proved", why);
+      continue;
     }
     const pools = harvest(fd);
     const t0All = Date.now();
-    const deadline = t0All + TIME_LIMIT_MS * (task.holes.length + 1);
-    let blocked: string | null = null;
+    // time for the whole function: the per-hole limit for each hole, and one more for backtracking
+    const deadline = t0All + TIME_LIMIT_MS * (n + 1);
+    const leanBudget = MAX_LEAN_CHECKS * n;
+    let leanRuns = 0;
+    let blocked: string | null = null; // no fill of this function can be checked now
+    let halt: string | null = null; // this function's time or Lean-check budget is spent
+    let provedRelative: string[] = [];
     const notes = new Map<Hole, { tested: number; last?: string; cand?: string }>();
-
-    // search hole i of the task with the earlier holes tentatively filled
-    const solve = async (i: number, tentative: Map<Hole, string>): Promise<Map<Hole, string> | null> => {
+    // deps[i]: the earlier holes that a call reaching hole i may also evaluate (only their fills
+    // can change what the tests of hole i say)
+    const recursive = callsItself(fd, checker, refsOf(fd));
+    const deps = task.holes.map((h, i) => new Set(task.holes.slice(0, i).flatMap((x, j) => (mayShareExecution(x.node, h.node, fd, recursive) ? [j] : []))));
+    const searches = new Map<string, Search>();
+    const searchOf = (i: number, ctx: Map<Hole, string>): Search => {
       const h = task.holes[i];
-      const last = i === task.holes.length - 1;
-      const ctx = [...tentative].map(([x, c]) => `hole ${task.holes.indexOf(x) + 1} = ${c}`).join(", ");
-      const label = task.holes.length > 1 ? `hole ${i + 1}/${task.holes.length} in ${task.name}${ctx ? ` (with ${ctx})` : ""}` : `hole in ${task.name}`;
-      console.log(`${label}: ${showType(h.type)}   scope: ${h.scope.map((a) => a.code).join(", ")}`);
       const en = new Enumerator(prog, h.scope, h.type, maxSize);
       for (const hp of helpers) {
         en.helpers.push(hp);
         hp.params.forEach((t) => en.register(t));
       }
-      const fills = (cand: string) => new Map([...accepted, ...tentative, [h, fillText(h, cand)]]);
-      const runner = makeRunner(sb!, target, task.name, pTypes as VType[], prog, pools, (cand) => applyEdits(base, [...editsOf(fills(cand)), ...ownContract]));
-      // ---- enumerate & test ----
-      let tested = 0;
-      let passed = 0;
-      let sizeReached = 0;
-      let stop = "";
-      let untestable: string | null = null;
-      let untested = 0;
-      let searchMs = 0;
-      const fails = new Map<string, { n: number; example: string }>();
-      const leanRejected: string[] = [];
-      let leanChecks = 0;
-      let examined = 0;
-      const limitFor = Math.min(TIME_LIMIT_MS, Math.max(5000, deadline - Date.now()));
-      // with several holes, a rejection may be the fault of an earlier fill: backtrack sooner
-      const leanCap = task.holes.length > 1 ? MAX_LEAN_CHECKS_JOINT : MAX_LEAN_CHECKS;
-      const survivors = function* (): Generator<{ code: string; valid: number; untested?: boolean }> {
-        // search time excludes the Lean checks done while the generator is suspended
-        let resume = Date.now();
-        const pause = () => {
-          searchMs += Date.now() - resume;
-          resume = -1;
-        };
-        try {
-          for (let size = 1; size <= maxSize; size++) {
-            sizeReached = size;
-            const terms = en.build(h.type, size);
-            for (const c of terms) {
-              if (searchMs + (Date.now() - resume) > limitFor) {
-                stop = `the ${(limitFor / 1000).toFixed(0)}s time limit was reached at size ${size}`;
-                return;
-              }
-              if (tested >= MAX_CANDIDATES) {
-                stop = `the cap of ${MAX_CANDIDATES} candidates was reached at size ${size}`;
-                return;
-              }
-              if (untestable) {
-                // the inputs cannot exercise this hole: the smallest candidates go to Lean untested
-                if (untested++ >= MAX_UNTESTED) {
-                  stop = `${MAX_UNTESTED} untested candidates were tried`;
-                  return;
-                }
-                pause();
-                yield { code: c.code, valid: 0, untested: true };
-                resume = Date.now();
-                continue;
-              }
-              tested++;
-              const r = runner.run(c.code);
-              if (process.env.VREACT_SYNTH_DEBUG && tested <= 12) console.log(`    [${r.ok ? "pass" : "fail"}] ${c.code}  ${r.why ?? ""}`);
-              if (r.untestable) {
-                untestable = r.untestable;
-                console.log(`  ${r.untestable}: the smallest candidates are checked by Lean only`);
-                untested++;
-                pause();
-                yield { code: c.code, valid: 0, untested: true };
-                resume = Date.now();
-                continue;
-              }
-              if (!r.ok) {
-                const cat = r.cat ?? "fails";
-                const e = fails.get(cat) ?? { n: 0, example: `${c.code}: ${r.why}` };
-                e.n++;
-                fails.set(cat, e);
-                continue;
-              }
-              passed++;
-              pause();
-              yield { code: c.code, valid: r.valid };
-              resume = Date.now();
-            }
-          }
-          stop = `all candidates up to size ${maxSize} were tried` + (en.capped ? ` (sub-expression lists were capped at ${MAX_TERMS} per type and size, so some larger candidates were never built)` : "");
-        } finally {
-          if (resume >= 0) pause();
+      // the earlier holes this one cannot share a call with stay unfilled (calls reaching them are skipped)
+      const runner = makeRunner(sb!, target, task.name, pTypes as VType[], prog, pools, (cand) => applyEdits(base, [...editsOf(new Map([...accepted, ...ctx, [h, fillText(h, cand)]])), ...ownContract]));
+      return newSearch(h, en, runner, maxSize, Math.min(TIME_LIMIT_MS, Math.max(5000, deadline - Date.now())));
+    };
+
+    /** `failed`: the hole whose search failed; `told`: the backjump was reported */
+    type Outcome = { sol: Map<Hole, string> | null; conflict: Set<number>; failed?: number; told?: boolean };
+    /**
+     * Search hole i with the earlier holes tentatively filled. On failure, `conflict` is the set of
+     * earlier holes whose fills the failure depends on: when it does not contain hole i - 1, other
+     * fills of hole i - 1 cannot help and the caller backjumps.
+     */
+    const solve = async (i: number, tentative: Map<Hole, string>): Promise<Outcome> => {
+      const h = task.holes[i];
+      const last = i === n - 1;
+      const earlier = () => new Set(Array.from({ length: i }, (_, j) => j));
+      const ctx = new Map([...tentative].filter(([x]) => deps[i].has(task.holes.indexOf(x))));
+      const ctxText = [...ctx].map(([x, c]) => `hole ${task.holes.indexOf(x) + 1} = ${c}`).join(", ");
+      const label = n > 1 ? `hole ${i + 1}/${n} in ${task.name}${ctxText ? ` (with ${ctxText})` : ""}` : `hole in ${task.name}`;
+      const key = [i, ...[...ctx].map(([x, c]) => `${task.holes.indexOf(x)}=${c}`)].join("\u0000");
+      let s = searches.get(key);
+      const reused = !!s;
+      if (!s) {
+        if (Date.now() >= deadline) {
+          halt = `the time limit for ${task.name} (${((deadline - t0All) / 1000).toFixed(0)}s for ${n} hole${n > 1 ? "s" : ""}) was reached`;
+          console.log(`${label}: not searched: ${halt}`);
+          return { sol: null, conflict: earlier() };
         }
-      };
-      let solved: Map<Hole, string> | null = null;
-      for (const s of survivors()) {
-        if (blocked) break;
+        console.log(`${label}: ${showType(h.type)}   scope: ${h.scope.map((a) => a.code).join(", ")}`);
+        s = searchOf(i, ctx);
+        searches.set(key, s);
+      } else {
+        const indep = [...tentative.keys()].map((x) => task.holes.indexOf(x)).filter((j) => !deps[i].has(j));
+        console.log(`${label}: same search as before${indep.length ? ` (a call reaching hole ${i + 1} never evaluates hole${indep.length > 1 ? "s" : ""} ${indep.map((j) => j + 1).join(", ")})` : ""}`);
+      }
+      // the candidates of this hole depend on the fills of deps[i] only
+      const conflict = new Set(deps[i]);
+      let examined = 0;
+      let leanChecks = 0;
+      let stop = "";
+      const rejected: string[] = [];
+      const untranslatable: string[] = [];
+      let sol: Map<Hole, string> | null = null;
+      // with several holes, a rejection may be the fault of an earlier fill: backtrack sooner
+      const leanCap = n > 1 ? MAX_LEAN_CHECKS_JOINT : MAX_LEAN_CHECKS;
+      for (let k = 0; !blocked && !halt; k++) {
+        const sv = s.next(k);
+        if (!sv) break;
         examined++;
-        const ins = fillText(h, s.code);
-        notes.set(h, { tested, cand: ins });
-        const after = `(${tested} candidate(s) tested in ${(searchMs / 1000).toFixed(1)}s)`;
-        if (!s.untested) console.log(`  candidate passes ${s.valid} random tests: ${ins}   ${after}`);
+        const ins = fillText(h, sv.code);
+        notes.set(h, { tested: s.tested, cand: ins });
+        const after = `(${s.tested} candidate(s) tested in ${(s.searchMs / 1000).toFixed(1)}s)`;
+        if (!sv.untested) console.log(`  candidate passes ${sv.valid} random tests: ${ins}   ${after}`);
         else console.log(`  untested candidate: ${ins}`);
         if (!last) {
           console.log(`  … proof pending the other hole(s) of ${task.name}: searching hole ${i + 2} with this fill`);
-          solved = await solve(i + 1, new Map([...tentative, [h, ins]]));
-          if (solved || blocked) break;
+          const r = await solve(i + 1, new Map([...tentative, [h, ins]]));
+          if (r.sol) {
+            sol = r.sol;
+            break;
+          }
+          if (blocked || halt) break;
+          if (!r.conflict.has(i)) {
+            // the failure does not depend on this fill: no other fill of this hole can help (backjump
+            // to the last hole it depends on)
+            if (!r.told) {
+              const to = Math.max(-1, ...r.conflict);
+              const over = Array.from({ length: i - to }, (_, d) => to + d + 2);
+              console.log(`  (hole ${(r.failed ?? i + 1) + 1} fails whatever the fill of hole${over.length > 1 ? "s" : ""} ${over.join(", ")}: no other fill of ${over.length > 1 ? "them" : "it"} is tried)`);
+            }
+            return { sol: null, conflict: r.conflict, failed: r.failed, told: true };
+          }
+          for (const c of r.conflict) if (c !== i) conflict.add(c);
           if (examined >= MAX_TENTATIVE) {
             stop = `${MAX_TENTATIVE} fills of this hole were tried with the next one`;
             break;
           }
           continue;
         }
-        const all = fills(s.code);
+        // Lean checks the whole function: its verdict depends on every fill
+        for (const j of earlier()) conflict.add(j);
+        const all = new Map([...accepted, ...tentative, [h, ins]]);
         const text = leanText(all);
+        const cached = checks.has(text);
+        if (!cached && leanRuns >= leanBudget) {
+          halt = `the cap of ${leanBudget} Lean checks for ${task.name} was reached`;
+          break;
+        }
         const st = statusOf(check(text), text, task, all);
         if (st.status === "untranslatable") {
+          // (a synth limitation, not a verdict of Lean)
           console.log(`  ✗ ${ins}: does not translate: ${st.why}`);
-          leanRejected.push(ins);
+          untranslatable.push(ins);
         } else {
+          if (!cached) leanRuns++;
           leanChecks++;
           if (st.status === "proved") {
-            const rel2 = st.relative.length ? ` (relative to: ${st.relative.join(", ")})` : "";
-            console.log(task.holes.length > 1 ? `  ✔ proved by Lean: ${task.name} with ${[...tentative.values(), ins].join(" / ")}${rel2}` : `  ✔ proved by Lean: ${ins}${rel2}`);
-            solved = all;
+            const rel2 = st.relative.length ? ` (relative to ${st.relative.join(", ")}: @trusted or assumed, not proved)` : "";
+            console.log(n > 1 ? `  ✔ proved by Lean: ${task.name} with ${[...tentative.values(), ins].join(" / ")}${rel2}` : `  ✔ proved by Lean: ${ins}${rel2}`);
+            provedRelative = st.relative;
+            sol = all;
             break;
           }
           if (st.status === "rejected") {
             console.log(`  ✗ Lean rejects ${ins}: ${st.why}`);
-            leanRejected.push(ins);
+            rejected.push(ins);
           } else {
             // blocked / pending: no candidate of this function can be checked now
             console.log(`  ? not proved: ${ins} passes the tests, but ${st.why}`);
@@ -1315,36 +1611,39 @@ export async function synthCommand(root: string, files: string[], opts: { write?
           break;
         }
       }
-      notes.set(h, { ...notes.get(h), tested, last: stop });
-      if (!solved && !blocked) {
-        const top = [...fails.entries()].sort((a, b) => b[1].n - a[1].n)[0];
-        const what = untestable ?? (passed ? `${passed} candidate(s) passed the tests, none was proved` : "no candidate passed the tests");
-        console.log(`  ${tested} candidates tested in ${(searchMs / 1000).toFixed(1)}s, up to size ${sizeReached}; stopped: ${stop || "search exhausted"}`);
+      if (sol) return { sol, conflict };
+      notes.set(h, { ...notes.get(h), tested: s.tested, last: stop || s.stop });
+      if (blocked || halt) return { sol: null, conflict, failed: i };
+      const what = s.untestable ?? (s.passed ? `${s.passed} candidate(s) passed the tests, none was proved` : "no candidate passed the tests");
+      if (!reused) {
+        console.log(`  ${s.tested} candidates tested in ${(s.searchMs / 1000).toFixed(1)}s, up to size ${s.sizeReached}; stopped: ${stop || s.stop || "search exhausted"}`);
+        const top = [...s.fails.entries()].sort((a, b) => b[1].n - a[1].n)[0];
         console.log(`  no verified solution for ${label}: ${what}`);
-        if (top && !passed) console.log(`  most common failure (${top[1].n}×): ${top[1].example}`);
-        if (last || !passed)
-          console.log(
-            leanRejected.length
-              ? "  the random tests accept candidates that Lean rejects: write this one by hand"
-              : "  write this one by hand (synth builds straight-line expressions; guarded updates need an `if`), or check that the spec is satisfiable",
-          );
-      }
-      return solved;
+        if (top && !s.passed) console.log(`  most common failure (${top[1].n}×): ${top[1].example}`);
+      } else console.log(`  no verified solution for ${label}: ${what}`);
+      // (candidates that do not translate never reached Lean: they are not Lean rejections)
+      const eg = (xs: string[]) => xs.slice(0, 2).join("; ") + (xs.length > 2 ? `; … ${xs.length - 2} more` : "");
+      if (rejected.length && s.untestable) console.log("  the inputs cannot test this hole and Lean rejects the smallest candidates: write this one by hand");
+      else if (rejected.length) console.log("  the random tests accept candidates that Lean rejects: write this one by hand");
+      else if (untranslatable.length) console.log(`  the candidate(s) that pass the tests do not translate (${eg(untranslatable)}): a synth limitation, write this one by hand`);
+      else if (last || !s.passed) console.log("  write this one by hand (synth builds straight-line expressions; guarded updates need an `if`), or check that the spec is satisfiable");
+      return { sol: null, conflict, failed: i };
     };
 
-    const solution = await solve(0, new Map());
+    const { sol: solution } = await solve(0, new Map());
     if (solution) {
       for (const h of task.holes) {
         accepted.set(h, solution.get(h)!);
-        record(h, solution.get(h)!, notes.get(h)?.tested ?? 0, "proved");
+        record(h, solution.get(h)!, notes.get(h)?.tested ?? 0, provedStatus(provedRelative), provedRelative.length ? relNote(provedRelative) : undefined, provedRelative);
       }
       acceptedTasks.push(task);
     } else {
       for (const h of task.holes) {
-        const n = notes.get(h);
-        record(h, null, n?.tested ?? 0, "not-proved", blocked ? `${n?.cand ? `${n.cand} passes the tests, but ` : ""}${blocked}` : n?.last);
+        const nt = notes.get(h);
+        record(h, null, nt?.tested ?? 0, "not-proved", blocked ? `${nt?.cand ? `${nt.cand} passes the tests, but ` : ""}${blocked}` : (halt ?? nt?.last));
       }
-      if (task.holes.length > 1) console.log(`  (no hole of ${task.name} is filled: its holes are only proved together)`);
+      if (halt) console.log(`  stopped: ${halt}`);
+      if (n > 1) console.log(`  (no hole of ${task.name} is filled: its holes are only proved together)`);
     }
   }
 
@@ -1353,17 +1652,30 @@ export async function synthCommand(root: string, files: string[], opts: { write?
     const final = leanText(accepted);
     // the last check of each accepted function may predate later fills: re-check the final text once
     const c = check(final);
-    const bad = acceptedTasks.map((t) => [t, statusOf(c, final, t, accepted)] as const).filter(([, s]) => s.status !== "proved");
+    const finalSt = acceptedTasks.map((t) => [t, statusOf(c, final, t, accepted)] as const);
+    const bad = finalSt.filter(([, s]) => s.status !== "proved");
     if (bad.length) {
       for (const [t, s] of bad) console.log(`✗ ${t.name} is no longer proved in the final program (${s.status}: ${"why" in s ? s.why : ""}): nothing written`);
-      for (const r of results) if (bad.some(([t]) => t.name === r.fn)) Object.assign(r, { proved: false, status: "not-proved" });
-    } else if (opts.write) {
-      if (fs.readFileSync(target, "utf8") !== raw) console.log(`✗ ${rel} changed while synth was running: not written`);
-      else {
-        fs.writeFileSync(target, bom + final);
-        console.log(`wrote ${rel}`);
+      for (const r of results) if (bad.some(([t]) => t.name === r.fn)) Object.assign(r, { proved: false, status: "not-proved", relative_to: undefined });
+    } else {
+      // what the written program's proofs assume
+      for (const [t, s] of finalSt) {
+        if (s.status !== "proved") continue;
+        for (const r of results) {
+          if (r.fn !== t.name || !r.proved) continue;
+          r.status = provedStatus(s.relative);
+          if (s.relative.length) Object.assign(r, { relative_to: s.relative, note: relNote(s.relative) });
+          else delete r.relative_to;
+        }
       }
-    } else console.log(`(${rel} not modified: rerun with --write to keep the proved fill(s))`);
+      if (opts.write) {
+        if (fs.readFileSync(target, "utf8") !== raw) console.log(`✗ ${rel} changed while synth was running: not written`);
+        else {
+          fs.writeFileSync(target, bom + final);
+          console.log(`wrote ${rel}`);
+        }
+      } else console.log(`(${rel} not modified: rerun with --write to keep the proved fill(s))`);
+    }
   }
   if (opts.json) console.log(JSON.stringify(results, null, 2));
   return results;

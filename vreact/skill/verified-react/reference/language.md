@@ -85,7 +85,8 @@ non-discriminated unions (`string | number`), `ReactNode`/`children` props.
   fields of the narrowed variant become available, also inside handlers created there.
   The complement narrows too when one variant is left (`if (s.kind === "a") return …;
   return s.onlyInB;`, `else`, `s.kind === "a" || s.b > 0`, `c ? … : s.b`), also after
-  several exclusions.
+  several exclusions; with several variants left, the fields they share are available.
+  A `T | null` value tested non-null and then to be a variant is that (present) variant.
   Assigning a present value to a `let x: T | null` (`x = 0`, `let x: int | null = 3`)
   narrows it too; assigning again (or in a loop) forgets it.
 
@@ -207,7 +208,8 @@ or a user component.
 | recursion, `while` | `for…of`, array methods |
 | generics | monomorphic helpers |
 | `async`, fetch | keep I/O in an unverified module that calls verified reducers |
-| guarded updates in `vreact synth` | write the guard by hand with a hole per branch; synth fills straight-line code (all holes of a function are proved together) |
+| guarded updates in `vreact synth` | write the guard by hand with a hole per branch; synth fills straight-line code (all holes of a function are proved together; a hole per `case`/branch is searched once) |
+| `vreact synth` on a function whose contract's Lean statement mentions a function that still has a hole (called in the contract, or in the body or `requires` of a function it calls; not in a `@trusted` body or a callee's `ensures`) | not searched ("the contract depends on unfinished function f"): fill or write `f` first |
 | `vreact synth` on a `/** @trusted */` function or a component | refused (Lean checks nothing in a trusted body): remove `@trusted` / move the expression into a model function |
 | a reducer over a discriminated union calling `@opaque` model functions | supported (contracts are instantiated inside the `switch` arms) |
 | invariants about sums (`reduce`) under filter/map | provable, but needs a Lean lemma in `proofs/` (automation handles append, filter, map, `slice`, `toSorted`, `toReversed`, `with` (also swaps `xs.with(i, xs[j]).with(j, xs[i])`), `indexOf`/`findIndex` ranges, `range`, membership, `distinct`, concatenation of string literals, and counts `xs.filter(p).length` under append, delete-by-id, map-updates and mark-all) |
