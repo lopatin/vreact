@@ -10,7 +10,7 @@
 import ts from "typescript";
 import { T, type VType, type Param, type Field, leanType, showType, typeOfNode } from "./types.ts";
 import { type Env, ModCtx, type CompCtx, type CompInfo, type StateVar, type FnInfo, type Binding, bind, freshLocal } from "./ctx.ts";
-import { expr, prop, block, branch, handlerFn, checkDeps, hookName, specFn, symbolOf, bindParam, type BlockCtx, typeOf, valueBlock, lambda, outcome } from "./translate.ts";
+import { expr, prop, block, branch, handlerFn, checkDeps, hookName, specFn, symbolOf, bindParam, type BlockCtx, typeOf, valueBlock, lambda, outcome, checkClosures, topLevelHookDecls } from "./translate.ts";
 import { fail, leanField, leanIdent, leanStr, jsStr, paren, nodeText, indent } from "./util.ts";
 
 const CONTINUOUS = new Set(["drag", "dragenter", "dragexit", "dragleave", "dragover", "mousemove", "mouseout", "mouseover", "pointermove", "pointerout", "pointerover", "scroll", "toggle", "touchmove", "wheel", "mouseenter", "mouseleave", "pointerenter", "pointerleave"]);
@@ -83,6 +83,8 @@ export function translateComponent(fn: ts.FunctionDeclaration, info: CompInfo, m
   }
   const body = fn.body;
   if (!body) fail(fn, "component without body");
+  // closures (handlers, effects, updaters, callbacks) over render-local `let`s must agree with JS
+  if (!info.trusted) checkClosures(body, env);
   const pp = prepass(body.statements, env, comp, m);
   comp.stateVars = pp.stateVars;
 
@@ -238,11 +240,27 @@ function prepass(stmts: readonly ts.Statement[], env: Env, comp: CompCtx, m: Mod
           fail(d, `${h} is not modelled in VTS yet`);
         }
       }
+      // useMemo / useCallback: allowed only here (top level), before any early return
+      for (const dd of s.declarationList.declarations) {
+        const init = dd.initializer && ts.isParenthesizedExpression(dd.initializer) ? dd.initializer.expression : dd.initializer;
+        if (!init || !ts.isCallExpression(init)) continue;
+        const h = hookName(env, init.expression);
+        if (h !== "useMemo" && h !== "useCallback") continue;
+        if (sawNonHook) fail(dd, "hooks must run unconditionally before any early return (Rules of Hooks)");
+        topLevelHookDecls.add(dd);
+      }
     }
-    if (ts.isIfStatement(s) || ts.isReturnStatement(s)) sawNonHook = true;
+    if (ts.isIfStatement(s) || ts.isReturnStatement(s) || ts.isSwitchStatement(s) || mayReturn(s)) sawNonHook = true;
     pp.renderStmts.push(s);
   }
   return pp;
+}
+
+/** Does a statement of the component body contain a `return` of the component (not of a nested function)? */
+function mayReturn(s: ts.Node): boolean {
+  if (ts.isReturnStatement(s)) return true;
+  if (ts.isFunctionLike(s) || ts.isClassLike(s)) return false;
+  return !!ts.forEachChild(s, (c) => (mayReturn(c) ? true : undefined));
 }
 
 function stateVar(d: ts.VariableDeclaration, h: string, env: Env, m: ModCtx, pp: Prepass): StateVar {
@@ -318,7 +336,14 @@ function effectCode(c: ts.CallExpression, env: Env, info: CompInfo): string {
     deps = `some [${ds.join(", ")}]`;
   }
   // split the body into: synchronous statements, timer registrations (tasks), cleanup
-  const stmts = ts.isBlock(fn.body) ? [...fn.body.statements] : [ts.factory.createExpressionStatement(fn.body)];
+  let stmts = ts.isBlock(fn.body) ? [...fn.body.statements] : [ts.factory.createExpressionStatement(fn.body)];
+  let bodyE: ts.Node = fn.body;
+  while (ts.isParenthesizedExpression(bodyE)) bodyE = bodyE.expression;
+  if (ts.isArrowFunction(bodyE) || ts.isFunctionExpression(bodyE)) {
+    // useEffect(() => () => cleanup)
+    checkCleanup(bodyE, env);
+    stmts = [];
+  }
   const tasks: string[] = [];
   const sync: ts.Statement[] = [];
   const timerCb = (e: ts.Expression): ts.Expression | null => {
@@ -327,8 +352,8 @@ function effectCode(c: ts.CallExpression, env: Env, info: CompInfo): string {
   };
   for (const s of stmts) {
     if (ts.isReturnStatement(s)) {
-      // cleanup: may not touch state
-      if (s.expression && containsSetter(s.expression, env)) fail(s, "effect cleanups may not update state");
+      // cleanup: not translated, so it may not touch any component's state
+      if (s.expression) checkCleanup(s.expression, env);
       continue;
     }
     let cb: ts.Expression | null = null;
@@ -362,18 +387,88 @@ function effectCode(c: ts.CallExpression, env: Env, info: CompInfo): string {
   return `(VReact.Effect.mk (S := ${info.ns}.State) (E := E) (inv := ${info.ns}.inv props) (${deps}) ${paren(setup)} ${okSetup} rfl\n     [${tasks.join(", ")}] ${okTasks})`;
 }
 
-function containsSetter(n: ts.Node, env: Env): boolean {
-  let found = false;
-  const visit = (x: ts.Node) => {
-    if (ts.isCallExpression(x) && ts.isIdentifier(x.expression)) {
-      const s = symbolOf(env, x.expression);
-      const b = s ? env.vars.get(s) : undefined;
-      if (b && (b.k === "setter" || b.k === "dispatch")) found = true;
+const CLEANUP_RULE = "effect cleanups may only clear timers (clearTimeout/clearInterval) and make external writes (console.*, localStorage.*, document.title = …): React runs a cleanup later, with the props and state of the render that created it, and the cleanup is not verified";
+
+/**
+ * An effect cleanup is not translated (the model has no cleanup step), so it must not be
+ * able to affect any component state: only timer clearing and the documented external
+ * writes, whose arguments are pure expressions.  Setters, dispatch, parent callbacks and
+ * local helpers (which may reach them) are rejected, directly or nested.
+ */
+function checkCleanup(e0: ts.Expression, env: Env) {
+  let e: ts.Expression = e0;
+  while (ts.isParenthesizedExpression(e)) e = e.expression;
+  if (!ts.isArrowFunction(e) && !ts.isFunctionExpression(e)) fail(e0, `an effect cleanup must be an inline function \`() => { … }\`; ${CLEANUP_RULE}`);
+  if (e.parameters.length) fail(e, "effect cleanups take no parameters");
+  const items: ts.Node[] = ts.isBlock(e.body) ? [...e.body.statements] : [e.body];
+  for (const it of items) {
+    if (ts.isEmptyStatement(it)) continue;
+    let x: ts.Node = ts.isExpressionStatement(it) ? it.expression : it;
+    while (ts.isParenthesizedExpression(x)) x = x.expression;
+    if (ts.isCallExpression(x)) {
+      const callee = x.expression;
+      const timerClear = ts.isIdentifier(callee) && ["clearTimeout", "clearInterval"].includes(callee.text) && !env.vars.get(symbolOf(env, callee)!);
+      const external = ts.isPropertyAccessExpression(callee) && ts.isIdentifier(callee.expression) && ["console", "localStorage"].includes(callee.expression.text) && !env.vars.get(symbolOf(env, callee.expression)!);
+      if (timerClear || external) {
+        x.arguments.forEach((a) => pureCleanupExpr(a, env));
+        continue;
+      }
     }
+    if (ts.isBinaryExpression(x) && x.operatorToken.kind === ts.SyntaxKind.EqualsToken && x.left.getText() === "document.title") {
+      pureCleanupExpr(x.right, env);
+      continue;
+    }
+    if (ts.isCallExpression(x) && updatesState(x.expression, env)) fail(it, `effect cleanups may not update state or call parent callbacks; ${CLEANUP_RULE}`);
+    fail(it, CLEANUP_RULE);
+  }
+}
+
+/** Does calling `callee` reach a setter, dispatch, a parent callback or a local helper? */
+function updatesState(callee: ts.Expression, env: Env): boolean {
+  if (ts.isIdentifier(callee)) {
+    const b = env.vars.get(symbolOf(env, callee)!);
+    return !!b && b.k !== "val";
+  }
+  if (ts.isPropertyAccessExpression(callee) && ts.isIdentifier(callee.expression) && env.vars.get(symbolOf(env, callee.expression)!)?.k === "props") {
+    return !env.comp?.info.data.some((f) => f.name === callee.name.text);
+  }
+  return false;
+}
+
+/** Arguments inside a cleanup: data only (no state updates, callbacks, helpers or unknown calls). */
+function pureCleanupExpr(n: ts.Node, env: Env) {
+  const visit = (x: ts.Node) => {
+    if (ts.isCallExpression(x)) {
+      const callee = x.expression;
+      let ok = false;
+      if (ts.isIdentifier(callee)) {
+        const s = symbolOf(env, callee);
+        const d = s && (s.flags & ts.SymbolFlags.Alias ? env.m.checker.getAliasedSymbol(s) : s).declarations?.[0];
+        ok = !env.vars.get(s!) && (callee.text === "String" || !!specFn(env, callee) || (!!d && env.m.prog.globals.get(d)?.k === "fn"));
+      } else if (ts.isPropertyAccessExpression(callee)) {
+        // methods of data values (arrays, strings) and Math.*; not props callbacks or helpers
+        const root = callee.expression;
+        if (ts.isIdentifier(root)) {
+          const b = env.vars.get(symbolOf(env, root)!);
+          ok = root.text === "Math" || b?.k === "val" || (!b && !!globalConst(root, env));
+        } else ok = !(ts.isPropertyAccessExpression(root) && updatesState(root, env));
+      }
+      if (!ok) fail(x, `effect cleanups may not call \`${nodeText(callee, 40)}\` here; ${CLEANUP_RULE}`);
+    }
+    if (ts.isNewExpression(x) || ts.isAwaitExpression(x) || ts.isDeleteExpression(x)) fail(x, CLEANUP_RULE);
+    if (ts.isBinaryExpression(x) && x.operatorToken.kind >= ts.SyntaxKind.FirstAssignment && x.operatorToken.kind <= ts.SyntaxKind.LastAssignment) fail(x, CLEANUP_RULE);
+    if ((ts.isPrefixUnaryExpression(x) || ts.isPostfixUnaryExpression(x)) && (x.operator === ts.SyntaxKind.PlusPlusToken || x.operator === ts.SyntaxKind.MinusMinusToken)) fail(x, CLEANUP_RULE);
     ts.forEachChild(x, visit);
   };
   visit(n);
-  return found;
+}
+
+function globalConst(id: ts.Identifier, env: Env) {
+  let s = symbolOf(env, id);
+  if (s && s.flags & ts.SymbolFlags.Alias) s = env.m.checker.getAliasedSymbol(s);
+  const d = s?.declarations?.[0];
+  const g = d ? env.m.prog.globals.get(d) : undefined;
+  return g?.k === "const" ? g : undefined;
 }
 
 /* ───────────────────────────── JSX ───────────────────────────── */

@@ -102,7 +102,11 @@ export function ItemList(props: ItemListProps) {
 * `setX(v)` uses the render snapshot; two of them in one handler do not compose — use
   `setX(prev => …)` when updates must accumulate.
 * Effects/timers must preserve the invariant from **any** state (stale closures):
-  prefer functional updates there; effect deps must be exhaustive.
+  prefer functional updates there; effect deps must be exhaustive. Cleanups only
+  clear timers (and log / write `localStorage` / `document.title`).
+* Closures read `let`s when they run: do not reassign a `let` after creating a
+  handler/helper/updater that reads it (`const xNow = x;` first), and never assign
+  an outer `let` inside a callback.
 * Invariants must not depend on props that can change (React keeps state across
   prop changes): clamp when rendering instead.
 * Lists need `key={…}` with provably distinct keys (usually from an invariant).

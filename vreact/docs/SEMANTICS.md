@@ -61,12 +61,27 @@ Every expression maps to a Lean term whose value is the JavaScript value.
 * `x!` carries the obligation `x ≠ null`; `?.` and `??` map to `Option.map/getD`.
 * Narrowing (`x !== null`, `x.kind === "add"`, `switch (x.kind)`, early
   `return`) is compiled to Lean `match`, so the narrowed facts are available to
-  every obligation in the branch.
+  every obligation in the branch. The complement of a tag test is narrowed too
+  when it leaves one variant (else branch, code after an early return, the right
+  of `||`, a ternary's false branch); with more variants left, the complement is
+  split into one arm per variant only when later code needs it (a later test
+  excludes all but one). Reassigning a narrowed `let` (or a `let` whose field was
+  narrowed) ends the narrowing; `x = e` with a non-null `e` narrows `x` to `e`.
 * Statements are translated in continuation-passing style: `const` ↦ `let`,
   reassignment of a local `let` ↦ shadowing `let`, `if` ↦ dependent `if` (the
   condition becomes a hypothesis), `for (const x of xs)` ↦ `List.foldl` over
-  the tuple of assigned locals, `throw` ↦ an obligation that the point is
-  unreachable.
+  the tuple of assigned locals, `switch` ↦ `match` / if-chain (first matching
+  label; `default` in any position takes the values no label matches), `throw`
+  ↦ an obligation that the point is unreachable.
+* Functions created in a body (helper arrows, handlers, callback props,
+  functional updates, effects, timers, cleanups, `useCallback`) are translated in
+  the environment of the point where they are created. JS closures capture
+  *variables*, so this is exact only under two static checks: a function that
+  runs later may not read a `let` that may be reassigned after the function is
+  created (a later assignment, or one in an enclosing loop), and no function —
+  including immediately-run array callbacks — may assign a `let` declared
+  outside it. Array-method callbacks, spec predicates and the `useMemo` factory
+  run in place and read the current values.
 
 ### 1.3 Contracts (`vreact/spec`)
 
@@ -156,8 +171,19 @@ compose two parent outcomes that were only checked separately).
 
 `useEffect(body, deps)` runs after commit when its dependency values changed.
 Its synchronous updates and the timers it registers must be robust and may not
-call parent callbacks; `deps` must be exhaustive (otherwise stale closures).
+call parent callbacks; `deps` must be exhaustive (otherwise stale closures;
+the check sees every reference, including shorthand properties `{ x }`; the same
+check applies to `useMemo` / `useCallback`). The model has no cleanup step, so a
+returned cleanup is restricted statically: it must be an inline function that
+only calls `clearTimeout` / `clearInterval` and makes external writes
+(`console.*`, `localStorage.*`, `document.title = …`) with pure arguments —
+no setters, `dispatch`, parent callbacks or local helpers.
 Running a robust effect any number of times (StrictMode) is safe.
+
+Hooks (`useState`, `useReducer`, `useEffect`, `useMemo`, `useCallback`) are
+matched by React by call order, so they must be top-level statements of the
+component, before any statement that may return (an `if`, a `switch`, …); a hook
+in a branch, loop, handler or closure is rejected.
 
 ---
 
