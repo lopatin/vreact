@@ -211,7 +211,19 @@ const cases: Record<string, () => Promise<void>> = {
     const want: Record<string, string> = { width2: "s.w", w4: "s.w + 1", w6: "s.h + s.w", w7: "k + s.h", triX: "0" };
     for (const [fn, s] of Object.entries(want)) check(`Sx-narrowing: ${fn}`, solutions(by(fn))[0] === s, String(solutions(by(fn))[0]));
     check("Sx-narrowing: early return narrows s to rect", out.includes("hole in width2: int   scope: s, s.w, s.h"));
-    check("Sx-narrowing: two variants left: shared fields only", out.includes("hole in triX: int   scope: t\n"));
+    check("Sx-narrowing: two variants left: the fields they share", out.includes("hole in triX: int   scope: t, t.y\n"));
+  },
+  // P78 / V2: a variant narrowing implies a present value (T | null); exclusions on a union of three
+  // variants (the translator splits the remaining arm per variant when the code there needs it)
+  async "Sx-narrowing3"() {
+    const dir = project("Sx-narrowing3");
+    const { by, out } = await synth(dir, "src/n.ts");
+    const want: Record<string, string[]> = { zOf: ["t.z"], yOf: ["t.y + 1"], zAnd: ["t.z + 1"], zTern: ["t.y + t.z", "t.z + t.y"], zOpt: ["t.z"], zBox: ["b.inner.z"], wOpt: ["s.w"], wSwitch: ["b.inner.w"], wAnd: ["b.inner.h"], noOver: ["t.y"] };
+    for (const [fn, s] of Object.entries(want)) check(`Sx-narrowing3: ${fn}`, s.includes(String(solutions(by(fn))[0])), String(solutions(by(fn))[0]));
+    const scope = (fn: string) => out.match(new RegExp(`hole in ${fn}: \\S+   scope: (.*)`))?.[1];
+    const scopes: Record<string, string> = { zOf: "t, t.y, t.z", yOf: "t, t.y", zOpt: "t, t.y, t.z", zBox: "b, b.inner, b.inner.y, b.inner.z, b.n", wOpt: "s, s.w, s.h", wSwitch: "b, b.inner, b.inner.w, b.inner.h, b.n", noOver: "t, t.y" };
+    for (const [fn, s] of Object.entries(scopes)) check(`Sx-narrowing3: scope of ${fn}`, scope(fn) === s, String(scope(fn)));
+    check("Sx-narrowing3: every candidate translates", !out.includes("does not translate"));
   },
   // N26: a field (and a parameter) spelled `hole` is not a use of the imported hole
   async "Sx-holefield"() {
@@ -234,6 +246,22 @@ const cases: Record<string, () => Promise<void>> = {
     const p = by("plusSq")[0];
     check("Sx-diag: plusSq: the contract depends on unfinished sq", !!p && !p.proved && p.tested === 0 && /contract of plusSq depends on unfinished function sq/.test(p.note ?? "") && !part("plusSq").includes("postcondition fails"), p?.note);
     check("Sx-diag: viaStub: the contract cannot be evaluated (not 'postcondition fails')", /contract of viaStub runs into a hole/.test(part("viaStub")) && !part("viaStub").includes("postcondition fails") && !part("viaStub").includes("the random tests accept"), part("viaStub").split("\n").slice(-1)[0]);
+  },
+  // V1 (N27 regression): only what the Lean statement of the contract mentions keeps a function
+  // from being searched: not the body of a @trusted callee (an axiom), nor a callee's ensures
+  async "Sx-leanrefs"() {
+    const dir = project("Sx-leanrefs");
+    const { by, out } = await synth(dir, "src/m.ts", { maxSize: 4 });
+    const part = (fn: string) => out.slice(out.indexOf(`hole in ${fn}`)).split("\nhole in ")[0];
+    const t = by("overTrusted")[0];
+    check("Sx-leanrefs: the body of a @trusted callee is not part of the contract", !!t && t.proved && t.solution === "x" && t.status === "proved-relative" && JSON.stringify(t.relative_to) === JSON.stringify(["VTS.m.viaTrusted"]), JSON.stringify(t));
+    const e = by("overEnsures")[0];
+    check("Sx-leanrefs: the ensures of a callee are not part of the contract", !!e && e.proved && e.status === "proved", JSON.stringify(e));
+    check("Sx-leanrefs: a helper that runs into a hole is not offered (it made the hole look untestable)", !part("overEnsures").includes("unfilled hole") && !part("overEnsures").includes("viaTrusted("), part("overEnsures").split("\n")[1]);
+    for (const fn of ["overRequires", "overBody"]) {
+      const r = by(fn)[0];
+      check(`Sx-leanrefs: ${fn}: depends on unfinished sq (requires / body of a callee)`, !!r && !r.proved && r.tested === 0 && new RegExp(`contract of ${fn} depends on unfinished function sq`).test(r.note ?? ""), r?.note);
+    }
   },
   // N28: a proof relative to @trusted declarations has its own status and lists what it assumes
   async "Sx-relative"() {

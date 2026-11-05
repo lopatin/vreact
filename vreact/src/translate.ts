@@ -209,10 +209,21 @@ export function narrowingAt(env: Env, roots: readonly { sym: ts.Symbol; name: st
   return out;
 }
 
-/** Is `e` (a variable or property path) narrowed to a non-null value here? */
+/** `remaining` (see Env) on the paths rooted at the given variables, keyed by path text as narrowingAt. */
+export function remainingAt(env: Env, roots: readonly { sym: ts.Symbol; name: string }[]): Map<string, string[]> {
+  const out = new Map<string, string[]>();
+  for (const { sym, name } of roots) {
+    const k = `#${symId(sym)}`;
+    for (const [key, vs] of env.remaining ?? []) if (key === k || key.startsWith(k + ".")) out.set(name + key.slice(k.length), vs);
+  }
+  return out;
+}
+
+/** Is `e` (a variable or property path) narrowed to a non-null value here (to a variant: also present)? */
 function narrowedSome(env: Env, e: ts.Expression): boolean {
   const k = pathKey(env, e);
-  return !!k && env.narrow.get(k)?.kind === "some";
+  const n = k ? env.narrow.get(k) : undefined;
+  return !!n && (n.kind === "some" || n.kind === "variant");
 }
 
 function isNullLit(e: ts.Expression): boolean {
@@ -390,11 +401,12 @@ export function expr(e: ts.Expression, env: Env, expected?: VType): Val {
 
 function expr0(e: ts.Expression, env: Env, expected?: VType): Val {
   const m = env.m;
-  // narrowed path?
+  // narrowed path? (a variant narrowing replaces a `some` one: `s: T | null` tested non-null,
+  // then to be a variant, is that present value)
   const key = pathKey(env, e);
   if (key) {
     const n = env.narrow.get(key);
-    if (n && n.kind === "some") return { code: n.code, type: n.type };
+    if (n && (n.kind === "some" || n.kind === "variant")) return { code: n.code, type: n.type };
   }
   switch (e.kind) {
     case ts.SyntaxKind.ParenthesizedExpression:
@@ -865,7 +877,7 @@ function objectLiteral(o: ts.ObjectLiteralExpression, env: Env, expected?: VType
       const vs = env.m.checker.getShorthandAssignmentValueSymbol(p);
       const key = vs ? `#${symId(vs)}` : null;
       const n = key ? env.narrow.get(key) : undefined;
-      if (n && n.kind === "some") return coerce({ code: n.code, type: n.type }, t, p, env);
+      if (n && (n.kind === "some" || n.kind === "variant")) return coerce({ code: n.code, type: n.type }, t, p, env);
       return coerce(identifier(p.name, env, t, vs), t, p, env);
     }
     return expr(p, env, t);
@@ -1547,8 +1559,16 @@ function narrowBranch(nt: NarrowTest, env: Env, onTrue: (e: Env) => string, onFa
     const nObs = m.obligations.length;
     const nCount = m.counter.n;
     const nHoles = m.prog.holeEnvs?.length ?? 0;
+    // (vreact synth only: which variants are left in the `_` arm; the term is the same)
+    let restEnv = env;
+    if (m.prog.holeEnvs) {
+      const before = env.remaining?.get(key);
+      const remaining = new Map(env.remaining ?? []);
+      remaining.set(key, others.map((v) => v.lit).filter((l) => !before || before.includes(l)));
+      restEnv = { ...env, remaining };
+    }
     try {
-      arms += `\n  | _ => ${paren(whenNot(env))}`;
+      arms += `\n  | _ => ${paren(whenNot(restEnv))}`;
     } catch (err) {
       if (!(err instanceof VtsError)) throw err;
       m.obligations.length = nObs;
@@ -1929,7 +1949,8 @@ function dropNarrowing(env: Env, s: ts.Symbol): Env {
 function forgetNarrowing(env: Env, s: ts.Symbol): Env {
   const key = `#${symId(s)}`;
   const narrow = new Map([...env.narrow].filter(([k]) => k !== key && !k.startsWith(key + ".")));
-  return { ...env, narrow };
+  const remaining = env.remaining && new Map([...env.remaining].filter(([k]) => k !== key && !k.startsWith(key + ".")));
+  return { ...env, narrow, remaining };
 }
 
 /**

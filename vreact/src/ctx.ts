@@ -135,6 +135,13 @@ export interface Env {
   fnName?: string;
   /** the key function of a keyed `.map`: its JSX consts are translated by the node function */
   keyFn?: boolean;
+  /**
+   * Set only while `vreact synth` records hole environments (`Program.holeEnvs`), and read only
+   * by synth: the variants a union-typed path can still have here, where tests excluded the
+   * others but the translation kept one `_` arm (several variants were left). Code there that
+   * needs one of them makes the translator split that arm per variant (see narrowBranch).
+   */
+  remaining?: Map<string, string[]>;
 }
 
 /** Per-program translation context. */

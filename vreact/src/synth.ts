@@ -38,7 +38,7 @@ import { translate, overrideHost, moduleNs, type Config, type TranslateResult } 
 import { runLake, findMarkers, judge, type Verdict } from "./lean.ts";
 import { Program, ModCtx, type HoleEnv } from "./ctx.ts";
 import { type VType, type Field, T, typeOfNode, typeOfDecl, showType, sharedFields } from "./types.ts";
-import { specFn, narrowingAt } from "./translate.ts";
+import { specFn, narrowingAt, remainingAt } from "./translate.ts";
 import { baseEnv } from "./component.ts";
 import { VtsError, capitalize } from "./util.ts";
 
@@ -268,14 +268,21 @@ function annotateRegistry(prog: Program, checker: ts.TypeChecker) {
 
 /* ───────────────────────── scope at the hole ───────────────────────── */
 
-/** What is known at a hole about a parameter path (`s`, `s.inner`): its variant, or that it is present. */
-type Narrow = Map<string, { variant?: string; some?: boolean }>;
+/**
+ * What is known at a hole about a parameter path (`s`, `s.inner`): the variants it can have (one
+ * when it is narrowed to a variant; absent: any), and whether it is present (not null).
+ */
+type Narrow = Map<string, { variants?: string[]; some?: boolean }>;
 
 /**
  * The narrowing at each hole of the program, by the hole's start offset in its file: read from
  * the translator's environments at the hole (`Config.holeEnvs`), so that synth types candidates
- * exactly as the translator will. A hole translated several times (the code after an `if`
- * without `else` is translated in both branches) keeps what every translation agrees on.
+ * exactly as the translator will. A variant narrowing implies a present value (`s: Shape | null`
+ * tested to be a "rect"). Where tests excluded variants but several are left, the translator
+ * keeps one arm and splits it when the code there needs a variant (`Env.remaining`): the
+ * variants left are what synth may assume. A hole translated several times (the code after an
+ * `if` without `else` is translated in both branches) keeps only what holds in every
+ * translation: the union of the variants, and presence when every translation has it.
  */
 function narrowingAtHoles(holeEnvs: HoleEnv[]): Map<string, Narrow> {
   const all = new Map<string, Narrow[]>();
@@ -289,15 +296,23 @@ function narrowingAtHoles(holeEnvs: HoleEnv[]): Map<string, Narrow> {
       if (sym) roots.push({ sym, name: (p.name as ts.Identifier).text });
     }
     const facts: Narrow = new Map();
-    for (const [p, n] of narrowingAt(env, roots)) facts.set(p, n.kind === "variant" ? { variant: n.variant } : { some: true });
+    for (const [p, n] of narrowingAt(env, roots)) facts.set(p, n.kind === "variant" && n.variant ? { variants: [n.variant], some: true } : { some: true });
+    for (const [p, vs] of remainingAt(env, roots)) {
+      const f = facts.get(p);
+      if (!f?.variants) facts.set(p, { ...f, variants: vs });
+    }
     const sf = node.getSourceFile();
     const k = `${path.resolve(sf.fileName)}:${node.getStart(sf)}`;
     all.set(k, [...(all.get(k) ?? []), facts]);
   }
   const out = new Map<string, Narrow>();
-  for (const [k, [first, ...rest]] of all) {
+  for (const [k, facts] of all) {
     const agreed: Narrow = new Map();
-    for (const [p, v] of first) if (rest.every((o) => o.get(p)?.variant === v.variant && !!o.get(p)?.some === !!v.some)) agreed.set(p, v);
+    for (const p of new Set(facts.flatMap((f) => [...f.keys()]))) {
+      const some = facts.every((f) => f.get(p)?.some);
+      const variants = facts.every((f) => f.get(p)?.variants) ? [...new Set(facts.flatMap((f) => f.get(p)!.variants!))] : undefined;
+      if (some || variants) agreed.set(p, { ...(variants ? { variants } : {}), ...(some ? { some } : {}) });
+    }
     out.set(k, agreed);
   }
   return out;
@@ -305,12 +320,12 @@ function narrowingAtHoles(holeEnvs: HoleEnv[]): Map<string, Narrow> {
 
 function holeScope(narrowed: Narrow, prog: Program, params: Map<string, VType>): Atom[] {
   const reg = prog.reg;
-  const fieldsOf = (t: VType, variant?: string): Field[] => {
+  // the fields of a value of type t (of a union: those its possible variants share)
+  const fieldsOf = (t: VType, variants?: string[]): Field[] => {
     if (t.k === "rec") return reg.rec(t);
     if (t.k === "union") {
       const u = reg.union(t);
-      if (variant) return u.variants.find((v) => v.lit === variant)?.fields ?? [];
-      return sharedFields(u.variants);
+      return sharedFields(variants ? u.variants.filter((v) => variants.includes(v.lit)) : u.variants);
     }
     return [];
   };
@@ -320,12 +335,12 @@ function holeScope(narrowed: Narrow, prog: Program, params: Map<string, VType>):
     const t = narrowT(name, t0);
     scope.push({ code: name, type: t, size: 1 });
     // one level of field access (two for records of records / narrowed variants)
-    for (const f of fieldsOf(t, narrowed.get(name)?.variant)) {
+    for (const f of fieldsOf(t, narrowed.get(name)?.variants)) {
       const p = `${name}.${f.name}`;
       const ft = narrowT(p, f.type);
       scope.push({ code: p, type: ft, size: 1 });
-      if (ft.k === "rec" || (ft.k === "union" && narrowed.get(p)?.variant)) {
-        for (const g of fieldsOf(ft, narrowed.get(p)?.variant)) scope.push({ code: `${p}.${g.name}`, type: narrowT(`${p}.${g.name}`, g.type), size: 2 });
+      if (ft.k === "rec" || (ft.k === "union" && narrowed.get(p)?.variants)) {
+        for (const g of fieldsOf(ft, narrowed.get(p)?.variants)) scope.push({ code: `${p}.${g.name}`, type: narrowT(`${p}.${g.name}`, g.type), size: 2 });
       }
     }
   }
@@ -1259,6 +1274,53 @@ export async function synthCommand(root: string, files: string[], opts: { write?
     if (d.body) for (const x of refsFrom(d.body, d)) out.add(x);
     return out;
   };
+  /**
+   * The functions that a node depends on, transitively: for each function it names, that
+   * function's `requires` and its body without the contract, but not its `ensures` (separate
+   * theorems that a statement never mentions; at run time, a callee's ensures are recorded and
+   * ignored). `lean`: what the node's Lean translation mentions through types and values (what
+   * `#print axioms` follows), where a @trusted function is an axiom whose type has the `requires`
+   * (the `h_pre` binder) but which has no value; otherwise what runs, @trusted bodies included.
+   */
+  const dependsOn = (lean: boolean) => {
+    const cache = new Map<ts.FunctionDeclaration, Set<ts.FunctionDeclaration>>();
+    const from = (node: ts.Node, self: ts.FunctionDeclaration | undefined, out = new Set<ts.FunctionDeclaration>()): Set<ts.FunctionDeclaration> => {
+      const visit = (n: ts.Node) => {
+        if (ts.isIdentifier(n)) {
+          let s = checker.getSymbolAtLocation(n);
+          if (s && s.flags & ts.SymbolFlags.Alias) s = checker.getAliasedSymbol(s);
+          const dd = s?.declarations?.[0];
+          if (dd && dd !== self && ts.isFunctionDeclaration(dd) && ts.isSourceFile(dd.parent) && !out.has(dd)) {
+            out.add(dd);
+            for (const x of of(dd)) out.add(x);
+          }
+        }
+        ts.forEachChild(n, visit);
+      };
+      visit(node);
+      return out;
+    };
+    const of = (d: ts.FunctionDeclaration): Set<ts.FunctionDeclaration> => {
+      const done = cache.get(d);
+      if (done) return done;
+      const out = new Set<ts.FunctionDeclaration>();
+      cache.set(d, out);
+      const stmts = d.body?.statements ?? [];
+      let i = 0;
+      for (; i < stmts.length; i++) {
+        const st = stmts[i];
+        if (!ts.isExpressionStatement(st) || !ts.isCallExpression(st.expression)) break;
+        const k = specFn(env, st.expression.expression);
+        if (k === "requires") from(st, d, out);
+        else if (k !== "ensures" && k !== "decreases") break;
+      }
+      if (!(lean && isTrusted(d))) for (const st of stmts.slice(i)) from(st, d, out);
+      return out;
+    };
+    return { from, of };
+  };
+  const leanDeps = dependsOn(true);
+  const runDeps = dependsOn(false);
   const holesIn = (d: ts.FunctionDeclaration) => {
     const hs: ts.CallExpression[] = [];
     if (d.body) findHoles(d.body, hs);
@@ -1284,6 +1346,8 @@ export async function synthCommand(root: string, files: string[], opts: { write?
   const leanText = (fills: Map<Hole, string>) => dropUnusedHoleImport(applyEdits(base, editsOf(fills)), target);
   /** the functions among `ds` whose Lean definition still has a hole (`sorry`): not filled by `fills`, not @trusted (axiomatized) */
   const unfinished = (ds: Iterable<ts.FunctionDeclaration>, fills: Map<Hole, string>) => [...ds].filter((d) => !isTrusted(d) && holesIn(d).some((h) => ![...fills.keys()].some((x) => x.node === h)));
+  /** a function whose body still has a hole that no proved fill replaces (@trusted or not: the tests run its body) */
+  const unfilled = (d: ts.FunctionDeclaration) => holesIn(d).some((h) => ![...accepted.keys()].some((x) => x.node === h));
   const fnNames = (ds: ts.FunctionDeclaration[]) => ds.map((d) => d.name?.text ?? "?").join(", ");
 
   // the status of task `t` in a checked text
@@ -1353,8 +1417,10 @@ export async function synthCommand(root: string, files: string[], opts: { write?
         if (/^[A-Z]/.test(st.name.text)) continue;
         const hasPre = st.body?.statements.some((x) => ts.isExpressionStatement(x) && ts.isCallExpression(x.expression) && specFn(env, x.expression.expression) === "requires");
         // (a function whose holes were filled above is a helper like any other; one that calls
-        // this function is not: VTS has no recursion, so such a fill would never translate)
-        if (hasPre || st.parameters.some((p) => !p.type) || holesIn(st).some((x) => ![...accepted.keys()].some((a) => a.node === x)) || refsOf(st).has(fd)) continue;
+        // this function is not: VTS has no recursion, so such a fill would never translate; nor
+        // one that runs into a hole, e.g. a @trusted stub calling unfinished code: no input could
+        // test a candidate calling it, and the first such candidate would make the hole look untestable)
+        if (hasPre || st.parameters.some((p) => !p.type) || refsOf(st).has(fd) || [st, ...runDeps.of(st)].some(unfilled)) continue;
         try {
           const h = { name: st.name.text, params: st.parameters.map((p) => typeOfNode(p.type!, prog.typeEnv, sigHint(st, p))), ret: typeOfNode(st.type, prog.typeEnv, capitalize(st.name.text) + "Result") };
           st.parameters.forEach((p, i) => annotateOpt(h.params[i], checker.getTypeFromTypeNode(p.type!), checker));
@@ -1393,10 +1459,11 @@ export async function synthCommand(root: string, files: string[], opts: { write?
       else if (k !== "decreases") break;
       contractStmts.push(st);
     }
-    // a contract that mentions a function with a hole cannot be tested, nor proved (its
-    // theorems mention that function's `sorry`) until that function is finished
-    const contractCalls = () => new Set(contractStmts.flatMap((st) => [...refsFrom(st, fd)]).filter((d) => d !== fd));
-    const contractNeeds = unfinished(contractCalls(), accepted);
+    // a contract whose Lean statement mentions a function with a hole cannot be proved (its
+    // theorems then depend on that function's `sorry`) until that function is finished. Only what
+    // the statement mentions counts: not the bodies of @trusted callees (axioms) nor the ensures of
+    // callees; anything else a proof may use is left to Lean (status "pending")
+    const contractNeeds = unfinished(new Set(contractStmts.flatMap((st) => [...leanDeps.from(st, fd)]).filter((d) => d !== fd)), accepted);
     if (contractNeeds.length) {
       const why = `the contract of ${task.name} depends on unfinished function${contractNeeds.length > 1 ? "s" : ""} ${fnNames(contractNeeds)} (a hole remains): finish ${contractNeeds.length > 1 ? "them" : "it"} first`;
       console.log(`${holesLabel}`);

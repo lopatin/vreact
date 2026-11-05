@@ -70,8 +70,9 @@ change (it is incremental and usually takes seconds).
    `relative_to` under `--json` — means the proof assumes those @trusted
    contracts or `assume(…)` facts. A `? not proved` line names what kept Lean
    from checking it (often a failing obligation elsewhere in the module or an
-   import: fix that first); a contract that calls a function that still has a
-   hole is reported as such: fill that function first. Synth never edits the
+   import: fix that first); a contract whose statement depends on a function
+   that still has a hole (through calls, their bodies and `requires`; not
+   through `@trusted` bodies) is reported as such: fill that function first. Synth never edits the
    file while searching; `--write` writes only proved fills.
 3. **Reducer** — a total `switch` over a discriminated-union action type,
    delegating to the model; `ensures` that it preserves the invariant.

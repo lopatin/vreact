@@ -46,7 +46,7 @@ export function w7(s: Shape, k: int): int {
   return hole<int>();
 }
 
-// two variants remain: no fields beyond the shared ones
+// two variants remain: the fields they share (y), not x
 export function triX(t: Tri): int {
   ensures((r: int) => r === 0 || t.kind === "a");
   if (t.kind === "a") return 1;
