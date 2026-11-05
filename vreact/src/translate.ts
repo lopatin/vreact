@@ -11,9 +11,9 @@
  * duplicate the continuation; `for…of` loops become folds.
  */
 import ts from "typescript";
-import { T, type VType, type Field, type Param, sameType, showType, leanType, sharedFields, type Variant, typeOfNode } from "./types.ts";
+import { T, type VType, type Field, type Param, sameType, showType, leanType, sharedFields, type Variant, typeOfNode, kindsOfType, nullShape } from "./types.ts";
 import { type Env, type Val, ModCtx, type Binding, type StateVar, type CompCtx, type HandlerAcc, type FnInfo, type CompInfo, type Global, type Narrowed, bind, extend, freshLocal } from "./ctx.ts";
-import { VtsError, fail, leanField, leanIdent, leanStr, jsStr, leanInt, paren, nodeText, capitalize } from "./util.ts";
+import { VtsError, fail, leanField, leanAccessor, leanIdent, leanStr, jsStr, leanInt, paren, nodeText, capitalize } from "./util.ts";
 
 /* ───────────────────────────── helpers ───────────────────────────── */
 
@@ -271,15 +271,6 @@ function tsTypeOf(e: ts.Expression, env: Env): ts.Type | null {
   return null;
 }
 
-/** Which nullish values (`null`, `undefined`) a TypeScript type admits. */
-function kindsOfType(t: ts.Type): { null: boolean; undef: boolean } {
-  const parts = t.isUnion() ? t.types : [t];
-  return {
-    null: parts.some((p) => (p.flags & ts.TypeFlags.Null) !== 0),
-    undef: parts.some((p) => (p.flags & (ts.TypeFlags.Undefined | ts.TypeFlags.Void)) !== 0),
-  };
-}
-
 function nullishKinds(e: ts.Expression, env: Env): { null: boolean; undef: boolean } | null {
   const t = tsTypeOf(e, env);
   return t ? kindsOfType(t) : null;
@@ -294,7 +285,7 @@ function checkStrictNullTest(node: ts.Node, other: ts.Expression, lit: ts.Expres
   const what = nodeText(other, 40);
   const litText = lit.kind === ts.SyntaxKind.NullKeyword ? "null" : "undefined";
   const k = nullishKinds(other, env);
-  if (!k) fail(node, `cannot tell whether \`${what}\` may be null or undefined (its TypeScript type is any): annotate it (e.g. ensures((r: T | null) => …)) or compare with == null`);
+  if (!k) fail(node, `cannot tell whether \`${what}\` may be null or undefined (its TypeScript type is any or unknown): give it its exact type (e.g. ensures((r: T | null) => …)) or compare with == null`);
   if (k.null && k.undef) fail(node, `\`${what}\` may be null or undefined, which VTS does not distinguish: compare with == null / != null`);
   if (litText === "null" && k.undef && !k.null) {
     fail(node, `\`${what}\` can be undefined but never null (optional fields, find(), at() and ?. give undefined), so \`=== null\` is always false in JS: write === undefined or == null`);
@@ -308,7 +299,7 @@ function checkStrictNullTest(node: ts.Node, other: ts.Expression, lit: ts.Expres
 function checkOptionalEquality(node: ts.Node, a: ts.Expression, b: ts.Expression, env: Env) {
   const ka = nullishKinds(a, env);
   const kb = nullishKinds(b, env);
-  if (!ka || !kb) fail(node, `cannot tell whether the operands may be null or undefined (TypeScript type any): annotate them`);
+  if (!ka || !kb) fail(node, `cannot tell whether the operands may be null or undefined (TypeScript type any or unknown): give them their exact types`);
   const any = (k: { null: boolean; undef: boolean }) => k.null || k.undef;
   if (!any(ka) || !any(kb)) return;
   if ((ka.null && ka.undef) || (kb.null && kb.undef) || ka.null !== kb.null) {
@@ -329,11 +320,99 @@ function checkPrimitiveElems(node: ts.Node, arr: ts.Expression, elem: VType, wha
     fail(node, `${what} on ${showType(elem)} elements compares object identity in JS (a copy is never found): compare keys instead, e.g. xs.some((x) => x.id === v.id)`);
   }
   if (elem.k === "opt") {
-    const t = tsTypeOf(arr, env);
-    const et = t ? env.m.checker.getIndexTypeOfType(t, ts.IndexKind.Number) : undefined;
+    const et = elemTsType(arr, env);
     const k = et ? kindsOfType(et) : null;
     if (!k || (k.null && k.undef)) fail(node, `${what} on elements that may be null or undefined is not supported (VTS does not distinguish them)`);
   }
+}
+
+/** The TypeScript type of the elements of an array expression (null when unknown). */
+function elemTsType(arr: ts.Expression, env: Env): ts.Type | null {
+  const t = tsTypeOf(arr, env);
+  return (t && env.m.checker.getIndexTypeOfType(t, ts.IndexKind.Number)) ?? null;
+}
+
+/**
+ * The parameter types of a function type (its single call signature; in a union such as
+ * `SetStateAction<T> = T | ((prev: T) => T)`, of its only function member).  null when there is
+ * no such signature, or it has a rest parameter.
+ */
+export function fnParamTsTypes(t: ts.Type | undefined, at: ts.Node, env: Env): ts.Type[] | null {
+  if (!t) return null;
+  const ck = env.m.checker;
+  const sigs = (t.isUnion() ? t.types : [t]).flatMap((m) => ck.getSignaturesOfType(m, ts.SignatureKind.Call));
+  if (sigs.length !== 1) return null;
+  const ps = sigs[0].getParameters();
+  if (ps.some((p) => { const d = p.valueDeclaration; return !!d && ts.isParameter(d) && !!d.dotDotDotToken; })) return null;
+  return ps.map((p) => ck.getTypeOfSymbolAtLocation(p, at));
+}
+
+/** The types the context of a function expression (call argument, JSX attribute, …) gives its parameters. */
+export function contextualParamTsTypes(fn: ts.Expression, env: Env): ts.Type[] | null {
+  return fnParamTsTypes(env.m.checker.getContextualType(fn), fn, env);
+}
+
+/** Whether a VTS type has an optional part (whose nullish value, null or undefined, only TypeScript types tell). */
+function hasOptPart(t: VType): boolean {
+  if (t.k === "opt") return true;
+  if (t.k === "arr") return hasOptPart(t.elem);
+  if (t.k === "tuple") return t.elems.some(hasOptPart);
+  return false; // records, unions, enums: nominal (their fields' kinds are those of the declaration)
+}
+
+/** `showType`, with the nullish value (null or undefined) of each optional part as TypeScript types it. */
+function showWithKinds(vt: VType, t: ts.Type | null, env: Env): string {
+  const ck = env.m.checker;
+  const k = vt.k === "opt" && t ? kindsOfType(t) : null;
+  if (vt.k === "opt" && t && k) {
+    const inner = showWithKinds(vt.elem, ck.getNonNullableType(t), env);
+    return [inner, ...(k.null ? ["null"] : []), ...(k.undef ? ["undefined"] : [])].join(" | ");
+  }
+  if (vt.k === "arr" && t) {
+    const et = ck.getIndexTypeOfType(t, ts.IndexKind.Number) ?? null;
+    const inner = showWithKinds(vt.elem, et, env);
+    return `readonly ${vt.elem.k === "opt" || vt.elem.k === "fn" ? `(${inner})` : inner}[]`;
+  }
+  if (vt.k === "tuple" && t && ck.isTupleType(t)) {
+    const args = ck.getTypeArguments(t as ts.TypeReference);
+    return `[${vt.elems.map((e, i) => showWithKinds(e, args[i] ?? null, env)).join(", ")}]`;
+  }
+  return showType(vt);
+}
+
+/**
+ * A parameter of a function value whose argument TypeScript does not check against the
+ * parameter's annotation: `ensures` takes `(result: any) => boolean`, and for a callback (array
+ * method, handler, functional update, contract lambda) TypeScript only requires the annotation
+ * to be a supertype of what is passed (`unknown`, `int | null` for an `int` argument).  The
+ * translation types the parameter from the value it receives (`real`, of TypeScript type
+ * `realTs`), but the null/undefined checks read TypeScript types: so the annotation must be
+ * exactly that type (the same VTS type and, at every optional position, the same nullish value).
+ * Default values and rest parameters are rejected (a default replaces an `undefined` argument).
+ */
+export function checkParamAnnotation(p: ts.ParameterDeclaration, real: VType, realTs: ts.Type | null, env: Env) {
+  const pname = p.name.getText();
+  if (p.dotDotDotToken) fail(p, `rest parameters are not supported`);
+  if (p.initializer) fail(p.initializer, `a default value for parameter \`${pname}\` is not supported (JS uses it when the argument is undefined)`);
+  if (p.questionToken) fail(p, `optional parameter \`${pname}?\` is not supported`);
+  if (!p.type) return;
+  const ck = env.m.checker;
+  const want = showWithKinds(real, realTs, env);
+  const reject = (): never =>
+    fail(p.type!, `parameter \`${pname}\` is annotated \`${nodeText(p.type!, 50)}\` but receives a value of type \`${want}\`: give it exactly that type, or leave the annotation out (the translation types \`${pname}\` from the value it receives, and TypeScript does not check that the two agree)`);
+  let ann: VType;
+  try {
+    ann = typeOfNode(p.type, env.m.prog.typeEnv, "Param" + capitalize(pname.replace(/[^A-Za-z0-9_]/g, "")));
+  } catch (e) {
+    if (e instanceof VtsError) reject();
+    throw e;
+  }
+  if (!sameType(ann!, real)) reject();
+  if (!hasOptPart(real)) return;
+  if (!realTs) fail(p.type, `cannot check the annotation \`${nodeText(p.type, 50)}\` of parameter \`${pname}\` against the value it receives (whether it is null or undefined): leave the annotation out`);
+  const a = nullShape(ck.getTypeFromTypeNode(p.type), real, ck);
+  const b = nullShape(realTs, real, ck);
+  if (a === null || b === null || a !== b) reject();
 }
 
 /** `distinct(xs, key)` compares keys with SameValueZero (a JS Set): keys must be ints or strings. */
@@ -360,12 +439,34 @@ function isNumeric(t: VType) {
 /** Insert a coercion from `v.type` to `expected` where VTS allows one. */
 export function coerce(v: Val, expected: VType | undefined, node: ts.Node, env: Env): Val {
   if (!expected || sameType(v.type, expected)) return v;
-  if (expected.k === "num" && v.type.k === "int") return { code: `(Float.ofInt ${paren(v.code)})`, type: T.num };
-  if (expected.k === "opt" && sameType(v.type, expected.elem)) return { code: `(some ${paren(v.code)})`, type: expected };
-  if (expected.k === "opt" && v.type.k === "int" && expected.elem.k === "num") return { code: `(some (Float.ofInt ${paren(v.code)}))`, type: expected };
-  if (expected.k === "arr" && v.type.k === "arr" && v.code === "[]") return { code: "[]", type: expected };
+  const w = widen(v, expected, env);
+  if (w) return w;
   if (expected.k === "void" || expected.k === "unit") return v;
   fail(node, `type mismatch: expected ${showType(expected)}, got ${showType(v.type)}`);
+}
+
+/**
+ * The value `v` at a wider type `t` (the same JS value): an int as a number, a present value as
+ * an optional one, an array elementwise (`int[]` as `(int | null)[]`, as TypeScript allows for
+ * readonly arrays).  null when `t` is not wider.
+ */
+function widen(v: Val, t: VType, env: Env): Val | null {
+  if (sameType(v.type, t)) return v;
+  if (t.k === "num" && v.type.k === "int") return { code: `(Float.ofInt ${paren(v.code)})`, type: T.num };
+  // a string-literal enum member is its string (the `ToJS` instance of the enum maps each
+  // constructor to its literal)
+  if (t.k === "str" && v.type.k === "enum") return { code: `(VReact.JS.str ${paren(v.code)})`, type: T.str };
+  if (t.k === "opt" && v.type.k !== "opt") {
+    const w = widen(v, t.elem, env);
+    return w && { code: `(some ${paren(w.code)})`, type: t };
+  }
+  if (t.k === "arr" && v.type.k === "arr") {
+    if (v.code === "[]") return { code: "[]", type: t };
+    const x = env.m.fresh("x");
+    const w = widen({ code: x, type: v.type.elem }, t.elem, env);
+    return w && { code: `(List.map (fun (${x} : ${leanType(v.type.elem)}) => ${w.code}) ${paren(v.code)})`, type: t };
+  }
+  return null;
 }
 
 /* ───────────────────────────── expressions ───────────────────────────── */
@@ -601,9 +702,9 @@ function fieldOf(base: Val, name: string, node: ts.Node, env: Env): Val {
   }
   if (t.k === "union") {
     const u = m.reg.union(t);
-    if (name === u.tag) return { code: `(${t.name}.${leanField(name)} ${paren(base.code)})`, type: T.str };
+    if (name === u.tag) return { code: `(${t.name}.${leanAccessor(name)} ${paren(base.code)})`, type: T.str };
     const sf = sharedFields(u.variants).find((f) => f.name === name);
-    if (sf) return { code: `(${t.name}.${leanField(name)} ${paren(base.code)})`, type: sf.type };
+    if (sf) return { code: `(${t.name}.${leanAccessor(name)} ${paren(base.code)})`, type: sf.type };
     const has = u.variants.filter((v) => v.fields.some((f) => f.name === name)).map((v) => `"${v.lit}"`);
     fail(node, `field ${name} is not present in every variant of ${showType(t)}${has.length ? ` (only in ${has.join(", ")})` : ""}: narrow first with a test on x.${u.tag} (if/else, early return, ?:, &&/||, switch) of this value — not through an alias (const isX = …) or \`in\`, and anew after reassigning a \`let\``);
   }
@@ -658,10 +759,22 @@ function prefix(p: ts.PrefixUnaryExpression, env: Env, expected?: VType): Val {
       if (!isNumeric(v.type)) fail(p, `unary + converts a ${showType(v.type)} to a number (ToNumber), which VTS does not model: only use it on numbers`);
       return v;
     }
+    case ts.SyntaxKind.TildeToken:
+      fail(p, BITWISE_MSG("~"));
     default:
       fail(p, "++/-- are only allowed as statements on local `let` variables");
   }
 }
+
+/** Bitwise operators: JS converts their operands to 32-bit integers (ToInt32), which VTS does not model. */
+const BITWISE_MSG = (op: string) =>
+  `the bitwise operator ${op} is not supported in VTS (JS applies it to the operands converted to 32-bit integers, which VTS does not model); use arithmetic (e.g. -x - 1 for ~x, Math.floor(x / 2) for x >> 1)`;
+const BITWISE_OPS = new Set([
+  ts.SyntaxKind.AmpersandToken, ts.SyntaxKind.BarToken, ts.SyntaxKind.CaretToken,
+  ts.SyntaxKind.LessThanLessThanToken, ts.SyntaxKind.GreaterThanGreaterThanToken, ts.SyntaxKind.GreaterThanGreaterThanGreaterThanToken,
+  ts.SyntaxKind.AmpersandEqualsToken, ts.SyntaxKind.BarEqualsToken, ts.SyntaxKind.CaretEqualsToken,
+  ts.SyntaxKind.LessThanLessThanEqualsToken, ts.SyntaxKind.GreaterThanGreaterThanEqualsToken, ts.SyntaxKind.GreaterThanGreaterThanGreaterThanEqualsToken,
+]);
 
 function isEqOp(k: ts.SyntaxKind) {
   return k === ts.SyntaxKind.EqualsEqualsEqualsToken || k === ts.SyntaxKind.EqualsEqualsToken;
@@ -715,7 +828,7 @@ function binary(b: ts.BinaryExpression, env: Env, expected?: VType): Val {
     const neg = isNeqOp(op);
     const nt = nullTest(b, env);
     if (nt) {
-      if (nt.isNull !== null) return { code: nt.isNull !== neg ? "true" : "false", type: T.bool };
+      if (nt.isNull !== null) return { code: keepOperand(nt, nt.isNull !== neg ? "true" : "false"), type: T.bool };
       return { code: neg ? `(Option.isSome ${paren(nt.v.code)})` : `(Option.isNone ${paren(nt.v.code)})`, type: T.bool };
     }
     const { l, r } = eqOperands(b, env);
@@ -742,10 +855,17 @@ function binary(b: ts.BinaryExpression, env: Env, expected?: VType): Val {
   // arithmetic is computed at the numeric type; an optional expected type (`int | null`)
   // applies to the result only (expr() wraps it in `some`)
   if (op === K.PlusToken) {
+    // string concatenation when an operand is a string (TypeScript's type of it decides, as the
+    // value does in JS): the other operand is converted with ToString (exact on ints and booleans)
+    if (isStringTyped(b.left, env) || isStringTyped(b.right, env)) {
+      const l = expr(b.left, env);
+      const r = expr(b.right, env);
+      return { code: `(${concatPart(l, b.left, b)} ++ ${concatPart(r, b.right, b)})`, type: T.str };
+    }
     const l = expr(b.left, env, numericExpected(expected));
     const r = expr(b.right, env, isNumeric(l.type) ? l.type : undefined);
     if (l.type.k === "str" || r.type.k === "str") {
-      return { code: `(${toStr(l, b.left)} ++ ${toStr(r, b.right)})`, type: T.str };
+      return { code: `(${concatPart(l, b.left, b)} ++ ${concatPart(r, b.right, b)})`, type: T.str };
     }
     return arith("+", l, r, b, env);
   }
@@ -768,14 +888,20 @@ function binary(b: ts.BinaryExpression, env: Env, expected?: VType): Val {
     const ob = env.m.ob(b, "nonzero-divisor", `divisor ${nodeText(b.right)} is non-zero`);
     return { code: `(VReact.JS.rem ${paren(l.code)} ${paren(r.code)} ${ob})`, type: T.int };
   }
+  if (BITWISE_OPS.has(op)) fail(b, BITWISE_MSG(b.operatorToken.getText()));
+  if (op >= K.FirstCompoundAssignment && op <= K.LastCompoundAssignment) {
+    fail(b, `compound assignment ${b.operatorToken.getText()} is not supported in VTS (only x = e, x += e and x -= e, as statements on local \`let\` variables)`);
+  }
   fail(b, `operator ${b.operatorToken.getText()} not supported in VTS`);
 }
 
 /**
  * A comparison with `null`/`undefined` (`x === null`, `x != undefined`, …): the tested optional
- * value, or `isNull` statically known (a narrowed path is not null).  `null` if not such a test.
+ * value, or `isNull` statically known (a present value: a narrowed path, `xs[i]`, `f(x)`, `x!`, …,
+ * is not null), with `obs` telling whether evaluating the operand has obligations (its index,
+ * precondition, non-null, … conditions: they stand, see `keepOperand`).  `null` if not such a test.
  */
-function nullTest(b: ts.BinaryExpression, env: Env): { v: Val; isNull: boolean | null } | null {
+function nullTest(b: ts.BinaryExpression, env: Env): { v: Val; isNull: boolean | null; obs: boolean } | null {
   const K = ts.SyntaxKind;
   const op = b.operatorToken.kind;
   if (op === K.EqualsEqualsToken || op === K.ExclamationEqualsToken) {
@@ -784,14 +910,24 @@ function nullTest(b: ts.BinaryExpression, env: Env): { v: Val; isNull: boolean |
   if (!isNullLit(b.right) && !isNullLit(b.left)) return null;
   const lit = isNullLit(b.right) ? b.right : b.left;
   const other = isNullLit(b.right) ? b.left : b.right;
+  const before = env.m.obCount();
   const v = expr(other, env);
+  const obs = env.m.obCount() > before;
   if (v.type.k !== "opt") {
     // a present value (e.g. narrowed on this path) is never null/undefined
-    if (isPresentValue(v.type)) return { v, isNull: false };
+    if (isPresentValue(v.type)) return { v, isNull: false, obs };
     fail(b, "comparison with null/undefined of a non-optional value");
   }
   checkStrictNullTest(b, other, lit, op, env);
-  return { v, isNull: null };
+  return { v, isNull: null, obs };
+}
+
+/**
+ * A statically decided null test (`result`: its Lean value, in code or as a proposition): JS still
+ * evaluates the operand, so an operand with obligations is kept, bound and unused, for them.
+ */
+function keepOperand(nt: { v: Val; obs: boolean }, result: string): string {
+  return nt.obs ? `(let _ := ${nt.v.code}; ${result})` : result;
 }
 
 /** VTS types whose JS values are never null or undefined (all but options and void). */
@@ -801,9 +937,16 @@ function isPresentValue(t: VType): boolean {
 
 /** The two operands of `===` / `!==` (not against null), at a common type JS compares by value. */
 function eqOperands(b: ts.BinaryExpression, env: Env): { l: Val; r: Val } {
+  const strLit = (e: ts.Expression) => ts.isStringLiteralLike(stripParens(e));
   let l = expr(b.left, env);
-  let r = expr(b.right, env, l.type.k === "enum" || l.type.k === "opt" ? l.type : undefined);
-  if (l.type.k === "str" && r.type.k === "enum") l = expr(b.left, env, r.type);
+  // an enum member compared with a string literal: at the enum (a member constructor); with any
+  // other string: as strings
+  let r = l.type.k === "enum" && !strLit(b.right) ? expr(b.right, env) : expr(b.right, env, l.type.k === "enum" || l.type.k === "opt" ? l.type : undefined);
+  if (l.type.k === "enum" && r.type.k === "str") l = coerce(l, T.str, b, env);
+  if (l.type.k === "str" && r.type.k === "enum") {
+    if (strLit(b.left)) l = expr(b.left, env, r.type);
+    else r = coerce(r, T.str, b, env);
+  }
   // `x.id === sel` with `sel: int | null`: compare as options (as for `sel === x.id`)
   if (r.type.k === "opt" && l.type.k !== "opt") {
     l = l.type.k === "str" && r.type.elem.k === "enum" ? expr(b.left, env, r.type) : coerce(l, r.type, b, env);
@@ -819,6 +962,21 @@ function eqOperands(b: ts.BinaryExpression, env: Env): { l: Val; r: Val } {
   }
   if (l.type.k === "opt") checkOptionalEquality(b, b.left, b.right, env);
   return { l, r };
+}
+
+/** Is `e` a string (or string-literal enum) value according to TypeScript? */
+function isStringTyped(e: ts.Expression, env: Env): boolean {
+  const t = tsTypeOf(e, env);
+  return !!t && (t.flags & ts.TypeFlags.StringLike) !== 0 || (!!t && t.isUnion() && t.types.every((p) => (p.flags & ts.TypeFlags.StringLike) !== 0));
+}
+
+/** An operand of a string concatenation `a + b`, as a string. */
+function concatPart(v: Val, e: ts.Expression, node: ts.Node): string {
+  if (v.type.k === "num") {
+    fail(node, `\`+\` converts the number \`${nodeText(e, 30)}\` to a string with JS's Number::toString (shortest round-trip form), which VTS models only as an opaque function: use an int, or a template literal \`\${…}\` (where the conversion is opaque too)`);
+  }
+  if (v.type.k === "opt") fail(node, `\`${nodeText(e, 30)}\` may be null or undefined, which \`+\` would turn into the text "null" / "undefined": narrow it first`);
+  return toStr(v, e);
 }
 
 function arith(op: string, l: Val, r: Val, node: ts.Node, env: Env): Val {
@@ -937,12 +1095,17 @@ function arrayLiteral(a: ts.ArrayLiteralExpression, env: Env, expected?: VType):
 
 /* ───────────────────────────── calls ───────────────────────────── */
 
-/** Translate an arrow function used as a pure lambda (array methods). */
+/**
+ * Translate an arrow function used as a pure lambda (array methods, contract lambdas), its
+ * parameters of types `paramTypes`; `paramTs`: the TypeScript types of the values they receive
+ * (their annotations are checked against them; by default against the contextual types).
+ */
 export function lambda(
   fn: ts.Expression,
   env: Env,
   paramTypes: VType[],
   expectedRet?: VType,
+  paramTs?: readonly (ts.Type | null | undefined)[],
 ): { binders: string[]; typed: string[]; body: Val; obligations: boolean; env: Env } {
   if (!ts.isArrowFunction(fn) && !ts.isFunctionExpression(fn)) fail(fn, "expected an inline arrow function `(x) => …`");
   let e2 = env;
@@ -952,7 +1115,7 @@ export function lambda(
     const t = paramTypes[i];
     if (!t) fail(p, "unexpected extra lambda parameter");
     if (p.dotDotDotToken || p.initializer || p.questionToken) fail(p, "rest, default and optional lambda parameters are not supported");
-    const r = bindParam(p.name, t, e2);
+    const r = bindParam(p.name, t, e2, paramTs?.[i]);
     e2 = r.env;
     binders.push(r.binder);
     typed.push(`(${r.binder} : ${leanType(t)})`);
@@ -967,8 +1130,20 @@ export function lambda(
   return { binders, typed, body, obligations: env.m.obCount() > before, env: e2 };
 }
 
-/** Bind a parameter (identifier or object-destructuring pattern) to a fresh Lean variable. */
-export function bindParam(name: ts.BindingName, t: VType, env: Env): { env: Env; binder: string } {
+/**
+ * Bind a parameter (identifier or object-destructuring pattern) to a fresh Lean variable of type
+ * `t`.  For a parameter of a function expression, `realTs` is the TypeScript type of the value it
+ * receives, against which its annotation is checked (`checkParamAnnotation`): by default the type
+ * the function's context gives it; `"declared"` when the annotation itself is the parameter's
+ * type (local helper closures: TypeScript checks every argument against it).
+ */
+export function bindParam(name: ts.BindingName, t: VType, env: Env, realTs?: ts.Type | null | "declared"): { env: Env; binder: string } {
+  const p = name.parent;
+  if (realTs !== "declared" && ts.isParameter(p) && (ts.isArrowFunction(p.parent) || ts.isFunctionExpression(p.parent))) {
+    const fn = p.parent;
+    const real = realTs !== undefined ? realTs : (contextualParamTsTypes(fn, env)?.[fn.parameters.indexOf(p)] ?? null);
+    checkParamAnnotation(p, t, real, env);
+  }
   if (ts.isIdentifier(name)) {
     const s = symbolOf(env, name)!;
     const { env: e2, name: ln } = freshLocal(env, leanIdent(name.text));
@@ -1048,7 +1223,7 @@ function inlineClosure(b: Extract<Binding, { k: "closure" }>, c: ts.CallExpressi
     if (!p.type) fail(p, "helper function parameters need type annotations");
     const t = typeOfNode(p.type, env.m.prog.typeEnv, "Arg");
     const a = expr(c.arguments[i], env, t);
-    const r = bindParam(p.name, t, e2);
+    const r = bindParam(p.name, t, e2, "declared");
     e2 = r.env;
     lets += `let ${r.binder} := ${a.code}; `;
   });
@@ -1121,8 +1296,11 @@ function arrayMethod(name: string, xs: Val, c: ts.CallExpression, env: Env, expe
   const m = env.m;
   const elem = (xs.type as { elem: VType }).elem;
   const X = paren(xs.code);
+  // the TypeScript type of the elements (callback parameter annotations are checked against it)
+  const elT = elemTsType((c.expression as ts.PropertyAccessExpression).expression, env) ?? undefined;
+  const numT = m.checker.getNumberType();
   const withAttach = (args0: ts.Expression, paramTypes: VType[], ret: VType | undefined) => {
-    const lam = lambda(args0, env, paramTypes, ret);
+    const lam = lambda(args0, env, paramTypes, ret, [elT]);
     return lam;
   };
   // every modelled method has an exact arity: optional JS arguments that are not modelled
@@ -1134,7 +1312,7 @@ function arrayMethod(name: string, xs: Val, c: ts.CallExpression, env: Env, expe
       const fn = args[0];
       if (!ts.isArrowFunction(fn) && !ts.isFunctionExpression(fn)) fail(fn, "map needs an inline arrow function");
       if (fn.parameters.length === 2) {
-        const lam = lambda(fn, env, [elem, T.int], expected?.k === "arr" ? expected.elem : undefined);
+        const lam = lambda(fn, env, [elem, T.int], expected?.k === "arr" ? expected.elem : undefined, [elT, numT]);
         if (lam.obligations) fail(fn, "map with an index parameter cannot contain proof obligations; precompute with a helper");
         const [x, i] = lam.binders;
         // the Nat index is bound to a subscripted name (never a VTS identifier), then as the Int `i`
@@ -1168,7 +1346,7 @@ function arrayMethod(name: string, xs: Val, c: ts.CallExpression, env: Env, expe
     }
     case "findIndex": {
       callbackArity();
-      const lam = lambda(args[0], env, [elem], T.bool);
+      const lam = lambda(args[0], env, [elem], T.bool, [elT]);
       if (lam.obligations) fail(args[0], "findIndex predicates cannot contain proof obligations");
       return { code: `(VReact.JS.findIndex ${X} ${lamCode(lam.typed, lam.body.code)})`, type: T.int };
     }
@@ -1204,7 +1382,8 @@ function arrayMethod(name: string, xs: Val, c: ts.CallExpression, env: Env, expe
     case "reduce": {
       if (args.length !== 2) fail(c, "reduce needs an initial value");
       const init = expr(args[1], env, expected);
-      const lam = lambda(args[0], env, [init.type, elem], init.type);
+      // (the accumulator's annotation is the type TypeScript checks every accumulated value against)
+      const lam = lambda(args[0], env, [init.type, elem], init.type, [undefined, elT]);
       if (lam.obligations) fail(args[0], "reduce callbacks cannot contain proof obligations");
       return { code: `(${X}.foldl ${lamCode(lam.typed, lam.body.code)} ${paren(init.code)})`, type: init.type };
     }
@@ -1213,13 +1392,12 @@ function arrayMethod(name: string, xs: Val, c: ts.CallExpression, env: Env, expe
       arity(c, "toSorted", 1, 1);
       if (elem.k === "opt") {
         // JS moves `undefined` elements to the end without calling the comparator
-        const undef = (t: ts.Type) => !!(t.flags & ts.TypeFlags.Undefined);
-        const at = ts.isPropertyAccessExpression(c.expression) ? env.m.checker.getTypeAtLocation(c.expression.expression) : undefined;
-        const et = at && env.m.checker.getIndexTypeOfType(at, ts.IndexKind.Number);
-        if (!et || undef(et) || (et.isUnion() && et.types.some(undef)))
+        const et = ts.isPropertyAccessExpression(c.expression) ? elemTsType(c.expression.expression, env) : null;
+        const k = et ? kindsOfType(et) : null;
+        if (!k || k.undef)
           fail(c, "toSorted on an array that may contain undefined is not supported (JS sorts undefined to the end without calling the comparator); filter or map the elements to a defined type first");
       }
-      const lam = lambda(args[0], env, [elem, elem], T.int);
+      const lam = lambda(args[0], env, [elem, elem], T.int, [elT, elT]);
       if (lam.obligations) fail(args[0], "comparators cannot contain proof obligations");
       if (lam.body.type.k !== "int") fail(args[0], "comparator must return an int");
       return { code: `(VReact.JS.toSorted ${X} ${lamCode(lam.typed, lam.body.code)})`, type: xs.type };
@@ -1242,7 +1420,7 @@ function arrayMethod(name: string, xs: Val, c: ts.CallExpression, env: Env, expe
     }
     case "flatMap": {
       callbackArity();
-      const lam = lambda(args[0], env, [elem], expected);
+      const lam = lambda(args[0], env, [elem], expected, [elT]);
       if (lam.obligations) fail(args[0], "flatMap callbacks cannot contain proof obligations");
       if (lam.body.type.k !== "arr") fail(args[0], "flatMap callback must return an array");
       return { code: `(${X}.flatMap ${lamCode(lam.typed, lam.body.code)})`, type: lam.body.type };
@@ -1310,7 +1488,7 @@ function specCall(name: string, c: ts.CallExpression, env: Env): Val {
       arity(c, name, 3, 3);
       const lo = expr(args[0], env, T.int);
       const hi = expr(args[1], env, T.int);
-      const lam = lambda(args[2], env, [T.int], T.bool);
+      const lam = lambda(args[2], env, [T.int], T.bool, [env.m.checker.getNumberType()]);
       const op = name === "forall" ? "all" : "any";
       const R = `(VReact.JS.rangeFrom ${paren(lo.code)} ${paren(hi.code)})`;
       if (lam.obligations) {
@@ -1325,7 +1503,7 @@ function specCall(name: string, c: ts.CallExpression, env: Env): Val {
       const xs = expr(args[0], env);
       if (xs.type.k !== "arr") fail(c, "distinct expects an array");
       if (args[1]) {
-        const lam = lambda(args[1], env, [xs.type.elem]);
+        const lam = lambda(args[1], env, [xs.type.elem], undefined, [elemTsType(args[0], env) ?? undefined]);
         checkDistinctKey(c, lam.body.type);
         return { code: `(VReact.JS.nodupB (${paren(xs.code)}.map ${lamCode(lam.typed, lam.body.code)}))`, type: T.bool };
       }
@@ -1585,7 +1763,7 @@ export function prop(e0: ts.Expression, env: Env): string {
     if (isEqOp(op) || isNeqOp(op)) {
       const nl = nullTest(e, env);
       if (nl) {
-        if (nl.isNull !== null) return nl.isNull !== isNeqOp(op) ? "True" : "False";
+        if (nl.isNull !== null) return keepOperand(nl, nl.isNull !== isNeqOp(op) ? "True" : "False");
         return `((${isNeqOp(op) ? "Option.isSome" : "Option.isNone"} ${paren(nl.v.code)}) = true)`;
       }
       const { l, r } = eqOperands(e, env);
@@ -1623,7 +1801,7 @@ export function prop(e0: ts.Expression, env: Env): string {
       const hi = expr(args[1], env, T.int);
       const fn = args[2];
       if (!fn || !(ts.isArrowFunction(fn) || ts.isFunctionExpression(fn)) || fn.parameters.length !== 1) fail(e, `${sf}(lo, hi, (i) => …)`);
-      const r = bindParam(fn.parameters[0].name, T.int, env);
+      const r = bindParam(fn.parameters[0].name, T.int, env, env.m.checker.getNumberType());
       if (ts.isBlock(fn.body)) fail(fn.body, "quantifier body must be an expression");
       const i = r.binder;
       const before = env.m.obCount();
@@ -1645,7 +1823,7 @@ export function prop(e0: ts.Expression, env: Env): string {
         checkPrimitiveElems(e, args[0], xs.type.elem, "distinct (without a key function)", env);
         return `(${paren(xs.code)}.Nodup)`;
       }
-      const lam = lambda(args[1], env, [xs.type.elem]);
+      const lam = lambda(args[1], env, [xs.type.elem], undefined, [elemTsType(args[0], env) ?? undefined]);
       checkDistinctKey(e, lam.body.type);
       return `((${paren(xs.code)}.map ${lamCode(lam.typed, lam.body.code)}).Nodup)`;
     }
@@ -1663,7 +1841,7 @@ export function prop(e0: ts.Expression, env: Env): string {
         if (!fn || !(ts.isArrowFunction(fn) || ts.isFunctionExpression(fn)) || fn.parameters.length !== 1 || ts.isBlock(fn.body)) {
           fail(e, `${mname}((x) => condition) with an expression body`);
         }
-        const r = bindParam(fn.parameters[0].name, xs.type.elem, env);
+        const r = bindParam(fn.parameters[0].name, xs.type.elem, env, elemTsType(e.expression.expression, env) ?? undefined);
         const before = env.m.obCount();
         const body = prop(fn.body as ts.Expression, r.env);
         const x = r.binder;
@@ -1953,9 +2131,12 @@ function exprStatement(e: ts.Expression, env: Env, bc: BlockCtx, rest: (e: Env) 
       const op = k === ts.SyntaxKind.PlusEqualsToken ? "+" : "-";
       return assignLocal(e.left, (old) => {
         const r = expr(e.right, env, isNumeric(old.type) ? old.type : undefined);
-        if (old.type.k === "str" && op === "+") return { code: `(${old.code} ++ ${toStr(r, e.right)})`, type: T.str };
+        if (old.type.k === "str" && op === "+") return { code: `(${old.code} ++ ${concatPart(r, e.right, e)})`, type: T.str };
         return arith(op, old, r, e, env);
       }, env, rest, e);
+    }
+    if (k >= ts.SyntaxKind.FirstCompoundAssignment && k <= ts.SyntaxKind.LastCompoundAssignment) {
+      fail(e, BITWISE_OPS.has(k) ? BITWISE_MSG(e.operatorToken.getText()) : `compound assignment ${e.operatorToken.getText()} is not supported in VTS (only x = e, x += e and x -= e on local \`let\` variables): write x = x … e`);
     }
   }
   if ((ts.isPostfixUnaryExpression(e) || ts.isPrefixUnaryExpression(e)) && (e.operator === ts.SyntaxKind.PlusPlusToken || e.operator === ts.SyntaxKind.MinusMinusToken)) {
@@ -2024,7 +2205,7 @@ function exprStatement(e: ts.Expression, env: Env, bc: BlockCtx, rest: (e: Env) 
         if (!p.type) fail(p, "helper parameters need type annotations");
         const t = typeOfNode(p.type, m.prog.typeEnv, "Arg");
         const a = expr(e.arguments[i], env, t);
-        const r = bindParam(p.name, t, e2);
+        const r = bindParam(p.name, t, e2, "declared");
         e2 = r.env;
         lets += `let ${r.binder} := ${a.code};\n`;
       });
@@ -2111,26 +2292,66 @@ function handlerEffect(t: UpdTarget, c: ts.CallExpression, env: Env, rest: (e: E
   return rest({ ...env, handler: { ...h, emit } });
 }
 
+/** A `case` label: `text` for a string literal, `key` for a literal (equal keys: equal JS values). */
+interface CaseLabel {
+  node: ts.Expression;
+  text: string | null;
+  key: string | null;
+}
+
+function caseLabel(e0: ts.Expression): CaseLabel {
+  const e = stripParens(e0);
+  if (ts.isStringLiteralLike(e)) return { node: e, text: e.text, key: `s:${JSON.stringify(e.text)}` };
+  // (TypeScript normalises the text of a numeric literal to its value: 0x10 is "16", 1e2 "100")
+  if (ts.isNumericLiteral(e)) return { node: e, text: null, key: `n:${String(Number(e.text))}` };
+  if (ts.isPrefixUnaryExpression(e) && e.operator === ts.SyntaxKind.MinusToken && ts.isNumericLiteral(stripParens(e.operand))) {
+    return { node: e, text: null, key: `n:${String(-Number((stripParens(e.operand) as ts.NumericLiteral).text))}` }; // (-0 is "0": 0 === -0)
+  }
+  if (e.kind === ts.SyntaxKind.TrueKeyword || e.kind === ts.SyntaxKind.FalseKeyword) return { node: e, text: null, key: `b:${e.kind === ts.SyntaxKind.TrueKeyword}` };
+  return { node: e, text: null, key: null };
+}
+
+/**
+ * The Lean test `disc === label` of a switch on a primitive value (JS compares with ===).  An
+ * int discriminant never equals a non-integer number, so such a label is rejected (it is dead).
+ */
+function caseTest(dv: Val, l: CaseLabel, discNode: ts.Expression, env: Env): string {
+  const t = dv.type;
+  const e = l.node;
+  const lit = ts.isNumericLiteral(e) ? e : ts.isPrefixUnaryExpression(e) && ts.isNumericLiteral(stripParens(e.operand)) ? (stripParens(e.operand) as ts.NumericLiteral) : null;
+  if (t.k === "int" && lit) {
+    const value = (lit === e ? 1 : -1) * Number(lit.text);
+    if (!Number.isInteger(value)) fail(e, `case ${nodeText(e)} can never match: \`${nodeText(discNode, 30)}\` is an int, and ${nodeText(e)} is not an integer (remove the case)`);
+    return `VReact.JS.eq ${paren(dv.code)} ${leanInt(BigInt(value))}`;
+  }
+  if (t.k === "num") {
+    // IEEE equality, as === (NaN matches nothing, -0 matches 0)
+    const v = expr(e, env, T.num);
+    return `(${paren(dv.code)} == ${paren(v.code)})`;
+  }
+  if (t.k !== "int" && t.k !== "str" && t.k !== "bool") fail(discNode, `switch on a value of type ${showType(t)} is not supported (only ints, strings, booleans, string-literal enums and discriminants x.kind)`);
+  const v = expr(e, env, t);
+  if (!sameType(v.type, t)) fail(e, `case label of type ${showType(v.type)} in a switch on ${showType(t)}`);
+  return `VReact.JS.eq ${paren(dv.code)} ${paren(v.code)}`;
+}
+
 function switchStmt(s: ts.SwitchStatement, env: Env, bc: BlockCtx, rest: (e: Env) => string): string {
   const disc = stripParens(s.expression);
   const m = env.m;
   // collect clauses: groups of case labels sharing a body
   interface Group {
-    labels: string[];
+    labels: CaseLabel[];
     body: ts.Statement[];
     isDefault: boolean;
     node: ts.Node;
   }
   const groups: Group[] = [];
-  let pending: string[] = [];
+  let pending: CaseLabel[] = [];
   let pendingDefault = false;
   let pendingNode: ts.Node | null = null;
   for (const cl of s.caseBlock.clauses) {
-    if (ts.isCaseClause(cl)) {
-      const lit = stripParens(cl.expression);
-      if (!ts.isStringLiteralLike(lit) && !ts.isNumericLiteral(lit)) fail(cl.expression, "case labels must be literals");
-      pending.push(lit.text);
-    } else pendingDefault = true;
+    if (ts.isCaseClause(cl)) pending.push(caseLabel(cl.expression));
+    else pendingDefault = true;
     pendingNode = pendingNode ?? cl;
     if (cl.statements.length === 0) continue;
     // a body ends with `break` (possibly as the last statement of a trailing block) or terminates
@@ -2145,14 +2366,18 @@ function switchStmt(s: ts.SwitchStatement, env: Env, bc: BlockCtx, rest: (e: Env
   if (pendingNode) groups.push({ labels: pending, body: [], isDefault: pendingDefault, node: pendingNode });
   // JS takes the first case whose label matches, wherever `default` is; `default`
   // (in any position, possibly grouped with labels) takes every value no case matches.
+  // (A literal label repeated later can never be taken there.)
   const claimed = new Set<string>();
   for (const g of groups) {
-    g.labels = g.labels.filter((l) => !claimed.has(l));
-    g.labels.forEach((l) => claimed.add(l));
+    g.labels = g.labels.filter((l) => l.key === null || !claimed.has(l.key));
+    g.labels.forEach((l) => l.key !== null && claimed.add(l.key));
   }
   const defaultGroup = groups.find((g) => g.isDefault);
   const caseGroups = groups.filter((g) => !g.isDefault && g.labels.length > 0);
   const after = (e2: Env) => rest(e2);
+  /** the string-literal labels of a switch on a discriminant / enum */
+  const texts = (g: Group, what: string): string[] =>
+    g.labels.map((l) => l.text ?? fail(l.node, `the case labels of a switch on ${what} must be string literals`));
   // discriminated union switch: switch (a.kind)
   if (ts.isPropertyAccessExpression(disc)) {
     const baseT = typeOf(disc.expression, env);
@@ -2163,10 +2388,11 @@ function switchStmt(s: ts.SwitchStatement, env: Env, bc: BlockCtx, rest: (e: Env
       const h = m.fresh("h");
       const covered = new Set<string>();
       let arms = "";
-      for (const g of groups) for (const l of g.labels) if (!u.variants.some((v) => v.lit === l)) fail(g.node, `"${l}" is not a variant of ${showType(baseT)}`);
+      for (const g of groups) for (const l of texts(g, nodeText(disc, 30))) if (!u.variants.some((v) => v.lit === l)) fail(g.node, `"${l}" is not a variant of ${showType(baseT)}`);
       for (const g of caseGroups) {
-        if (g.labels.length === 1) {
-          const v = u.variants.find((v) => v.lit === g.labels[0])!;
+        const ls = texts(g, nodeText(disc, 30));
+        if (ls.length === 1) {
+          const v = u.variants.find((v) => v.lit === ls[0])!;
           covered.add(v.lit);
           let e1 = env;
           const names: string[] = [];
@@ -2181,7 +2407,7 @@ function switchStmt(s: ts.SwitchStatement, env: Env, bc: BlockCtx, rest: (e: Env
           if (key) narrow.set(key, { kind: "variant", code: target.code, type: baseT, variant: v.lit, fields });
           arms += `\n  | .${leanField(v.ctor)}${names.map((n) => " " + n).join("")} => ${paren(block(g.body, 0, { ...e1, narrow }, bc, after))}`;
         } else {
-          const pats = g.labels.map((l) => {
+          const pats = ls.map((l) => {
             const v = u.variants.find((v) => v.lit === l)!;
             covered.add(l);
             return `.${leanField(v.ctor)}${v.fields.map(() => " _").join("")}`;
@@ -2200,28 +2426,25 @@ function switchStmt(s: ts.SwitchStatement, env: Env, bc: BlockCtx, rest: (e: Env
     const lits = m.reg.enumLits(dv.type);
     const covered = new Set<string>();
     let arms = "";
-    for (const g of groups) for (const l of g.labels) if (!lits.includes(l)) fail(g.node, `"${l}" is not a member of ${showType(dv.type)}`);
+    for (const g of groups) for (const l of texts(g, nodeText(disc, 30))) if (!lits.includes(l)) fail(g.node, `"${l}" is not a member of ${showType(dv.type)}`);
     for (const g of caseGroups) {
-      g.labels.forEach((l) => covered.add(l));
-      arms += `\n  | ${g.labels.map((l) => `.${leanField(l)}`).join(" | ")} => ${paren(block(g.body, 0, env, bc, after))}`;
+      const ls = texts(g, nodeText(disc, 30));
+      ls.forEach((l) => covered.add(l));
+      arms += `\n  | ${ls.map((l) => `.${leanField(l)}`).join(" | ")} => ${paren(block(g.body, 0, env, bc, after))}`;
     }
     if (covered.size < lits.length) arms += `\n  | _ => ${paren(defaultGroup ? block(defaultGroup.body, 0, env, bc, after) : rest(env))}`;
     const h = m.fresh("h");
     return `(match ${h} : ${dv.code} with${arms})`;
   }
-  // generic switch on a primitive value: if-chain
-  let code: string | null = null;
+  // generic switch on a primitive value: if-chain (the labels of a group tested in order)
   let elseCode = defaultGroup ? block(defaultGroup.body, 0, env, bc, after) : rest(env);
-  for (const g of [...caseGroups].reverse()) {
-    const conds = g.labels.map((l) => {
-      const lv = dv.type.k === "enum" ? `${dv.type.name}.${leanField(l)}` : dv.type.k === "str" ? jsStr(l) : dv.type.k === "int" && /^[0-9]+$/.test(l) ? leanInt(BigInt(l)) : l;
-      return `VReact.JS.eq ${paren(dv.code)} ${paren(lv)}`;
-    });
+  const tests = caseGroups.map((g) => g.labels.map((l) => caseTest(dv, l, disc, env)));
+  for (let gi = caseGroups.length - 1; gi >= 0; gi--) {
+    const g = caseGroups[gi];
     const h = m.fresh("h");
-    elseCode = `(if ${h} : (${conds.join(" || ")}) = true then ${paren(block(g.body, 0, env, bc, after))} else ${paren(elseCode)})`;
+    elseCode = `(if ${h} : (${tests[gi].join(" || ")}) = true then ${paren(block(g.body, 0, env, bc, after))} else ${paren(elseCode)})`;
   }
-  code = elseCode;
-  return code;
+  return elseCode;
 }
 
 /**
@@ -2306,16 +2529,21 @@ function forOf(s: ts.ForOfStatement, env: Env, bc: BlockCtx, rest: (e: Env) => s
 
 /* ─────────────────────────── handlers ─────────────────────────── */
 
-/** Translate a function used as an event handler into `fun ev => outcome`. */
-export function handlerFn(fnExpr: ts.Expression, env: Env, kind: "discrete" | "robust", argTypes: Param[] | "event", hyps?: string): { code: string; params: string[] } {
+/**
+ * Translate a function used as an event handler into `fun ev => outcome`.  `paramTs`: the
+ * TypeScript types of the arguments (by default, those the context of `fnExpr` gives them, e.g.
+ * the child's callback prop type for a JSX attribute), against which annotations are checked.
+ */
+export function handlerFn(fnExpr: ts.Expression, env: Env, kind: "discrete" | "robust", argTypes: Param[] | "event", hyps?: string, paramTs?: ts.Type[] | null): { code: string; params: string[] } {
   const m = env.m;
   const comp = env.comp!;
   fnExpr = stripParens(fnExpr);
+  if (paramTs === undefined) paramTs = argTypes === "event" ? null : contextualParamTsTypes(fnExpr, env);
   // passing a closure by name
   if (ts.isIdentifier(fnExpr)) {
     const s = symbolOf(env, fnExpr);
     const b = s ? env.vars.get(s) : undefined;
-    if (b?.k === "closure") return handlerFn(b.fn, { ...b.env, scope: env.scope }, kind, argTypes, hyps);
+    if (b?.k === "closure") return handlerFn(b.fn, { ...b.env, scope: env.scope }, kind, argTypes, hyps, paramTs);
     if (b?.k === "callback") {
       // forward a parent callback
       const cb = comp.info.callbacks.find((c) => c.name === b.cb.name)!;
@@ -2351,7 +2579,7 @@ export function handlerFn(fnExpr: ts.Expression, env: Env, kind: "discrete" | "r
   } else {
     if (fnExpr.parameters.length !== argTypes.length) fail(fnExpr, `callback expects ${argTypes.length} parameters`);
     fnExpr.parameters.forEach((p, i) => {
-      const r = bindParam(p.name, argTypes[i].type, e1);
+      const r = bindParam(p.name, argTypes[i].type, e1, paramTs?.[i] ?? null);
       e1 = r.env;
       params.push(r.binder);
     });

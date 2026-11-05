@@ -16,7 +16,7 @@ Two files that map to the same module, or to names differing only in letter
 case, are rejected (`module name clash`): e.g. `limits.ts` + `limits.tsx`,
 `my-x.ts` + `my_x.ts`, `todo.ts` + `Todo.tsx`. Rename one of them.
 
-The tsconfig needs `"strict": true` and `"lib": ["ES2023", "DOM"]` (for
+The tsconfig needs `"strict": true` (with `strictNullChecks`) and `"lib": ["ES2023", "DOM"]` (for
 `toSorted`/`toReversed`/`with`); without a tsconfig, vreact uses these defaults.
 
 ## Types
@@ -49,6 +49,22 @@ non-discriminated unions (`string | number`), `ReactNode`/`children` props.
   false (`t.due === null` on `due?: int`), or on a value that may be either, is
   rejected: use `== null`. Two optional values compared with `===` must use the
   same nullish value.
+* Annotations of function parameters must be exactly the type of the value
+  received (or be left out): `ensures((r: T) => …)` with `T` the declared return
+  type, a `callbackRequires`/handler parameter the callback's parameter type, a
+  functional update's the state type, an array callback's the element type (`int`
+  for an index). TypeScript does not check these (`(v: unknown) => …`,
+  `(r: int | null) => …` for an `int | undefined` value pass it), so others are
+  rejected; so are default values, `?` and rest parameters there.
+* `+` with a string operand concatenates; `int`, `boolean` and enum operands are
+  converted as in template literals (`x + "px"`); a `number` or nullable operand is
+  rejected (use an int, or `${n}`). Bitwise operators (`~ & | ^ << >> >>>`) and
+  compound assignments other than `+=`/`-=` are rejected.
+* Widening as in TypeScript: an `int[]` where `(int | null)[]` is expected
+  (elementwise, also in a spread), an enum member where a `string` is expected
+  (`return k;`, `k === s`). The same inline object type or string-literal union
+  in one module is one type (e.g. `hole<{ readonly v: int }>()` returned from a
+  function declared to return `{ readonly v: int }`).
 * `&& || ! ?: ?? ?.` (also `a ?? b ?? 0`) and template literals.
 * `xs[i]` (obligation: `0 <= i < xs.length`), `t[0]` on tuples, `x!` (obligation).
 * Arrays: `length map filter some every find findIndex includes indexOf slice
@@ -76,7 +92,9 @@ non-discriminated unions (`string | number`), `ReactNode`/`children` props.
 * `Math.max/min/abs/sign/floor/trunc/round/ceil`, `String(x)`.
 * Names: any identifier works. Ones that are Lean keywords or root names
   (`matches`, `rec`, `show`, `max`, `List`, …) get a `'` in Lean (`VTS.m.max'`),
-  also components (`function Type()` → `VTS.m.Type'`). File/directory names that
+  also components (`function Type()` → `VTS.m.Type'`) and names shaped like Lean's
+  derived instances (`instReprP`: `inst` + capital). Enum members may be any
+  strings (escaped into distinct constructors). File/directory names that
   are such names get a `_` (`src/end/Sort.tsx` → `VTS.end_.Sort_`, lemmas in
   `proofs/end_/Sort_.lean`).
 * Calls to verified top-level functions (their `requires` become obligations)
@@ -93,7 +111,9 @@ non-discriminated unions (`string | number`), `ReactNode`/`children` props.
 
 `const`, `let` + reassignment (locals only), `if/else`, `return`, `switch`
 (cases end with `return`/`break`, also `case "x": { …; break; }`; no fall-through;
-`default` anywhere, also grouped `case "a": default:`), `for (const x of xs)` (may
+`default` anywhere, also grouped `case "a": default:`; on an int/string/boolean/number:
+literal, negated-literal or constant labels compared with `===`, a non-integer label
+on an int is rejected; on an enum or `x.kind`: string literals), `for (const x of xs)` (may
 assign outer `let`s; no `return`/`continue` inside, `break` only to end a `switch`
 case), `throw` (must be provably
 unreachable), `assert(c)`, `assume(c)`. No `while`, `try`, `var`, recursion.
@@ -110,7 +130,7 @@ use `for…of` or `reduce`. Array callbacks may read outer `let`s.
 ```ts
 export function f(x: int, xs: readonly int[]): int {
   requires(0 <= x && x < xs.length);          // first statements
-  ensures((r: int) => r >= 0);                // annotate the result type
+  ensures((r: int) => r >= 0);                // r: exactly the return type (or no annotation)
   …
 }
 /** @opaque */  …   // callers see only requires/ensures

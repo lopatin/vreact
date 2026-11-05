@@ -43,8 +43,24 @@ exact, total meaning in Lean, while still covering what real React code uses.
 value a `none` stands for is taken from the TypeScript type of the expression
 (optional fields, `find()`, `at()` and `?.` give `undefined`). A strict test
 against the other nullish value (`t.due === null` with `due?: int`), a strict
-test of a value that may be either, and `===` between a `T | null` and a
-`T | undefined` value are rejected: `== null` covers both.
+test of a value that may be either (or whose type is `any`/`unknown`), and `===`
+between a `T | null` and a `T | undefined` value are rejected: `== null` covers
+both. This needs `strictNullChecks` (rejected without it).
+
+The parameters of function values are typed from the values they receive: the
+declared return type for `ensures((r) => …)`, the callback prop's parameter types
+for `callbackRequires` and for handlers passed to a child, the state type for a
+functional update, the element (and `int` index) type for array-method callbacks
+and quantifiers. TypeScript does not check an annotation there against that type
+(`ensures` takes `any`; a callback annotation only has to accept the argument, so
+`unknown` or `int | null` for an `int | undefined` argument pass), so an annotation
+must be exactly that type — the same VTS type and the same nullish value at each
+optional position — or is rejected; default values, `?` and rest parameters are
+rejected. Inline object types and string-literal unions are structural: the same
+inline type in one module is one Lean type (`hole<{ readonly v: int }>()` in a
+function returning `{ readonly v: int }`). A value is widened where TypeScript
+allows it: an `int` to a `number`, a present value to an optional one, an array
+elementwise (`int[]` to `(int | null)[]`), an enum member to its string.
 
 Rejected: `any`, `as` casts, classes, `this`, mutation of objects/arrays,
 `==` (except `== null`), `===` on objects (reference identity), generics,
@@ -86,6 +102,11 @@ Every expression maps to a Lean term whose value is the JavaScript value.
   code units `JS.Str.mk […]`.
 * `===` on `number` is IEEE equality (`Float` `==`, `NaN !== NaN`), in code and in
   contracts alike. Unary `+` is only accepted on numbers (the identity).
+* `a + b` with a string operand (by its TypeScript type) is concatenation; an
+  `int`, `boolean` or enum operand is converted exactly as in a template literal
+  (`-5 + "a"` is `"-5a"`); a `number` or possibly-null operand is rejected.
+  Bitwise operators (`~ & | ^ << >> >>>`, also as `&=` …) are rejected (ToInt32 is
+  not modelled), as are compound assignments other than `+=` and `-=`.
 * `x!` carries the obligation `x ≠ null`; `?.` and `??` map to `Option.map/getD`.
 * Narrowing (`x !== null`, `x.kind === "add"`, `switch (x.kind)`, early
   `return`) is compiled to Lean `match`, so the narrowed facts are available to
@@ -97,14 +118,23 @@ Every expression maps to a Lean term whose value is the JavaScript value.
   Assigning a present value to an optional `let`
   narrows it as well; any later assignment (also in a `for…of`) drops what was
   known. A null test, `??`, `?.` or `!` on a value known to be present is decided
-  statically (the value is not null).
+  statically (the value is not null); the operand is still evaluated, so its own
+  obligations (`xs[5] === null`: the index; `g(x) != null`: g's precondition;
+  `x! === null`: non-null) remain.
 * Names: a VTS identifier that is a Lean token, a root-level Lean name the
   generated code may use unqualified (`max`, `some`, `List`, …) or a fixed name of
   the generated code (`σ`, `props`, `h_pre`, …) is primed (`max'`; fields and
-  constructors also avoid `rec`, `mk`, `casesOn`, …); names the translator invents
-  are subscripted (`h₁`, `idx₀`). Neither `'` nor subscript digits can occur in a
-  TypeScript identifier, so generated names and user names never capture each
-  other. The lists are generated from Lean by `lean/scripts/GenNames.lean`.
+  constructors also avoid `rec`, `mk`, `casesOn`, …), and so is a name shaped like
+  the instances Lean declares for the module's types (`instReprP`,
+  `instDecidableEqP`, `instToJSK`: any `inst` followed by a capital); names the
+  translator invents are subscripted (`h₁`, `idx₀`). Neither `'` nor subscript
+  digits can occur in a TypeScript identifier, so generated names and user names
+  never capture each other. The lists are generated from Lean by
+  `lean/scripts/GenNames.lean`. Enum members and discriminants are any strings:
+  an ASCII identifier is used as is (primed if Lean generates that name in the
+  type's namespace), anything else is «quoted» with `\`, `'`, `«`, `»`, control
+  characters and lone surrogates written `\uXXXX` — injective, and the source stays
+  UTF-8; union accessors are primed (`A.kind'`), so no constructor can clash.
   Component names follow the same rule (`function Type()` is the namespace
   `Type'`); a module path segment that would clash gets a `_` suffix instead, as
   it is also a directory name (`src/end/Sort.tsx` is the module `VTS.end_.Sort_`,
@@ -114,7 +144,10 @@ Every expression maps to a Lean term whose value is the JavaScript value.
   condition becomes a hypothesis), `for (const x of xs)` ↦ `List.foldl` over
   the tuple of assigned locals (no `return`/`continue`, and a `break` only to end
   a `switch` case), `switch` ↦ `match` / if-chain (first matching
-  label; `default` in any position takes the values no label matches), `throw`
+  label; `default` in any position takes the values no label matches; labels of
+  a switch on an int, string, boolean or number are compared with `===`, and may be
+  literals, negated literals or constants — a non-integer label on an int is
+  rejected, it can never match), `throw`
   ↦ an obligation that the point is unreachable.
 * A JSX const (`const row = <p>{e}</p>;`) is translated where it is declared —
   JS evaluates the element's attributes and `{…}` children there, whether or not

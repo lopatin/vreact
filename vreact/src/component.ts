@@ -10,7 +10,7 @@
 import ts from "typescript";
 import { T, type VType, type Param, type Field, leanType, showType, typeOfNode } from "./types.ts";
 import { type Env, ModCtx, type CompCtx, type CompInfo, type StateVar, type FnInfo, type Binding, bind, freshLocal } from "./ctx.ts";
-import { expr, prop, propAll, block, branch, handlerFn, checkDeps, hookName, specFn, symbolOf, bindParam, type BlockCtx, typeOf, valueBlock, lambda, outcome, checkClosures, topLevelHookDecls } from "./translate.ts";
+import { expr, prop, propAll, block, branch, handlerFn, checkDeps, hookName, specFn, symbolOf, bindParam, type BlockCtx, typeOf, valueBlock, lambda, outcome, checkClosures, topLevelHookDecls, fnParamTsTypes } from "./translate.ts";
 import { fail, leanField, leanIdent, leanStr, jsStr, paren, nodeText, indent } from "./util.ts";
 
 /* ─────────────────────── React 18.3.1 event model ───────────────────────
@@ -375,7 +375,8 @@ function prepass(stmts: readonly ts.Statement[], env: Env, comp: CompCtx, m: Mod
         if (!cb) fail(cbE, "callbackRequires expects a callback prop");
         const lam = c.arguments[1];
         if (!lam || !(ts.isArrowFunction(lam) || ts.isFunctionExpression(lam))) fail(c, "callbackRequires(cb, (args) => condition)");
-        const l = lambda(lam, env, cb.params.map((p) => p.type), T.bool);
+        // (parameter annotations are checked against the callback prop's parameter types)
+        const l = lambda(lam, env, cb.params.map((p) => p.type), T.bool, fnParamTsTypes(m.checker.getTypeAtLocation(cbE), cbE, env) ?? cb.params.map(() => null));
         const prop = `${paren(l.body.code)} = true`;
         const prev = pp.contracts.get(cb.name);
         if (!prev) pp.contracts.set(cb.name, { binders: l.binders, prop });

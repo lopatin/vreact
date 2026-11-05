@@ -64,8 +64,14 @@ const ROOT_NAMES = new Set(LEAN_ROOT_NAMES);
 const TYPE_AUX = new Set(LEAN_TYPE_AUX);
 /** Fixed (non-fresh) names of the generated Lean. */
 const GENERATED = new Set(["E", "σ", "τ", "κ", "hpre", "hinv", "props", "ev", "acc", "VTS", "Proofs", "VReact"]);
-const GENERATED_RE = /^h_pre\d*$/;
+/**
+ * Generated name shapes: `h_pre…`, and the instances Lean's `deriving` handlers and anonymous
+ * `instance`s declare in the module namespace (`instReprP`, `instDecidableEqP`, `instToJSK`, …).
+ */
+const GENERATED_RE = /^h_pre\d*$|^inst[A-Z]/;
 const PLAIN_IDENT = /^[A-Za-z_][A-Za-z0-9_']*$/;
+/** ASCII identifiers without `'` (the names `leanField` leaves unquoted). */
+const STRICT_IDENT = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
 /** Whether a TypeScript identifier needs renaming in Lean (see above). */
 export function clashesWithLean(name: string): boolean {
@@ -75,15 +81,55 @@ export function clashesWithLean(name: string): boolean {
 /** A Lean identifier for a TypeScript identifier (locals, params, functions, constants, types). */
 export function leanIdent(name: string): string {
   const base = clashesWithLean(name) ? name + "'" : name;
-  return PLAIN_IDENT.test(base) ? base : "«" + base + "»";
+  return PLAIN_IDENT.test(base) ? base : "«" + quotedText(base) + "»";
 }
 
-/** A Lean identifier for a structure field / constructor / enum member. */
+/**
+ * A Lean identifier for a structure field / constructor / enum member (any JS string: enum
+ * members and discriminants are string literals).  Injective, so that distinct members get
+ * distinct constructors:
+ *  - an ASCII identifier is itself (`«quoted»` if a Lean token), primed if it is one of the
+ *    names Lean generates in a type's namespace (`rec'`, `mk'`);
+ *  - anything else is `«quoted»`, with `\`, `'`, `«`, `»`, `⟦`, control characters and lone
+ *    surrogates written `\uXXXX` (`\\` for `\`, `\e` for the empty string): so it never
+ *    contains a `'` (no clash with a primed name), the source stays valid UTF-8, and distinct
+ *    strings stay distinct.
+ */
 export function leanField(name: string): string {
-  // fields and constructors live in the type's namespace: avoid the names Lean generates there
-  const base = TYPE_AUX.has(name) ? name + "'" : name;
-  if (TOKENS.has(base) || !PLAIN_IDENT.test(base)) return "«" + base + "»";
-  return base;
+  if (STRICT_IDENT.test(name)) {
+    if (TYPE_AUX.has(name)) return name + "'";
+    return TOKENS.has(name) ? "«" + name + "»" : name;
+  }
+  return "«" + (name === "" ? "\\e" : quotedText(name, true)) + "»";
+}
+
+/**
+ * The name of a generated accessor in a union type's namespace (the discriminant `U.kind'`, a
+ * field shared by all variants `U.id'`): `leanField` primed, never a constructor's name (a
+ * constructor named after any string literal, e.g. `"kind"`, is `leanField` of it, primed only
+ * for Lean's own names and never otherwise containing `'`).
+ */
+export function leanAccessor(name: string): string {
+  const f = leanField(name);
+  return f.endsWith("»") ? f.slice(0, -1) + "'»" : f + "'";
+}
+
+/** The text of a `«quoted»` Lean identifier for `s` (see `leanField`; `all`: also escape `'` and `\`). */
+function quotedText(s: string, all = false): string {
+  let out = "";
+  for (let i = 0; i < s.length; i++) {
+    const c = s.charCodeAt(i);
+    const u = (n: number) => "\\u" + n.toString(16).padStart(4, "0");
+    if (c >= 0xd800 && c <= 0xdbff && i + 1 < s.length && s.charCodeAt(i + 1) >= 0xdc00 && s.charCodeAt(i + 1) <= 0xdfff) {
+      out += s[i] + s[i + 1]; // a surrogate pair: one code point
+      i++;
+    } else if (c >= 0xd800 && c <= 0xdfff) out += u(c); // lone surrogate (not representable in UTF-8)
+    else if (c < 0x20 || (c >= 0x7f && c <= 0x9f) || c === 0x2028 || c === 0x2029 || c === 0xab || c === 0xbb || c === 0x27e6) out += u(c);
+    else if (all && c === 0x5c) out += "\\\\";
+    else if (all && c === 0x27) out += u(c);
+    else out += s[i];
+  }
+  return out;
 }
 
 /** `name` with a subscript number (translator-invented binder names; unreachable from TypeScript). */
@@ -116,6 +162,8 @@ export function leanStr(s: string): string {
     else if (ch === "\t") out += "\\t";
     else if (ch === "\r") out += "\\r";
     else if (c < 0x20 || c === 0x7f) out += "\\x" + c.toString(16).padStart(2, "0");
+    // (`⟦` starts the obligation markers `/-⟦obN⟧-/` the report scans the generated files for)
+    else if (c === 0x27e6) out += "\\u27e6";
     else out += ch;
   }
   return out + '"';
