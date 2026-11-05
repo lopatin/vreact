@@ -36,6 +36,11 @@ non-discriminated unions (`string | number`), `ReactNode`/`children` props.
 * Arrays: `length map filter some every find findIndex includes indexOf slice
   concat join reduce(f, init) toSorted(cmp) toReversed with at flatMap`, spread.
   Lambdas inline: `xs.filter((x) => x.id !== id)`.
+  `toSorted`: proofs know the result is a permutation (length, membership,
+  `distinct` keys); the *order* is known only for a consistent comparator
+  (ECMA-262: `cmp(a, a) = 0`, symmetric ties, transitive — e.g. `(a, b) => a.k - b.k`;
+  `(a, b) => a.k < b.k ? -1 : 1` is not consistent: JS engines order its ties
+  differently). Rejected on arrays that may contain `undefined`.
 * Strings: `length trim includes startsWith endsWith slice repeat toLowerCase
   toUpperCase` — exact UTF-16 semantics (case mapping is opaque to proofs).
 * `Math.max/min/abs/sign/floor/trunc/round/ceil`, `String(x)`.
@@ -124,4 +129,4 @@ handler may not contain an element with the same handler or a user component.
 | `async`, fetch | keep I/O in an unverified module that calls verified reducers |
 | guarded updates in `vreact synth` | write the guard by hand; synth fills straight-line code |
 | a reducer over a discriminated union calling `@opaque` model functions | supported (contracts are instantiated inside the `switch` arms) |
-| invariants about sums (`reduce`) under filter/map | provable, but needs a Lean lemma in `proofs/` (automation handles append, filter, map, membership, `distinct`, counts via `length`) |
+| invariants about sums (`reduce`) under filter/map | provable, but needs a Lean lemma in `proofs/` (automation handles append, filter, map, `slice`, `toSorted`, `toReversed`, `with`, `indexOf`, `range`, membership, `distinct`, and counts `xs.filter(p).length` under append, delete-by-id, map-updates and mark-all) |

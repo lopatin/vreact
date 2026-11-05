@@ -65,6 +65,31 @@ theorem length_filter_add_length_filter_not {α} (p : α → Bool) (l : List α)
   | cons a l ih => cases h : p a <;> simp [List.filter_cons, h] <;> omega
 grind_pattern length_filter_add_length_filter_not => (l.filter p).length, (l.filter (fun a => !p a)).length
 
+/-- Deleting by a key of a list with distinct keys removes at most one element. -/
+theorem length_le_length_filter_add_one {α β} {f : α → β} {p : α → Bool} {l : List α}
+    (h : (l.map f).Nodup) (hp : ∀ x ∈ l, ∀ y ∈ l, p x = false → p y = false → f x = f y) :
+    l.length ≤ (l.filter p).length + 1 := by
+  induction l with
+  | nil => simp
+  | cons a t ih =>
+    simp only [List.map_cons, List.nodup_cons, List.mem_map, not_exists, not_and] at h
+    have ih' := ih h.2 (fun x hx y hy => hp x (List.mem_cons_of_mem _ hx) y (List.mem_cons_of_mem _ hy))
+    cases ha : p a
+    · have : t.filter p = t := by
+        rw [List.filter_eq_self]
+        intro y hy
+        cases hpy : p y
+        · exact absurd (hp y (List.mem_cons_of_mem _ hy) a List.mem_cons_self hpy ha) (h.1 y hy)
+        · rfl
+      simp [List.filter_cons, ha, this]
+    · simp [List.filter_cons, ha]; omega
+grind_pattern length_le_length_filter_add_one => (l.map f).Nodup, l.filter p
+-- … and removes at least one element when one matches
+theorem length_filter_lt_of_mem {α} {p : α → Bool} {l : List α} {x : α} (hx : x ∈ l) (hp : p x = false) :
+    (l.filter p).length < l.length :=
+  List.length_filter_lt_length_iff_exists.mpr ⟨x, hx, by simp [hp]⟩
+grind_pattern length_filter_lt_of_mem => x ∈ l, l.filter p
+
 @[vreact_simp] theorem nodup_reverse_iff {α} (xs : List α) : xs.reverse.Nodup ↔ xs.Nodup := by
   simp only [List.Nodup, List.pairwise_reverse]
   exact ⟨fun h => h.imp (fun h e => h e.symm), fun h => h.imp (fun h e => h e.symm)⟩

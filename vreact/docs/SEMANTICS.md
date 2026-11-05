@@ -54,7 +54,15 @@ Every expression maps to a Lean term whose value is the JavaScript value.
 * Array methods `map filter some every find findIndex includes indexOf slice
   concat join reduce toSorted toReversed with at flatMap` and spread `[...xs, x]`
   map to their exact list counterparts (`slice` implements JS's negative-index
-  clamping, `toSorted` is a stable sort, `with` carries a bounds obligation).
+  clamping, `with` carries a bounds obligation). `toSorted(cmp)` follows
+  ECMA-262: for a comparator that is *consistent* on the elements (`JS.Consistent`:
+  reflexive, symmetric and transitive `=`, transitive `<` and `>`) the result is the
+  unique stable sort; otherwise the order is implementation-defined (V8 and a
+  merge sort differ, e.g. for `(a, b) => a.k < b.k ? -1 : 1` on ties), and the model
+  only knows that the result is a permutation of the input (`JS.unspecifiedSort`, an
+  unspecified function of the list and the comparator). `toSorted` on an array that
+  may contain `undefined` is rejected (JS moves `undefined` to the end without
+  calling the comparator).
 * String methods `trim includes startsWith endsWith slice repeat length` are
   exact on UTF-16 code units; `toLowerCase/toUpperCase` are opaque (Unicode case
   mapping is not modelled: proofs cannot depend on them).
@@ -239,7 +247,9 @@ hook rules hold (static checks). For every function: its body is safe and its
 * **The translation** from TypeScript to Lean (≈3k lines of TypeScript). It is
   structural and syntax-directed; the regression suite pins its behaviour.
 * **The JS runtime model** (`JS.lean`): e.g. that `Array.prototype.slice` behaves
-  like `JS.slice`. Definitions follow ECMA-262 directly.
+  like `JS.slice`. Definitions follow ECMA-262 directly; where ECMA-262 leaves a
+  result implementation-defined (`toSorted` with an inconsistent comparator) the
+  model fixes only what every engine guarantees (a permutation).
 * **The React model**: that React 18 behaves as described in §2–3 (discrete-event
   flushing, update queues, reconciliation by position/key/type).
 * **Abstractions:** integers are unbounded; floats are opaque to proofs; Unicode

@@ -3,7 +3,9 @@
 Every failed obligation is reported as `file:line:col [kind] description`
 followed by the Lean goal. Hypotheses above `⊢` are what is known; with
 `grind`, `⊢ False` means the known facts did not suffice, and the remaining
-hypotheses often *are* a counterexample.
+hypotheses often *are* a counterexample. When an invariant is a conjunction and
+the whole fails, the conjuncts are proved separately and the report shows the
+first one that fails.
 
 | kind | the claim | first thing to check |
 |------|-----------|----------------------|

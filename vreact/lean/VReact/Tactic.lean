@@ -7,10 +7,16 @@ import VReact.Simprocs
 # `vreact_auto` — the default discharger for every generated proof obligation
 
 1. introduce binders, unfold generated definitions and the model
-   (`@[vreact_simp]`), and let-bound locals (`zetaDelta`);
+   (`@[vreact_simp]`), and let-bound locals (`zetaDelta`); hypotheses that a
+   local depends on are copied first so that they are unfolded too (`vreact_expose`);
+   record fields are pushed through conditionals (`pushProjIte`) and Bool
+   `if`-chains become propositions, so a map-update that leaves a field alone leaves
+   facts about that field syntactically unchanged;
 2. split `if`/`match` in the goal, normalise again;
 3. close each case with `grind` (congruence closure + E-matching + linear
-   integer arithmetic + case splitting), falling back to `omega` / `simp_all`.
+   integer arithmetic + case splitting), falling back to `omega` / `simp_all`;
+   if all fail on a conjunction, prove the conjuncts separately; a failure
+   reports `grind`'s goal (`vreact_finish`).
 
 The normalisation set is the simp attribute `vreact_simp` (so a typo in a lemma
 name is a build error of this library, never a silent weakening of the tactic).
@@ -84,7 +90,9 @@ private def finishOne : TacticM (Option Exception) := withMainContext do
   let s ← saveState
   let attempt (tac : TSyntax `tactic) : TacticM (Option Exception) := do
     try
-      evalTactic tac
+      -- like the alternatives of `first`: no error recovery (an error must not be logged
+      -- and the goal admitted; it must make us try the next alternative)
+      withoutRecover (evalTactic tac)
       if (← getUnsolvedGoals).isEmpty then return none
       throwError "unsolved goals"
     catch e =>
