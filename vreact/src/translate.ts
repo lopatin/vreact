@@ -196,6 +196,19 @@ function pathKey(env: Env, e: ts.Expression): string | null {
   return null;
 }
 
+/**
+ * The narrowing in effect in `env` on the paths rooted at the given variables, keyed by
+ * path text (`s`, `s.inner`): what `vreact synth` may assume at a hole.
+ */
+export function narrowingAt(env: Env, roots: readonly { sym: ts.Symbol; name: string }[]): Map<string, Narrowed> {
+  const out = new Map<string, Narrowed>();
+  for (const { sym, name } of roots) {
+    const k = `#${symId(sym)}`;
+    for (const [key, n] of env.narrow) if (key === k || key.startsWith(k + ".")) out.set(name + key.slice(k.length), n);
+  }
+  return out;
+}
+
 /** Is `e` (a variable or property path) narrowed to a non-null value here? */
 function narrowedSome(env: Env, e: ts.Expression): boolean {
   const k = pathKey(env, e);
@@ -1355,6 +1368,8 @@ function specCall(name: string, c: ts.CallExpression, env: Env): Val {
       // an unfilled synthesis placeholder: translated as `sorry` (reported INCOMPLETE)
       const t = c.typeArguments?.[0] ? typeOfNode(c.typeArguments[0], env.m.prog.typeEnv, "Hole") : undefined;
       if (!t) fail(c, "write hole<T>() with an explicit type");
+      // vreact synth types its candidates with the narrowing in effect here
+      if (!env.m.dry) env.m.prog.holeEnvs?.push({ node: c, env });
       return { code: `(sorry : ${leanType(t)})`, type: t };
     }
     default:
@@ -1418,6 +1433,7 @@ function narrowTest(e: ts.Expression, env: Env): NarrowTest | null {
 /** A throw-away module context for type queries (obligations are discarded). */
 function dryCtx(m: ModCtx): ModCtx {
   const d = Object.create(m) as ModCtx;
+  d.dry = true;
   d.obligations = [];
   d.counter = { n: 0 };
   d.ob = () => "(by sorry)";
@@ -1530,12 +1546,14 @@ function narrowBranch(nt: NarrowTest, env: Env, onTrue: (e: Env) => string, onFa
     const m = env.m;
     const nObs = m.obligations.length;
     const nCount = m.counter.n;
+    const nHoles = m.prog.holeEnvs?.length ?? 0;
     try {
       arms += `\n  | _ => ${paren(whenNot(env))}`;
     } catch (err) {
       if (!(err instanceof VtsError)) throw err;
       m.obligations.length = nObs;
       m.counter.n = nCount;
+      if (m.prog.holeEnvs) m.prog.holeEnvs.length = nHoles;
       for (const v of others) {
         const a = arm(v);
         arms += `\n  | ${a.pat} => ${paren(whenNot(a.env))}`;

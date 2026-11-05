@@ -114,6 +114,12 @@ export interface Narrowed {
   fields?: Map<string, Val>;
 }
 
+/** A translated `hole<T>()` and the environment in effect there (read by `vreact synth`). */
+export interface HoleEnv {
+  node: ts.CallExpression;
+  env: Env;
+}
+
 export interface Env {
   m: ModCtx;
   vars: Map<ts.Symbol, Binding>;
@@ -139,6 +145,8 @@ export class Program {
   root: string;
   typeEnv: TypeEnv;
   modNs = new Map<string, string>();
+  /** set by `vreact synth`: every translation of a `hole<T>()` kept in the output, with its environment (narrowing) */
+  holeEnvs?: HoleEnv[];
   constructor(checker: ts.TypeChecker, root: string, nsOf: (sf: ts.SourceFile) => string) {
     this.checker = checker;
     this.root = root;
@@ -165,6 +173,8 @@ export class ModCtx {
   obligations: Obligation[];
   counter: { n: number };
   hyp = 0;
+  /** a throw-away context for type queries (its terms are discarded) */
+  dry = false;
   /** imported modules needed by this file (Lean module names) */
   deps: Set<string>;
   sf: ts.SourceFile;
@@ -204,11 +214,13 @@ export class ModCtx {
   dryRun(f: () => void) {
     const n = this.counter.n;
     const len = this.obligations.length;
+    const holes = this.prog.holeEnvs?.length ?? 0;
     try {
       f();
     } finally {
       this.counter.n = n;
       this.obligations.length = len;
+      if (this.prog.holeEnvs) this.prog.holeEnvs.length = holes;
     }
   }
   describe(node: ts.Node): string {

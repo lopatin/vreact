@@ -5,7 +5,8 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { synthCommand, type SynthResult } from "../src/synth.ts";
+import ts from "typescript";
+import { synthCommand, mayShareExecution, canonical, type SynthResult } from "../src/synth.ts";
 import { loadConfig } from "../src/cli.ts";
 import { translate } from "../src/module.ts";
 
@@ -150,6 +151,109 @@ const cases: Record<string, () => Promise<void>> = {
     check("nosolution: not proved", !by("impossible")[0]?.proved);
     check("nosolution: reports size and stop reason", out.includes("up to size 3; stopped: all candidates up to size 3 were tried") && out.includes("no candidate passed the tests") && !out.includes("strengthen"), out.split("\n").slice(-4).join(" | "));
     check("nosolution: nothing written", writes.length === 0);
+  },
+  // N25: holes no call shares (switch cases) are searched once each; a hole without candidates
+  // backjumps over the holes it does not depend on (before: 3^(n-1) searches of the last hole)
+  async "Sx-joint5"() {
+    const dir = project("Sx-joint5");
+    const t0 = Date.now();
+    const { by, out } = await synth(dir, "src/r.ts", { maxSize: 5 });
+    const secs = (Date.now() - t0) / 1000;
+    const headers = (fn: string, k: number) => out.split("\n").filter((l) => l.startsWith(`hole ${k}/5 in ${fn}:`)).length;
+    check("Sx-joint5: step not proved", by("step").length === 5 && by("step").every((r) => !r.proved));
+    check("Sx-joint5: each hole of step searched once", [1, 2, 3, 4, 5].every((k) => headers("step", k) === 1), [1, 2, 3, 4, 5].map((k) => headers("step", k)).join(","));
+    check("Sx-joint5: backjump over the independent holes", out.includes("hole 5 fails whatever the fill of holes 1, 2, 3, 4"));
+    check("Sx-joint5: no Lean check for step", !/Lean rejects|proved by Lean: step with/.test(out));
+    check("Sx-joint5: step5 proved together, each hole searched once", by("step5").length === 5 && by("step5").every((r) => r.proved) && [1, 2, 3, 4, 5].every((k) => headers("step5", k) === 1), JSON.stringify(solutions(by("step5"))));
+    // a dependent pair: hole 2 is searched with hole 1's fill in its tests
+    check("Sx-joint5: twice (hole 2 depends on hole 1)", JSON.stringify(solutions(by("twice"))) === JSON.stringify(["x", "(1 + 1)"]) && out.includes("hole 2/2 in twice (with hole 1 = x)"), JSON.stringify(solutions(by("twice"))));
+    check("Sx-joint5: within the time budget", secs < 5 * 60, `${secs.toFixed(0)}s`);
+  },
+  // which holes a call can evaluate together (the basis of the search reuse above)
+  async "Sx-shared"() {
+    const holesOf = (src: string) => {
+      const sf = ts.createSourceFile("t.ts", src, ts.ScriptTarget.ES2022, true);
+      const fn = sf.statements.find(ts.isFunctionDeclaration)!;
+      const hs: ts.Node[] = [];
+      const visit = (n: ts.Node) => {
+        if (ts.isCallExpression(n) && ts.isIdentifier(n.expression) && n.expression.text === "hole") hs.push(n);
+        ts.forEachChild(n, visit);
+      };
+      visit(fn);
+      return { fn, hs };
+    };
+    const shared = (src: string) => {
+      const { fn, hs } = holesOf(src);
+      return mayShareExecution(hs[0], hs[1], fn, false);
+    };
+    const cases: [string, string, boolean][] = [
+      ["switch cases", `function f(a: A) { switch (a.kind) { case "a": return hole(); case "b": { const y = 1; return hole(); } } }`, false],
+      ["if / else", `function f(c: boolean) { if (c) { return hole(); } else { return hole(); } }`, false],
+      ["early return", `function f(c: boolean) { if (c) return hole(); return hole(); }`, false],
+      ["early return after a local", `function f(c: boolean) { if (c) { const y = hole(); return y; } return hole(); }`, false],
+      ["ternary", `function f(c: boolean) { return c ? hole() : hole(); }`, false],
+      ["sequence", `function f(x: int) { const y = hole(); return y + hole(); }`, true],
+      ["if without return", `function f(c: boolean) { let y = 0; if (c) { y = hole(); } return y + hole(); }`, true],
+      ["both in one lambda", `function f(xs: X[]) { return xs.map((x) => (x.c ? hole() : hole())); }`, true],
+      ["in a loop", `function f(xs: X[]) { let s = 0; for (const x of xs) { if (x.c) { s = hole(); } else { s = hole(); } } return s; }`, true],
+      ["a closure called later", `function f(c: boolean) { const g = () => hole(); return c ? g() : hole(); }`, true],
+      ["a return of a nested lambda", `function f(c: boolean, xs: X[]) { const ys = xs.map((x) => { return hole(); }); return c ? ys : hole(); }`, true],
+      ["condition and branch", `function f() { if (hole()) return hole(); return 0; }`, true],
+    ];
+    for (const [name, src, want] of cases) check(`Sx-shared: ${name}`, shared(src) === want, `got ${shared(src)}`);
+    const { fn, hs } = holesOf(`function f(c: boolean) { if (c) return hole(); return hole(); }`);
+    check("Sx-shared: a recursive function shares everything", mayShareExecution(hs[0], hs[1], fn, true));
+  },
+  // P78: the scope has the translator's narrowing (complement of a test included)
+  async "Sx-narrowing"() {
+    const dir = project("Sx-narrowing");
+    const { by, out } = await synth(dir, "src/List.ts");
+    const want: Record<string, string> = { width2: "s.w", w4: "s.w + 1", w6: "s.h + s.w", w7: "k + s.h", triX: "0" };
+    for (const [fn, s] of Object.entries(want)) check(`Sx-narrowing: ${fn}`, solutions(by(fn))[0] === s, String(solutions(by(fn))[0]));
+    check("Sx-narrowing: early return narrows s to rect", out.includes("hole in width2: int   scope: s, s.w, s.h"));
+    check("Sx-narrowing: two variants left: shared fields only", out.includes("hole in triX: int   scope: t\n"));
+  },
+  // N26: a field (and a parameter) spelled `hole` is not a use of the imported hole
+  async "Sx-holefield"() {
+    const dir = project("Sx-holefield");
+    const { by, out } = await synth(dir, "src/golf.ts", { write: true });
+    const text = read(dir, "src/golf.ts");
+    const s = solutions(by("nextHole"))[0];
+    check("Sx-holefield: nextHole proved", s === "{ ...c, hole: c.hole + 1 }" || s === "{ ...c, hole: after(c.hole) }", String(s));
+    check("Sx-holefield: no candidate failed to translate", !out.includes("does not translate"));
+    check("Sx-holefield: hole import dropped, field kept, translates under noUnusedLocals", /import \{ ensures, type int \} from "vreact\/spec";/.test(text) && text.includes("readonly hole: int") && translate(loadConfig(dir)).ok);
+  },
+  // N27: diagnostics — untranslatable candidates are not Lean rejections; a contract calling
+  // an unfinished function is reported as such
+  async "Sx-diag"() {
+    const dir = project("Sx-diag");
+    const { by, out } = await synth(dir, "src/d.ts", { maxSize: 4 });
+    const part = (fn: string) => out.slice(out.indexOf(`hole in ${fn}`)).split("\nhole in ")[0];
+    check("Sx-diag: clearSel not proved", !by("clearSel")[0]?.proved);
+    check("Sx-diag: clearSel: candidates do not translate, Lean never ran", part("clearSel").includes("do not translate") && !/Lean rejects|accept candidates that Lean rejects/.test(part("clearSel")), part("clearSel").split("\n").slice(-1)[0]);
+    const p = by("plusSq")[0];
+    check("Sx-diag: plusSq: the contract depends on unfinished sq", !!p && !p.proved && p.tested === 0 && /contract of plusSq depends on unfinished function sq/.test(p.note ?? "") && !part("plusSq").includes("postcondition fails"), p?.note);
+    check("Sx-diag: viaStub: the contract cannot be evaluated (not 'postcondition fails')", /contract of viaStub runs into a hole/.test(part("viaStub")) && !part("viaStub").includes("postcondition fails") && !part("viaStub").includes("the random tests accept"), part("viaStub").split("\n").slice(-1)[0]);
+  },
+  // N28: a proof relative to @trusted declarations has its own status and lists what it assumes
+  async "Sx-relative"() {
+    const dir = project("Sx-relative");
+    const { by } = await synth(dir, "src/t.ts", { write: true });
+    const v = by("viaStub")[0];
+    check("Sx-relative: viaStub proved relative to stub", !!v && v.proved && v.status === "proved-relative" && JSON.stringify(v.relative_to) === JSON.stringify(["VTS.t.stub", "VTS.t.stub.post"]), JSON.stringify(v));
+    const i = by("inc")[0];
+    check("Sx-relative: inc proved outright", !!i && i.proved && i.status === "proved" && i.relative_to === undefined, JSON.stringify(i));
+    check("Sx-relative: written", read(dir, "src/t.ts").includes("return stub(x);"));
+  },
+  // N29: the same candidate (up to whitespace and parentheses) goes to Lean once
+  async "Sx-dedup"() {
+    check("Sx-dedup: parentheses and spacing are ignored", canonical("(a + b) + 1") === canonical("a + b  + 1") && canonical("{ ...s, f: (x) }") === canonical("{ ...s, f: x }") && canonical("xs.map((x) => x.k)") === canonical("xs.map(x => x.k)"));
+    check("Sx-dedup: different trees stay different", canonical("a + (b + 1)") !== canonical("a + b + 1") && canonical("!x") !== canonical("-x") && canonical('"a"') !== canonical('"b"'));
+    const dir = project("Sx-dedup");
+    const { by, out } = await synth(dir, "src/f.ts");
+    const checked = out.split("\n").filter((l) => /^ {2}(✗ Lean rejects|✔ proved by Lean)/.test(l)).map((l) => canonical(l.replace(/^ {2}(✗ Lean rejects |✔ proved by Lean: )/, "").replace(/: postcondition.*$/, "")));
+    check("Sx-dedup: no candidate checked twice", checked.length >= 2 && new Set(checked).size === checked.length, `${checked.length} checks`);
+    check("Sx-dedup: above proved", solutions(by("above"))[0] === "a + b + 1 + 1", String(solutions(by("above"))[0]));
   },
 };
 

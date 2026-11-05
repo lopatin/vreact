@@ -14,7 +14,7 @@
 import ts from "typescript";
 import fs from "node:fs";
 import path from "node:path";
-import { Program, ModCtx, type Obligation, type FnInfo, type CompInfo, type Global, type ConstInfo } from "./ctx.ts";
+import { Program, ModCtx, type Obligation, type FnInfo, type CompInfo, type Global, type ConstInfo, type HoleEnv } from "./ctx.ts";
 import { T, type VType, typeOfNode, typeOfDecl, emitTypeDecl, leanType } from "./types.ts";
 import { VtsError, fail, leanIdent, leanField, leanStr, paren, capitalize, nodeText, clashesWithLean } from "./util.ts";
 import { expr, prop, propAll, valueBlock, specFn, symbolOf, bindParam, typeOf } from "./translate.ts";
@@ -32,6 +32,8 @@ export interface Config {
   heartbeats?: number;
   /** In-memory source texts that replace files on disk (used by `vreact synth`, which never edits sources it checks). */
   overrides?: Map<string, string>;
+  /** `vreact synth`: receives every translated `hole<T>()` with the environment (narrowing) in effect there */
+  holeEnvs?: HoleEnv[];
 }
 
 /** A compiler host that reads the given files from memory instead of disk. */
@@ -116,6 +118,12 @@ function loadProgram(cfg: Config): { program: ts.Program; diags: string[] } {
   return { program, diags };
 }
 
+/** The Lean namespace of the module of source file `f` (also used by `vreact synth`, whose type names must match). */
+export function moduleNs(srcDir: string, f: string): string {
+  const rel = path.relative(srcDir, f).replace(/\.(tsx?|jsx?)$/, "");
+  return "VTS." + rel.split(path.sep).map(sanitizeSeg).join(".");
+}
+
 /** A module path segment as a Lean namespace / module name component (also a directory name). */
 function sanitizeSeg(s: string): string {
   const t0 = s.replace(/[^A-Za-z0-9_]/g, "_");
@@ -151,11 +159,9 @@ export function translate(cfg: Config): TranslateResult {
   if (diags.length) return res;
   const checker = program.getTypeChecker();
   const fileSet = new Set(cfg.files.map((f) => path.resolve(f)));
-  const nsOfFile = (f: string) => {
-    const rel = path.relative(cfg.srcDir, f).replace(/\.(tsx?|jsx?)$/, "");
-    return "VTS." + rel.split(path.sep).map(sanitizeSeg).join(".");
-  };
+  const nsOfFile = (f: string) => moduleNs(cfg.srcDir, f);
   const prog = new Program(checker, cfg.root, (sf) => nsOfFile(sf.fileName));
+  prog.holeEnvs = cfg.holeEnvs;
   const sfs = cfg.files.map((f) => program.getSourceFile(f)!);
   const counter = { n: 0 };
 

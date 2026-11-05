@@ -433,3 +433,9 @@ function's obligations failed, and their axioms contain no `sorryAx` — so a
 function with several holes is proved once all are filled, a `@trusted`
 function is refused, and a failure elsewhere that keeps the function from being
 checked is reported as "not proved". The written text is the text Lean checked.
+A proof whose axioms include @trusted declarations or `assume(…)` facts is
+reported relative to them (`--json`: `"status": "proved-relative"` and
+`relative_to`). Synth types candidates with the narrowing the translator has at
+the hole, and searches a hole once per fill of the earlier holes a call can
+also evaluate (holes in different cases or branches are searched once); both
+only steer the search — Lean still checks every fill of a function together.
