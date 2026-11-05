@@ -16,7 +16,7 @@ hypotheses often *are* a counterexample.
 | `child-precondition` | props passed to `<C/>` satisfy `C`'s `requires` | establish it from your invariant / data; or weaken `C`'s requires |
 | `callback` | the function you pass as a child's callback keeps **your** invariant, assuming the child's `callbackRequires` | strengthen the child's contract, or guard in your handler |
 | `callback-contract` | this call of a callback prop satisfies its `callbackRequires` | the arguments you pass (e.g. trim/validate first) |
-| `index` | `xs[i]` / `xs.with(i, …)` is in bounds | guard `i < xs.length`, or carry bounds in an invariant |
+| `index` | `xs[i]` / `xs.with(i, …)` is in bounds | guard `i < xs.length` (in contracts too: `i < xs.length && xs[i] > 0`, `forall(0, xs.length, (i) => …)`), or carry bounds in an invariant |
 | `nonzero-divisor` | `%`, `idiv`, `Math.floor(a/b)` divisor ≠ 0 | guard (`total === 0 ? 0 : …`) |
 | `non-null` | `x!` is not null | narrow with `!== null` instead |
 | `precondition` | a called function's `requires` holds | establish it, or make the callee total |
@@ -53,7 +53,11 @@ hypotheses often *are* a counterexample.
 
    Generated names: types `VTS.<module>.<Type>`, functions
    `VTS.<module>.<fn>` with contracts `<fn>.post`, `<fn>.post2`, …; components
-   `VTS.<module>.<Comp>.{Props, Cb, State, pre, inv, render}`. Run
+   `VTS.<module>.<Comp>.{Props, Cb, State, pre, inv, render}`. A name that is a
+   Lean keyword or root-level Lean name gets a `'` (`function max` is
+   `VTS.<module>.max'`, field `rec` is `rec'`); hypotheses the translator invents
+   are subscripted (`h₁`, `hmem₂`); all `requires` of a function form one
+   hypothesis `h_pre`. Run
    `vreact explain src/<file>.tsx` to see them. `proofs/Base.lean` (no imports of
    generated code) is visible to every module.
 

@@ -1,6 +1,6 @@
 import ts from "typescript";
 import { TypeRegistry, type VType, type Param, type Field, type TypeEnv } from "./types.ts";
-import { relLoc, nodeText } from "./util.ts";
+import { relLoc, nodeText, subscripted } from "./util.ts";
 
 /** A translated Lean term together with its VTS type. */
 export interface Val {
@@ -179,9 +179,10 @@ export class ModCtx {
   get reg() {
     return this.prog.reg;
   }
+  /** A fresh hypothesis name (subscripted: never a VTS identifier's Lean name, see util.ts). */
   fresh(base: string): string {
     this.hyp++;
-    return `${base}_${this.hyp}`;
+    return subscripted(base, this.hyp);
   }
   /** Emit a proof obligation discharged by `vreact_auto`, tagged with a source marker;
    * `vreact_ob` gives it its own heartbeat budget (VReact/Budget.lean). */
@@ -214,7 +215,9 @@ export function bind(env: Env, sym: ts.Symbol, b: Binding): Env {
 export function freshLocal(env: Env, base: string): { env: Env; name: string } {
   let name = base;
   let i = 1;
-  while (env.scope.has(name)) name = `${base}_${i++}`;
+  // a «quoted» name takes its suffix inside the quotes
+  const suffixed = (k: number) => (base.endsWith("»") ? `${base.slice(0, -1)}_${k}»` : `${base}_${k}`);
+  while (env.scope.has(name)) name = suffixed(i++);
   const scope = new Set(env.scope);
   scope.add(name);
   return { env: { ...env, scope }, name };

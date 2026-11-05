@@ -91,6 +91,145 @@ function stripParens(e: ts.Expression): ts.Expression {
   return e;
 }
 
+/** A conditional expression with a `null`/`undefined` leaf (`c ? x : null`, `c ? x : d ? y : null`). */
+function hasNullLeaf(e: ts.Expression): boolean {
+  e = stripParens(e);
+  if (isNullLit(e)) return true;
+  return ts.isConditionalExpression(e) && (hasNullLeaf(e.whenTrue) || hasNullLeaf(e.whenFalse));
+}
+
+/** The type of some non-null leaf of a conditional (typed in its narrowed environment, nothing emitted). */
+function nonNullLeafType(e: ts.Expression, env: Env): VType | undefined {
+  e = stripParens(e);
+  if (isNullLit(e)) return undefined;
+  if (ts.isConditionalExpression(e) && hasNullLeaf(e)) {
+    let ot: VType | undefined;
+    const c = e;
+    const dry = { ...env, m: dryCtx(env.m) };
+    branch(c.condition, dry, (e1) => {
+      ot = ot ?? nonNullLeafType(c.whenTrue, e1);
+      return "_";
+    }, (e2) => {
+      ot = ot ?? nonNullLeafType(c.whenFalse, e2);
+      return "_";
+    });
+    return ot;
+  }
+  return typeOf(e, env);
+}
+
+/**
+ * The TypeScript type of an expression (the source of truth for which nullish value,
+ * `null` or `undefined`, an optional value can be: VTS represents both as `none`).
+ * `ensures((r) => …)` types its parameter `any`; the function's declared return type is used
+ * instead.  `null` when unknown.
+ */
+function tsTypeOf(e: ts.Expression, env: Env): ts.Type | null {
+  const ck = env.m.checker;
+  e = stripParens(e);
+  const t = ck.getTypeAtLocation(e);
+  if (!(t.flags & ts.TypeFlags.Any)) return t;
+  if (ts.isIdentifier(e)) {
+    const d = symbolOf(env, e)?.valueDeclaration;
+    if (d && ts.isParameter(d) && !d.type && (ts.isArrowFunction(d.parent) || ts.isFunctionExpression(d.parent))) {
+      const call = d.parent.parent;
+      if (ts.isCallExpression(call) && specFn(env, call.expression) === "ensures") {
+        let f: ts.Node | undefined = call;
+        while (f && !ts.isFunctionDeclaration(f)) f = f.parent;
+        const rt = f && (f as ts.FunctionDeclaration).type;
+        if (rt) return ck.getTypeFromTypeNode(rt);
+      }
+    }
+    return null;
+  }
+  if (ts.isPropertyAccessExpression(e) && !e.questionDotToken) {
+    const base = tsTypeOf(e.expression, env);
+    if (!base) return null;
+    const p = ck.getPropertyOfType(ck.getNonNullableType(base), e.name.text);
+    return p ? ck.getTypeOfSymbolAtLocation(p, e) : null;
+  }
+  return null;
+}
+
+/** Which nullish values (`null`, `undefined`) a TypeScript type admits. */
+function kindsOfType(t: ts.Type): { null: boolean; undef: boolean } {
+  const parts = t.isUnion() ? t.types : [t];
+  return {
+    null: parts.some((p) => (p.flags & ts.TypeFlags.Null) !== 0),
+    undef: parts.some((p) => (p.flags & (ts.TypeFlags.Undefined | ts.TypeFlags.Void)) !== 0),
+  };
+}
+
+function nullishKinds(e: ts.Expression, env: Env): { null: boolean; undef: boolean } | null {
+  const t = tsTypeOf(e, env);
+  return t ? kindsOfType(t) : null;
+}
+
+/**
+ * `x === null` / `x === undefined` (strict) must test the nullish value `x` can actually
+ * hold: JS `undefined === null` is false.  `== null` / `!= null` cover both.
+ */
+function checkStrictNullTest(node: ts.Node, other: ts.Expression, lit: ts.Expression, op: ts.SyntaxKind, env: Env) {
+  if (op === ts.SyntaxKind.EqualsEqualsToken || op === ts.SyntaxKind.ExclamationEqualsToken) return;
+  const what = nodeText(other, 40);
+  const litText = lit.kind === ts.SyntaxKind.NullKeyword ? "null" : "undefined";
+  const k = nullishKinds(other, env);
+  if (!k) fail(node, `cannot tell whether \`${what}\` may be null or undefined (its TypeScript type is any): annotate it (e.g. ensures((r: T | null) => …)) or compare with == null`);
+  if (k.null && k.undef) fail(node, `\`${what}\` may be null or undefined, which VTS does not distinguish: compare with == null / != null`);
+  if (litText === "null" && k.undef && !k.null) {
+    fail(node, `\`${what}\` can be undefined but never null (optional fields, find(), at() and ?. give undefined), so \`=== null\` is always false in JS: write === undefined or == null`);
+  }
+  if (litText === "undefined" && k.null && !k.undef) {
+    fail(node, `\`${what}\` can be null but never undefined, so \`=== undefined\` is always false in JS: write === null or == null`);
+  }
+}
+
+/** `a === b` on two possibly-nullish values: both must use the same nullish value (null !== undefined). */
+function checkOptionalEquality(node: ts.Node, a: ts.Expression, b: ts.Expression, env: Env) {
+  const ka = nullishKinds(a, env);
+  const kb = nullishKinds(b, env);
+  if (!ka || !kb) fail(node, `cannot tell whether the operands may be null or undefined (TypeScript type any): annotate them`);
+  const any = (k: { null: boolean; undef: boolean }) => k.null || k.undef;
+  if (!any(ka) || !any(kb)) return;
+  if ((ka.null && ka.undef) || (kb.null && kb.undef) || ka.null !== kb.null) {
+    fail(node, `\`${nodeText(node, 50)}\` compares values that may be null and undefined (null !== undefined in JS, but VTS represents both as absent): narrow with != null first`);
+  }
+}
+
+/** Values JS compares by value (`===`, SameValueZero in includes/indexOf/Set): booleans, ints, strings, enums. */
+function isPrimitiveEq(t: VType): boolean {
+  if (t.k === "opt") return isPrimitiveEq(t.elem);
+  return t.k === "bool" || t.k === "int" || t.k === "str" || t.k === "enum";
+}
+
+/** Element comparisons of `includes`/`indexOf`/`distinct` are by value only for primitive elements. */
+function checkPrimitiveElems(node: ts.Node, arr: ts.Expression, elem: VType, what: string, env: Env) {
+  if (elem.k === "num") fail(node, `${what} on number elements is not supported (JS compares with SameValueZero/===, NaN and -0 differ from Lean's Float equality); use ints`);
+  if (!isPrimitiveEq(elem)) {
+    fail(node, `${what} on ${showType(elem)} elements compares object identity in JS (a copy is never found): compare keys instead, e.g. xs.some((x) => x.id === v.id)`);
+  }
+  if (elem.k === "opt") {
+    const t = tsTypeOf(arr, env);
+    const et = t ? env.m.checker.getIndexTypeOfType(t, ts.IndexKind.Number) : undefined;
+    const k = et ? kindsOfType(et) : null;
+    if (!k || (k.null && k.undef)) fail(node, `${what} on elements that may be null or undefined is not supported (VTS does not distinguish them)`);
+  }
+}
+
+/** `distinct(xs, key)` compares keys with SameValueZero (a JS Set): keys must be ints or strings. */
+function checkDistinctKey(node: ts.Node, t: VType) {
+  if (t.k !== "int" && t.k !== "str" && t.k !== "enum") fail(node, `distinct keys must be int or string (got ${showType(t)})`);
+}
+
+/** Exact arity of a modelled library call (extra arguments would be silently ignored otherwise). */
+function arity(c: ts.CallExpression, what: string, min: number, max: number, hint = "") {
+  const n = c.arguments.length;
+  if (n < min || n > max) {
+    const want = min === max ? `${min}` : `${min}–${max}`;
+    fail(c, `${what} takes ${want} argument${max === 1 ? "" : "s"} in VTS, got ${n}${hint ? ` (${hint})` : ""}`);
+  }
+}
+
 function isIntLike(t: VType) {
   return t.k === "int";
 }
@@ -128,6 +267,7 @@ function expr0(e: ts.Expression, env: Env, expected?: VType): Val {
     case ts.SyntaxKind.ParenthesizedExpression:
       return expr((e as ts.ParenthesizedExpression).expression, env, expected);
     case ts.SyntaxKind.NumericLiteral: {
+      // literals are always type-ascribed: a bare Lean numeral defaults to Nat (truncated subtraction)
       const text = (e as ts.NumericLiteral).text;
       if (expected?.k === "num" || /[.eE]/.test(text)) return { code: `(${text} : Float)`, type: T.num };
       return { code: leanInt(BigInt(text)), type: T.int };
@@ -149,7 +289,7 @@ function expr0(e: ts.Expression, env: Env, expected?: VType): Val {
       return { code: "false", type: T.bool };
     case ts.SyntaxKind.NullKeyword:
       if (!expected || expected.k !== "opt") fail(e, "null needs an expected type T | null");
-      return { code: "none", type: expected };
+      return { code: `(none : ${leanType(expected)})`, type: expected };
     case ts.SyntaxKind.Identifier:
       return identifier(e as ts.Identifier, env, expected);
     case ts.SyntaxKind.PropertyAccessExpression:
@@ -165,17 +305,10 @@ function expr0(e: ts.Expression, env: Env, expected?: VType): Val {
     case ts.SyntaxKind.ConditionalExpression: {
       const c = e as ts.ConditionalExpression;
       let ty: VType | undefined = expected;
-      if (!ty && (isNullLit(stripParens(c.whenTrue)) || isNullLit(stripParens(c.whenFalse)))) {
-        // type the non-null branch in its (narrowed) environment, without emitting anything
-        let ot: VType | undefined;
-        const dry = { ...env, m: dryCtx(env.m) };
-        branch(c.condition, dry, (e1) => {
-          if (!isNullLit(stripParens(c.whenTrue))) ot = typeOf(c.whenTrue, e1);
-          return "_";
-        }, (e2) => {
-          if (!isNullLit(stripParens(c.whenFalse))) ot = typeOf(c.whenFalse, e2);
-          return "_";
-        });
+      if (!ty && hasNullLeaf(c)) {
+        // `c ? x : null` (also nested: `c ? x : d ? y : null`): type a non-null leaf in its
+        // (narrowed) environment, without emitting anything
+        const ot = nonNullLeafType(c, env);
         if (ot) ty = ot.k === "opt" ? ot : T.opt(ot);
       }
       const code = branch(c.condition, env, (e1) => {
@@ -210,6 +343,7 @@ function expr0(e: ts.Expression, env: Env, expected?: VType): Val {
     }
     case ts.SyntaxKind.NonNullExpression: {
       const inner = expr((e as ts.NonNullExpression).expression, env);
+      if (inner.type.k !== "opt" && isPresentValue(inner.type)) return inner; // present (e.g. narrowed)
       if (inner.type.k !== "opt") fail(e, "`!` applied to a non-optional value");
       const ob = m.ob(e, "non-null", `\`${nodeText(e)}\` is not null/undefined`);
       return { code: `(Option.get ${paren(inner.code)} ${ob})`, type: inner.type.elem };
@@ -244,7 +378,7 @@ function toStr(v: Val, node: ts.Node): string {
 function identifier(id: ts.Identifier, env: Env, expected?: VType, symOverride?: ts.Symbol): Val {
   if (id.text === "undefined") {
     if (!expected || expected.k !== "opt") fail(id, "undefined needs an expected type T | undefined");
-    return { code: "none", type: expected };
+    return { code: `(none : ${leanType(expected)})`, type: expected };
   }
   const s = symOverride ?? symbolOf(env, id);
   const b = s ? env.vars.get(s) : undefined;
@@ -290,6 +424,7 @@ function propertyAccess(pa: ts.PropertyAccessExpression, env: Env): Val {
   // optional chaining x?.f
   if (pa.questionDotToken) {
     const base = expr(pa.expression, env);
+    if (base.type.k !== "opt" && isPresentValue(base.type)) return fieldOf(base, name, pa, env); // present (e.g. narrowed)
     if (base.type.k !== "opt") fail(pa, "?. on a non-optional value");
     const { name: v } = freshLocal(env, "v");
     const inner = fieldOf({ code: v, type: base.type.elem }, name, pa, env);
@@ -375,6 +510,12 @@ function elementAccess(ea: ts.ElementAccessExpression, env: Env): Val {
   return { code: `(VReact.JS.get ${paren(base.code)} ${paren(idx.code)} ${ob})`, type: base.type.elem };
 }
 
+/** The numeric part of an expected type (`int | null` → `int`), passed to operands of arithmetic. */
+function numericExpected(expected?: VType): VType | undefined {
+  const t = expected?.k === "opt" ? expected.elem : expected;
+  return t && isNumeric(t) ? t : undefined;
+}
+
 function prefix(p: ts.PrefixUnaryExpression, env: Env, expected?: VType): Val {
   switch (p.operator) {
     case ts.SyntaxKind.ExclamationToken: {
@@ -383,15 +524,19 @@ function prefix(p: ts.PrefixUnaryExpression, env: Env, expected?: VType): Val {
     }
     case ts.SyntaxKind.MinusToken: {
       if (ts.isNumericLiteral(p.operand)) {
-        const v = expr(p.operand, env, expected);
-        return { code: v.type.k === "int" ? `(-${v.code})` : `(-${v.code})`, type: v.type };
+        const v = expr(p.operand, env, numericExpected(expected));
+        return { code: v.type.k === "int" ? leanInt(-BigInt(p.operand.text)) : `(-${v.code})`, type: v.type };
       }
-      const v = expr(p.operand, env);
+      const v = expr(p.operand, env, numericExpected(expected));
       if (!isNumeric(v.type)) fail(p, "unary minus on a non-number");
       return { code: `(-${paren(v.code)})`, type: v.type };
     }
-    case ts.SyntaxKind.PlusToken:
-      return expr(p.operand, env, expected);
+    case ts.SyntaxKind.PlusToken: {
+      // `+x` is ToNumber(x): the identity on numbers only (`+"5"` is 5, `+true` is 1)
+      const v = expr(p.operand, env, numericExpected(expected));
+      if (!isNumeric(v.type)) fail(p, `unary + converts a ${showType(v.type)} to a number (ToNumber), which VTS does not model: only use it on numbers`);
+      return v;
+    }
     default:
       fail(p, "++/-- are only allowed as statements on local `let` variables");
   }
@@ -425,8 +570,20 @@ function binary(b: ts.BinaryExpression, env: Env, expected?: VType): Val {
   }
   if (op === K.QuestionQuestionToken) {
     const l = expr(b.left, env);
+    if (l.type.k !== "opt" && isPresentValue(l.type)) return l; // present (e.g. narrowed): the fallback is not evaluated
     if (l.type.k !== "opt") fail(b, "?? on a non-optional value");
     if (isNullLit(stripParens(b.right))) return l;
+    // an optional fallback (`a ?? b ?? 0` is `(a ?? b) ?? 0`): the first present value
+    let rt: VType | null = null;
+    try {
+      rt = typeOf(b.right, env);
+    } catch {
+      rt = null;
+    }
+    if (rt && rt.k === "opt" && sameType(rt, l.type)) {
+      const r = expr(b.right, env, l.type);
+      return { code: `(Option.or ${paren(l.code)} ${paren(r.code)})`, type: l.type };
+    }
     const r = expr(b.right, env, l.type.elem);
     return { code: `(Option.getD ${paren(l.code)} ${paren(r.code)})`, type: l.type.elem };
   }
@@ -434,25 +591,13 @@ function binary(b: ts.BinaryExpression, env: Env, expected?: VType): Val {
     fail(b, "assignments are statements in VTS (and only to local `let` variables)");
   }
   if (isEqOp(op) || isNeqOp(op)) {
-    if (op === K.EqualsEqualsToken || op === K.ExclamationEqualsToken) {
-      if (!isNullLit(b.left) && !isNullLit(b.right)) fail(b, "use === / !== (loose equality is only allowed against null)");
-    }
     const neg = isNeqOp(op);
-    if (isNullLit(b.right) || isNullLit(b.left)) {
-      const other = isNullLit(b.right) ? b.left : b.right;
-      const v = expr(other, env);
-      if (v.type.k !== "opt") fail(b, "comparison with null/undefined of a non-optional value");
-      return { code: neg ? `(Option.isSome ${paren(v.code)})` : `(Option.isNone ${paren(v.code)})`, type: T.bool };
+    const nt = nullTest(b, env);
+    if (nt) {
+      if (nt.isNull !== null) return { code: nt.isNull !== neg ? "true" : "false", type: T.bool };
+      return { code: neg ? `(Option.isSome ${paren(nt.v.code)})` : `(Option.isNone ${paren(nt.v.code)})`, type: T.bool };
     }
-    let l = expr(b.left, env);
-    let r = expr(b.right, env, l.type.k === "enum" || l.type.k === "opt" ? l.type : undefined);
-    if (l.type.k === "str" && r.type.k === "enum") l = expr(b.left, env, r.type);
-    if (l.type.k === "int" && r.type.k === "num") l = coerce(l, T.num, b, env);
-    if (r.type.k === "int" && l.type.k === "num") r = coerce(r, T.num, b, env);
-    if (!sameType(l.type, r.type)) fail(b, `comparing ${showType(l.type)} with ${showType(r.type)}`);
-    if (["rec", "arr", "union", "tuple"].includes(l.type.k)) {
-      fail(b, `=== on ${showType(l.type)} compares object identity in JS; compare keys/fields instead`);
-    }
+    const { l, r } = eqOperands(b, env);
     const eq = l.type.k === "num" ? `(${paren(l.code)} == ${paren(r.code)})` : `(VReact.JS.eq ${paren(l.code)} ${paren(r.code)})`;
     return { code: neg ? `(!${eq})` : eq, type: T.bool };
   }
@@ -473,17 +618,19 @@ function binary(b: ts.BinaryExpression, env: Env, expected?: VType): Val {
     const [a, bb] = fn[1] ? [r.code, l.code] : [l.code, r.code];
     return { code: `(VReact.JS.${fn[0]} ${paren(a)} ${paren(bb)})`, type: T.bool };
   }
+  // arithmetic is computed at the numeric type; an optional expected type (`int | null`)
+  // applies to the result only (expr() wraps it in `some`)
   if (op === K.PlusToken) {
-    const l = expr(b.left, env, expected?.k === "str" ? undefined : expected);
-    const r = expr(b.right, env, l.type.k === "str" ? undefined : l.type);
+    const l = expr(b.left, env, numericExpected(expected));
+    const r = expr(b.right, env, isNumeric(l.type) ? l.type : undefined);
     if (l.type.k === "str" || r.type.k === "str") {
       return { code: `(${toStr(l, b.left)} ++ ${toStr(r, b.right)})`, type: T.str };
     }
     return arith("+", l, r, b, env);
   }
   if (op === K.MinusToken || op === K.AsteriskToken) {
-    const l = expr(b.left, env, expected);
-    const r = expr(b.right, env, l.type);
+    const l = expr(b.left, env, numericExpected(expected));
+    const r = expr(b.right, env, isNumeric(l.type) ? l.type : undefined);
     return arith(op === K.MinusToken ? "-" : "*", l, r, b, env);
   }
   if (op === K.SlashToken) {
@@ -501,6 +648,56 @@ function binary(b: ts.BinaryExpression, env: Env, expected?: VType): Val {
     return { code: `(VReact.JS.rem ${paren(l.code)} ${paren(r.code)} ${ob})`, type: T.int };
   }
   fail(b, `operator ${b.operatorToken.getText()} not supported in VTS`);
+}
+
+/**
+ * A comparison with `null`/`undefined` (`x === null`, `x != undefined`, …): the tested optional
+ * value, or `isNull` statically known (a narrowed path is not null).  `null` if not such a test.
+ */
+function nullTest(b: ts.BinaryExpression, env: Env): { v: Val; isNull: boolean | null } | null {
+  const K = ts.SyntaxKind;
+  const op = b.operatorToken.kind;
+  if (op === K.EqualsEqualsToken || op === K.ExclamationEqualsToken) {
+    if (!isNullLit(b.left) && !isNullLit(b.right)) fail(b, "use === / !== (loose equality is only allowed against null)");
+  }
+  if (!isNullLit(b.right) && !isNullLit(b.left)) return null;
+  const lit = isNullLit(b.right) ? b.right : b.left;
+  const other = isNullLit(b.right) ? b.left : b.right;
+  const v = expr(other, env);
+  if (v.type.k !== "opt") {
+    // a present value (e.g. narrowed on this path) is never null/undefined
+    if (isPresentValue(v.type)) return { v, isNull: false };
+    fail(b, "comparison with null/undefined of a non-optional value");
+  }
+  checkStrictNullTest(b, other, lit, op, env);
+  return { v, isNull: null };
+}
+
+/** VTS types whose JS values are never null or undefined (all but options and void). */
+function isPresentValue(t: VType): boolean {
+  return ["bool", "int", "num", "str", "enum", "rec", "union", "arr", "tuple"].includes(t.k);
+}
+
+/** The two operands of `===` / `!==` (not against null), at a common type JS compares by value. */
+function eqOperands(b: ts.BinaryExpression, env: Env): { l: Val; r: Val } {
+  let l = expr(b.left, env);
+  let r = expr(b.right, env, l.type.k === "enum" || l.type.k === "opt" ? l.type : undefined);
+  if (l.type.k === "str" && r.type.k === "enum") l = expr(b.left, env, r.type);
+  // `x.id === sel` with `sel: int | null`: compare as options (as for `sel === x.id`)
+  if (r.type.k === "opt" && l.type.k !== "opt") {
+    l = l.type.k === "str" && r.type.elem.k === "enum" ? expr(b.left, env, r.type) : coerce(l, r.type, b, env);
+  }
+  if (l.type.k === "int" && r.type.k === "num") l = coerce(l, T.num, b, env);
+  if (r.type.k === "int" && l.type.k === "num") r = coerce(r, T.num, b, env);
+  if (!sameType(l.type, r.type)) fail(b, `comparing ${showType(l.type)} with ${showType(r.type)}`);
+  if (l.type.k !== "num" && !isPrimitiveEq(l.type)) {
+    const t = l.type.k === "opt" ? l.type.elem : l.type;
+    if (["rec", "arr", "union", "tuple"].includes(t.k)) fail(b, `=== on ${showType(l.type)} compares object identity in JS; compare keys/fields instead`);
+    if (t.k === "num") fail(b, `=== on ${showType(l.type)} is not supported: narrow with !== null first, then compare the numbers`);
+    fail(b, `=== is not supported on ${showType(l.type)}`);
+  }
+  if (l.type.k === "opt") checkOptionalEquality(b, b.left, b.right, env);
+  return { l, r };
 }
 
 function arith(op: string, l: Val, r: Val, node: ts.Node, env: Env): Val {
@@ -613,7 +810,8 @@ function arrayLiteral(a: ts.ArrayLiteralExpression, env: Env, expected?: VType):
   flush();
   if (!elemT) fail(a, "empty array literal needs a known element type (annotate it)");
   const code = pieces.length === 0 ? "[]" : pieces.length === 1 ? pieces[0] : `(${pieces.join(" ++ ")})`;
-  return { code: pieces.length === 0 ? `([] : List ${leanType(elemT)})` : code, type: T.arr(elemT) };
+  // ascribed, so that Lean never re-infers the element type (e.g. a fold over a literal)
+  return { code: `(${code} : List ${leanType(elemT)})`, type: T.arr(elemT) };
 }
 
 /* ───────────────────────────── calls ───────────────────────────── */
@@ -632,11 +830,17 @@ export function lambda(
   fn.parameters.forEach((p, i) => {
     const t = paramTypes[i];
     if (!t) fail(p, "unexpected extra lambda parameter");
+    if (p.dotDotDotToken || p.initializer || p.questionToken) fail(p, "rest, default and optional lambda parameters are not supported");
     const r = bindParam(p.name, t, e2);
     e2 = r.env;
     binders.push(r.binder);
     typed.push(`(${r.binder} : ${leanType(t)})`);
   });
+  // JS passes every argument; a callback declaring fewer parameters ignores the rest
+  for (let i = fn.parameters.length; i < paramTypes.length; i++) {
+    binders.push("_");
+    typed.push(`(_ : ${leanType(paramTypes[i])})`);
+  }
   const before = env.m.obCount();
   const body = ts.isBlock(fn.body) ? valueBlock(fn.body.statements, e2, expectedRet, fn) : expr(fn.body, e2, expectedRet);
   return { binders, typed, body, obligations: env.m.obCount() > before, env: e2 };
@@ -786,15 +990,21 @@ function arrayMethod(name: string, xs: Val, c: ts.CallExpression, env: Env, expe
     const lam = lambda(args0, env, paramTypes, ret);
     return lam;
   };
+  // every modelled method has an exact arity: optional JS arguments that are not modelled
+  // (thisArg, fromIndex, …) are rejected rather than ignored
+  const callbackArity = () => arity(c, name, 1, 1, "a thisArg argument is not supported");
   switch (name) {
     case "map": {
+      callbackArity();
       const fn = args[0];
       if (!ts.isArrowFunction(fn) && !ts.isFunctionExpression(fn)) fail(fn, "map needs an inline arrow function");
       if (fn.parameters.length === 2) {
         const lam = lambda(fn, env, [elem, T.int], expected?.k === "arr" ? expected.elem : undefined);
         if (lam.obligations) fail(fn, "map with an index parameter cannot contain proof obligations; precompute with a helper");
         const [x, i] = lam.binders;
-        return { code: `(${X}.zipIdx.map (fun (${x}, ${i}0) => let ${i} : Int := ${i}0; ${lam.body.code}))`, type: T.arr(lam.body.type) };
+        // the Nat index is bound to a subscripted name (never a VTS identifier), then as the Int `i`
+        const k = "idx₀";
+        return { code: `(${X}.zipIdx.map (fun (${x}, ${k}) => let ${i} : Int := ${k}; ${lam.body.code}))`, type: T.arr(lam.body.type) };
       }
       const lam = withAttach(fn, [elem], expected?.k === "arr" ? expected.elem : undefined);
       if (lam.obligations) {
@@ -807,6 +1017,8 @@ function arrayMethod(name: string, xs: Val, c: ts.CallExpression, env: Env, expe
     case "some":
     case "every":
     case "find": {
+      callbackArity();
+      if (name === "find" && elem.k === "opt") fail(c, "find on an array of optional values is not supported (a found null and \"not found\" (undefined) would be conflated)");
       const lam = withAttach(args[0], [elem], T.bool);
       const lean = { filter: "filter", some: "any", every: "all", find: "find?" }[name];
       const rt = name === "filter" ? xs.type : name === "find" ? T.opt(elem) : T.bool;
@@ -820,28 +1032,36 @@ function arrayMethod(name: string, xs: Val, c: ts.CallExpression, env: Env, expe
       return { code: `(${X}.${lean} ${lamCode(lam.typed, lam.body.code)})`, type: rt };
     }
     case "findIndex": {
+      callbackArity();
       const lam = lambda(args[0], env, [elem], T.bool);
       if (lam.obligations) fail(args[0], "findIndex predicates cannot contain proof obligations");
       return { code: `(VReact.JS.findIndex ${X} ${lamCode(lam.typed, lam.body.code)})`, type: T.int };
     }
     case "includes": {
+      arity(c, "includes", 1, 1, "a fromIndex is not supported: write xs.slice(k).includes(v)");
+      checkPrimitiveElems(c, (c.expression as ts.PropertyAccessExpression).expression, elem, "includes", env);
       const v = expr(args[0], env, elem);
       return { code: `(${X}.contains ${paren(v.code)})`, type: T.bool };
     }
     case "indexOf": {
+      arity(c, "indexOf", 1, 1, "a fromIndex is not supported");
+      checkPrimitiveElems(c, (c.expression as ts.PropertyAccessExpression).expression, elem, "indexOf", env);
       const v = expr(args[0], env, elem);
       return { code: `(VReact.JS.indexOf ${X} ${paren(v.code)})`, type: T.int };
     }
     case "slice": {
-      const a = args[0] ? expr(args[0], env, T.int).code : "0";
+      arity(c, "slice", 0, 2);
+      const a = args[0] ? expr(args[0], env, T.int).code : leanInt(0);
       const b = args[1] ? ` (some ${paren(expr(args[1], env, T.int).code)})` : "";
       return { code: `(VReact.JS.slice ${X} ${paren(a)}${b})`, type: xs.type };
     }
     case "concat": {
+      // (every argument must be an array of the same type: JS would append a non-array as an element)
       const parts = args.map((a) => paren(expr(a, env, xs.type).code));
       return { code: `(${[X, ...parts].join(" ++ ")})`, type: xs.type };
     }
     case "join": {
+      arity(c, "join", 0, 1);
       if (elem.k !== "str") fail(c, "join is supported on string arrays (map to strings first)");
       const sep = args[0] ? expr(args[0], env, T.str).code : jsStr(",");
       return { code: `(VReact.JS.join ${X} ${paren(sep)})`, type: T.str };
@@ -855,24 +1075,30 @@ function arrayMethod(name: string, xs: Val, c: ts.CallExpression, env: Env, expe
     }
     case "toSorted": {
       if (!args[0]) fail(c, "toSorted needs a comparator (a, b) => number");
+      arity(c, "toSorted", 1, 1);
       const lam = lambda(args[0], env, [elem, elem], T.int);
       if (lam.obligations) fail(args[0], "comparators cannot contain proof obligations");
       if (lam.body.type.k !== "int") fail(args[0], "comparator must return an int");
       return { code: `(VReact.JS.toSorted ${X} ${lamCode(lam.typed, lam.body.code)})`, type: xs.type };
     }
     case "toReversed":
+      arity(c, "toReversed", 0, 0);
       return { code: `(${X}.reverse)`, type: xs.type };
     case "with": {
+      arity(c, "with", 2, 2);
       const i = expr(args[0], env, T.int);
       const v = expr(args[1], env, elem);
       const ob = m.ob(c, "index", `index ${nodeText(args[0])} is within bounds for .with`);
       return { code: `(VReact.JS.withAt ${X} ${paren(i.code)} ${paren(v.code)} ${ob})`, type: xs.type };
     }
     case "at": {
+      arity(c, "at", 1, 1);
+      if (elem.k === "opt") fail(c, "at on an array of optional values is not supported (a null element and \"out of range\" (undefined) would be conflated)");
       const i = expr(args[0], env, T.int);
       return { code: `(VReact.JS.atOpt ${X} ${paren(i.code)})`, type: T.opt(elem) };
     }
     case "flatMap": {
+      callbackArity();
       const lam = lambda(args[0], env, [elem], expected);
       if (lam.obligations) fail(args[0], "flatMap callbacks cannot contain proof obligations");
       if (lam.body.type.k !== "arr") fail(args[0], "flatMap callback must return an array");
@@ -898,23 +1124,31 @@ function stringMethod(name: string, s: Val, c: ts.CallExpression, env: Env): Val
   const S = paren(s.code);
   switch (name) {
     case "trim":
+      arity(c, "trim", 0, 0);
       return { code: `(VReact.JS.trim ${S})`, type: T.str };
     case "toLowerCase":
+      arity(c, "toLowerCase", 0, 0);
       return { code: `(VReact.JS.toLowerCase ${S})`, type: T.str };
     case "toUpperCase":
+      arity(c, "toUpperCase", 0, 0);
       return { code: `(VReact.JS.toUpperCase ${S})`, type: T.str };
     case "includes":
+      arity(c, "includes", 1, 1, "a position is not supported: for p >= 0 write s.slice(p).includes(t)");
       return { code: `(VReact.JS.strIncludes ${S} ${paren(expr(args[0], env, T.str).code)})`, type: T.bool };
     case "startsWith":
+      arity(c, "startsWith", 1, 1, "a position is not supported: for p >= 0 write s.slice(p).startsWith(t)");
       return { code: `(VReact.JS.startsWith ${S} ${paren(expr(args[0], env, T.str).code)})`, type: T.bool };
     case "endsWith":
+      arity(c, "endsWith", 1, 1, "an end position is not supported: for e >= 0 write s.slice(0, e).endsWith(t)");
       return { code: `(VReact.JS.endsWith ${S} ${paren(expr(args[0], env, T.str).code)})`, type: T.bool };
     case "slice": {
-      const a = args[0] ? expr(args[0], env, T.int).code : "0";
+      arity(c, "slice", 0, 2);
+      const a = args[0] ? expr(args[0], env, T.int).code : leanInt(0);
       const b = args[1] ? ` (some ${paren(expr(args[1], env, T.int).code)})` : "";
       return { code: `(VReact.JS.strSlice ${S} ${paren(a)}${b})`, type: T.str };
     }
     case "repeat": {
+      arity(c, "repeat", 1, 1);
       const n = expr(args[0], env, T.int);
       const ob = env.m.ob(c, "precondition", `repeat count ${nodeText(args[0])} is non-negative`);
       return { code: `(VReact.JS.strRepeat ${S} ${paren(n.code)} ${ob})`, type: T.str };
@@ -930,33 +1164,47 @@ function specCall(name: string, c: ts.CallExpression, env: Env): Val {
   switch (name) {
     case "forall":
     case "exists": {
+      arity(c, name, 3, 3);
       const lo = expr(args[0], env, T.int);
       const hi = expr(args[1], env, T.int);
       const lam = lambda(args[2], env, [T.int], T.bool);
       const op = name === "forall" ? "all" : "any";
-      return { code: `((VReact.JS.rangeFrom ${paren(lo.code)} ${paren(hi.code)}).${op} ${lamCode(lam.typed, lam.body.code)})`, type: T.bool };
+      const R = `(VReact.JS.rangeFrom ${paren(lo.code)} ${paren(hi.code)})`;
+      if (lam.obligations) {
+        // the body's obligations may use the bounds of i (membership in the range)
+        const h = env.m.fresh("hmem");
+        return { code: `(${R}.attach.${op} (fun ⟨${lam.binders[0]}, ${h}⟩ => ${lam.body.code}))`, type: T.bool };
+      }
+      return { code: `(${R}.${op} ${lamCode(lam.typed, lam.body.code)})`, type: T.bool };
     }
     case "distinct": {
+      arity(c, "distinct", 1, 2);
       const xs = expr(args[0], env);
       if (xs.type.k !== "arr") fail(c, "distinct expects an array");
       if (args[1]) {
         const lam = lambda(args[1], env, [xs.type.elem]);
+        checkDistinctKey(c, lam.body.type);
         return { code: `(VReact.JS.nodupB (${paren(xs.code)}.map ${lamCode(lam.typed, lam.body.code)}))`, type: T.bool };
       }
+      checkPrimitiveElems(c, args[0], xs.type.elem, "distinct (without a key function)", env);
       return { code: `(VReact.JS.nodupB ${paren(xs.code)})`, type: T.bool };
     }
     case "implies": {
+      // a function call: JS evaluates both arguments (in code; contracts read it as an implication)
+      arity(c, "implies", 2, 2);
       const a = expr(args[0], env, T.bool);
       const b = expr(args[1], env, T.bool);
       return { code: `((!${paren(a.code)}) || ${paren(b.code)})`, type: T.bool };
     }
     case "idiv": {
+      arity(c, "idiv", 2, 2);
       const a = expr(args[0], env, T.int);
       const b = expr(args[1], env, T.int);
       const ob = env.m.ob(c, "nonzero-divisor", `divisor ${nodeText(args[1])} is non-zero`);
       return { code: `(VReact.JS.floorDiv ${paren(a.code)} ${paren(b.code)} ${ob})`, type: T.int };
     }
     case "range": {
+      arity(c, "range", 1, 1);
       const n = expr(args[0], env, T.int);
       return { code: `(VReact.JS.range ${paren(n.code)})`, type: T.arr(T.int) };
     }
@@ -999,7 +1247,9 @@ function narrowTest(e: ts.Expression, env: Env): NarrowTest | null {
     const neg = isNeqOp(k);
     if (isNullLit(e.right) || isNullLit(e.left)) {
       const target = isNullLit(e.right) ? e.left : e.right;
-      if (!pathKey(env, target)) return null;
+      const key = pathKey(env, target);
+      if (!key) return null;
+      if (env.narrow.get(key)?.kind !== "some") checkStrictNullTest(e, target, isNullLit(e.right) ? e.right : e.left, k, env);
       return { kind: "null", target, positive: !neg };
     }
     // x.kind === "lit"
@@ -1078,8 +1328,10 @@ export function branch(c: ts.Expression, env: Env, onTrue: (e: Env) => string, o
 }
 
 function narrowBranch(nt: NarrowTest, env: Env, onTrue: (e: Env) => string, onFalse: (e: Env) => string): string {
-  const target = expr(nt.target, env);
   const key = pathKey(env, nt.target)!;
+  const target = expr(nt.target, env);
+  // a present (e.g. already narrowed) value is not null: the test is decided
+  if (nt.kind === "null" && target.type.k !== "opt" && isPresentValue(target.type)) return (nt.positive ? onFalse : onTrue)(env);
   const h = env.m.fresh("h");
   if (nt.kind === "null") {
     if (target.type.k !== "opt") fail(nt.target, "null test on a non-optional value");
@@ -1121,6 +1373,13 @@ function narrowBranch(nt: NarrowTest, env: Env, onTrue: (e: Env) => string, onFa
  * requires / invariant / ensures / callbackRequires / assert).  Connectives,
  * comparisons and quantifying array methods become logical connectives and
  * quantifiers, so that automation never sees `decide` instances in specs.
+ *
+ * Guards are in scope where JS evaluates under them: the right operand of `&&`
+ * (`||`) under a hypothesis that the left one holds (fails), the branches of
+ * `?:` and the consequent of `implies(a, b)` under the condition, a quantifier
+ * body under its bounds / membership.  When the guarded part has no proof
+ * obligations the plain connective is emitted (`∧`, `∨`, `→`: same normal forms);
+ * otherwise a named hypothesis binds the guard (`∃ (h : a), b`, `∀ (h : a), b`).
  */
 export function prop(e0: ts.Expression, env: Env): string {
   const e = stripParens(e0);
@@ -1134,25 +1393,27 @@ export function prop(e0: ts.Expression, env: Env): string {
   }
   if (ts.isBinaryExpression(e)) {
     const op = e.operatorToken.kind;
-    if (op === K.AmpersandAmpersandToken) {
-      const nt = narrowTest(e.left, env);
-      if (nt) return propNarrow(nt, env, (e1) => prop(e.right, e1), () => "False");
-      return `(${prop(e.left, env)} ∧ ${prop(e.right, env)})`;
-    }
+    if (op === K.AmpersandAmpersandToken) return propAnd(e.left, env, (e1) => prop(e.right, e1));
     if (op === K.BarBarToken) {
       const nt = narrowTest(e.left, env);
       if (nt) return propNarrow(nt, env, () => "True", (e2) => prop(e.right, e2));
-      return `(${prop(e.left, env)} ∨ ${prop(e.right, env)})`;
+      const l = prop(e.left, env);
+      const before = env.m.obCount();
+      const r = prop(e.right, env);
+      if (env.m.obCount() === before) return `(${l} ∨ ${r})`;
+      return `(${l} ∨ ∃ (${env.m.fresh("h")} : ¬${paren(l)}), ${r})`;
     }
     const nt = narrowTest(e, env);
     if (nt) return propNarrow(nt, env, () => "True", () => "False");
     if (isEqOp(op) || isNeqOp(op)) {
-      let l = expr(e.left, env);
-      let r = expr(e.right, env, l.type.k === "enum" || l.type.k === "opt" ? l.type : undefined);
-      if (l.type.k === "str" && r.type.k === "enum") l = expr(e.left, env, r.type);
-      if (l.type.k === "int" && r.type.k === "num") l = coerce(l, T.num, e, env);
-      if (r.type.k === "int" && l.type.k === "num") r = coerce(r, T.num, e, env);
-      if (["rec", "arr", "union", "tuple"].includes(l.type.k)) fail(e, `=== on ${showType(l.type)} compares object identity in JS; compare keys/fields instead`);
+      const nl = nullTest(e, env);
+      if (nl) {
+        if (nl.isNull !== null) return nl.isNull !== isNeqOp(op) ? "True" : "False";
+        return `((${isNeqOp(op) ? "Option.isSome" : "Option.isNone"} ${paren(nl.v.code)}) = true)`;
+      }
+      const { l, r } = eqOperands(e, env);
+      // number equality is IEEE (NaN !== NaN), exactly as in code; Lean's `=` would be reflexive
+      if (l.type.k === "num") return `((${paren(l.code)} == ${paren(r.code)}) = ${isNeqOp(op) ? "false" : "true"})`;
       return `(${l.code} ${isNeqOp(op) ? "≠" : "="} ${r.code})`;
     }
     const cmp: Record<number, string> = { [K.LessThanToken]: "<", [K.LessThanEqualsToken]: "≤", [K.GreaterThanToken]: ">", [K.GreaterThanEqualsToken]: "≥" };
@@ -1165,44 +1426,75 @@ export function prop(e0: ts.Expression, env: Env): string {
     }
   }
   if (ts.isConditionalExpression(e)) {
+    const nt = narrowTest(e.condition, env);
+    if (nt) return propNarrow(nt, env, (e1) => prop(e.whenTrue, e1), (e2) => prop(e.whenFalse, e2));
     const c = prop(e.condition, env);
-    return `((${c} → ${prop(e.whenTrue, env)}) ∧ (¬${paren(c)} → ${prop(e.whenFalse, env)}))`;
+    return `((∀ (${env.m.fresh("h")} : ${c}), ${prop(e.whenTrue, env)}) ∧ (∀ (${env.m.fresh("h")} : ¬${paren(c)}), ${prop(e.whenFalse, env)}))`;
   }
   if (ts.isCallExpression(e)) {
     const sf = specFn(env, e.expression);
     const args = e.arguments;
-    if (sf === "implies") return `(${prop(args[0], env)} → ${prop(args[1], env)})`;
+    if (sf === "implies") {
+      arity(e, "implies", 2, 2);
+      const nt = narrowTest(args[0], env);
+      if (nt) return propNarrow(nt, env, (e1) => prop(args[1], e1), () => "True");
+      return `(∀ (${env.m.fresh("h")} : ${prop(args[0], env)}), ${prop(args[1], env)})`;
+    }
     if (sf === "forall" || sf === "exists") {
+      arity(e, sf, 3, 3);
       const lo = expr(args[0], env, T.int);
       const hi = expr(args[1], env, T.int);
       const fn = args[2];
       if (!fn || !(ts.isArrowFunction(fn) || ts.isFunctionExpression(fn)) || fn.parameters.length !== 1) fail(e, `${sf}(lo, hi, (i) => …)`);
       const r = bindParam(fn.parameters[0].name, T.int, env);
       if (ts.isBlock(fn.body)) fail(fn.body, "quantifier body must be an expression");
+      const i = r.binder;
+      const before = env.m.obCount();
       const body = prop(fn.body, r.env);
-      return sf === "forall"
-        ? `(∀ ${r.binder} : Int, ${paren(lo.code)} ≤ ${r.binder} → ${r.binder} < ${paren(hi.code)} → ${body})`
-        : `(∃ ${r.binder} : Int, ${paren(lo.code)} ≤ ${r.binder} ∧ ${r.binder} < ${paren(hi.code)} ∧ ${body})`;
+      const guarded = env.m.obCount() > before;
+      if (sf === "forall") {
+        if (!guarded) return `(∀ ${i} : Int, ${paren(lo.code)} ≤ ${i} → ${i} < ${paren(hi.code)} → ${body})`;
+        return `(∀ ${i} : Int, ∀ (${env.m.fresh("h")} : ${paren(lo.code)} ≤ ${i}), ∀ (${env.m.fresh("h")} : ${i} < ${paren(hi.code)}), ${body})`;
+      }
+      return guarded
+        ? `(∃ ${i} : Int, ∃ (${env.m.fresh("h")} : ${paren(lo.code)} ≤ ${i} ∧ ${i} < ${paren(hi.code)}), ${body})`
+        : `(∃ ${i} : Int, ${paren(lo.code)} ≤ ${i} ∧ ${i} < ${paren(hi.code)} ∧ ${body})`;
     }
     if (sf === "distinct") {
+      arity(e, "distinct", 1, 2);
       const xs = expr(args[0], env);
       if (xs.type.k !== "arr") fail(e, "distinct expects an array");
-      if (!args[1]) return `(${paren(xs.code)}.Nodup)`;
+      if (!args[1]) {
+        checkPrimitiveElems(e, args[0], xs.type.elem, "distinct (without a key function)", env);
+        return `(${paren(xs.code)}.Nodup)`;
+      }
       const lam = lambda(args[1], env, [xs.type.elem]);
+      checkDistinctKey(e, lam.body.type);
       return `((${paren(xs.code)}.map ${lamCode(lam.typed, lam.body.code)}).Nodup)`;
     }
     if (ts.isPropertyAccessExpression(e.expression) && ["every", "some", "includes"].includes(e.expression.name.text)) {
       const xs = expr(e.expression.expression, env);
       if (xs.type.k === "arr") {
         const mname = e.expression.name.text;
-        if (mname === "includes") return `(${expr(args[0], env, xs.type.elem).code} ∈ ${paren(xs.code)})`;
+        if (mname === "includes") {
+          arity(e, "includes", 1, 1, "a fromIndex is not supported: write xs.slice(k).includes(v)");
+          checkPrimitiveElems(e, e.expression.expression, xs.type.elem, "includes", env);
+          return `(${expr(args[0], env, xs.type.elem).code} ∈ ${paren(xs.code)})`;
+        }
+        arity(e, mname, 1, 1, "a thisArg argument is not supported");
         const fn = args[0];
         if (!fn || !(ts.isArrowFunction(fn) || ts.isFunctionExpression(fn)) || fn.parameters.length !== 1 || ts.isBlock(fn.body)) {
           fail(e, `${mname}((x) => condition) with an expression body`);
         }
         const r = bindParam(fn.parameters[0].name, xs.type.elem, env);
+        const before = env.m.obCount();
         const body = prop(fn.body as ts.Expression, r.env);
-        return mname === "every" ? `(∀ ${r.binder} ∈ ${paren(xs.code)}, ${body})` : `(∃ ${r.binder} ∈ ${paren(xs.code)}, ${body})`;
+        const x = r.binder;
+        if (env.m.obCount() === before) return mname === "every" ? `(∀ ${x} ∈ ${paren(xs.code)}, ${body})` : `(∃ ${x} ∈ ${paren(xs.code)}, ${body})`;
+        const hm = env.m.fresh("hmem");
+        return mname === "every"
+          ? `(∀ ${x}, ∀ (${hm} : ${x} ∈ ${paren(xs.code)}), ${body})`
+          : `(∃ ${x}, ∃ (${hm} : ${x} ∈ ${paren(xs.code)}), ${body})`;
       }
     }
   }
@@ -1210,11 +1502,32 @@ export function prop(e0: ts.Expression, env: Env): string {
   return `(${paren(v.code)} = true)`;
 }
 
+/**
+ * `left && right` as a proposition, `right` built (by `rightK`) under the guard `left`:
+ * narrowing (`x !== null && P(x)`), or a named hypothesis when `right` has obligations.
+ */
+function propAnd(left: ts.Expression, env: Env, rightK: (e: Env) => string): string {
+  const nt = narrowTest(left, env);
+  if (nt) return propNarrow(nt, env, rightK, () => "False");
+  const l = prop(left, env);
+  const before = env.m.obCount();
+  const r = rightK(env);
+  if (env.m.obCount() === before) return `(${l} ∧ ${r})`;
+  return `(∃ (${env.m.fresh("h")} : ${l}), ${r})`;
+}
+
+/** Several conditions (`requires(a); requires(b)`) as one proposition, each guarded by the earlier ones. */
+export function propAll(es: readonly ts.Expression[], env: Env): string {
+  if (es.length === 0) return "True";
+  if (es.length === 1) return prop(es[0], env);
+  return propAnd(es[0], env, (e1) => propAll(es.slice(1), e1));
+}
+
 /** Narrowing inside propositions: `x !== null && P(x)` ↦ `match x with | some x => P x | none => False`. */
 function propNarrow(nt: NarrowTest, env: Env, onTrue: (e: Env) => string, onFalse: (e: Env) => string): string {
   const s = narrowBranch(nt, env, onTrue, onFalse);
-  // narrowBranch names the equation hypothesis `h_N : …`; drop it inside propositions
-  return s.replace(/^\(match h_\d+ : /, "(match ");
+  // narrowBranch names the equation hypothesis (`h₁ : …`); drop it inside propositions
+  return s.replace(/^\(match [^\s:]+ : /, "(match ");
 }
 
 /* ───────────────────────────── statements ───────────────────────────── */
@@ -1340,33 +1653,84 @@ function varDecls(decls: ts.NodeArray<ts.VariableDeclaration>, j: number, env: E
     const { env: e1, name: tmp } = freshLocal(env, "tmp");
     const r = bindParam(d.name, v.type, e1);
     // bindParam created its own local name; re-bind to tmp
-    return `(let ${r.binder} := ${v.code};\n${next(r.env)})`;
+    return `(let ${r.binder}${letType(v.type)} := ${v.code};\n${next(r.env)})`;
   }
   if (!ts.isIdentifier(d.name)) fail(d, "unsupported destructuring");
-  const v = expr(init, env, declT);
-  return bindLocal(d.name, v, env, next);
+  const v = declT?.k === "opt" ? exprPreferElem(init, env, declT) : expr(init, env, declT);
+  return bindLocal(d.name, v, env, next, declT);
 }
 
-function bindLocal(name: ts.BindingName, v: Val, env: Env, next: (e: Env) => string): string {
+/** ` : T` for a `let` (every local is type-ascribed, so Lean never re-infers, e.g. defaults to Nat). */
+function letType(t: VType): string {
+  try {
+    return ` : ${leanType(t)}`;
+  } catch {
+    return "";
+  }
+}
+
+/**
+ * The value of `e` for an optional declared type `T | null`: at `T` when it is certainly
+ * present (`x = 5`, `let x: int | null = 3`), so the local can be narrowed as TypeScript does.
+ */
+function exprPreferElem(e: ts.Expression, env: Env, t: VType & { k: "opt" }): Val {
+  let rt: VType | null = null;
+  try {
+    rt = typeOf(e, env, t.elem);
+  } catch {
+    rt = null;
+  }
+  return rt && sameType(rt, t.elem) ? expr(e, env, t.elem) : expr(e, env, t);
+}
+
+/**
+ * Bind a local.  A present value of an optional declared type binds the payload and narrows
+ * the local (its option value is `some payload`).
+ */
+function bindLocal(name: ts.BindingName, v: Val, env: Env, next: (e: Env) => string, declT?: VType): string {
   if (!ts.isIdentifier(name)) fail(name, "unsupported binding");
   const s = symbolOf(env, name)!;
   const { env: e1, name: ln } = freshLocal(env, leanIdent(name.text));
+  if (declT?.k === "opt" && v.type.k !== "opt" && sameType(v.type, declT.elem)) {
+    const narrow = new Map(e1.narrow);
+    narrow.set(`#${symId(s)}`, { kind: "some", code: ln, type: v.type });
+    const e2 = bind({ ...e1, narrow }, s, { k: "val", code: `(some ${ln})`, type: declT });
+    return `(let ${ln}${letType(v.type)} := ${v.code};\n${next(e2)})`;
+  }
   const e2 = bind(e1, s, { k: "val", code: ln, type: v.type });
-  return `(let ${ln} := ${v.code};\n${next(e2)})`;
+  return `(let ${ln}${letType(v.type)} := ${v.code};\n${next(e2)})`;
 }
 
-/** Re-bind a mutable local after assignment. */
-function assignLocal(target: ts.Expression, newVal: (old: Val) => Val, env: Env, next: (e: Env) => string, node: ts.Node): string {
+/** Forget what was known (narrowing) about a local and its property paths. */
+function forgetNarrowing(env: Env, s: ts.Symbol): Env {
+  const key = `#${symId(s)}`;
+  const narrow = new Map([...env.narrow].filter(([k]) => k !== key && !k.startsWith(key + ".")));
+  return { ...env, narrow };
+}
+
+/**
+ * Re-bind a mutable local after assignment.  `newVal(current, declared)`: `current` is the
+ * current value (narrowed when known present), `declared` the local's declared type.
+ */
+function assignLocal(target: ts.Expression, newVal: (old: Val, declared: VType) => Val, env: Env, next: (e: Env) => string, node: ts.Node): string {
   if (!ts.isIdentifier(target)) fail(node, "only local `let` variables can be assigned (VTS data is immutable)");
   const s = symbolOf(env, target);
   const b = s ? env.vars.get(s) : undefined;
   if (!b || b.k !== "val") fail(node, `cannot assign to ${target.text}`);
   const decl = s!.valueDeclaration;
   if (!decl || !ts.isVariableDeclaration(decl) || !(decl.parent.flags & ts.NodeFlags.Let)) fail(node, `${target.text} is not a local let variable`);
-  const v = newVal({ code: b.code, type: b.type });
+  const known = env.narrow.get(`#${symId(s!)}`);
+  const v = newVal(known?.kind === "some" ? { code: known.code, type: known.type } : { code: b.code, type: b.type }, b.type);
+  // the old narrowing no longer describes the new value
+  const { env: e1, name: ln } = freshLocal(forgetNarrowing(env, s!), leanIdent(target.text));
+  if (b.type.k === "opt" && v.type.k !== "opt" && sameType(v.type, b.type.elem)) {
+    // assignment narrowing (as in TypeScript): after `x = 5`, x is known to be present
+    const narrow = new Map(e1.narrow);
+    narrow.set(`#${symId(s!)}`, { kind: "some", code: ln, type: v.type });
+    return `(let ${ln}${letType(v.type)} := ${v.code};\n${next(bind({ ...e1, narrow }, s!, { k: "val", code: `(some ${ln})`, type: b.type }))})`;
+  }
   const c = coerce(v, b.type, node, env);
-  const { env: e1, name: ln } = freshLocal(env, leanIdent(target.text));
-  return `(let ${ln} := ${c.code};\n${next(bind(e1, s!, { k: "val", code: ln, type: b.type }))})`;
+  return `(let ${ln}${letType(b.type)} := ${c.code};\n${next(bind(e1, s!, { k: "val", code: ln, type: b.type }))})`;
 }
 
 function exprStatement(e: ts.Expression, env: Env, bc: BlockCtx, rest: (e: Env) => string): string {
@@ -1377,12 +1741,12 @@ function exprStatement(e: ts.Expression, env: Env, bc: BlockCtx, rest: (e: Env) 
     const k = e.operatorToken.kind;
     if (k === ts.SyntaxKind.EqualsToken) {
       if (ts.isPropertyAccessExpression(e.left) && e.left.getText() === "document.title") return rest(env); // external effect
-      return assignLocal(e.left, (old) => expr(e.right, env, old.type), env, rest, e);
+      return assignLocal(e.left, (_old, declared) => (declared.k === "opt" ? exprPreferElem(e.right, env, declared) : expr(e.right, env, declared)), env, rest, e);
     }
     if (k === ts.SyntaxKind.PlusEqualsToken || k === ts.SyntaxKind.MinusEqualsToken) {
       const op = k === ts.SyntaxKind.PlusEqualsToken ? "+" : "-";
       return assignLocal(e.left, (old) => {
-        const r = expr(e.right, env, old.type);
+        const r = expr(e.right, env, isNumeric(old.type) ? old.type : undefined);
         if (old.type.k === "str" && op === "+") return { code: `(${old.code} ++ ${toStr(r, e.right)})`, type: T.str };
         return arith(op, old, r, e, env);
       }, env, rest, e);
@@ -1390,7 +1754,11 @@ function exprStatement(e: ts.Expression, env: Env, bc: BlockCtx, rest: (e: Env) 
   }
   if ((ts.isPostfixUnaryExpression(e) || ts.isPrefixUnaryExpression(e)) && (e.operator === ts.SyntaxKind.PlusPlusToken || e.operator === ts.SyntaxKind.MinusMinusToken)) {
     const op = e.operator === ts.SyntaxKind.PlusPlusToken ? "+" : "-";
-    return assignLocal(e.operand, (old) => ({ code: `(${old.code} ${op} 1)`, type: old.type }), env, rest, e);
+    return assignLocal(e.operand, (old) => {
+      if (!isNumeric(old.type)) fail(e, `++/-- on ${showType(old.type)}`);
+      const one = old.type.k === "num" ? "(1 : Float)" : leanInt(1);
+      return { code: `(${old.code} ${op} ${one})`, type: old.type };
+    }, env, rest, e);
   }
   if (!ts.isCallExpression(e)) fail(e, "expression statement has no effect");
   const callee = e.expression;
@@ -1641,7 +2009,7 @@ function switchStmt(s: ts.SwitchStatement, env: Env, bc: BlockCtx, rest: (e: Env
   for (const g of [...groups].reverse()) {
     if (g.labels.length === 0) continue;
     const conds = g.labels.map((l) => {
-      const lv = dv.type.k === "enum" ? `${dv.type.name}.${leanField(l)}` : dv.type.k === "str" ? jsStr(l) : l;
+      const lv = dv.type.k === "enum" ? `${dv.type.name}.${leanField(l)}` : dv.type.k === "str" ? jsStr(l) : dv.type.k === "int" && /^[0-9]+$/.test(l) ? leanInt(BigInt(l)) : l;
       return `VReact.JS.eq ${paren(dv.code)} ${paren(lv)}`;
     });
     const h = m.fresh("h");
@@ -1685,8 +2053,9 @@ function forOf(s: ts.ForOfStatement, env: Env, bc: BlockCtx, rest: (e: Env) => s
   if (assigned.length === 0) fail(s, "loop has no effect (it assigns no local variable)");
   const accTypes = assigned.map((sym) => (env.vars.get(sym) as { type: VType }).type);
   const accCodes = assigned.map((sym) => (env.vars.get(sym) as { code: string }).code);
-  // fresh names for accumulator and element
+  // fresh names for accumulator and element (what was known about the assigned locals is forgotten)
   let e1 = env;
+  for (const sym of assigned) e1 = forgetNarrowing(e1, sym);
   const accNames: string[] = [];
   for (const sym of assigned) {
     const r = freshLocal(e1, leanIdent(sym.name));
@@ -1700,9 +2069,10 @@ function forOf(s: ts.ForOfStatement, env: Env, bc: BlockCtx, rest: (e: Env) => s
   const bodyBc: BlockCtx = { kind: "value", fnNode: s, onReturn: () => fail(s, "return inside loop") };
   const body = block(blockOf(s.statement), 0, pr.env, bodyBc, (e3) => tuple(assigned.map((sym) => (e3.vars.get(sym) as { code: string }).code)));
   const accT = accTypes.length === 1 ? leanType(accTypes[0]) : `(${accTypes.map(leanType).join(" × ")})`;
-  const fold = `(${paren(xs.code)}.foldl (fun (acc : ${accT}) ${pr.binder} => let ${tuple(accNames)} := acc; ${body}) ${tuple(accCodes)})`;
+  const fold = `(${paren(xs.code)}.foldl (fun (acc : ${accT}) (${pr.binder} : ${leanType(xs.type.elem)}) => let ${tuple(accNames)} := acc; ${body}) ${tuple(accCodes)})`;
   // rebind the assigned locals after the loop
   let e4 = env;
+  for (const sym of assigned) e4 = forgetNarrowing(e4, sym);
   const outNames: string[] = [];
   for (const sym of assigned) {
     const r = freshLocal(e4, leanIdent(sym.name));

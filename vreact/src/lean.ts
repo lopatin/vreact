@@ -258,9 +258,10 @@ export function judge(obligations: Obligation[], messages: LeanMessage[], marker
     const d = msg.line ? declAt(decls.get(rel), msg.line) : undefined;
     msg.decl = d?.name ?? null;
     if (msg.severity === "info") {
-      const am = /^'(\S+)' depends on axioms: \[([^\]]*)\]/.exec(msg.text);
+      // (Lean names may themselves contain `'`, e.g. `VTS.m.max'`)
+      const am = /^'(.+?)' depends on axioms: \[([^\]]*)\]/.exec(msg.text);
       if (am) axioms.set(am[1], am[2].split(",").map((s) => s.trim()).filter(Boolean));
-      const none = /^'(\S+)' does not depend on any axioms/.exec(msg.text);
+      const none = /^'(.+?)' does not depend on any axioms/.exec(msg.text);
       if (none) axioms.set(none[1], []);
       if (SENTINEL.test(msg.text.trim())) checkedFiles.add(rel);
       continue;

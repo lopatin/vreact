@@ -36,22 +36,45 @@ non-discriminated unions (`string | number`), `ReactNode`/`children` props.
 
 ## Expressions
 
-* Arithmetic `+ - *` on `int`; `/` produces `number`; use `idiv(a, b)` or
+* Arithmetic `+ - *` on `int` (also where `int | null` is expected: computed at
+  `int`, then wrapped); `/` produces `number`; use `idiv(a, b)` or
   `Math.floor(a / b)` for integer division (obligation: `b !== 0`); `%` (obligation).
-* Comparisons `< <= > >= === !==`. `===` on objects/arrays is rejected (identity);
-  compare keys/fields. `== null` / `!= null` allowed.
-* `&& || ! ?: ?? ?.` and template literals.
+  Unary `+` only on numbers (`+s` on a string is rejected: ToNumber is not modelled).
+* Comparisons `< <= > >= === !==`. `===` on objects/arrays (also `T | null` of
+  them) is rejected (identity); compare keys/fields. `===` on `number` is IEEE
+  (`NaN !== NaN`), in code and contracts. `== null` / `!= null` allowed.
+* `null` vs `undefined`: `x === null` / `x === undefined` must name the nullish
+  value `x`'s type actually has — optional fields `f?: T`, `find()`, `at()` and
+  `?.` give `undefined`; `T | null` gives `null`. A strict test that is always
+  false (`t.due === null` on `due?: int`), or on a value that may be either, is
+  rejected: use `== null`. Two optional values compared with `===` must use the
+  same nullish value.
+* `&& || ! ?: ?? ?.` (also `a ?? b ?? 0`) and template literals.
 * `xs[i]` (obligation: `0 <= i < xs.length`), `t[0]` on tuples, `x!` (obligation).
 * Arrays: `length map filter some every find findIndex includes indexOf slice
   concat join reduce(f, init) toSorted(cmp) toReversed with at flatMap`, spread.
-  Lambdas inline: `xs.filter((x) => x.id !== id)`.
+  Lambdas inline: `xs.filter((x) => x.id !== id)` (they may ignore parameters:
+  `xs.map(() => "")`). Exact arities: optional arguments that are not modelled
+  are rejected (`thisArg`; `includes(v, fromIndex)` → `xs.slice(k).includes(v)`;
+  `indexOf(v, fromIndex)`). `includes`, `indexOf` and `distinct(xs)` without a
+  key need primitive elements (`boolean`, `int`, `string`, enums, options of
+  them): on records/arrays/tuples JS compares identity (use `some`/a key), on
+  `number` SameValueZero. `find`/`at` on arrays of optional values are rejected
+  (a found `null` and "not found" would be conflated).
 * Strings: `length trim includes startsWith endsWith slice repeat toLowerCase
-  toUpperCase` — exact UTF-16 semantics (case mapping is opaque to proofs).
+  toUpperCase` — exact UTF-16 semantics (case mapping is opaque to proofs),
+  including literals with lone surrogates (`"\uD800"`). No position arguments:
+  `s.includes(t, p)` / `s.startsWith(t, p)` → `s.slice(p).includes(t)` (`p >= 0`),
+  `s.endsWith(t, e)` → `s.slice(0, e).endsWith(t)`.
 * `Math.max/min/abs/sign/floor/trunc/round/ceil`, `String(x)`.
+* Names: any identifier works. Ones that are Lean keywords or root names
+  (`matches`, `rec`, `show`, `max`, `List`, …) get a `'` in Lean (`VTS.m.max'`).
 * Calls to verified top-level functions (their `requires` become obligations)
   and to local helper arrows (inlined).
 * Narrowing: `x !== null`, `x.kind === "add"`, `switch (x.kind)`, early returns —
   fields of the narrowed variant become available, also inside handlers created there.
+  Assigning a present value to a `let x: T | null` (`x = 0`, `let x: int | null = 3`)
+  narrows it too; assigning again (or in a loop) forgets it.
 
 ## Statements
 
@@ -71,6 +94,13 @@ export function f(x: int, xs: readonly int[]): int {
 /** @opaque */  …   // callers see only requires/ensures
 /** @trusted */ …   // body not verified, contract assumed (reported)
 ```
+
+Several `requires` form one precondition, in order: a later one may rely on an
+earlier one (`requires(xs.length > 0); requires(xs[0] >= 0)`). Inside contracts,
+guards are in scope as JS evaluates them: the right side of `&&` / `||`, the
+branches of `?:`, the consequent of `implies(a, b)`, and quantifier bodies
+(`forall(0, xs.length, (i) => xs[i] >= 0)`, `xs.every((r) => r[0] > 0)`) may index
+under their guard.
 
 Constants: small ones are unfolded wherever used. For large data use
 

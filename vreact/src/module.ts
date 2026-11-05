@@ -16,7 +16,7 @@ import path from "node:path";
 import { Program, ModCtx, type Obligation, type FnInfo, type CompInfo, type Global, type ConstInfo } from "./ctx.ts";
 import { T, type VType, typeOfNode, typeOfDecl, emitTypeDecl, leanType } from "./types.ts";
 import { VtsError, fail, leanIdent, leanField, leanStr, paren, capitalize, nodeText } from "./util.ts";
-import { expr, prop, valueBlock, specFn, symbolOf, bindParam, typeOf } from "./translate.ts";
+import { expr, prop, propAll, valueBlock, specFn, symbolOf, bindParam, typeOf } from "./translate.ts";
 import { translateComponent, compSignature, baseEnv } from "./component.ts";
 import { leanDecls } from "./lean.ts";
 
@@ -407,7 +407,7 @@ function collect(st: ts.Statement, m: ModCtx, ns: string, res: TranslateResult) 
     if (!st.type) fail(st, "functions need a return type annotation");
     const ret = typeOfNode(st.type, prog.typeEnv, capitalize(st.name.text) + "Result");
     const hasPre = !!st.body?.statements.some((s) => isSpecCall(s, m, "requires"));
-    const info: FnInfo = { qname: `${ns}.${st.name.text}`, name: st.name.text, params, ret, hasPre, trusted, opaque: isOpaque(st), decl: st, module: ns };
+    const info: FnInfo = { qname: `${ns}.${leanIdent(st.name.text)}`, name: st.name.text, params, ret, hasPre, trusted, opaque: isOpaque(st), decl: st, module: ns };
     prog.globals.set(st, { k: "fn", info });
     return;
   }
@@ -424,7 +424,7 @@ function collect(st: ts.Statement, m: ModCtx, ns: string, res: TranslateResult) 
         else if (init.kind === ts.SyntaxKind.TrueKeyword || init.kind === ts.SyntaxKind.FalseKeyword) t = T.bool;
         else fail(d, "annotate the type of this constant");
       }
-      prog.globals.set(d, { k: "const", info: { qname: `${ns}.${d.name.text}`, type: t, decl: d, opaque: isOpaque(d) || isOpaque(st), facts: [] } });
+      prog.globals.set(d, { k: "const", info: { qname: `${ns}.${leanIdent(d.name.text)}`, type: t, decl: d, opaque: isOpaque(d) || isOpaque(st), facts: [] } });
     }
     return;
   }
@@ -512,7 +512,7 @@ function topo(decls: ts.Node[], m: ModCtx, rel: (g: Global) => boolean): ts.Node
 function translateConst(d: ts.VariableDeclaration, info: ConstInfo, m: ModCtx): string {
   const env = baseEnv(m);
   const v = expr(d.initializer!, env, info.type);
-  const short = leanIdent(info.qname.split(".").pop()!);
+  const short = leanIdent((d.name as ts.Identifier).text);
   // transparent constants are unfolded by automation; @opaque ones only through their facts
   let out = `${info.opaque ? "" : "@[vreact_simp, reducible] "}def ${short} : ${leanType(info.type)} :=\n  ${v.code}\n`;
   info.facts.forEach((f, k) => {
@@ -545,14 +545,14 @@ function translateFunction(fn: ts.FunctionDeclaration, info: FnInfo, m: ModCtx):
   const stmts = [...(fn.body?.statements ?? [])];
   const hyps: string[] = [];
   const hypNames: string[] = [];
+  const reqs: ts.Expression[] = [];
   const posts: { lam: ts.ArrowFunction | ts.FunctionExpression }[] = [];
   while (stmts.length && ts.isExpressionStatement(stmts[0]) && ts.isCallExpression(stmts[0].expression)) {
     const c = stmts[0].expression;
     const sf = specFn(env, c.expression);
     if (sf === "requires") {
-      const h = hyps.length ? `h_pre${hyps.length + 1}` : "h_pre";
-      hyps.push(`(${h} : ${prop(c.arguments[0], env)})`);
-      hypNames.push(h);
+      if (c.arguments.length !== 1) fail(c, "requires(condition)");
+      reqs.push(c.arguments[0]);
     } else if (sf === "ensures") {
       const lam = c.arguments[0];
       if (!lam || !(ts.isArrowFunction(lam) || ts.isFunctionExpression(lam)) || lam.parameters.length !== 1) fail(c, "ensures((result) => condition)");
@@ -561,6 +561,11 @@ function translateFunction(fn: ts.FunctionDeclaration, info: FnInfo, m: ModCtx):
       fail(c, "recursion is not supported yet");
     } else break;
     stmts.shift();
+  }
+  // all requires form one precondition (each guarded by the earlier ones): call sites pass one proof
+  if (reqs.length) {
+    hyps.push(`(h_pre : ${propAll(reqs, env)})`);
+    hypNames.push("h_pre");
   }
   const short = leanIdent(info.name);
   const sig = `${short} ${binders.join(" ")} ${hyps.join(" ")} : ${leanType(info.ret)}`.replace(/\s+/g, " ");
