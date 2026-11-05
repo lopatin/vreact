@@ -1,4 +1,5 @@
 import VReact.JS
+import VReact.Attr
 /-!
 # VReact.Core — a semantic model of React components
 
@@ -22,14 +23,24 @@ batching exactly — e.g. `setN(n + 1); setN(n + 1)` increments once while
 
 ## Snapshots, discrete events and robustness
 
-React flushes the updates of a *discrete* event (click, input, keydown, submit…)
-synchronously, so the next discrete event always runs a handler from the latest
-committed render, whose captured snapshot equals the current state.  A discrete
-handler therefore only has to preserve the invariant **from its snapshot**.
+React flushes the updates of a *discrete* event (click, input, keydown, submit…;
+exactly React's `DiscreteEventPriority` events) synchronously, so the next
+discrete event always runs a handler from the latest committed render, whose
+captured snapshot equals the current state.  A discrete handler therefore only
+has to preserve the invariant **from its snapshot** — unless its component has
+*deferred* updates (below).
 
-Continuous events (mousemove, scroll, …), effects and asynchronous callbacks
-(timers, subscriptions) may run while the snapshot is stale, so their outcomes
-must be **robust**: preserve the invariant from *every* state satisfying it.
+Continuous- and default-priority events (mousemove, scroll, transitionend,
+load, …), effects and asynchronous callbacks (timers, subscriptions) may run
+while the snapshot is stale, and their updates are rendered later, so their
+outcomes must be **robust**: preserve the invariant from *every* state
+satisfying it.
+
+React keeps one update queue per hook and *rebases*: a later discrete update is
+rendered first, skipping a pending lower-priority one, and is then re-applied on
+top of it.  So in a component with deferred updates (`RebaseSafe`), a discrete
+outcome must preserve the invariant from every invariant state that agrees with
+the snapshot on all fields no deferred source writes.
 
 ## Rendering
 
@@ -87,7 +98,20 @@ def continuousEvents : List String :=
    "mouseover", "pointermove", "pointerout", "pointerover", "scroll", "toggle",
    "touchmove", "wheel", "mouseenter", "mouseleave", "pointerenter", "pointerleave"]
 
-def isDiscrete (ev : String) : Bool := !(continuousEvents.contains ev)
+/-- The handler names (React prop `onX` lower-cased; `onDoubleClick` ↦ `dblclick`)
+whose native events all have React 18's `DiscreteEventPriority`
+(react-dom 18.3.1 `getEventPriority`).  A whitelist: every other event —
+continuous *and* default priority (`transitionend`, `load`, media events, …) —
+is not discrete, and its handlers must be robust. -/
+def discreteEvents : List String :=
+  ["auxclick", "cancel", "click", "close", "contextmenu", "copy", "cut", "dragend",
+   "dragstart", "drop", "input", "invalid", "keydown", "keypress", "keyup", "mousedown",
+   "mouseup", "paste", "pause", "play", "pointercancel", "pointerdown", "pointerup",
+   "ratechange", "reset", "resize", "seeked", "submit", "touchcancel", "touchend",
+   "touchstart", "volumechange", "dblclick", "focus", "blur", "change", "beforeinput",
+   "compositionstart", "compositionend", "compositionupdate"]
+
+def isDiscrete (ev : String) : Bool := discreteEvents.contains ev
 
 /-! ## Updates and outcomes -/
 
@@ -114,6 +138,28 @@ def Outcome.apply {S E : Type} (o : Outcome S E) (s : S) : S :=
 def Robust {S E : Type} (inv : S → Prop) (o : Outcome S E) : Prop :=
   ∀ s, inv s → inv (o.apply s)
 
+/-- Rebasing (React 18 lanes).  In a component with *deferred* updates (timer
+tasks, effects that set state, continuous/default-priority handlers), the hooks
+those sources write may carry pending lower-priority updates when a discrete
+event runs.  React renders the discrete updates first, skipping the pending ones,
+and later re-applies them on top: the outcome of a discrete handler is applied to
+the snapshot *or* to a state in which the deferred fields have other values.
+`vary x` is the snapshot with the deferred fields replaced by `x`; every other
+field (whose hook queue only ever holds synchronously flushed updates) equals the
+snapshot.  `RebaseSafe inv vary o`: `o` keeps `inv` from every such state. -/
+@[vreact_simp] def RebaseSafe {S E X : Type} (inv : S → Prop) (vary : X → S) (o : Outcome S E) : Prop :=
+  ∀ x, inv (vary x) → inv (o.apply (vary x))
+
+theorem RebaseSafe.at_snap {S E X : Type} {inv : S → Prop} {vary : X → S} {o : Outcome S E}
+    {snap : S} (x₀ : X) (hx : vary x₀ = snap) (hs : inv snap) (h : RebaseSafe inv vary o) :
+    inv (o.apply snap) := by
+  cases hx; exact h x₀ hs
+
+/-- With no deferred fields (`vary` constant) rebase-safety is snapshot safety;
+with all fields deferred it is robustness. -/
+theorem Robust.rebaseSafe {S E X : Type} {inv : S → Prop} {o : Outcome S E} (vary : X → S)
+    (h : Robust inv o) : RebaseSafe inv vary o := fun x hx => h (vary x) hx
+
 /-- A parent outcome packaged with the proof that it preserves the parent's
 invariant when applied to the parent's snapshot. -/
 def Emit (S E : Type) (inv : S → Prop) (snap : S) : Type :=
@@ -126,7 +172,8 @@ inductive Handler (S E : Type) (inv : S → Prop) (snap : S) : Type where
   /-- Discrete events run against the current snapshot. -/
   | discrete (event : String) (run : DomEvent → Outcome S E)
       (ok : ∀ e, inv ((run e).apply snap)) (hd : isDiscrete event = true)
-  /-- Continuous events may observe stale snapshots: robust, and no callbacks. -/
+  /-- Continuous- and default-priority events may observe stale snapshots and are
+  rendered later: robust, and no callbacks. -/
   | continuous (event : String) (run : DomEvent → Outcome S E)
       (ok : ∀ e, Robust inv (run e)) (noEmit : ∀ e, (run e).emit = none)
 
@@ -137,6 +184,24 @@ def Handler.event {S E inv snap} : Handler S E inv snap → String
 def Handler.run {S E inv snap} : Handler S E inv snap → DomEvent → Outcome S E
   | .discrete _ r .. => r
   | .continuous _ r .. => r
+
+/-- A discrete handler of a component with deferred updates: its outcome is
+checked `RebaseSafe` (every state React may rebase it onto), which in particular
+covers the snapshot.  It may invoke a parent callback. -/
+def Handler.rebased {S E X : Type} {inv : S → Prop} {snap : S} (event : String)
+    (run : DomEvent → Outcome S E) (vary : X → S) (x₀ : X) (hx : vary x₀ = snap) (hs : inv snap)
+    (ok : ∀ e, RebaseSafe inv vary (run e)) (hd : isDiscrete event = true) : Handler S E inv snap :=
+  .discrete event run (fun e => RebaseSafe.at_snap x₀ hx hs (ok e)) hd
+
+/-- Closes `o.emit = none` for the outcomes of robust handlers and effect setups:
+the translator rejects parent callbacks there, so every branch ends in
+`emit := none`.  (Not a user obligation: a failure is a translator bug.)
+Let-bound locals are unfolded first (`zetaDelta`), so that `split` can case on
+`match h : x with` where `x` is a render-local. -/
+macro "vreact_noemit" : tactic =>
+  `(tactic| (intros
+             try simp (config := { zetaDelta := true, failIfUnchanged := false }) only []
+             all_goals ((repeat' split) <;> (first | rfl | (simp_all; done)))))
 
 /-- A dependency value of `useEffect`.  Objects are compared by identity in
 React; the model treats them as "possibly changed" (`obj`), which only makes
@@ -247,6 +312,17 @@ def VNode.keyedMap {S E inv snap} {α : Type} (xs : List α) (key : α → Key)
       rfl
     rw [this]; exact nodup)
 
+/-- An element with a `key={k}` outside a list.  JavaScript evaluates `k` on every
+render, so the term `k` (with its proof obligations) is kept; the model
+reconciles by position and component identity, and a key change (React remounts:
+fresh state, `init_inv`) is covered because both keeping and resetting the state
+are verified. -/
+def VNode.withKey {S E inv snap} {α : Type} (_k : α) (n : VNode S E inv snap) : VNode S E inv snap := n
+
+/-- A boolean JSX child `{b}`: React renders nothing, but JavaScript evaluates `b`
+(so its proof obligations are kept in the term). -/
+def VNode.ofBool {S E inv snap} (_b : Bool) : VNode S E inv snap := .empty
+
 /-- `xs.map(x => <El/>)` without keys is rejected by the translator (React
 requires keys); `mapNodes` is used for non-element results such as text. -/
 def VNode.mapList {S E inv snap} {α : Type} (xs : List α)
@@ -285,5 +361,12 @@ axiom assumed {p : Prop} : p
 
 /-- Package a parent outcome for a child callback. -/
 def Emit.mk {S E inv snap} (o : Outcome S E) (h : inv (o.apply snap)) : Emit S E inv snap := ⟨o, h⟩
+
+/-- Package a parent outcome of a component with deferred updates: checked
+`RebaseSafe` (React may rebase the parent's queued updates onto pending
+lower-priority ones). -/
+def Emit.rebased {S E X : Type} {inv : S → Prop} {snap : S} (o : Outcome S E) (vary : X → S) (x₀ : X)
+    (hx : vary x₀ = snap) (hs : inv snap) (h : RebaseSafe inv vary o) : Emit S E inv snap :=
+  ⟨o, RebaseSafe.at_snap x₀ hx hs h⟩
 
 end VReact

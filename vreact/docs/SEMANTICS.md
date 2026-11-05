@@ -158,18 +158,47 @@ Consequently (proved in `Runtime.lean`): `setN(n+1); setN(n+1)` increments once,
 earlier queued updates. The regression case `StaleBatch.tsx` is rejected for
 this reason; `FunctionalBatch.tsx` is accepted.
 
-### 2.2 Snapshots: discrete events vs. robust updates
+### 2.2 Snapshots: discrete events, robust updates, rebasing
 
-React flushes the updates of a *discrete* event (click, input, keydown,
-submit, …) synchronously, so the next discrete event runs a handler of the
-latest render, whose snapshot is the current state. A discrete handler must
-therefore preserve the invariant **from its snapshot**.
+React 18 has three event priorities (react-dom 18.3.1 `getEventPriority`).
+Only the updates of a *discrete* event (click, input, keydown, submit, focus, …:
+exactly the `DiscreteEventPriority` events, a whitelist in `component.ts` and
+`Core.discreteEvents`) are flushed synchronously, so the next discrete event
+runs a handler of the latest render, whose snapshot is the current state. A
+discrete handler must therefore preserve the invariant **from its snapshot**.
 
-Continuous events (mousemove, scroll, wheel, …), effects and asynchronous
-callbacks (timers) may run with a stale snapshot, so their outcomes must be
-**robust**: preserve the invariant from *every* state that satisfies it. This is
+Continuous events (mousemove, scroll, wheel, mouseenter, …), default-priority
+events (transitionend, animationend, load, error, media events, …), effects and
+asynchronous callbacks (timers) are rendered later and may run with a stale
+snapshot, so their outcomes must be **robust**: preserve the invariant from
+*every* state that satisfies it; they may not call parent callbacks. This is
 what rejects the classic stale-closure bug (`StaleTimer.tsx`) and accepts the
 functional-update fix (`RobustTimer.tsx`).
+
+**Rebasing.** These *deferred* updates are still pending when a later discrete
+event runs. React keeps one update queue per hook; it renders the discrete
+update `f` first, skipping a pending deferred `u`, and later re-applies both in
+order — `f(u(s₀))`, although `f` was computed from the snapshot `s₀`. So in a
+component with deferred sources (an effect or timer that sets state, a
+continuous/default-priority handler), its discrete handlers and the callbacks it
+implements for children are checked **rebase-safe** (`Core.RebaseSafe`,
+obligations `handler-rebased` / `callback-rebased`): from every invariant state
+that agrees with the snapshot on the fields no deferred source writes (the
+others vary). Components without deferred sources keep the snapshot check
+(`RxRebaseTimer.tsx` fails, `RxRebaseTimerOk.tsx` verifies).
+
+Why this is sound. Every VTS update reads and writes a single hook (`setX(v)`,
+`setX(p => …)`, `dispatch(a)`), so per-hook queue processing is the in-order
+application of whole outcomes. Every state React renders is the initial state
+with an in-order subsequence of the queued outcomes applied, in which every
+discrete outcome before an included discrete one is included (synchronous
+updates are flushed before the next event and never skipped). By induction each
+such state satisfies the invariant: a deferred outcome is robust; a discrete
+outcome is applied to a state whose non-deferred fields equal its snapshot's
+(only discrete outcomes write them, and all earlier ones are applied), which is
+what `RebaseSafe` covers. With no deferred fields `RebaseSafe` is the snapshot
+check; with all fields deferred it is robustness. `Runtime.rebase_safe` proves
+the step for one pending update; `dispatch` itself models the in-order case.
 
 ### 2.3 Rendering is proof-carrying
 
@@ -180,6 +209,11 @@ function returning a view tree in which
 * every child element `<C …/>` stores the proof of `C.pre`,
 * every keyed list stores the proof that its keys are pairwise distinct
   (React's reconciliation requirement; `int` and `string` keys never mix),
+* every expression JavaScript evaluates during render is kept in the term with
+  its obligations, including `key={…}` outside lists (`VNode.withKey`; a key
+  change remounts, which is covered because both keeping the state and
+  re-initialising it are verified) and boolean children (`VNode.ofBool`, rendered
+  as nothing),
 * every parent callback handed to a child stores the proof that, assuming the
   child's callback contract, the parent's invariant is preserved.
 
@@ -197,7 +231,8 @@ A child declares `callbackRequires(props.onPick, (i) => 0 <= i && i < props.n)`.
   against the parent's (current) snapshot.
 
 A handler may invoke at most one parent callback per execution path (two would
-compose two parent outcomes that were only checked separately).
+compose two parent outcomes that were only checked separately). Several
+`callbackRequires` for one callback are conjoined.
 
 ### 2.5 Lifecycle obligations
 
@@ -292,9 +327,11 @@ left with `hpre` only, and Lean's goal shows the counterexample
 ## 4. What is verified
 
 For every component: initial state satisfies the invariant; the invariant
-survives prop changes; every handler (discrete: from the snapshot; continuous,
-effects, timers: from any state) preserves it; rendering never fails (indices,
-divisions, non-null assertions, preconditions of called functions); keys are
+survives prop changes; every handler (discrete: from the snapshot, or
+rebase-safe when the component has deferred updates; continuous,
+default-priority, effects, timers: from any state) preserves it; rendering never
+fails (indices, divisions, non-null assertions, preconditions of called
+functions — also in keys and boolean children); keys are
 distinct; child preconditions hold; callback contracts hold in both directions;
 hook rules hold (static checks). For every function: its body is safe and its
 `ensures` hold.
@@ -323,17 +360,28 @@ hook rules hold (static checks). For every function: its body is safe and its
 * **The JS runtime model** (`JS.lean`): e.g. that `Array.prototype.slice` behaves
   like `JS.slice`. Definitions follow ECMA-262 directly.
 * **The React model**: that React 18 behaves as described in §2–3 (discrete-event
-  flushing, update queues, reconciliation by position/key/type).
+  flushing, per-hook update queues and rebasing, reconciliation by
+  position/key/type), and the event table of `component.ts` (React handler prop
+  → native events → priority), which mirrors react-dom 18.3.1's event plugins
+  and `getEventPriority`. Rebasing is covered by the argument of §2.2 (with
+  `Runtime.rebase_safe`), not by `dispatch`.
 * **Abstractions:** integers are unbounded; floats are opaque to proofs; Unicode
   case mapping is opaque; `localStorage`, `console`, `document.title` writes are
   external effects with no state change; reading external data is not modelled.
 * **Outside the subset:** the entry point (`main.tsx`), React itself, the DOM,
   CSS.
-* **Event bubbling** is handled by a static restriction rather than modelled: the
-  runtime runs one handler per event, and VTS rejects every layout in which one
-  event could reach two handlers (an element with `onX` containing a nested
-  `onX` or a user component; a submit button with `onClick` inside
-  `<form onSubmit>`).
+* **Event bubbling and multi-handler events** are handled by a static
+  restriction rather than modelled: the runtime runs one handler per event, and
+  VTS rejects every layout in which one discrete native event could reach two
+  handlers — two props of one element dispatched by the same native event (a
+  checkbox's `onClick` and `onChange` both run on `click`; `onInput` and a text
+  input's `onChange` both run on `input`: react-dom's ChangeEventPlugin), an
+  element with handlers containing a descendant handler that shares a native
+  event (e.g. `<li onClick>` around a checkbox's `onChange`) or a user
+  component, and a submit button with `onClick` inside `<form onSubmit>`.
+  Handlers of continuous/default-priority events are robust and cannot call
+  parents, so several of them in one batch compose. `onSelect` and capture-phase
+  handlers are rejected; unknown handler names are rejected, never discrete.
 
 Lean's kernel checks every proof; `sorry`, `@trusted` and `assume(…)`
 (`VReact.assumed`, reported `ASSUMES`) show up in the axiom report, so nothing

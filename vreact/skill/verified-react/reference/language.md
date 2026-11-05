@@ -134,7 +134,8 @@ Order inside the body:
 
 1. `requires(…)` — props precondition (what every parent must establish);
 2. `callbackRequires(props.cb, (args) => …)` — what this component guarantees
-   about the arguments it passes to callback props (the parent may rely on it);
+   about the arguments it passes to callback props (the parent may rely on it;
+   several for one callback are conjoined);
 3. hooks: `const [x, setX] = useState<T>(init)`, `const [s, dispatch] =
    useReducer(reducer, init)`, `useEffect(() => {…}, [deps])`,
    `useMemo(() => v, [deps])`, `useCallback(fn, [deps])` — top level,
@@ -150,8 +151,16 @@ is a record whose function-typed fields are callbacks (`=> void`, required).
 Handlers (`onClick`, `onChange`, `onSubmit`, `onKeyDown`, …): arrow functions or
 local closures; the event parameter supports `e.target.value`,
 `e.target.checked`, `e.key`, `e.preventDefault()`. Setters, `dispatch`, at most
-one parent callback per path. Continuous events (`onMouseMove`, `onScroll`, …)
-must be robust and may not call parent callbacks.
+one parent callback per path. Only React's discrete events (`onClick`,
+`onChange`, `onInput`, `onKeyDown`, `onSubmit`, `onFocus`, `onBlur`, …) are
+checked from the render snapshot; continuous (`onMouseMove`, `onScroll`,
+`onMouseEnter`, …) and default-priority events (`onTransitionEnd`,
+`onAnimationEnd`, `onLoad`, `onError`, media events, …) must be robust and may
+not call parent callbacks. In a component with such handlers or with effects /
+timers that set state, discrete handlers and callbacks passed to children must
+also be safe when React rebases them onto those pending updates (guard inside the
+functional update: `setR(p => p.lo < p.hi ? … : p)`). Rejected: unknown handler
+names, `onSelect`, capture-phase handlers (`onClickCapture`).
 
 Effects: setters and timers (`setTimeout`/`setInterval` callbacks become tasks),
 external writes (`localStorage.setItem`, `document.title = …`, `console.*`) are
@@ -164,8 +173,14 @@ JSX: intrinsic elements with string/int/bool/enum attributes (`className`,
 `value`, `checked`, `disabled`, `placeholder`, `type`, …; no `style`, `ref`,
 spread), child components with all their props, `{cond && <X/>}`, ternaries,
 `xs.map(x => <El key={…}/>)` (keys `int` or `string`, distinct), text from
-strings/ints/enums. `children` props are not supported yet. An element with a
-handler may not contain an element with the same handler or a user component.
+strings/ints/enums (booleans render nothing, but are checked). `key={…}` outside
+lists is checked too (JS evaluates it). `children` props are not supported yet.
+One native event may reach at most one discrete handler: an element may not
+combine handlers fired by the same native event (a checkbox's `onClick` +
+`onChange` both run on click; `onInput` + a text input's `onChange` both run on
+input), and an element with a handler may not contain a handler fired by the
+same native event (`<li onClick>` around `<input type="checkbox" onChange>`)
+or a user component.
 
 ## Not yet supported (workarounds)
 

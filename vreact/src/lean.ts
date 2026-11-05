@@ -107,9 +107,10 @@ export function findMarkers(outDir: string): Marker[] {
       } else if (f.endsWith(".lean")) {
         const lines = fs.readFileSync(p, "utf8").split("\n");
         lines.forEach((l, i) => {
-          const re = /\/-⟦ob(\d+)⟧-\//g;
+          // `/-⟦gen⟧-/` (id 0) marks a generated proof that is not a user obligation
+          const re = /\/-⟦(?:ob(\d+)|gen)⟧-\//g;
           let mm;
-          while ((mm = re.exec(l))) markers.push({ id: +mm[1], file: path.relative(outDir, p), line: i + 1, col: [...l.slice(0, mm.index)].length });
+          while ((mm = re.exec(l))) markers.push({ id: mm[1] ? +mm[1] : 0, file: path.relative(outDir, p), line: i + 1, col: [...l.slice(0, mm.index)].length });
         });
       }
     }
@@ -274,8 +275,8 @@ export function judge(obligations: Obligation[], messages: LeanMessage[], marker
     if (d?.name && !declErrors.has(d.name)) declErrors.set(d.name, msg.text);
     // the marker on that line closest to the left of the error column
     const cands = markers.filter((mk) => mk.file === rel && mk.line === msg.line && mk.col <= msg.col && msg.col <= mk.col + 40);
-    if (cands.length) {
-      const mk = cands.reduce((a, b) => (b.col > a.col ? b : a));
+    const mk = cands.length ? cands.reduce((a, b) => (b.col > a.col ? b : a)) : null;
+    if (mk && mk.id !== 0) {
       if (!failedIds.has(mk.id)) failedIds.set(mk.id, msg.text);
       if (d) {
         badOf(d).failedObs++;

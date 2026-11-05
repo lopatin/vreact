@@ -371,6 +371,22 @@ theorem replace_after_functional (snap : Int) (e : Option Empty) :
     (Outcome.mk [fun (m : Int) => m + 5, fun _ => snap + 1] e).apply snap = snap + 1 := by
   simp [Outcome.apply]
 
+/-- Rebasing is safe (React 18 lanes, SEMANTICS §2.2).  A deferred outcome `u`
+(timer, effect, continuous/default-priority handler: robust, writing only the
+deferred fields) is pending when a discrete outcome `f`, checked `RebaseSafe`
+against its snapshot `vary x₀`, is queued.  React may render `f` alone (skipping
+`u`), `u` alone, and finally `f` re-applied on top of `u`; all three keep the
+invariant.  `dispatch`/`fireTask` above model the in-order case. -/
+theorem rebase_safe {S E X : Type} {inv : S → Prop} (vary : X → S) (x₀ : X)
+    (u f : Outcome S E) (hu : Robust inv u) (hu' : ∀ x, ∃ x', u.apply (vary x) = vary x')
+    (hf : RebaseSafe inv vary f) (h₀ : inv (vary x₀)) :
+    inv (f.apply (vary x₀)) ∧ inv (u.apply (vary x₀)) ∧ inv (f.apply (u.apply (vary x₀))) := by
+  obtain ⟨x', hx'⟩ := hu' x₀
+  have h1 := hu _ h₀
+  refine ⟨hf x₀ h₀, h1, ?_⟩
+  rw [hx'] at h1 ⊢
+  exact hf x' h1
+
 /-- The component and state of an instance. -/
 def Inst.stateSigma {E : Type} : Inst E → Σ spec : Spec, spec.S
   | .mk c s .. => ⟨c.spec, s⟩
