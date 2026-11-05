@@ -32,7 +32,9 @@ export type StrikeRowProps = {
 
 /**
  * One strike: call market | strike | put market | volatility.
- * Clicking a bid or an ask reports exactly the price shown in that cell.
+ * Clicking a bid or an ask reports that cell's call/put, bid/ask and price. The contract checks
+ * that every report is consistent (the price is the quote of the leg and side it names), not
+ * which cell made it: that is the wiring below, like the column order.
  */
 export function StrikeRow(props: StrikeRowProps) {
   requires(props.heat >= 1);

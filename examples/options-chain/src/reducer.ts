@@ -1,5 +1,5 @@
 // The chain's UI state, its invariant, and a total reducer over a discriminated-union action.
-import { ensures, implies, distinct, hole, type int } from "vreact/spec";
+import { ensures, implies, distinct, type int } from "vreact/spec";
 import { type StrikeFilter, type Ticket, type Order, validOrder, validQty } from "./model";
 
 export const MAX_HEAT: int = 5;
@@ -49,6 +49,43 @@ export function sameView(u: ChainUi, r: ChainUi): boolean {
 /** Frame condition: every hold of another expiry than `id` is kept. */
 export function keepsHolds(u: ChainUi, r: ChainUi, id: int): boolean {
   return u.held.every((h) => h.expiry === id || r.held.some((g) => g.expiry === h.expiry && g.price === h.price));
+}
+
+/** Frame condition: every hold is kept. */
+export function keepsAllHolds(u: ChainUi, r: ChainUi): boolean {
+  return u.held.every((h) => r.held.some((g) => g.expiry === h.expiry && g.price === h.price));
+}
+
+/** Frame condition: every working order of `u` is still working in `r`, unchanged. */
+export function keepsOrders(u: ChainUi, r: ChainUi): boolean {
+  return u.orders.every((o) =>
+    r.orders.some(
+      (p) =>
+        p.id === o.id &&
+        p.expiry === o.expiry &&
+        p.leg === o.leg &&
+        p.strike === o.strike &&
+        p.buy === o.buy &&
+        p.qty === o.qty &&
+        p.price === o.price,
+    ),
+  );
+}
+
+/**
+ * `o` is the order a ticket asks for, with id `id`: the ticket's contract, the direction its
+ * side implies (clicking an ask buys, clicking a bid sells), the quantity and the price.
+ */
+export function orderFor(o: Order, id: int, t: Ticket, qty: int, price: int): boolean {
+  return (
+    o.id === id &&
+    o.expiry === t.expiry &&
+    o.leg === t.leg &&
+    o.strike === t.strike &&
+    o.buy === (t.side === "ask") &&
+    o.qty === qty &&
+    o.price === price
+  );
 }
 
 /**
@@ -134,7 +171,11 @@ export function setHeat(u: ChainUi, t: int): ChainUi {
  */
 export function place(u: ChainUi, t: Ticket, qty: int, price: int): ChainUi {
   ensures((r: ChainUi) => implies(wellFormed(u), wellFormed(r)));
-  ensures((r: ChainUi) => implies(validQty(qty) && price > 0, r.orders.some((o) => o.id === u.nextId && o.qty === qty && o.price === price)));
+  // a valid order is added exactly as the ticket says, under the next id ...
+  ensures((r: ChainUi) => implies(validQty(qty) && price > 0, r.orders.some((o) => orderFor(o, u.nextId, t, qty, price))));
+  // ... and nothing else changes: one order more (none for an invalid one), the others kept
+  ensures((r: ChainUi) => r.orders.length === (validQty(qty) && price > 0 ? u.orders.length + 1 : u.orders.length));
+  ensures((r: ChainUi) => keepsOrders(u, r) && keepsAllHolds(u, r) && sameView(u, r));
   if (!validQty(qty) || price <= 0) return u;
   const o: Order = { id: u.nextId, expiry: t.expiry, leg: t.leg, strike: t.strike, buy: t.side === "ask", qty: qty, price: price };
   return { ...u, orders: [...u.orders, o], nextId: u.nextId + 1 };

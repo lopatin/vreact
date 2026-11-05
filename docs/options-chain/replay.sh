@@ -14,7 +14,7 @@
 #
 #   bash docs/options-chain/replay.sh            # all steps (about 15 minutes)
 #   bash docs/options-chain/replay.sh 05 23      # only the steps whose names start with 05 or 23
-#   bash docs/options-chain/replay.sh --stable docs/options-chain/23-final.txt   # the compared lines
+#   bash docs/options-chain/replay.sh --stable docs/options-chain/26-final.txt   # the compared lines
 #
 # Requirements: Node >= 22.6, Lean via elan (~/.elan/bin), the VReact Lean library built
 # (vreact/lean: lake build), and the app's npm dependencies (examples/options-chain/node_modules,

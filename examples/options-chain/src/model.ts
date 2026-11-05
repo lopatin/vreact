@@ -5,7 +5,7 @@
 // uses a tick of 0.05, so 102.40 is 2048 ticks. A missing price is `null`.
 //
 // Theoretical values and volatilities are *input data* (no pricing model is verified here).
-import { requires, ensures, implies, distinct, forall, idiv, hole, type int } from "vreact/spec";
+import { requires, ensures, implies, distinct, forall, idiv, type int } from "vreact/spec";
 
 export type Right = "call" | "put";
 /** A side of a market: the best bid (buyers) or the best ask (sellers). */
@@ -29,7 +29,10 @@ export type Strike = {
   readonly vol: int; // basis points, display only
 };
 
-/** One expiry: its futures market (the underlying) and its strike ladder (ascending). */
+/**
+ * One expiry: its futures market (the underlying) and its strike ladder (ascending, for
+ * display: no proof relies on the order).
+ */
 export type Expiry = {
   readonly id: int;
   readonly symbol: string;
