@@ -114,6 +114,34 @@ example (xs : List St) (p : St → Bool) (h : (xs.filter p).length ≤ 5) (k : I
 example (xs : List St) (h : (xs.filter (fun s => !JS.eq s.count 0)).length ≤ 5) :
     ((xs.map (fun s => { s with count := 0 })).filter (fun s => !JS.eq s.count 0)).length = 0 := by vreact_auto
 
+/-! ### round 3 (Lx): chains, counts by key, `%`, enumerations, bounded quantifiers, literals -/
+
+-- distinct keys through a chain of list operations (`vreact_subperm`)
+example (xs : List St) (h : (xs.map (·.count)).Nodup) (c : St → St → Int) (p : St → Bool) :
+    (((JS.slice (JS.toSorted xs c) 1 (some 5)).filter p).reverse.map (·.count)).Nodup := by vreact_auto
+-- deleting by the key of a present element of a list with distinct keys removes one
+example (xs : List St) (i : Nat) (hi : i < xs.length) (h : (xs.map (·.count)).Nodup) :
+    (xs.filter (fun s => !JS.eq s.count (xs[i]'hi).count)).length + 1 = xs.length := by vreact_auto
+-- a map-update by key changes a count by at most one
+example (xs : List St) (k : Int) (h : (xs.map (·.count)).Nodup) :
+    ((xs.map (fun s => if s.count = k then { s with name := JS.Str.ofString "x" } else s)).filter
+      (fun s => JS.eq s.name (JS.Str.ofString "x"))).length ≤ (xs.filter (fun s => JS.eq s.name (JS.Str.ofString "x"))).length + 1 := by
+  vreact_auto
+-- `%` with a variable divisor
+example (s n : Int) (hn : 0 < n) (hs : 0 ≤ s) : 0 ≤ JS.rem s n (by omega) ∧ JS.rem s n (by omega) < n := by vreact_auto
+-- a disjunction over an enumeration (case split fallback)
+inductive Color where | red | green | blue
+deriving DecidableEq
+example (c : Color) : (c = .red ∧ (if c = .red then (1 : Int) else 0) = 1) ∨ (c = .green ∨ c = .blue) := by vreact_auto
+-- a bounded quantifier with a numeral bound, at numeral indices
+example (xs : List Int)
+    (h : ∃ (_ : (xs.length : Int) = 3), ∀ i : Int, ∀ (h₁ : 0 ≤ i) (h₂ : i < 3), xs[i.toNat]'(by omega) ≥ 0) :
+    xs[0]'(by obtain ⟨_, _⟩ := h; omega) + xs[2]'(by obtain ⟨_, _⟩ := h; omega) ≥ 0 := by
+  vreact_auto
+-- literal strings
+example : JS.strIncludes (JS.Str.ofString "a@b") (JS.Str.ofString "@") = true := by vreact_auto
+example : JS.startsWith (JS.Str.ofString "ab") (JS.Str.ofString "b") = false := by vreact_auto
+
 /-! ### automation shape (#40, #57, #58, #65) -/
 
 @[vreact_simp] def three (xs : List Int) : Prop := xs.length = 3
@@ -143,6 +171,14 @@ elab "vreact_fails_showing_goal " t:term : tactic => do
 example : True := by
   vreact_fails_showing_goal (∀ (a d : Int) (h : d ≠ 0), JS.rem a d h = a)
   vreact_fails_showing_goal (∀ (xs : List Int) (i : Int), 0 ≤ i ∧ i < xs.length)
+  trivial
+
+-- round 3 (Lx): the new facts do not prove false goals
+example : True := by
+  vreact_fails_showing_goal (∀ (xs : List St) (i : Nat) (hi : i < xs.length),
+    (xs.filter (fun s => !JS.eq s.count (xs[i]'hi).count)).length + 1 = xs.length)
+  vreact_fails_showing_goal (∀ (s n : Int) (h : n ≠ 0), 0 ≤ JS.rem s n h)
+  vreact_fails_showing_goal (∀ (c : Color), c = .red ∨ c = .green)
   trivial
 
 end VReact.SelfTest

@@ -408,8 +408,8 @@ distinct, membership and counts are unchanged. -/
     (((xs.set i xs[j]).set j xs[i]).filter p).length = (xs.filter p).length :=
   ((List.set_set_perm hi hj).filter p).length_eq
 
-/-! ### `slice` is a sublist: membership and distinct keys carry over (the `Nodup` and count
-transfers are the `SubPerm` lemmas of `Lists.lean`) -/
+/-! ### `slice` is a sublist: membership and distinct keys carry over (chains of operations:
+`SubPerm` in `Lists.lean`) -/
 
 theorem slice_sublist {α} (xs : List α) (a : Int) (b : Option Int) : (slice xs a b).Sublist xs := by
   unfold slice; exact (List.take_sublist _ _).trans (List.drop_sublist _ _)
@@ -417,10 +417,13 @@ theorem slice_sublist {α} (xs : List α) (a : Int) (b : Option Int) : (slice xs
     (h : x ∈ slice xs a b) : x ∈ xs := (slice_sublist xs a b).subset h
 theorem nodup_map_slice {α β} (f : α → β) (xs : List α) (a : Int) (b : Option Int) (h : (xs.map f).Nodup) :
     ((slice xs a b).map f).Nodup := h.sublist ((slice_sublist xs a b).map f)
+grind_pattern nodup_map_slice => (slice xs a b).map f, (xs.map f).Nodup
 theorem nodup_slice {α} (xs : List α) (a : Int) (b : Option Int) (h : xs.Nodup) : (slice xs a b).Nodup :=
   h.sublist (slice_sublist xs a b)
+grind_pattern nodup_slice => slice xs a b, xs.Nodup
 theorem length_filter_slice_le {α} (p : α → Bool) (xs : List α) (a : Int) (b : Option Int) :
     ((slice xs a b).filter p).length ≤ (xs.filter p).length := ((slice_sublist xs a b).filter p).length_le
+grind_pattern length_filter_slice_le => (slice xs a b).filter p, xs.filter p
 
 /-! ### `range(n)` has distinct elements -/
 

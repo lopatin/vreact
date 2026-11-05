@@ -104,11 +104,25 @@ first one that fails.
    checked. Make the goal smaller (`@opaque` helpers with `ensures`, `assert`)
    before raising the budget. (`vreact_auto could not prove the goal (grind
    stopped at Lean's recursion limit)` is not a timeout: `grind` gave up on a
-   hypothesis shape it cannot handle, e.g. `forall(0, 3, …)` with a literal
-   bound, and the other strategies did not prove the goal either; an `assert`
-   of the needed instance, or a variable bound, usually helps.) A timeout or
-   error Lean reports for a whole declaration leaves its obligations unproved
-   ("not checked", with the reason).
+   hypothesis shape it cannot handle, and the other strategies did not prove
+   the goal either. Guarded contracts `xs.length === 3 && forall(0, 3, i =>
+   xs[i] >= 0)` are split and instantiated at the indices of the goal
+   automatically; in a shape that is not, an `assert` of the needed instance
+   usually helps.) A timeout or error Lean reports for a whole declaration
+   leaves its obligations unproved ("not checked", with the reason). Budgets
+   are per obligation also when Lean elaborates declarations in parallel; the
+   one-time cost of a shared auxiliary lemma (equation lemmas of a big `match`)
+   goes to whichever obligation needs it first (well under 1% in practice).
+8. **What the automation knows about lists.** Distinct keys and counts follow
+   chains of `filter`/`slice`/`toSorted`/`toReversed` from a list whose
+   `distinct(...)` is a hypothesis (an invariant, a `requires`), also through
+   `const`s; deleting by the key of a present element of a list with distinct
+   keys removes exactly one element, and a map-update by key
+   (`xs.map(x => x.id === k ? {...x, done: !x.done} : x)`) changes a
+   `filter(...).length` by at most one. A disjunction over the cases of an
+   enumeration or union (`(c === "red" && n === 1) || (c === "green" && …)`) is
+   proved by splitting the enumeration (at most two levels); `%` with a
+   non-negative dividend and a non-zero divisor is in `[0, |divisor|)`.
 
 ## What not to do
 

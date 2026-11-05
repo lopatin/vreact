@@ -15,12 +15,13 @@ namespace VReact
 
 The views rendered from state are chains of list operations (`items.toSorted(cmp).slice(a, b)`,
 `xs.filter(p).slice(2).toReversed()`, …).  Each operation that neither duplicates nor invents
-elements gives a fact `SubPerm (op l) l` (`l₁` is a permutation of a sublist of `l₂`), and
-generic transfer lemmas move `Nodup` facts (distinct keys) and counts from `l₂` to `l₁`.
-The transfer lemma is instantiated for each `SubPerm l₁ l₂` and term `l₁.map f`, and its
-instance `(l₂.map f).Nodup → (l₁.map f).Nodup` mentions `l₂.map f`, which instantiates it for
-the next operation down the chain, so `grind` follows a chain of any length to the
-hypothesis about the state (one operation per E-matching round). -/
+elements is a sub-permutation of its input (`SubPerm (op l) l`: a permutation of a sublist), the
+relation is transitive, and transfer lemmas move `Nodup` facts (distinct keys) and counts from
+`l₂` to `l₁`.  `vreact_subperm` (`Tactic.lean`) composes the steps of a chain down to a list with
+a known `Nodup` (or count), and adds the transferred fact.  (As `grind` patterns, the steps were
+instantiated for every list operation of a goal, and the transfers reached `Nodup`s of large
+literal lists: too costly.)  The one-step patterns below cover a single operation whose input
+fact is in the E-graph. -/
 
 /-- `l₁` is a permutation of a sublist of `l₂` (Mathlib's `List.Subperm`). -/
 def SubPerm {α} (l₁ l₂ : List α) : Prop := ∃ l : List α, l.Perm l₁ ∧ l.Sublist l₂
@@ -46,21 +47,19 @@ theorem subPerm_toSorted {α} (l : List α) (cmp : α → α → Int) : SubPerm 
 theorem subPerm_reverse {α} (l : List α) : SubPerm l.reverse l := .of_perm (List.reverse_perm l)
 theorem subPerm_take {α} (n : Nat) (l : List α) : SubPerm (l.take n) l := .of_sublist (List.take_sublist n l)
 theorem subPerm_drop {α} (n : Nat) (l : List α) : SubPerm (l.drop n) l := .of_sublist (List.drop_sublist n l)
-grind_pattern subPerm_filter => l.filter p
-grind_pattern subPerm_slice => JS.slice l a b
-grind_pattern subPerm_toSorted => JS.toSorted l cmp
-grind_pattern subPerm_reverse => l.reverse
-grind_pattern subPerm_take => l.take n
-grind_pattern subPerm_drop => l.drop n
--- the transfers
-grind_pattern SubPerm.nodup_map => SubPerm l₁ l₂, l₁.map f
-grind_pattern SubPerm.nodup => SubPerm l₁ l₂, l₁.Nodup
-grind_pattern SubPerm.length_filter_le => SubPerm l₁ l₂, l₁.filter p
+theorem SubPerm.trans {α} {l₁ l₂ l₃ : List α} (h₁ : SubPerm l₁ l₂) (h₂ : SubPerm l₂ l₃) : SubPerm l₁ l₃ := by
+  obtain ⟨l, hp, hs⟩ := h₁
+  obtain ⟨l', hp', hs'⟩ := h₂
+  obtain ⟨l'', hp'', hs''⟩ := List.exists_perm_sublist hs hp'.symm
+  exact ⟨l'', hp''.trans hp, hs''.trans hs'⟩
+theorem SubPerm.length_le {α} {l₁ l₂ : List α} (h : SubPerm l₁ l₂) : l₁.length ≤ l₂.length := by
+  obtain ⟨l, hp, hs⟩ := h; exact hp.length_eq ▸ hs.length_le
 
 /-- Removing elements keeps keys distinct. -/
 theorem nodup_map_filter {α β} (f : α → β) (p : α → Bool) (l : List α) (h : (l.map f).Nodup) :
     ((l.filter p).map f).Nodup :=
   (subPerm_filter p l).nodup_map h
+grind_pattern nodup_map_filter => (l.filter p).map f, (l.map f).Nodup
 
 attribute [grind →] List.mem_of_find?_eq_some
 -- `xs[i]` is an element of `xs` (`JS.get_mem`, after `JS.get` is unfolded to `getElem`)
@@ -99,6 +98,7 @@ attribute [vreact_simp] List.filter_map List.length_map List.length_filter_le
 theorem length_filter_filter_le {α} (p q : α → Bool) (l : List α) :
     ((l.filter q).filter p).length ≤ (l.filter p).length :=
   ((List.filter_sublist).filter p).length_le
+grind_pattern length_filter_filter_le => (l.filter q).filter p
 
 theorem length_filter_le_of_imp {α} {p q : α → Bool} {l : List α} (h : ∀ x ∈ l, q x = true → p x = true) :
     (l.filter q).length ≤ (l.filter p).length := by

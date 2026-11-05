@@ -12,13 +12,18 @@ import VReact.Simprocs
    record fields are pushed through conditionals (`pushProjIte`) and Bool
    `if`-chains become propositions, so a map-update that leaves a field alone leaves
    facts about that field syntactically unchanged;
-2. split `if`/`match` in the goal, normalise again;
+2. split `if`/`match` in the goal, normalise again; add the facts `grind` cannot find by
+   E-matching: counts of filters by key (`vreact_keyfacts`), the parts and instances of
+   bounded quantifiers and guarded existentials (`vreact_bounded`), distinct keys and counts
+   through chains of list operations (`vreact_subperm`);
 3. close each case with `grind` (congruence closure + E-matching + linear
    integer arithmetic + case splitting) or `omega`; if both fail on a
    conjunction, prove the conjuncts separately; on a goal that is not a
    conjunction, fall back to `simp_all` variants (also on the parts of guarded
    contracts `∃ (h : a), b h`, `vreact_unpack`); a failure reports `grind`'s
-   goal (`vreact_finish`).  Every alternative runs under `tryTactic`: a runtime
+   goal (`vreact_finish`); if all of that fails, split a guarded existential goal, a
+   bounded quantifier with numeral bounds, or a small enumeration/union of the goal, and
+   finish each case (`vreactFinishAux`).  Every alternative runs under `tryTactic`: a runtime
    exception such as `maximum recursion depth` (which `first`/`try` let
    through) makes it fail like any other error — except the heartbeat limit,
    `vreact_ob`'s per-obligation budget, which is passed on.
@@ -514,6 +519,109 @@ elab "vreact_bounded" : tactic => withMainContext do
       g := g'
   replaceMainGoal [g]
 
+/-- One list operation that is a sub-permutation of its input (`Lists.lean`): the input, and
+the proof of `SubPerm e input`. -/
+private def subPermStep? (e : Expr) : MetaM (Option (Expr × Expr)) := do
+  if e.isAppOfArity ``List.filter 3 then
+    return some (e.getArg! 2, ← mkAppM ``subPerm_filter #[e.getArg! 1, e.getArg! 2])
+  if e.isAppOfArity ``JS.slice 4 then
+    return some (e.getArg! 1, ← mkAppM ``subPerm_slice #[e.getArg! 1, e.getArg! 2, e.getArg! 3])
+  if e.isAppOfArity ``JS.toSorted 3 then
+    return some (e.getArg! 1, ← mkAppM ``subPerm_toSorted #[e.getArg! 1, e.getArg! 2])
+  if e.isAppOfArity ``List.reverse 2 then
+    return some (e.getArg! 1, ← mkAppM ``subPerm_reverse #[e.getArg! 1])
+  if e.isAppOfArity ``List.take 3 then
+    return some (e.getArg! 2, ← mkAppM ``subPerm_take #[e.getArg! 1, e.getArg! 2])
+  if e.isAppOfArity ``List.drop 3 then
+    return some (e.getArg! 2, ← mkAppM ``subPerm_drop #[e.getArg! 1, e.getArg! 2])
+  return none
+
+/-- `vreact_subperm`: distinct keys and counts through chains of list operations
+(`items.toSorted(cmp).slice(a, b)`, `xs.filter(p).slice(2).toReversed()`, `const`s of them).
+For each `Nodup (map f L)` / `Nodup L` of the goal and the hypotheses whose `L` is a chain of
+sub-permutations (`filter`, `slice`, `toSorted`, `reverse`, `take`, `drop`) of a list `R` with a
+hypothesis `Nodup (map f R)`, add `Nodup (map f L)` (`SubPerm.trans` of the steps, then
+`SubPerm.nodup_map`); for each count `(L.filter p).length` of such a chain, add `≤ (R'.filter
+p).length` for the lists `R'` of the chain whose count `(R'.filter p)` occurs.  Only facts whose
+other side is already present: following a chain to a literal list (a constant of the program)
+would make `grind` evaluate it. -/
+elab "vreact_subperm" : tactic => withMainContext do
+  let goal ← getMainGoal
+  let lctx ← getLCtx
+  let mut known : Array (Expr × Expr) := #[]
+  for d in lctx do
+    if d.isImplementationDetail || d.isLet then continue
+    let ty ← instantiateMVars d.type
+    unless ← isProp ty do continue
+    for (pf, pty) in ← hypParts (mkFVar d.fvarId) ty 3 do
+      if pty.isAppOfArity ``List.Nodup 2 then known := known.push (pty, pf)
+  let mut targets : Array Expr := #[← instantiateMVars (← goal.getType)]
+  for d in lctx do
+    if !d.isImplementationDetail then targets := targets.push (← instantiateMVars d.type)
+  let nodups ← IO.mkRef (#[] : Array Expr)
+  let filters ← IO.mkRef (#[] : Array Expr)
+  for t in targets do
+    forEachExpr t fun e => do
+      if e.hasLooseBVars || e.hasMVar then return
+      if e.hasAnyFVar (fun fv => !lctx.contains fv) then return
+      if e.isAppOfArity ``List.Nodup 2 then
+        let l := e.appArg!
+        let l := if l.isAppOfArity ``List.map 4 then l.appArg! else l
+        if l.isAppOfArity ``List.filter 3 || l.isAppOfArity ``JS.slice 4 || l.isAppOfArity ``JS.toSorted 3 ||
+            l.isAppOfArity ``List.reverse 2 || l.isAppOfArity ``List.take 3 || l.isAppOfArity ``List.drop 3 then
+          nodups.modify fun a => if a.contains e || a.size ≥ 16 then a else a.push e
+      if e.isAppOfArity ``List.filter 3 then
+        filters.modify fun a => if a.contains e || a.size ≥ 32 then a else a.push e
+  let mut facts : Array Expr := #[]
+  -- distinct keys
+  for nd in ← nodups.get do
+    let x := nd.appArg!
+    let (f?, l) := if x.isAppOfArity ``List.map 4 then (some (x.getArg! 2), x.appArg!) else (none, x)
+    let mut cur := l
+    let mut sp? : Option Expr := none
+    for _ in [0:8] do
+      let some (inner, step) ← subPermStep? cur | break
+      let sp ← match sp? with | none => pure step | some sp => mkAppM ``SubPerm.trans #[sp, step]
+      sp? := some sp
+      cur := inner
+      let want ← match f? with
+        | some f => mkAppM ``List.Nodup #[← mkAppM ``List.map #[f, cur]]
+        | none => mkAppM ``List.Nodup #[cur]
+      let mut hit : Option Expr := none
+      for (kty, kpf) in known do
+        if ← withReducible (isDefEq kty want) then hit := some kpf; break
+      if let some kpf := hit then
+        facts := facts.push (← mkAppM (if f?.isSome then ``SubPerm.nodup_map else ``SubPerm.nodup) #[sp, kpf])
+        break
+  -- counts
+  let fs ← filters.get
+  for fl in fs do
+    let p := fl.getArg! 1
+    let mut cur := fl.getArg! 2
+    let mut sp? : Option Expr := none
+    for _ in [0:8] do
+      let some (inner, step) ← subPermStep? cur | break
+      let sp ← match sp? with | none => pure step | some sp => mkAppM ``SubPerm.trans #[sp, step]
+      sp? := some sp
+      cur := inner
+      -- a count over `cur` with the same predicate occurs
+      let mut hit := false
+      for fl' in fs do
+        if ← withReducible (isDefEq fl' (← mkAppM ``List.filter #[p, cur])) then hit := true; break
+      if hit then facts := facts.push (← mkAppM ``SubPerm.length_filter_le #[p, sp])
+  if facts.isEmpty then return
+  let mut have_ : Array Expr := #[]
+  for d in lctx do
+    if !d.isImplementationDetail then have_ := have_.push (← instantiateMVars d.type)
+  let mut g := goal
+  for pf in facts do
+    let ty ← instantiateMVars (← inferType pf)
+    if have_.contains ty then continue
+    have_ := have_.push ty
+    let (_, g') ← (← g.assert (← mkFreshUserName `hsub) ty pf).intro1P
+    g := g'
+  replaceMainGoal [g]
+
 end Bounded
 
 open Lean Meta Elab Tactic in
@@ -712,6 +820,7 @@ partial def vreactFinishAux (depth : Nat) : TacticM Unit := do
       evalTactic (← `(tactic| all_goals vreact_norm))
       evalTactic (← `(tactic| all_goals vreact_keyfacts))
       evalTactic (← `(tactic| all_goals vreact_bounded))
+      evalTactic (← `(tactic| all_goals vreact_subperm))
       for gj in ← getGoals do
         setGoals [gj]
         vreactFinishAux (depth - 1)
@@ -756,6 +865,7 @@ macro_rules
          all_goals vreact_norm
          all_goals vreact_keyfacts
          all_goals vreact_bounded
+         all_goals vreact_subperm
          all_goals vreact_finish)))
 
 end VReact
