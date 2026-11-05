@@ -1,0 +1,103 @@
+translated 1 module(s), 24 proof obligation(s) → .vreact/ ; checking with Lean…
+
+Components
+Functions
+  VERIFIED           validChain
+  VERIFIED           legOf
+  VERIFIED           theoOf
+  VERIFIED           quotePrice
+  VERIFIED           withinSpread
+  VERIFIED           isMid
+  VERIFIED           midPrice
+  VERIFIED           inTheMoney
+  VERIFIED           dist
+  VERIFIED           nearest
+  INCOMPLETE         atmIndex
+  VERIFIED           inWindow
+  INCOMPLETE         strikeWindow
+  VERIFIED           levelsOf
+  VERIFIED           edge
+  VERIFIED           heatOf
+  VERIFIED           validQty
+  VERIFIED           validOrder
+  VERIFIED           fmtPrice
+  VERIFIED           fmtVol
+Obligations by file
+  ✗ src/model.ts                             18/24
+
+Failed obligations
+✗ src/model.ts:119:11  [postcondition] postcondition of atmIndex: r < 0 || nearest(ks, ks[r], price)
+    │ vreact: (deterministic) timeout: the automation did not finish within this obligation's budget of 1000000 heartbeats (set "heartbeats" in vreact.json to change it)
+✗ src/model.ts:121:11  [postcondition] postcondition of atmIndex: implies(ks.length > 0, r >= 0)
+    │ vreact_auto could not prove the goal (grind stopped at Lean's recursion limit)
+    │   case isTrue
+    │   ks : List Strike
+    │   price : Int
+    │   h₂₂✝ : ↑ks.length > 0
+    │   hcontract✝⁶ :
+    │     (-1 ≤
+    │         if
+    │             price - ks[((JS.findIndex ks fun s => JS.le price s.strike) - 1).toNat].strike ≤
+    │               ks[(JS.findIndex ks fun s => JS.le price s.strike).toNat].strike - price then
+    │           (JS.findIndex ks fun s => JS.le price s.strike) - 1
+    │         else JS.findIndex ks fun s => JS.le price s.strike) ∧
+    │       (if
+    │             price - ks[((JS.findIndex ks fun s => JS.le price s.strike) - 1).toNat].strike ≤
+    │               ks[(JS.findIndex ks fun s => JS.le price s.strike).toNat].strike - price then
+    │           (JS.findIndex ks fun s => JS.le price s.strike) - 1
+    │         else JS.findIndex ks fun s => JS.le price s.strike) <
+    │         ↑ks.length
+    │   …
+✗ src/model.ts:125:18  [index] index k - 1 is within bounds of ks
+    │ `grind` failed
+    │ case grind.1.2
+    │ ks : List Strike
+    │ price : Int
+    │ k : Int := JS.findIndex ks fun s => JS.le price s.strike
+    │ hcontract :
+    │   (-1 ≤ JS.findIndex ks fun s => JS.le price s.strike) ∧ (JS.findIndex ks fun s => JS.le price s.strike) < ↑ks.length
+    │ h : (JS.findIndex ks fun s => JS.le price s.strike) ≤ 0
+    │ h_1 : (JS.findIndex ks fun s => JS.le price s.strike) = -1
+    │ left : (JS.findIndex ks fun s => JS.le price s.strike) + 1 ≤ 0
+    │ right : ∀ (x : Strike), x ∈ ks → JS.le price x.strike = false
+    │ ⊢ False
+✗ src/model.ts:125:38  [index] index k is within bounds of ks
+    │ `grind` failed
+    │ case grind
+    │ ks : List Strike
+    │ price : Int
+    │ k : Int := JS.findIndex ks fun s => JS.le price s.strike
+    │ hcontract :
+    │   (-1 ≤ JS.findIndex ks fun s => JS.le price s.strike) ∧ (JS.findIndex ks fun s => JS.le price s.strike) < ↑ks.length
+    │ h : (JS.findIndex ks fun s => JS.le price s.strike) + 1 ≤ 0
+    │ ⊢ False
+✗ src/model.ts:139:11  [postcondition] postcondition of strikeWindow: 0 <= r.lo && r.lo <= atm && atm < r.hi && r.hi <= n
+    │ `grind` failed
+    │ case grind.2
+    │ n atm levels : Int
+    │ h_pre : (0 ≤ atm ∧ atm < n) ∧ levels ≥ 0
+    │ h : -1 * atm + min n (atm + levels) ≤ 0
+    │ h_1 : ¬n + -1 * atm + -1 * levels ≤ 0
+    │ ⊢ False
+✗ src/model.ts:140:11  [postcondition] postcondition of strikeWindow: forall(0, n, (i) => (r.lo <= i && i < r.hi) === inWindow(i, atm, leve…
+    │ `grind` failed
+    │ case grind.2.2.2.1
+    │ n atm levels : Int
+    │ h_pre : (0 ≤ atm ∧ atm < n) ∧ levels ≥ 0
+    │ i : Int
+    │ h : 0 ≤ i
+    │ h_1 : i < n
+    │ hcontract :
+    │   ((0 ≤ max 0 (atm - levels) ∧ max 0 (atm - levels) ≤ atm) ∧ atm < min n (atm + levels)) ∧ min n (atm + levels) ≤ n
+    │ h_2 :
+    │   (JS.le (max 0 (atm + -1 * levels)) i = true ∧ JS.lt i (min n (atm + levels)) = true) =
+    │     (JS.le (atm + -1 * levels) i = false ∨ JS.le i (atm + levels) = false)
+    │ left : JS.le (max 0 (atm + -1 * levels)) i = false ∨ JS.lt i (min n (atm + levels)) = false
+    │ left_1 : JS.le (atm + -1 * levels) i = true
+    │ right_1 : JS.le i (atm + levels) = true
+    │ h_4 : JS.lt i (min n (atm + levels)) = false
+    │ h_5 : ¬n + -1 * atm + -1 * levels ≤ 0
+    │ h_6 : -1 * atm + levels ≤ 0
+    │   …
+
+✗ NOT VERIFIED  18/24 obligations proved, 6 failed; components: 0/0 verified  (38.3s)

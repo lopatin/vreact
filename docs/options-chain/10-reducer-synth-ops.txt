@@ -1,0 +1,17 @@
+hole in holdAt: ChainUi   scope: u, u.collapsed, u.filter, u.held, u.focus, u.heat, u.orders, u.nextId, id, price
+  24720 candidates tested in 60.0s, up to size 6; stopped: the 60s time limit was reached at size 6
+  no verified solution for hole in holdAt: no candidate passed the tests
+  most common failure (24720×): u: postcondition fails on [{"collapsed":[0],"filter":"s7","held":[{"expiry":10,"price":3},{"expiry":0,"price":0}],"focus":-1,"heat":3,"orders":[{"id":-1,"expiry":1,"leg":"put","strike":7,"buy":false,"qty":0,"price":4}],"nextId":5},0,4] ↦ {"collapsed":[0],"filter":"s7","held":[{"expiry":10,"price":3},{"expiry":0,"price":0}],"focus":-1,"heat":3,"orders":[{"id":-1,"expiry":1,"leg":"put","strike":7,"buy":false,"qty":0,"price":4}],"nextId":5}
+  write this one by hand (synth builds straight-line expressions; guarded updates need an `if`), or check that the spec is satisfiable
+hole in follow: ChainUi   scope: u, u.collapsed, u.filter, u.held, u.focus, u.heat, u.orders, u.nextId, id
+  candidate passes 400 random tests: { ...u, held: u.held.filter((x) => x.expiry !== id) }   (10409 candidate(s) tested in 24.9s)
+  ✔ proved by Lean: { ...u, held: u.held.filter((x) => x.expiry !== id) }
+hole in place: ChainUi   scope: u, u.collapsed, u.filter, u.held, u.focus, u.heat, u.orders, u.nextId, t, t.expiry, t.leg, t.strike, t.side, t.price, qty, price
+  19112 candidates tested in 60.0s, up to size 6; stopped: the 60s time limit was reached at size 6
+  no verified solution for hole in place: no candidate passed the tests
+  most common failure (19112×): u: postcondition fails on [{"collapsed":[1,10],"filter":"s3","held":[{"expiry":4,"price":4},{"expiry":1,"price":10},{"expiry":1,"price":2}],"focus":null,"heat":7,"orders":[{"id":4,"expiry":0,"leg":"call","strike":7,"buy":true,"qty":3,"price":0},{"id":3,"expiry":7,"leg":"call","strike":1,"buy":true,"qty":0,"price":0},{"id":6,"expiry":2,"leg":"put","strike":0,"buy":true,"qty":2,"price":1}],"nextId":0},{"expiry":0,"leg":"call","strike":0,"side":"bid","price":2},1,2] ↦ {"collapsed":[1,10],"filter":"s3","held":[{"expiry":4,"price":4},{"expiry":1,"price":10},{"expiry":1,"price":2}],"focus":null,"heat":7,"orders":[{"id":4,"expiry":0,"leg":"call","strike":7,"buy":true,"qty":3,"price":0},{"id":3,"expiry":7,"leg":"call","strike":1,"buy":true,"qty":0,"price":0},{"id":6,"expiry":2,"leg":"put","strike":0,"buy":true,"qty":2,"price":1}],"nextId":0}
+  write this one by hand (synth builds straight-line expressions; guarded updates need an `if`), or check that the spec is satisfiable
+hole in cancel: ChainUi   scope: u, u.collapsed, u.filter, u.held, u.focus, u.heat, u.orders, u.nextId, id
+  candidate passes 400 random tests: { ...u, orders: u.orders.filter((x) => x.id !== id) }   (13940 candidate(s) tested in 42.0s)
+  ✔ proved by Lean: { ...u, orders: u.orders.filter((x) => x.id !== id) }
+wrote src/reducer.ts
