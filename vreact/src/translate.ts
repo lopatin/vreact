@@ -1102,6 +1102,20 @@ function lamCode(binders: string[], body: string): string {
   return `(fun ${binders.join(" ")} => ${body})`;
 }
 
+/**
+ * The callback over `xs.attach` binding the element `x` and its membership proof `h`, as
+ * projections of a typed binder.  Not `fun ⟨x, h⟩ => body`: that is a `match`, whose
+ * alternative stays a delayed-assigned metavariable until every obligation inside it is
+ * solved, so an obligation Lean runs first (the enclosing handler's) would see the whole
+ * callback as an opaque `?m x`.  (`have`: the membership is an ordinary hypothesis of
+ * the obligations inside, which the automation normalises.)
+ */
+function attachLam(m: ModCtx, x: string, h: string, elem: VType, body: string): string {
+  const p = m.fresh("p");
+  const t = leanType(elem);
+  return `(fun (${p} : {${m.fresh("y")} : ${t} // _}) => let ${x} : ${t} := ${p}.1; have ${h} := ${p}.2; ${body})`;
+}
+
 function arrayMethod(name: string, xs: Val, c: ts.CallExpression, env: Env, expected?: VType): Val {
   const args = c.arguments;
   const m = env.m;
@@ -1130,7 +1144,7 @@ function arrayMethod(name: string, xs: Val, c: ts.CallExpression, env: Env, expe
       const lam = withAttach(fn, [elem], expected?.k === "arr" ? expected.elem : undefined);
       if (lam.obligations) {
         const h = m.fresh("hmem");
-        return { code: `(${X}.attach.map (fun ⟨${lam.binders[0]}, ${h}⟩ => ${lam.body.code}))`, type: T.arr(lam.body.type) };
+        return { code: `(${X}.attach.map ${attachLam(m, lam.binders[0], h, elem, lam.body.code)})`, type: T.arr(lam.body.type) };
       }
       return { code: `(${X}.map ${lamCode(lam.typed, lam.body.code)})`, type: T.arr(lam.body.type) };
     }
@@ -1145,7 +1159,7 @@ function arrayMethod(name: string, xs: Val, c: ts.CallExpression, env: Env, expe
       const rt = name === "filter" ? xs.type : name === "find" ? T.opt(elem) : T.bool;
       if (lam.obligations) {
         const h = m.fresh("hmem");
-        const core = `(${X}.attach.${lean} (fun ⟨${lam.binders[0]}, ${h}⟩ => ${lam.body.code}))`;
+        const core = `(${X}.attach.${lean} ${attachLam(m, lam.binders[0], h, elem, lam.body.code)})`;
         if (name === "filter") return { code: `(${core}.map (·.1))`, type: rt };
         if (name === "find") return { code: `(${core}.map (·.1))`, type: rt };
         return { code: core, type: rt };
@@ -1302,7 +1316,7 @@ function specCall(name: string, c: ts.CallExpression, env: Env): Val {
       if (lam.obligations) {
         // the body's obligations may use the bounds of i (membership in the range)
         const h = env.m.fresh("hmem");
-        return { code: `(${R}.attach.${op} (fun ⟨${lam.binders[0]}, ${h}⟩ => ${lam.body.code}))`, type: T.bool };
+        return { code: `(${R}.attach.${op} ${attachLam(env.m, lam.binders[0], h, T.int, lam.body.code)})`, type: T.bool };
       }
       return { code: `(${R}.${op} ${lamCode(lam.typed, lam.body.code)})`, type: T.bool };
     }
@@ -1705,6 +1719,8 @@ export interface BlockCtx {
   onReturn?: (e: ts.Expression | undefined, env: Env) => string;
   /** handler: produce the outcome term */
   onDone?: (env: Env) => string;
+  /** render: translate a JSX const at its declaration (`code`), of Lean type `type` */
+  jsxConst?: { code: (e: ts.Expression, env: Env) => string; type: string };
   fnNode: ts.Node;
 }
 
@@ -1820,10 +1836,18 @@ function varDecls(decls: ts.NodeArray<ts.VariableDeclaration>, j: number, env: E
   if (ts.isCallExpression(init) && hookName(env, init.expression)) {
     fail(init, `hooks must be called at the top level of a component, unconditionally (Rules of Hooks)`);
   }
-  // JSX-valued const (inlined where used)
+  // JSX-valued const.  JS evaluates the element (its attribute and `{…}` child expressions)
+  // here, at the declaration, whether or not it is rendered: so it is translated here, its
+  // obligations under the facts of this point, and bound to a Lean local used at its uses.
   if (ts.isJsxElement(init) || ts.isJsxSelfClosingElement(init) || ts.isJsxFragment(init)) {
     if (!ts.isIdentifier(d.name)) fail(d, "destructuring JSX");
-    return next(bind(env, symbolOf(env, d.name)!, { k: "jsx", node: init, env }));
+    const s = symbolOf(env, d.name)!;
+    // the key function of a keyed map: the node function translates the same statements
+    if (env.keyFn) return next(bind(env, s, { k: "jsx", node: init, env, code: "" }));
+    if (bc.kind !== "render" || !bc.jsxConst) fail(init, "JSX is only allowed in a component's render (not in functions, handlers, effects or loops)");
+    const code = bc.jsxConst.code(init, env);
+    const { env: e1, name: ln } = freshLocal(env, leanIdent(d.name.text));
+    return `(let ${ln} : ${bc.jsxConst.type} := ${code};\n${next(bind(e1, s, { k: "jsx", node: init, env, code: ln }))})`;
   }
   if (ts.isObjectBindingPattern(d.name)) {
     const v = expr(init, env, declT);
@@ -2230,9 +2254,10 @@ function forOf(s: ts.ForOfStatement, env: Env, bc: BlockCtx, rest: (e: Env) => s
   if (!ts.isVariableDeclarationList(s.initializer) || s.initializer.declarations.length !== 1) fail(s, "use for (const x of xs)");
   const xs = expr(s.expression, env);
   if (xs.type.k !== "arr") fail(s.expression, "for…of over a non-array");
-  // locals assigned in the body
+  // locals assigned in the body; `sw`: the innermost enclosing breakable statement (inside
+  // the loop body) is a switch, so an unlabeled `break` there only ends the case
   const assigned: ts.Symbol[] = [];
-  const visit = (n: ts.Node) => {
+  const visit = (n: ts.Node, sw = false) => {
     if (ts.isBinaryExpression(n) && [ts.SyntaxKind.EqualsToken, ts.SyntaxKind.PlusEqualsToken, ts.SyntaxKind.MinusEqualsToken].includes(n.operatorToken.kind) && ts.isIdentifier(n.left)) {
       const sym = symbolOf(env, n.left);
       if (sym && env.vars.has(sym) && !assigned.includes(sym)) assigned.push(sym);
@@ -2241,9 +2266,10 @@ function forOf(s: ts.ForOfStatement, env: Env, bc: BlockCtx, rest: (e: Env) => s
       const sym = symbolOf(env, n.operand);
       if (sym && env.vars.has(sym) && !assigned.includes(sym)) assigned.push(sym);
     }
-    if (ts.isReturnStatement(n) || ts.isBreakStatement(n) || ts.isContinueStatement(n)) fail(n, "return/break/continue inside for…of are not supported; use array methods (find, some, …)");
+    if (ts.isReturnStatement(n) || ts.isContinueStatement(n) || (ts.isBreakStatement(n) && (!!n.label || !sw))) fail(n, "return/break/continue inside for…of are not supported (a `break` may only end a switch case); use array methods (find, some, …)");
     if (ts.isCallExpression(n) && updateTarget(n.expression, env)) fail(n, "state updates inside loops are not supported; compute the new value, then update once");
-    ts.forEachChild(n, visit);
+    const inner = ts.isSwitchStatement(n) ? true : ts.isIterationStatement(n, false) ? false : sw;
+    ts.forEachChild(n, (c) => visit(c, inner));
   };
   visit(s.statement);
   if (assigned.length === 0) fail(s, "loop has no effect (it assigns no local variable)");

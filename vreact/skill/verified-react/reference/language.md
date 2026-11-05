@@ -75,7 +75,10 @@ non-discriminated unions (`string | number`), `ReactNode`/`children` props.
   `s.endsWith(t, e)` → `s.slice(0, e).endsWith(t)`.
 * `Math.max/min/abs/sign/floor/trunc/round/ceil`, `String(x)`.
 * Names: any identifier works. Ones that are Lean keywords or root names
-  (`matches`, `rec`, `show`, `max`, `List`, …) get a `'` in Lean (`VTS.m.max'`).
+  (`matches`, `rec`, `show`, `max`, `List`, …) get a `'` in Lean (`VTS.m.max'`),
+  also components (`function Type()` → `VTS.m.Type'`). File/directory names that
+  are such names get a `_` (`src/end/Sort.tsx` → `VTS.end_.Sort_`, lemmas in
+  `proofs/end_/Sort_.lean`).
 * Calls to verified top-level functions (their `requires` become obligations)
   and to local helper arrows (inlined).
 * Narrowing: `x !== null`, `x.kind === "add"`, `switch (x.kind)`, early returns —
@@ -91,7 +94,8 @@ non-discriminated unions (`string | number`), `ReactNode`/`children` props.
 `const`, `let` + reassignment (locals only), `if/else`, `return`, `switch`
 (cases end with `return`/`break`, also `case "x": { …; break; }`; no fall-through;
 `default` anywhere, also grouped `case "a": default:`), `for (const x of xs)` (may
-assign outer `let`s; no `break`/`return` inside), `throw` (must be provably
+assign outer `let`s; no `return`/`continue` inside, `break` only to end a `switch`
+case), `throw` (must be provably
 unreachable), `assert(c)`, `assume(c)`. No `while`, `try`, `var`, recursion.
 
 Closures and `let`: JS closures read a variable when they run. So a function
@@ -114,7 +118,8 @@ export function f(x: int, xs: readonly int[]): int {
 ```
 
 Several `requires` form one precondition, in order: a later one may rely on an
-earlier one (`requires(xs.length > 0); requires(xs[0] >= 0)`). Inside contracts,
+earlier one (`requires(xs.length > 0); requires(xs[0] >= 0)`); the same holds for
+a component's `requires` and `invariant`s. Inside contracts,
 guards are in scope as JS evaluates them: the right side of `&&` / `||`, the
 branches of `?:`, the consequent of `implies(a, b)`, and quantifier bodies
 (`forall(0, xs.length, (i) => xs[i] >= 0)`, `xs.every((r) => r[0] > 0)`) may index
@@ -173,15 +178,19 @@ Effects: setters and timers (`setTimeout`/`setInterval` callbacks become tasks),
 external writes (`localStorage.setItem`, `document.title = …`, `console.*`) are
 allowed and have no modelled effect; no async. A cleanup is an inline
 `() => { … }` that only calls `clearTimeout`/`clearInterval` and makes those
-external writes (no setters, `dispatch`, parent callbacks or local helpers: it
-runs later with a stale render's values and is not verified).
+external writes, possibly under `if`/`else` (`if (id !== null) clearInterval(id)`;
+no setters, `dispatch`, parent callbacks or local helpers: it runs later with a
+stale render's values and is not verified).
 
 JSX: intrinsic elements with string/int/bool/enum attributes (`className`,
 `value`, `checked`, `disabled`, `placeholder`, `type`, …; no `style`, `ref`,
 spread), child components with all their props, `{cond && <X/>}`, ternaries,
 `xs.map(x => <El key={…}/>)` (keys `int` or `string`, distinct), text from
 strings/ints/enums (booleans render nothing, but are checked). `key={…}` outside
-lists is checked too (JS evaluates it). `children` props are not supported yet.
+lists is checked too (JS evaluates it). A JSX const (`const row = <p>{e}</p>;`)
+is checked where it is declared, even if it is rendered only under a condition or
+not at all (JS evaluates it there); JSX only appears in a component's render.
+`children` props are not supported yet.
 One native event may reach at most one discrete handler: an element may not
 combine handlers fired by the same native event (a checkbox's `onClick` +
 `onChange` both run on click; `onInput` + a text input's `onChange` both run on

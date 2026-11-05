@@ -15,7 +15,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { Program, ModCtx, type Obligation, type FnInfo, type CompInfo, type Global, type ConstInfo } from "./ctx.ts";
 import { T, type VType, typeOfNode, typeOfDecl, emitTypeDecl, leanType } from "./types.ts";
-import { VtsError, fail, leanIdent, leanField, leanStr, paren, capitalize, nodeText } from "./util.ts";
+import { VtsError, fail, leanIdent, leanField, leanStr, paren, capitalize, nodeText, clashesWithLean } from "./util.ts";
 import { expr, prop, propAll, valueBlock, specFn, symbolOf, bindParam, typeOf } from "./translate.ts";
 import { translateComponent, compSignature, baseEnv } from "./component.ts";
 import { leanDecls } from "./lean.ts";
@@ -110,9 +110,13 @@ function loadProgram(cfg: Config): { program: ts.Program; diags: string[] } {
   return { program, diags };
 }
 
+/** A module path segment as a Lean namespace / module name component (also a directory name). */
 function sanitizeSeg(s: string): string {
-  const t = s.replace(/[^A-Za-z0-9_]/g, "_");
-  return /^[A-Za-z_]/.test(t) ? t : "M" + t;
+  const t0 = s.replace(/[^A-Za-z0-9_]/g, "_");
+  const t = /^[A-Za-z_]/.test(t0) ? t0 : "M" + t0;
+  // a Lean token (`end`, `at`, `Type`) does not parse as a name component, and a Lean or
+  // generated name (`List`, `VReact`) would capture references (`List.map` inside VTS.List)
+  return clashesWithLean(t) ? t + "_" : t;
 }
 
 function isComponentDecl(fn: ts.FunctionDeclaration): boolean {
@@ -164,7 +168,7 @@ export function translate(cfg: Config): TranslateResult {
     const a = path.relative(cfg.root, other.fileName), b = path.relative(cfg.root, sf.fileName);
     const otherNs = nsOfFile(other.fileName);
     const same = otherNs === ns ? `the same Lean module ${ns}` : `Lean modules ${otherNs} and ${ns}, whose files differ only in letter case`;
-    res.errors.push(new VtsError(sf, `module name clash: ${a} and ${b} translate to ${same} (a module is named after its path without the .ts/.tsx extension, other characters than letters, digits and _ become _); rename one of the files`));
+    res.errors.push(new VtsError(sf, `module name clash: ${a} and ${b} translate to ${same} (a module is named after its path without the .ts/.tsx extension, other characters than letters, digits and _ become _, and a segment that is a Lean keyword or Lean name gets a trailing _); rename one of the files`));
   }
   if (res.errors.length) return res;
 
@@ -298,14 +302,15 @@ export function translate(cfg: Config): TranslateResult {
         const info = g.info;
         if (info.data.length || info.callbacks.length) continue;
         const N = info.ns;
+        const L = leanIdent(info.name); // the component's namespace in this module (as in N)
         view += `/-- \`<${info.name}/>\` as the root element of an application. -/\n`;
         const rootOb = obsOf(() => m.ob(c, "root-precondition", `<${info.name}/> can be mounted as the application root`));
-        view += `theorem ${info.name}.root_pre : ${N}.pre ${N}.Props.mk :=\n  ${rootOb.r}\n\n`;
-        view += `noncomputable def ${info.name}.element : VReact.CompNode Empty :=\n  ⟨${N}.spec, ${N}.Props.mk, ${N}.Cb.mk, ${N}.root_pre,\n   fun s h => ${N}.component.render ${N}.Props.mk ${N}.Cb.mk s ${N}.root_pre h⟩\n\n`;
+        view += `theorem ${L}.root_pre : ${N}.pre ${N}.Props.mk :=\n  ${rootOb.r}\n\n`;
+        view += `noncomputable def ${L}.element : VReact.CompNode Empty :=\n  ⟨${N}.spec, ${N}.Props.mk, ${N}.Cb.mk, ${N}.root_pre,\n   fun s h => ${N}.component.render ${N}.Props.mk ${N}.Cb.mk s ${N}.root_pre h⟩\n\n`;
         view += `/-- **Certificate.** In every run of the application rooted at \`<${info.name}/>\` — any sequence of\nuser events, effect flushes and timer callbacks — every mounted component instance satisfies\nits invariant (instantiation of \`VReact.run_allInv\`). -/\n`;
-        view += `theorem ${info.name}.certificate (fuel : Nat) (acts : List VReact.Action) :\n    (VReact.run fuel ${info.name}.element acts).AllInv :=\n  VReact.run_allInv fuel ${info.name}.element acts\n\n`;
+        view += `theorem ${L}.certificate (fuel : Nat) (acts : List VReact.Action) :\n    (VReact.run fuel ${N}.element acts).AllInv :=\n  VReact.run_allInv fuel ${N}.element acts\n\n`;
         const compObs = modRes.components.find((x) => x.ns === N)?.obs ?? [];
-        modRes.certificates.push({ name: info.name, qname: `${ns}.${info.name}.certificate`, obs: [...compObs, ...rootOb.obs] });
+        modRes.certificates.push({ name: info.name, qname: `${N}.certificate`, obs: [...compObs, ...rootOb.obs] });
       }
       // (axiom reports are printed after the namespace is closed, with full names)
     } catch (e) {

@@ -59,7 +59,9 @@ first one that fails.
    `VTS.<module>.<fn>` with contracts `<fn>.post`, `<fn>.post2`, …; components
    `VTS.<module>.<Comp>.{Props, Cb, State, pre, inv, render}`. A name that is a
    Lean keyword or root-level Lean name gets a `'` (`function max` is
-   `VTS.<module>.max'`, field `rec` is `rec'`); hypotheses the translator invents
+   `VTS.<module>.max'`, field `rec` is `rec'`, component `Type` is
+   `VTS.<module>.Type'`; a module path segment gets a `_`: `src/end/Sort.tsx` is
+   `VTS.end_.Sort_`, its lemmas `proofs/end_/Sort_.lean`); hypotheses the translator invents
    are subscripted (`h₁`, `hmem₂`); all `requires` of a function form one
    hypothesis `h_pre`. Run
    `vreact explain src/<file>.tsx` to see them. `proofs/Base.lean` (no imports of

@@ -105,12 +105,23 @@ Every expression maps to a Lean term whose value is the JavaScript value.
   are subscripted (`h₁`, `idx₀`). Neither `'` nor subscript digits can occur in a
   TypeScript identifier, so generated names and user names never capture each
   other. The lists are generated from Lean by `lean/scripts/GenNames.lean`.
+  Component names follow the same rule (`function Type()` is the namespace
+  `Type'`); a module path segment that would clash gets a `_` suffix instead, as
+  it is also a directory name (`src/end/Sort.tsx` is the module `VTS.end_.Sort_`,
+  its user lemmas go in `proofs/end_/Sort_.lean`).
 * Statements are translated in continuation-passing style: `const` ↦ `let`,
   reassignment of a local `let` ↦ shadowing `let`, `if` ↦ dependent `if` (the
   condition becomes a hypothesis), `for (const x of xs)` ↦ `List.foldl` over
-  the tuple of assigned locals, `switch` ↦ `match` / if-chain (first matching
+  the tuple of assigned locals (no `return`/`continue`, and a `break` only to end
+  a `switch` case), `switch` ↦ `match` / if-chain (first matching
   label; `default` in any position takes the values no label matches), `throw`
   ↦ an obligation that the point is unreachable.
+* A JSX const (`const row = <p>{e}</p>;`) is translated where it is declared —
+  JS evaluates the element's attributes and `{…}` children there, whether or not
+  (and wherever) it is rendered — so its obligations are checked at the
+  declaration, under the facts that hold there; uses refer to that value (the
+  event-bubbling checks of §2.4 still apply at each use). JSX elsewhere than in a
+  component's render (functions, handlers, loops) is rejected.
 * Functions created in a body (helper arrows, handlers, callback props,
   functional updates, effects, timers, cleanups, `useCallback`) are translated in
   the environment of the point where they are created. JS closures capture
@@ -127,8 +138,8 @@ Every expression maps to a Lean term whose value is the JavaScript value.
 |-----------------------------------|---------|
 | `requires(c)` in a function       | hypothesis parameter `(h_pre : c)`; every call site must prove it (several `requires` are conjoined in order into one `h_pre`) |
 | `ensures((r: T) => c)`            | theorem `f.post : ∀ args, h_pre → c[r := f args]` |
-| `requires(c)` in a component      | the props precondition `pre`; every `<C …/>` must prove it |
-| `invariant(c)` in a component     | the state invariant `inv` (after the hooks) |
+| `requires(c)` in a component      | the props precondition `pre`; every `<C …/>` must prove it (several are conjoined in order, as in functions) |
+| `invariant(c)` in a component     | the state invariant `inv` (after the hooks; several are conjoined in order) |
 | `callbackRequires(cb, (…) => c)`  | the contract of a callback prop (§2.4) |
 | `assert(c)` / `assume(c)`         | obligation + fact / trusted fact (reported) |
 | `forall exists distinct implies`  | bounded quantifiers, key uniqueness (`List.Nodup`), implication |
@@ -143,7 +154,8 @@ proof obligations, plain `a ∧ b` otherwise), `a || b` as `a ∨ ∃ (h : ¬a),
 `∀ (h : a), b`, `forall(lo, hi, i => p)` as `∀ i, ∀ (h₁ : lo ≤ i), ∀ (h₂ : i < hi), p`
 and `xs.every(x => p)` as `∀ x, ∀ (h : x ∈ xs), p`, so an index obligation in `b`,
 `p`, … sees its guard. (In code, `implies` is a function call: both arguments are
-evaluated.)
+evaluated.) Several `requires` (or `invariant`) statements are one condition
+`c₁ && c₂ && …`: a later one may rely on the earlier ones as guards.
 
 ---
 
@@ -258,7 +270,8 @@ the check sees every reference, including shorthand properties `{ x }`; the same
 check applies to `useMemo` / `useCallback`). The model has no cleanup step, so a
 returned cleanup is restricted statically: it must be an inline function that
 only calls `clearTimeout` / `clearInterval` and makes external writes
-(`console.*`, `localStorage.*`, `document.title = …`) with pure arguments —
+(`console.*`, `localStorage.*`, `document.title = …`) with pure arguments,
+possibly under `if`/`else` with pure conditions —
 no setters, `dispatch`, parent callbacks or local helpers.
 Running a robust effect any number of times (StrictMode) is safe.
 
