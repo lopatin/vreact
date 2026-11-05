@@ -142,6 +142,48 @@ example (xs : List Int)
 example : JS.strIncludes (JS.Str.ofString "a@b") (JS.Str.ofString "@") = true := by vreact_auto
 example : JS.startsWith (JS.Str.ofString "ab") (JS.Str.ofString "b") = false := by vreact_auto
 
+/-! ### round 3 repairs (Lx): copies of guarded preconditions, `!==` updates, exact `%`,
+nested enums, maps in key chains, bounded goals -/
+
+-- a single guarded precondition the goal depends on: its `vreact_expose` copy must survive
+@[vreact_simp, reducible] def exLenT (xs : List Int)
+    (_h : ∃ i : Int, ∃ (h₁ : 0 ≤ i ∧ i < (xs.length : Int)), JS.get xs i h₁ < 0) : Int := xs.length
+example (xs : List Int) (h : ∃ i : Int, ∃ (h₁ : 0 ≤ i ∧ i < (xs.length : Int)), JS.get xs i h₁ < 0) :
+    exLenT xs h > 0 := by vreact_auto
+-- a map-update guarded by a negated key test
+example (xs : List St) (k : Int) (h : (xs.map (·.count)).Nodup) :
+    ((xs.map (fun s => if ¬ s.count = k then s else { s with name := JS.Str.ofString "x" })).filter
+      (fun s => JS.eq s.name (JS.Str.ofString "x"))).length ≤ (xs.filter (fun s => JS.eq s.name (JS.Str.ofString "x"))).length + 1 := by
+  vreact_auto
+-- exact values of `%`
+example (n : Int) (hn : 0 < n) : JS.rem n n (by omega) = 0 := by vreact_auto
+example (s n : Int) (hn : 0 < n) (hs : 0 ≤ s ∧ s + 1 < n) : JS.rem (s + 1) n (by omega) = s + 1 := by vreact_auto
+-- an enumeration that is a field of a field
+structure Box where
+  c : Color
+  k : Int
+structure Box2 where
+  b : Box
+example (o : Box2) : (o.b.c = .red ∧ (if o.b.c = .red then (1 : Int) else 0) = 1) ∨ (o.b.c = .green ∨ o.b.c = .blue) := by
+  vreact_auto
+-- distinct keys through a map that keeps the key
+example (xs : List St) (h : (xs.map (·.count)).Nodup) :
+    ((JS.slice (xs.map (fun s => { s with name := JS.Str.ofString "x" })) 0 (some 3)).map (·.count)).Nodup := by
+  vreact_auto
+example (xs : List St) (k : Int) (h : (xs.map (·.count)).Nodup) :
+    ((JS.slice (xs.map (fun s => if s.count = k then { s with name := JS.Str.ofString "x" } else s)) 0 (some 3)).map (·.count)).Nodup := by
+  vreact_auto
+-- a bounded quantifier to establish under a guard, with a two-sided body, and above 8 values
+example (xs : List Int) (k : Int) (hl : (xs.length : Int) = 9) (hk : 0 ≤ k ∧ k < 9)
+    (h : ∀ i : Int, ∀ (h₁ : 0 ≤ i) (h₂ : i < 9), 0 ≤ xs[i.toNat]'(by omega) ∧ xs[i.toNat]'(by omega) ≤ 2) :
+    ∃ (h : ((xs.set k.toNat 1).length : Int) = 9), ∀ i : Int, ∀ (h₁ : 0 ≤ i) (h₂ : i < 9),
+      0 ≤ (xs.set k.toNat 1)[i.toNat]'(by omega) ∧ (xs.set k.toNat 1)[i.toNat]'(by omega) ≤ 2 := by
+  vreact_auto
+example : ∃ (h : ([0, 0, 0, 0, 0, 0, 0, 0, 0] : List Int).length = 9), ∀ i : Int, ∀ (h₁ : 0 ≤ i) (h₂ : i < 9),
+    0 ≤ ([0, 0, 0, 0, 0, 0, 0, 0, 0] : List Int)[i.toNat]'(by simp; omega) := by
+  vreact_auto
+
+
 /-! ### automation shape (#40, #57, #58, #65) -/
 
 @[vreact_simp] def three (xs : List Int) : Prop := xs.length = 3
@@ -179,6 +221,15 @@ example : True := by
     (xs.filter (fun s => !JS.eq s.count (xs[i]'hi).count)).length + 1 = xs.length)
   vreact_fails_showing_goal (∀ (s n : Int) (h : n ≠ 0), 0 ≤ JS.rem s n h)
   vreact_fails_showing_goal (∀ (c : Color), c = .red ∨ c = .green)
+  trivial
+
+-- round 3 repairs (Lx): the new facts do not prove false goals
+example : True := by
+  vreact_fails_showing_goal (∀ (n : Int) (h : n ≠ 0), JS.rem n n h = 1)
+  vreact_fails_showing_goal (∀ (s n : Int) (h : n ≠ 0), JS.rem (s + 1) n h = s + 1)
+  vreact_fails_showing_goal (∀ (xs : List St), (xs.map (·.count)).Nodup →
+    ((JS.slice (xs.map (fun s => { s with count := 0 })) 0 (some 3)).map (·.count)).Nodup)
+  vreact_fails_showing_goal (∀ (o : Box2), o.b.c = .red ∨ o.b.c = .green)
   trivial
 
 end VReact.SelfTest

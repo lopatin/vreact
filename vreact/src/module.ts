@@ -371,6 +371,21 @@ export function translate(cfg: Config): TranslateResult {
     fs.mkdirSync(path.dirname(p), { recursive: true });
     if (!fs.existsSync(p) || fs.readFileSync(p, "utf8") !== f.text) fs.writeFileSync(p, f.text);
   }
+  // a manifest written for another location of the library (a project copied or moved with its
+  // `.vreact/`) still names that VReact: lake would keep building against it, so it is removed
+  // and lake writes a new one from the lakefile
+  const manifest = path.join(cfg.outDir, "lake-manifest.json");
+  if (fs.existsSync(manifest)) {
+    let same = false;
+    try {
+      const m = JSON.parse(fs.readFileSync(manifest, "utf8")) as { packages?: { name?: string; dir?: string }[] };
+      const dep = (m.packages ?? []).find((p) => p.name === "VReact");
+      same = !!dep?.dir && fs.realpathSync(path.resolve(cfg.outDir, dep.dir)) === fs.realpathSync(cfg.leanLib);
+    } catch {
+      same = false;
+    }
+    if (!same) fs.rmSync(manifest, { force: true });
+  }
   res.ok = true;
   return res;
 }

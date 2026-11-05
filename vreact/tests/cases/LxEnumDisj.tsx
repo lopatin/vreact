@@ -1,7 +1,7 @@
 // expect: verified
 // N11: true disjunctive postconditions/invariants over an enumeration or a discriminated union
 // need a case split on the enum value, which `grind` does not do itself (vreact_finish splits
-// a small enum/union of the goal as a fallback, up to two levels).
+// a small enum/union of the goal as a fallback, up to three levels).
 import { useState } from "react";
 import { ensures, invariant, type int } from "vreact/spec";
 
@@ -22,7 +22,7 @@ export function getV(t: T): int {
   return t.v;
 }
 
-// two enumerations: the split goes two levels deep
+// two enumerations: the split goes two levels deep (of at most three)
 type Size = "s" | "m" | "l";
 export function price(c: Color, s: Size): int {
   ensures((p: int) => (s === "s" && p < 10) || (s === "m" && 10 <= p && p < 20) || (s === "l" && p >= 20));

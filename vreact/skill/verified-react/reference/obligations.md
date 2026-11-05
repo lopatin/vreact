@@ -116,13 +116,26 @@ first one that fails.
 8. **What the automation knows about lists.** Distinct keys and counts follow
    chains of `filter`/`slice`/`toSorted`/`toReversed` from a list whose
    `distinct(...)` is a hypothesis (an invariant, a `requires`), also through
-   `const`s; deleting by the key of a present element of a list with distinct
-   keys removes exactly one element, and a map-update by key
-   (`xs.map(x => x.id === k ? {...x, done: !x.done} : x)`) changes a
-   `filter(...).length` by at most one. A disjunction over the cases of an
-   enumeration or union (`(c === "red" && n === 1) || (c === "green" && …)`) is
-   proved by splitting the enumeration (at most two levels); `%` with a
-   non-negative dividend and a non-zero divisor is in `[0, |divisor|)`.
+   `const`s and through a `map` that keeps the key (`xs.map(bump).slice(0, 3)`
+   keyed by `id` when `bump` returns `{...r, age: …}`); deleting by the key of a
+   present element of a list with distinct keys removes exactly one element, and
+   a map-update by key (`xs.map(x => x.id === k ? {...x, done: !x.done} : x)`,
+   also written with `!==` or as an `if` that returns `x` early) changes a
+   `filter(...).length` by at most one. Facts about every (or some) element of a
+   map-updated list are stated about the updated elements, so a reducer with
+   many map-update arms stays within one obligation's budget. A disjunction over
+   the cases of an enumeration or union (`(c === "red" && n === 1) || (c ===
+   "green" && …)`, also on `o.inner.mode`) is proved by splitting the
+   enumeration (up to three nested fallback levels). `%` with a non-negative
+   dividend and a non-zero divisor is in `[0, |divisor|)`, and its exact value
+   is known where index arithmetic needs it: `a % n === a` for `0 <= a < |n|`
+   (and for `-|n| < a <= 0`), `n % n === 0`.
+9. **Bounded quantifiers.** `forall(lo, hi, i => …)` and guarded `&&` in
+   hypotheses are split and instantiated at the indices of the goal, also
+   nested (`g[r][c]` of a 2-D grid); to *establish* one with numeral bounds
+   (an `init` of 9 cells, `cells.with(k, v)` under `forall(0, 9, i => cells[i]
+   >= 0 && cells[i] <= 2)`), the goal is split into its conjuncts and, if
+   needed, into one case per index (at most 16 values).
 
 ## What not to do
 

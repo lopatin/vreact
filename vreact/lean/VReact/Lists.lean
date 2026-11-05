@@ -54,6 +54,16 @@ theorem SubPerm.trans {α} {l₁ l₂ l₃ : List α} (h₁ : SubPerm l₁ l₂)
   exact ⟨l'', hp''.trans hp, hs''.trans hs'⟩
 theorem SubPerm.length_le {α} {l₁ l₂ : List α} (h : SubPerm l₁ l₂) : l₁.length ≤ l₂.length := by
   obtain ⟨l, hp, hs⟩ := h; exact hp.length_eq ▸ hs.length_le
+/-- A map in a chain (`xs.map(bump).slice(0, 3)` keyed by `id`): the keys of `l.map g` are those of
+`l` under `fun x => f (g x)`, which is `f` itself when `g` keeps the key (`{...r, age: r.age +
+1}`; `vreact_subperm` checks that by definitional unfolding). -/
+theorem nodup_map_map_comp {α β κ} (f : β → κ) (g : α → β) (l : List α)
+    (h : (l.map (fun x => f (g x))).Nodup) : ((l.map g).map f).Nodup := by
+  rw [List.map_map]; exact h
+theorem nodup_map_map_of_keep {α κ} (f : α → κ) (g : α → α) (l : List α) (hfg : ∀ x, f (g x) = f x)
+    (h : (l.map f).Nodup) : ((l.map g).map f).Nodup := by
+  have e : (l.map g).map f = l.map f := by rw [List.map_map]; exact congrArg (List.map · l) (funext hfg)
+  rw [e]; exact h
 
 /-- Removing elements keeps keys distinct. -/
 theorem nodup_map_filter {α β} (f : α → β) (p : α → Bool) (l : List α) (h : (l.map f).Nodup) :
@@ -69,6 +79,73 @@ attribute [grind =] List.all_eq_true List.any_eq_true
 -- membership and distinctness distribute over the list operations
 attribute [vreact_simp] List.nodup_append List.map_append List.mem_append List.mem_map List.mem_filter
   List.nodup_cons List.mem_singleton List.nodup_nil List.filter_append List.append_assoc
+
+/-! ### Membership in a map-update (`xs.map(x => x.id === k ? {...x, f: v} : x)`)
+
+`List.mem_map` states `x ∈ l.map f` as `∃ a, a ∈ l ∧ f a = x`; a fact about every element (or
+some element) of a concatenation with one updated part (`all(b) = [...todo, ...doing, ...done]`
+after a reducer arm) then hides the update behind an existential that `grind` must instantiate
+for each conjunct.  These state it about `f a` for the elements `a` of `l` (`f : α → α`, a
+map-update: key maps such as `fun c => c.id` are untouched), with the field accesses `(f a).id` then
+reduced by `pushProjIte`.  Not in `vreact_simp`: keyed on `∃`/`∀`, `simp` would try them at every
+quantifier of every goal (+9% on `examples/seats`); `vreact_memmap` (`Tactic.lean`) rewrites with
+them the goals that have such a membership. -/
+section MemMap
+variable {α β : Type _} {l : List α}
+theorem ex_mem_map_and {f : α → β} {q : β → Prop} :
+    (∃ b, (∃ a, a ∈ l ∧ f a = b) ∧ q b) ↔ ∃ a, a ∈ l ∧ q (f a) :=
+  ⟨fun ⟨_, ⟨a, ha, rfl⟩, hq⟩ => ⟨a, ha, hq⟩, fun ⟨a, ha, hq⟩ => ⟨f a, ⟨a, ha, rfl⟩, hq⟩⟩
+theorem ex_mem_map_or_and {f : α → α} {R q : α → Prop} :
+    (∃ x, ((∃ a, a ∈ l ∧ f a = x) ∨ R x) ∧ q x) ↔ (∃ a, a ∈ l ∧ q (f a)) ∨ ∃ x, R x ∧ q x := by
+  constructor
+  · rintro ⟨x, ⟨a, ha, rfl⟩ | hr, hq⟩
+    · exact .inl ⟨a, ha, hq⟩
+    · exact .inr ⟨x, hr, hq⟩
+  · rintro (⟨a, ha, hq⟩ | ⟨x, hr, hq⟩)
+    · exact ⟨f a, .inl ⟨a, ha, rfl⟩, hq⟩
+    · exact ⟨x, .inr hr, hq⟩
+theorem ex_or_mem_map_and {f : α → α} {A q : α → Prop} :
+    (∃ x, (A x ∨ ∃ a, a ∈ l ∧ f a = x) ∧ q x) ↔ (∃ x, A x ∧ q x) ∨ ∃ a, a ∈ l ∧ q (f a) := by
+  constructor
+  · rintro ⟨x, hr | ⟨a, ha, rfl⟩, hq⟩
+    · exact .inl ⟨x, hr, hq⟩
+    · exact .inr ⟨a, ha, hq⟩
+  · rintro (⟨x, hr, hq⟩ | ⟨a, ha, hq⟩)
+    · exact ⟨x, .inl hr, hq⟩
+    · exact ⟨f a, .inr ⟨a, ha, rfl⟩, hq⟩
+theorem ex_or_mem_map_or_and {f : α → α} {A B q : α → Prop} :
+    (∃ x, (A x ∨ (∃ a, a ∈ l ∧ f a = x) ∨ B x) ∧ q x) ↔ (∃ a, a ∈ l ∧ q (f a)) ∨ ∃ x, (A x ∨ B x) ∧ q x := by
+  constructor
+  · rintro ⟨x, hr | ⟨a, ha, rfl⟩ | hb, hq⟩
+    · exact .inr ⟨x, .inl hr, hq⟩
+    · exact .inl ⟨a, ha, hq⟩
+    · exact .inr ⟨x, .inr hb, hq⟩
+  · rintro (⟨a, ha, hq⟩ | ⟨x, hr | hb, hq⟩)
+    · exact ⟨f a, .inr (.inl ⟨a, ha, rfl⟩), hq⟩
+    · exact ⟨x, .inl hr, hq⟩
+    · exact ⟨x, .inr (.inr hb), hq⟩
+theorem all_mem_map {f : α → α} {P : α → Prop} :
+    (∀ x, (∃ a, a ∈ l ∧ f a = x) → P x) ↔ ∀ a, a ∈ l → P (f a) :=
+  ⟨fun h a ha => h _ ⟨a, ha, rfl⟩, fun h _ ⟨a, ha, e⟩ => e ▸ h a ha⟩
+theorem all_mem_map_or {f : α → α} {R P : α → Prop} :
+    (∀ x, (∃ a, a ∈ l ∧ f a = x) ∨ R x → P x) ↔ (∀ a, a ∈ l → P (f a)) ∧ ∀ x, R x → P x :=
+  ⟨fun h => ⟨fun a ha => h _ (.inl ⟨a, ha, rfl⟩), fun x hx => h x (.inr hx)⟩,
+   fun ⟨h1, h2⟩ x hx => hx.elim (fun ⟨a, ha, e⟩ => e ▸ h1 a ha) (h2 x)⟩
+theorem all_or_mem_map {f : α → α} {A P : α → Prop} :
+    (∀ x, A x ∨ (∃ a, a ∈ l ∧ f a = x) → P x) ↔ (∀ a, a ∈ l → P (f a)) ∧ ∀ x, A x → P x :=
+  ⟨fun h => ⟨fun a ha => h _ (.inr ⟨a, ha, rfl⟩), fun x hx => h x (.inl hx)⟩,
+   fun ⟨h1, h2⟩ x hx => hx.elim (h2 x) (fun ⟨a, ha, e⟩ => e ▸ h1 a ha)⟩
+theorem all_or_mem_map_or {f : α → α} {A B P : α → Prop} :
+    (∀ x, A x ∨ (∃ a, a ∈ l ∧ f a = x) ∨ B x → P x) ↔ (∀ a, a ∈ l → P (f a)) ∧ ∀ x, A x ∨ B x → P x :=
+  ⟨fun h => ⟨fun a ha => h _ (.inr (.inl ⟨a, ha, rfl⟩)), fun x hx => hx.elim (fun h' => h x (.inl h')) (fun h' => h x (.inr (.inr h')))⟩,
+   fun ⟨h1, h2⟩ x hx => hx.elim (fun h' => h2 x (.inl h')) (fun hx => hx.elim (fun ⟨a, ha, e⟩ => e ▸ h1 a ha) (fun h' => h2 x (.inr h')))⟩
+theorem all_or_or_mem_map {f : α → α} {A B P : α → Prop} :
+    (∀ x, A x ∨ B x ∨ (∃ a, a ∈ l ∧ f a = x) → P x) ↔ (∀ a, a ∈ l → P (f a)) ∧ ∀ x, A x ∨ B x → P x := by
+  rw [← all_or_mem_map (A := fun x => A x ∨ B x)]; simp only [or_assoc]
+theorem ex_or_or_mem_map_and {f : α → α} {A B q : α → Prop} :
+    (∃ x, (A x ∨ B x ∨ ∃ a, a ∈ l ∧ f a = x) ∧ q x) ↔ (∃ a, a ∈ l ∧ q (f a)) ∨ ∃ x, (A x ∨ B x) ∧ q x := by
+  rw [Or.comm (a := ∃ a, _), ← ex_or_mem_map_and (A := fun x => A x ∨ B x)]; simp only [or_assoc]
+end MemMap
 
 /-! Keys of `range(n)` and of lists of ints/strings used directly as keys
 (`List.map Key.int xs` is the eta-reduced form `nodup_map_key_int` does not match). -/

@@ -12,18 +12,21 @@ import VReact.Simprocs
    record fields are pushed through conditionals (`pushProjIte`) and Bool
    `if`-chains become propositions, so a map-update that leaves a field alone leaves
    facts about that field syntactically unchanged;
-2. split `if`/`match` in the goal, normalise again; add the facts `grind` cannot find by
-   E-matching: counts of filters by key (`vreact_keyfacts`), the parts and instances of
-   bounded quantifiers and guarded existentials (`vreact_bounded`), distinct keys and counts
-   through chains of list operations (`vreact_subperm`);
+2. split `if`/`match` in the goal, normalise again (a goal with a membership in a map-update
+   also with the lemmas of `Lists.lean` that state it about the updated elements,
+   `vreact_memmap`); add the facts `grind` cannot find by E-matching: counts of filters by key
+   (`vreact_keyfacts`), the parts and instances of bounded quantifiers and guarded existentials,
+   with a goal's own guarded binders made plain implications (`vreact_bounded`), distinct keys
+   and counts through chains of list operations, maps that keep the key included
+   (`vreact_subperm`);
 3. close each case with `grind` (congruence closure + E-matching + linear
    integer arithmetic + case splitting) or `omega`; if both fail on a
    conjunction, prove the conjuncts separately; on a goal that is not a
    conjunction, fall back to `simp_all` variants (also on the parts of guarded
    contracts `∃ (h : a), b h`, `vreact_unpack`); a failure reports `grind`'s
-   goal (`vreact_finish`); if all of that fails, split a guarded existential goal, a
-   bounded quantifier with numeral bounds, or a small enumeration/union of the goal, and
-   finish each case (`vreactFinishAux`).  Every alternative runs under `tryTactic`: a runtime
+   goal (`vreact_finish`); if all of that fails, split a conjunction into its conjuncts, a
+   guarded existential goal, a bounded quantifier with numeral bounds, or a small
+   enumeration/union of the goal, and finish each case (`vreactFinishAux`).  Every alternative runs under `tryTactic`: a runtime
    exception such as `maximum recursion depth` (which `first`/`try` let
    through) makes it fail like any other error — except the heartbeat limit,
    `vreact_ob`'s per-obligation budget, which is passed on.
@@ -56,6 +59,10 @@ attribute [vreact_simp] dite_eq_ite List.foldl_cons List.foldl_nil decide_eq_tru
   not_true_eq_false and_false false_and
 -- conditional record updates (`pushProjIte` in `Simprocs.lean`) collapse field by field
 attribute [vreact_simp] ite_self
+-- a guard whose proof the guarded part does not use (`cells[i] >= 0 && cells[i] <= 2`: the index
+-- proofs of the second conjunct do not need the first) is a conjunction: `grind` proves an `∃ (h :
+-- a), b` goal under a bounded quantifier poorly
+attribute [vreact_simp] exists_prop
 
 -- Bool `if`-chains (`a && b` / `a || b` with narrowing compile to `if a then b else false`)
 -- become propositions, so that invariants are conjunctions in hypotheses and goals.
@@ -148,6 +155,28 @@ elab "vreact_unpack" : tactic => withMainContext do
       work := work.push (p, t)
   replaceMainGoal [g]
 
+open Lean Meta Elab Tactic in
+/-- `vreact_memmap`: a goal with a membership in a map-update (`∃ a, a ∈ l ∧ f a = x`, from
+`x ∈ l.map f` with `f : α → α`, `List.mem_map`) is normalised with the lemmas of `Lists.lean`
+("Membership in a map-update"), which state the facts about the updated elements `f a` instead:
+`grind` instantiated that existential for every conjunct of a reducer's invariant (`wf(b)` over
+`[...todo, ...doing, ...done]` after a map-update arm). Only such goals: the lemmas are keyed
+on `∃`/`∀`. -/
+elab "vreact_memmap" : tactic => withMainContext do
+  let tgt ← instantiateMVars (← getMainTarget)
+  let isUpd (e : Expr) : Bool := Id.run do
+    unless e.isAppOfArity ``Exists 2 do return false
+    let .lam _ ty b _ := e.appArg! | return false
+    unless b.isAppOfArity ``And 2 do return false
+    let m := b.appFn!.appArg!; let q := b.appArg!
+    unless m.isAppOfArity ``Membership.mem 5 && q.isAppOfArity ``Eq 3 do return false
+    let lhs := q.getArg! 1
+    return q.getArg! 0 == ty && !lhs.isBVar && lhs.hasLooseBVar 0
+  unless (tgt.find? isUpd).isSome do return
+  evalTactic (← `(tactic| vreact_try simp (config := { zetaDelta := true, failIfUnchanged := false }) only
+    [vreact_simp, ex_mem_map_and, ex_mem_map_or_and, ex_or_mem_map_and, ex_or_mem_map_or_and,
+      ex_or_or_mem_map_and, all_mem_map, all_mem_map_or, all_or_mem_map, all_or_mem_map_or, all_or_or_mem_map]))
+
 section KeyFacts
 open Lean Meta Elab Tactic
 
@@ -162,19 +191,23 @@ private def keyCmp? (x c : Expr) : MetaM (Option (Expr × Expr × Expr × Bool))
   return none
 
 /-- A key test `ite (e = k) A B` / `ite (k = e) A B` inside `b` (`e` mentions `x`, `k` does
-not), as `(the ite, e, k, k first?)`. -/
-private def keyIte? (x b : Expr) : Option (Expr × Expr × Expr × Bool) := Id.run do
-  let some t := b.find? fun s => Id.run do
-      unless s.isAppOfArity ``ite 5 do return false
-      let c := s.getArg! 1
-      unless c.isAppOfArity ``Eq 3 do return false
-      let l := c.getArg! 1; let r := c.getArg! 2
-      let inL := l.containsFVar x.fvarId!; let inR := r.containsFVar x.fvarId!
-      return (inL && !inR) || (inR && !inL)
-    | return none
-  let c := t.getArg! 1
-  let l := c.getArg! 1; let r := c.getArg! 2
-  if l.containsFVar x.fvarId! then return some (t, l, r, false) else return some (t, r, l, true)
+not), also negated (`ite (¬ e = k) B A`: `t.id !== id ? t : {...}`), as `(the ite, e, k, k first?,
+negated?)`. -/
+private def keyIte? (x b : Expr) : Option (Expr × Expr × Expr × Bool × Bool) := Id.run do
+  let keyEq? (c : Expr) : Option (Expr × Expr × Bool) := Id.run do
+    unless c.isAppOfArity ``Eq 3 do return none
+    let l := c.getArg! 1; let r := c.getArg! 2
+    let inL := l.containsFVar x.fvarId!; let inR := r.containsFVar x.fvarId!
+    if inL && !inR then return some (l, r, false)
+    if inR && !inL then return some (r, l, true)
+    return none
+  let cond? (c : Expr) : Option (Expr × Expr × Bool × Bool) :=
+    match keyEq? c with
+    | some (e, k, kf) => some (e, k, kf, false)
+    | none => if c.isAppOfArity ``Not 1 then (keyEq? c.appArg!).map fun (e, k, kf) => (e, k, kf, true) else none
+  let some t := b.find? fun s => s.isAppOfArity ``ite 5 && (cond? (s.getArg! 1)).isSome | return none
+  let some (e, k, kf, neg) := cond? (t.getArg! 1) | return none
+  return some (t, e, k, kf, neg)
 
 /-- The facts of `Lists.lean` ("counts by key") for the count `(l.filter p).length`. -/
 private def keyFactsOf (p l : Expr) : MetaM (Array Expr) := do
@@ -190,20 +223,24 @@ private def keyFactsOf (p l : Expr) : MetaM (Array Expr) := do
         | false, false => ``length_filter_eq_key | false, true => ``length_filter_eq_key'
       out := out.push (← mkAppOptM lem #[none, none, some inst, some f, some k, some l])
     -- a predicate after a map-update by key: `fun y => … (if y.id = k then A else B) …`
-    if let some (t, e, k, kFirst) := keyIte? x b then
+    if let some (t, e, k, kFirst, neg) := keyIte? x b then
       let f ← mkLambdaFVars #[x] e
       let β ← inferType k
       let inst ← synthInstance (← mkAppM ``DecidableEq #[β])
-      -- `q`: the predicate with the `else` branch (the elements whose key is not `k`)
-      let q ← mkLambdaFVars #[x] (b.replace fun s => if s == t then some (t.getArg! 4) else none)
+      -- `q`: the predicate with the branch of the elements whose key is not `k` (`else`, or
+      -- `then` of a negated test)
+      let off := if neg then t.getArg! 3 else t.getArg! 4
+      let q ← mkLambdaFVars #[x] (b.replace fun s => if s == t then some off else none)
       let extra ← withLocalDeclD `z (← inferType t) fun zv => do
         let bAbs := b.replace fun s => if s == t then some zv else none
-        -- h : ∀ x, f x ≠ k → p x = q x  (`congrArg` of `if_neg` at the `ite`)
+        -- h : ∀ x, f x ≠ k → p x = q x  (`congrArg` of `if_neg`/`if_pos` at the `ite`)
         let h ← withLocalDeclD `hx (← mkAppM ``Ne #[e, k]) fun hx => do
+          -- `¬ (e = k)` resp. `¬ (k = e)`: the condition (negated test) or its negation
           let hnc ← if kFirst then
-              withLocalDeclD `he (t.getArg! 1) fun he => do mkLambdaFVars #[he] (mkApp hx (← mkEqSymm he))
+              withLocalDeclD `he (← mkEq k e) fun he => do mkLambdaFVars #[he] (mkApp hx (← mkEqSymm he))
             else pure hx
-          let eqIte ← mkAppOptM ``if_neg #[t.getArg! 1, t.getArg! 2, hnc, t.getArg! 0, t.getArg! 3, t.getArg! 4]
+          let eqIte ← mkAppOptM (if neg then ``if_pos else ``if_neg)
+            #[t.getArg! 1, t.getArg! 2, hnc, t.getArg! 0, t.getArg! 3, t.getArg! 4]
           let pf ← mkCongrArg (← mkLambdaFVars #[zv] bAbs) eqIte
           mkLambdaFVars #[x, hx] pf
         let hsymm ← withLocalDeclD `hx (← mkAppM ``Ne #[e, k]) fun hx => do
@@ -285,16 +322,19 @@ private def indexTerms (targets : Array Expr) (lctx : LocalContext) : MetaM (Arr
   let add (c : Expr) : MetaM Unit := do
     let cur ← found.get
     if cur.size < 12 && !cur.contains c then found.set (cur.push c)
+  -- the list and the index must be closed; the bound proof may be a bound variable (`∀ (hp : 0 <
+  -- xs.length), xs[0]'hp …`, a goal after `genGoal`)
+  let closed (e : Expr) : Bool := !e.hasLooseBVars && !e.hasMVar && !e.hasAnyFVar (fun fv => !lctx.contains fv)
   for t in targets do
     forEachExpr t fun e => do
-      if e.hasLooseBVars || e.hasMVar then return
-      if e.hasAnyFVar (fun fv => !lctx.contains fv) then return
       if e.isAppOfArity ``GetElem.getElem 8 then
         let n := e.getArg! 6
+        unless closed n && closed (e.getArg! 5) do return
         if n.isAppOfArity ``Int.toNat 1 then add n.appArg!
         else if let some k := n.nat? then add (toExpr (k : Int))
         else if let .lit (.natVal k) := n then add (toExpr (k : Int))
-      else if e.isAppOfArity ``JS.get 4 then add (e.getArg! 2)
+      else if e.isAppOfArity ``JS.get 4 then
+        if closed (e.getArg! 2) && closed (e.getArg! 1) then add (e.getArg! 2)
   return (← found.get)
 
 /-- `∀ xs, B` with the proofs in `B` that use its propositional binders made binders of their own,
@@ -358,15 +398,15 @@ private def proofUsing? (tgt : Expr) (fv : FVarId) : MetaM (Option (Expr × Expr
   found.get
 
 /-- The goal without its dependency on the hypothesis `fv`: the proofs in the goal that use it are
-generalised one by one (`∀ (hp : P), G hp` implies `G p` by proof irrelevance), then `fv` is
-cleared.  `none` if another local depends on it, or `fv` occurs outside such a proof. -/
-private def dropDependency (g : MVarId) (fv : FVarId) : MetaM (Option MVarId) := do
+generalised one by one (`∀ (hp : P), G hp` implies `G p` by proof irrelevance); `fv` stays.  `none`
+if another local depends on it, or `fv` occurs outside such a proof. -/
+private def freeGoal (g : MVarId) (fv : FVarId) : MetaM (Option MVarId) := do
   if (← g.withContext getLCtx).any (fun d => d.fvarId != fv &&
       (d.type.containsFVar fv || (d.value?.map (·.containsFVar fv)).getD false)) then return none
   let mut g := g
   for _ in [0:32] do
     let tgt ← instantiateMVars (← g.getType)
-    unless tgt.containsFVar fv do return some (← g.clear fv)
+    unless tgt.containsFVar fv do return some g
     let some (p, pty) ← g.withContext (proofUsing? tgt fv) | return none
     g ← g.withContext do
       let abs ← kabstract tgt p
@@ -408,94 +448,235 @@ private def abstractProofsUsing (g : MVarId) (fv : FVarId) (ty : Expr) : MetaM (
     ty := abs.instantiate1 (mkFVar h)
   return none
 
-/-- `vreact_bounded`: bounded quantifiers among the hypotheses (`forall(lo, hi, i => P)` is
-`∀ i : Int, lo ≤ i → i < hi → P i`, possibly inside guards `∃ (h : a), …` and `∧`).
-1. A hypothesis that has one, or a guarded existential whose body indexes with its guard
-   (`hasDepGuard`), is replaced by its parts: the guards, the other conjuncts with the proofs that
-   use the hypothesis made hypotheses of their own (`abstractProofsUsing`), and the quantifiers
-   with their index proofs made non-dependent (`genProofs`).  `grind`'s arithmetic normaliser raises `maximum
-   recursion depth` on a binder with a numeral bound that a later proof depends on, `∀ i (h : i <
-   3), … xs[i.toNat]'(… h …) …` (a core Lean 4.35 limitation), and it does so on any hypothesis of
-   the context.  A hypothesis only the goal depends on (`vreact_expose` made a normalised copy of
-   it, which is replaced) is removed after the proofs in the goal that use it are generalised
-   (`dropDependency`).
-2. The quantifiers are instantiated at the index terms of the goal, for each whose bounds `omega`
-   proves: `grind` instantiates them by E-matching on `xs[i.toNat]`, which `xs[0]` (a numeral
-   index, after `Int.toNat 0` is evaluated) does not match. -/
-elab "vreact_bounded" : tactic => withMainContext do
+/-- The parts of the hypothesis `fv : ty` (a candidate of `vreact_bounded` that nothing depends on),
+asserted: `(goal, the bounded quantifiers among them, the statements asserted, whether `fv` is to be
+cleared)`, or `none` (nothing to do, or a part that cannot be stated without `fv`: the caller
+restores the state).  `isDup t`: `t` is already a hypothesis that stays. -/
+private def candParts (g : MVarId) (fv : FVarId) (ty : Expr) (guarded : Bool) (isDup : Expr → Bool) :
+    MetaM (Option (MVarId × Array (Expr × Expr) × Array Expr × Bool)) := do
+  let leaves ← hypParts (mkFVar fv) ty
+  -- one part, the hypothesis itself (`∃ i, ∃ (h : …), xs[i] < 0`, `(∃ (h : …), …) ∨ …`, `∀ x ∈ l,
+  -- ∃ (h : …), …`): nothing to split, the hypothesis stays
+  if leaves.size == 1 && guarded && !(← isBoundedForall ty) then return none
+  -- a plain bounded quantifier: instantiated as it is
+  if leaves.size == 1 && !guarded then
+    if let some (pf', pty') ← g.withContext (genProofs (mkFVar fv) ty) then
+      let (fv', g') ← (← g.assert (← mkFreshUserName `hpart) pty' pf').intro1P
+      return some (g', #[(mkFVar fv', pty')], #[pty'], true)
+    else if ← isBoundedForall ty then return some (g, #[(mkFVar fv, ty)], #[], false)
+    return none
+  -- the parts become hypotheses (the quantifiers are instantiated through these)
+  let mut g := g
+  let mut parts := #[]
+  let mut tys := #[]
+  for (pf, pty) in leaves do
+    let some (g', pty') ← abstractProofsUsing g fv pty | return none
+    g := g'
+    let (pf, pty) ← if ← isBoundedForall pty' then
+        pure ((← g.withContext (genProofs pf pty')).getD (pf, pty'))
+      else pure (pf, pty')
+    let bnd ← isBoundedForall pty
+    if !bnd && (isDup pty || tys.contains pty) then continue
+    tys := tys.push pty
+    let (fv', g') ← (← g.assert (← mkFreshUserName `hpart) pty pf).intro1P
+    g := g'
+    if bnd then parts := parts.push (mkFVar fv', pty)
+  return some (g, parts, tys, true)
+
+/-- The proof arguments of `e` (closed, mentioning a local, not under a binder of `e`), with the
+statement their position asks for (the binding domain of the function at the actual arguments: `n <
+l.length` for `l[n]'p`, in terms of the normalised `l`, where `p`'s own type may mention a term
+`simp` has rewritten since, e.g. an unfolded call `f xs h_pre`). -/
+private partial def proofArgs (lctx : LocalContext) (e : Expr) (acc : Array (Expr × Expr)) :
+    MetaM (Array (Expr × Expr)) := do
+  let closed (x : Expr) : Bool := !x.hasLooseBVars && !x.hasAnyFVar (fun fv => !lctx.contains fv)
+  match e with
+  | .app .. =>
+    let f := e.getAppFn
+    let args := e.getAppArgs
+    let mut acc ← proofArgs lctx f acc
+    let mut fty ← inferType f
+    for a in args do
+      fty ← whnf fty
+      let .forallE _ dom body _ := fty | return acc
+      if a.hasFVar && !a.isFVar && closed a && closed dom && (← isProp dom) then
+        unless acc.any (·.1 == a) do acc := acc.push (a, dom)
+      else
+        acc ← proofArgs lctx a acc
+      fty := body.instantiate1 a
+    return acc
+  | .lam n d b bi | .forallE n d b bi =>
+    let acc ← proofArgs lctx d acc
+    withLocalDecl n bi d fun x => proofArgs lctx (b.instantiate1 x) acc
+  | .letE n t v b _ =>
+    let acc ← proofArgs lctx v acc
+    withLetDecl n t v fun x => proofArgs lctx (b.instantiate1 x) acc
+  | .mdata _ x => proofArgs lctx x acc
+  | .proj _ _ x => proofArgs lctx x acc
+  | _ => return acc
+
+/-- The proofs in the leaf `l` of a goal (`proofArgs`) made binders of their own: `(∀ hps, l[hps],
+fun p' => p' ps)`, or `none`. -/
+private def genLeaf (l : Expr) : MetaM (Option (Expr × Expr)) := do
+  let found ← proofArgs (← getLCtx) l #[]
+  if found.isEmpty then return none
+  let ps := found.map (·.1)
+  let tys := found.map (·.2)
+  withLocalDeclsDND (tys.mapIdx fun i t => (Name.mkSimple s!"hp{i}", t)) fun hps => do
+    let l' := l.replace fun s => (ps.idxOf? s).map (hps[·]!)
+    let ty' ← mkForallFVars hps l'
+    let back ← withLocalDeclD `p ty' fun p => do mkLambdaFVars #[p] (mkAppN p ps)
+    return some (ty', back)
+
+/-- A propositional binder on the spine (`∧`, `∃`, `∀`) of the goal `ty` that its body depends on:
+`∀ i (h : 0 ≤ i), … xs[i]'(… h …)`, `∃ (h : a), … h …` (not inside proofs or leaves). -/
+private partial def spineDep (ty : Expr) (fuel : Nat := 12) : MetaM Bool := do
+  if fuel == 0 then return false
+  let ty := ty.headBeta
+  if ty.isAppOfArity ``And 2 then
+    return (← spineDep ty.appFn!.appArg! (fuel - 1)) || (← spineDep ty.appArg! (fuel - 1))
+  if ty.isAppOfArity ``Exists 2 then
+    let .lam n d b bi := ty.appArg! | return false
+    if b.hasLooseBVar 0 && (← isProp d) then return true
+    return ← withLocalDecl n bi d fun x => spineDep (b.instantiate1 x) (fuel - 1)
+  if let .forallE n d b bi := ty then
+    if b.hasLooseBVar 0 && (← isProp d) then return true
+    return ← withLocalDecl n bi d fun x => spineDep (b.instantiate1 x) (fuel - 1)
+  return false
+
+/-- The goal `ty` with the proofs at its leaves made binders of their own (`genLeaf`), along its
+spine of `∧`, guarded `∃ (h : a), _` and `∀ x, _`: `∃ (h : xs.length = 3), ∀ i (h₁ : 0 ≤ i) (h₂ : i <
+3), xs[i.toNat]'(… h h₂ …) ≥ 0` ↦ `∃ (h : xs.length = 3), ∀ i, 0 ≤ i → i < 3 → ∀ (hp : i.toNat <
+xs.length), xs[i.toNat]'hp ≥ 0`, with `back : new → ty` (proof irrelevance).  The propositional
+binders become plain implications: `grind`'s arithmetic normaliser raises `maximum recursion depth`
+on a binder with a numeral bound that a proof depends on, in the goal as in hypotheses. -/
+private partial def genGoal (ty : Expr) (fuel : Nat := 12) : MetaM (Option (Expr × Expr)) := do
+  if fuel == 0 then return none
+  let ty := ty.headBeta
+  if ty.isAppOfArity ``And 2 then
+    let a := ty.appFn!.appArg!; let b := ty.appArg!
+    let ra ← genGoal a (fuel - 1)
+    let rb ← genGoal b (fuel - 1)
+    if ra.isNone && rb.isNone then return none
+    let (a', ba) := ra.getD (a, ← withLocalDeclD `p a fun p => mkLambdaFVars #[p] p)
+    let (b', bb) := rb.getD (b, ← withLocalDeclD `p b fun p => mkLambdaFVars #[p] p)
+    let ty' := mkAnd a' b'
+    let back ← withLocalDeclD `p ty' fun p => do
+      mkLambdaFVars #[p] (mkApp4 (mkConst ``And.intro) a b
+        (mkApp ba (mkApp3 (mkConst ``And.left) a' b' p)) (mkApp bb (mkApp3 (mkConst ``And.right) a' b' p)))
+    return some (ty', back)
+  if ty.isAppOfArity ``Exists 2 then
+    let a := ty.appFn!.appArg!
+    let .lam n _ body bi := ty.appArg! | return none
+    unless ← isProp a do return none
+    let some (lam', bk) ← withLocalDecl n bi a fun h => do
+        let some (b', bb) ← genGoal (body.instantiate1 h) (fuel - 1) | return none
+        return some (← mkLambdaFVars #[h] b', ← mkLambdaFVars #[h] bb)
+      | return none
+    let ty' ← mkAppM ``Exists #[lam']
+    let back ← withLocalDeclD `p ty' fun p => do
+      let fst ← mkAppM ``exists_prop_fst #[p]
+      let snd ← mkAppM ``exists_prop_snd #[p]
+      mkLambdaFVars #[p] (← mkAppOptM ``Exists.intro #[some a, some ty.appArg!, some fst, some (mkApp2 bk fst snd).headBeta])
+    return some (ty', back)
+  if let .forallE n d body bi := ty then
+    -- (the premise of an implication `a → b` is not on the spine: only `b` is changed)
+    if !body.hasLooseBVars && !(← isProp d) then return none
+    let some (lam', bk) ← withLocalDecl n bi d fun x => do
+        let some (b', bb) ← genGoal (body.instantiate1 x) (fuel - 1) | return none
+        return some (← mkLambdaFVars #[x] b', ← mkLambdaFVars #[x] bb)
+      | return none
+    let .lam _ _ body' _ := lam' | return none
+    let ty' := Expr.forallE n d body' bi
+    let back ← withLocalDeclD `p ty' fun p => do
+      withLocalDecl n bi d fun x => do
+        mkLambdaFVars #[p] (← mkLambdaFVars #[x] (mkApp (mkApp bk x).headBeta (mkApp p x)).headBeta)
+    return some (ty', back)
+  genLeaf ty
+
+/-- One round of `vreact_bounded` on the hypotheses (steps 1–3); `true` if an instance it added is
+itself a guarded or bounded quantifier. -/
+private def boundedRound : TacticM Bool := withMainContext do
   let goal ← getMainGoal
   let lctx ← getLCtx
   let tgt ← instantiateMVars (← goal.getType)
   let mut have_ : Array Expr := #[]
   for d in lctx do
     if !d.isImplementationDetail then have_ := have_.push (← instantiateMVars d.type)
+  -- `have_[base:]`: the parts asserted so far (they stay)
+  let base := have_.size
   let mut g := goal
   let mut parts : Array (Expr × Expr) := #[]
   let mut toClear : Array FVarId := #[]
-  let mut toDrop : Array FVarId := #[]
+  let mut toDrop : Array (LocalDecl × Expr × Bool) := #[]
+  -- the candidates: some binder over `Int` with a guard (cheap filter), or a guarded existential
+  let mut cands : Array (LocalDecl × Expr × Bool) := #[]
   for d in lctx do
     if d.isImplementationDetail || d.isLet then continue
     let ty ← instantiateMVars d.type
     unless ← isProp ty do continue
-    -- cheap filter: some binder over `Int` with a guard, or a guarded existential
     let bounded := ty.find? (fun s => match s with
         | .forallE _ (.const ``Int _) (.forallE ..) _ => true | _ => false) |>.isSome
     let guarded ← hasDepGuard ty
     unless bounded || guarded do continue
-    -- depended on (by the goal or another local): `vreact_expose` added a normalised copy
+    cands := cands.push (d, ty, guarded)
+  let mut seen : Array Expr := #[]
+  for (d, ty, guarded) in cands do
+    -- depended on (by the goal or another local): see 2.
     let used := tgt.containsFVar d.fvarId || lctx.any fun d' =>
       d'.index > d.index && (d'.type.containsFVar d.fvarId || (d'.value?.map (·.containsFVar d.fvarId)).getD false)
     if used then
-      toDrop := toDrop.push d.fvarId
+      toDrop := toDrop.push (d, ty, guarded)
       continue
-    let leaves ← hypParts (mkFVar d.fvarId) ty
-    -- a plain bounded quantifier: instantiated as it is
-    if leaves.size == 1 && !guarded then
-      if let some (pf', pty') ← g.withContext (genProofs (mkFVar d.fvarId) ty) then
-        let (fv, g') ← (← g.assert (← mkFreshUserName `hpart) pty' pf').intro1P
-        g := g'
-        parts := parts.push (mkFVar fv, pty')
-        toClear := toClear.push d.fvarId
-      else if ← isBoundedForall ty then parts := parts.push (mkFVar d.fvarId, ty)
+    -- a second copy of a candidate handled already (it stays, or its parts do), or the original
+    -- of a later normalised copy (`vreact_expose`: same name) that is a candidate too
+    if seen.contains ty || (!d.userName.hasMacroScopes && cands.any fun (c, _) =>
+        c.index > d.index && c.userName == d.userName) then
+      toClear := toClear.push d.fvarId
       continue
-    -- the parts become hypotheses (the quantifiers are instantiated through these)
+    seen := seen.push ty
+    -- a duplicate of a hypothesis that stays: an asserted part, or a local that is not `d`, not
+    -- cleared, not depended on, and not a later candidate
+    let isDup (t : Expr) : Bool := (have_.extract base have_.size).contains t ||
+      lctx.any fun d' => d'.fvarId != d.fvarId && !d'.isImplementationDetail && d'.type == t &&
+        !toClear.contains d'.fvarId && !toDrop.any (·.1.fvarId == d'.fvarId) &&
+        !cands.any (fun (c, _) => c.index > d.index && c.fvarId == d'.fvarId)
     let saved ← saveState
-    let g0 := g
-    let parts0 := parts
-    let have0 := have_
-    let mut ok := true
-    for (pf, pty) in leaves do
-      let some (g', pty') ← abstractProofsUsing g d.fvarId pty | ok := false; break
-      g := g'
-      let (pf, pty) ← if ← isBoundedForall pty' then
-          pure ((← g.withContext (genProofs pf pty')).getD (pf, pty'))
-        else pure (pf, pty')
-      -- a duplicate of another hypothesis (not of `d` itself, which is cleared)
-      if !(← isBoundedForall pty) && (have_.size > have0.size && (have_.extract have0.size have_.size).contains pty
-          || lctx.any fun d' => d'.fvarId != d.fvarId && !d'.isImplementationDetail && d'.type == pty) then continue
-      have_ := have_.push pty
-      let (fv, g') ← (← g.assert (← mkFreshUserName `hpart) pty pf).intro1P
-      g := g'
-      if ← isBoundedForall pty then parts := parts.push (mkFVar fv, pty)
-    if ok then toClear := toClear.push d.fvarId
-    else
-      saved.restore
-      g := g0
-      parts := parts0
-      have_ := have0
+    match ← candParts g d.fvarId ty guarded isDup with
+    | some (g', ps, tys, clr) =>
+      g := g'; parts := parts ++ ps; have_ := have_ ++ tys
+      if clr then toClear := toClear.push d.fvarId
+    | none => saved.restore
   g ← g.tryClearMany toClear
   if !parts.isEmpty || !toClear.isEmpty then
-    for fv in toDrop do
+    for (d, ty, guarded) in toDrop do
       let saved ← saveState
-      if let some g' ← (try dropDependency g fv catch _ => pure none) then g := g'
-      else saved.restore
-  if parts.isEmpty then replaceMainGoal [g]; return
+      let some g' ← (try freeGoal g d.fvarId catch _ => pure none) | saved.restore; continue
+      g := g'
+      -- the normalised copy (same name, later, not depended on itself)
+      let copied := lctx.any fun d' => d'.index > d.index && d'.userName == d.userName &&
+        !toDrop.any (·.1.fvarId == d'.fvarId)
+      if copied then
+        if let some g' ← (try some <$> g.clear d.fvarId catch _ => pure none) then g := g'
+        continue
+      let isDup (t : Expr) : Bool := (have_.extract base have_.size).contains t ||
+        lctx.any fun d' => d'.fvarId != d.fvarId && !d'.isImplementationDetail && d'.type == t &&
+          !toClear.contains d'.fvarId && !toDrop.any (·.1.fvarId == d'.fvarId)
+      let saved ← saveState
+      match ← (try candParts g d.fvarId ty guarded isDup catch _ => pure none) with
+      | some (g', ps, tys, true) =>
+        if let some g'' ← (try some <$> g'.clear d.fvarId catch _ => pure none) then
+          g := g''; parts := parts ++ ps; have_ := have_ ++ tys
+        else saved.restore
+      | _ => saved.restore
+  if parts.isEmpty then replaceMainGoal [g]; return false
   let mut targets : Array Expr := #[tgt]
   for d in lctx do
     if !d.isImplementationDetail then targets := targets.push (← instantiateMVars d.type)
-  let cands ← indexTerms targets lctx
+  let idxs ← indexTerms targets lctx
+  let mut again := false
   for (pf, _) in parts.toList.take 8 do
-    for c in cands do
+    for c in idxs do
       let some fact ← g.withContext (do
           let mut e := mkApp pf c
           let mut ty ← whnfR (← instantiateMVars (← inferType e))
@@ -517,7 +698,57 @@ elab "vreact_bounded" : tactic => withMainContext do
       have_ := have_.push ty
       let (_, g') ← (← g.assert (← mkFreshUserName `hinst) ty e).intro1P
       g := g'
+      -- an instance that is itself a guarded or bounded quantifier (`g[1].length === 2 &&
+      -- forall(0, 2, c => g[1][c] >= 0)`, a row of a 2-D grid): another round
+      if (← g.withContext (hasDepGuard ty)) || (ty.find? (fun s => match s with
+          | .forallE _ (.const ``Int _) (.forallE ..) _ => true | _ => false)).isSome then again := true
   replaceMainGoal [g]
+  return again
+
+/-- `vreact_bounded`: bounded quantifiers among the hypotheses (`forall(lo, hi, i => P)` is
+`∀ i : Int, lo ≤ i → i < hi → P i`, possibly inside guards `∃ (h : a), …` and `∧`).
+0. A goal with a propositional binder that a proof depends on (`forall(…)` or a guarded `&&` to
+   establish) has its proofs made binders of their own (`genGoal`), and is normalised again.
+1. A hypothesis that has one, or a guarded existential whose body indexes with its guard
+   (`hasDepGuard`), is replaced by its parts (`candParts`): the guards, the other conjuncts with
+   the proofs that use the hypothesis made hypotheses of their own (`abstractProofsUsing`), and the
+   quantifiers with their index proofs made non-dependent (`genProofs`).  `grind`'s arithmetic
+   normaliser raises `maximum recursion depth` on a binder with a numeral bound that a later proof
+   depends on, `∀ i (h : i < 3), … xs[i.toNat]'(… h …) …` (a core Lean 4.35 limitation), and it does
+   so on any hypothesis of the context.  A part that duplicates a hypothesis that stays is not
+   added (two copies of one precondition, the second made by `vreact_expose`, must not each be
+   dropped as a duplicate of the other).
+2. A hypothesis only the goal depends on: the proofs in the goal that use it are generalised
+   (`freeGoal`); then it is removed if `vreact_expose` made a normalised copy of it (same name;
+   replaced by its parts in step 1), otherwise replaced by its own parts like the others.
+3. The quantifiers are instantiated at the index terms of the goal, for each whose bounds `omega`
+   proves: `grind` instantiates them by E-matching on `xs[i.toNat]`, which `xs[0]` (a numeral
+   index, after `Int.toNat 0` is evaluated) does not match.  An instance that is itself guarded or
+   bounded (a row `g[1]` of a 2-D grid) gets steps 1–3 again (at most three rounds). -/
+elab "vreact_bounded" : tactic => do
+  -- 0. the goal: one with a propositional binder that a proof depends on (a bounded quantifier, a
+  -- guarded existential) gets its proofs generalised (`genGoal`) and is normalised again
+  -- (again after `simp`: `JS.get xs i hp` becomes `xs[i.toNat]'(… hp …)`, whose proof is generalised
+  -- in turn, so that the bound is stated in terms of `xs` itself)
+  for _ in [0:3] do
+    if (← getGoals).isEmpty then return
+    let changed ← withMainContext do
+      let goal ← getMainGoal
+      let tgt ← instantiateMVars (← goal.getType)
+      unless ← spineDep tgt do return false
+      let some (ty', back) ← (try genGoal tgt catch _ => pure none) | return false
+      let g' ← mkFreshExprSyntheticOpaqueMVar ty' (← goal.getTag)
+      goal.assign (mkApp back g')
+      replaceMainGoal [g'.mvarId!]
+      -- conjunctions under the quantifiers become conjuncts of the goal (`vreact_finish` proves
+      -- them one by one: `grind` on `∀ i, … → (a ∧ b)` runs out of instances)
+      evalTactic (← `(tactic| vreact_try simp (config := { zetaDelta := true, failIfUnchanged := false }) only [vreact_simp, forall_and]))
+      return true
+    unless changed do break
+  -- 1.–3., again for instances that are guarded or bounded quantifiers themselves (at most 3 rounds)
+  for _ in [0:3] do
+    if (← getGoals).isEmpty then return
+    unless ← boundedRound do break
 
 /-- One list operation that is a sub-permutation of its input (`Lists.lean`): the input, and
 the proof of `SubPerm e input`. -/
@@ -573,25 +804,57 @@ elab "vreact_subperm" : tactic => withMainContext do
       if e.isAppOfArity ``List.filter 3 then
         filters.modify fun a => if a.contains e || a.size ≥ 32 then a else a.push e
   let mut facts : Array Expr := #[]
-  -- distinct keys
+  -- distinct keys: `mk pf` turns a proof of `Nodup (map f cur)` into one of `Nodup (map f L)`
   for nd in ← nodups.get do
     let x := nd.appArg!
     let (f?, l) := if x.isAppOfArity ``List.map 4 then (some (x.getArg! 2), x.appArg!) else (none, x)
     let mut cur := l
-    let mut sp? : Option Expr := none
+    let mut f := f?
+    let mut mk : Expr → MetaM Expr := pure
     for _ in [0:8] do
-      let some (inner, step) ← subPermStep? cur | break
-      let sp ← match sp? with | none => pure step | some sp => mkAppM ``SubPerm.trans #[sp, step]
-      sp? := some sp
-      cur := inner
-      let want ← match f? with
-        | some f => mkAppM ``List.Nodup #[← mkAppM ``List.map #[f, cur]]
+      if let some (inner, step) ← subPermStep? cur then
+        let mk0 := mk
+        let isMap := f.isSome
+        mk := fun pf => do mk0 (← mkAppM (if isMap then ``SubPerm.nodup_map else ``SubPerm.nodup) #[step, pf])
+        cur := inner
+      else if let (some fk, true) := (f, cur.isAppOfArity ``List.map 4) then
+        -- a map that keeps the key: `fun x => fk (g x)` unfolds to `fk`, or (a map-update by
+        -- cases, `x.id === k ? {...x, name} : x`) `∀ x, fk (g x) = fk x` holds by `simp`
+        let g := cur.getArg! 2
+        let inner := cur.appArg!
+        let ty ← whnfR (← inferType inner)
+        unless ty.isAppOfArity ``List 1 do break
+        let α := ty.appArg!
+        let keep? ← (do
+            unless ← isDefEq (← inferType cur) ty do return none
+            let stmt ← withLocalDeclD `x α fun xv => do
+              mkForallFVars #[xv] (← mkEq (mkApp fk (mkApp g xv)).headBeta (mkApp fk xv).headBeta)
+            let m ← mkFreshExprMVar stmt
+            let saved ← getGoals
+            let ok ← (do
+                setGoals [m.mvarId!]
+                evalTactic (← `(tactic| (intro x; first | rfl | (simp only [vreact_simp]; done))))
+                pure true) <|> pure false
+            setGoals saved
+            if ok then return some (← instantiateMVars m) else return none : TacticM (Option Expr))
+        let mk0 := mk
+        if let some hfg := keep? then
+          mk := fun pf => do mk0 (← mkAppOptM ``nodup_map_map_of_keep #[none, none, some fk, some g, some inner, some hfg, some pf])
+        else
+          let fk' ← withLocalDeclD `x α fun xv => do
+            mkLambdaFVars #[xv] (← whnfR (mkApp fk (mkApp g xv)).headBeta)
+          mk := fun pf => do mk0 (← mkAppOptM ``nodup_map_map_comp #[none, none, none, some fk, some g, some inner, some pf])
+          f := some fk'
+        cur := inner
+      else break
+      let want ← match f with
+        | some fk => mkAppM ``List.Nodup #[← mkAppM ``List.map #[fk, cur]]
         | none => mkAppM ``List.Nodup #[cur]
       let mut hit : Option Expr := none
       for (kty, kpf) in known do
         if ← withReducible (isDefEq kty want) then hit := some kpf; break
       if let some kpf := hit then
-        facts := facts.push (← mkAppM (if f?.isSome then ``SubPerm.nodup_map else ``SubPerm.nodup) #[sp, kpf])
+        if let some pf ← (try some <$> mk kpf catch _ => pure none) then facts := facts.push pf
         break
   -- counts
   let fs ← filters.get
@@ -648,9 +911,10 @@ private def finishCheap : TacticM (Option Exception) := withMainContext do
     -- the other conjuncts, and `try … catch` does not catch runtime exceptions).
     -- Not Lean's own wording: the report would read that as an aborted declaration.
     if e.isRuntime then
-      return some (.error (← getRef) m!"vreact_auto could not prove the goal (grind stopped at Lean's recursion limit){indentD (MessageData.ofGoal goal)}")
+      -- (with its message context: the goal may be gone from the state the report is made in)
+      return some (.error (← getRef) (← addMessageContext m!"vreact_auto could not prove the goal (grind stopped at Lean's recursion limit){indentD (MessageData.ofGoal goal)}"))
     return some e
-  | none => return some (.error (← getRef) m!"vreact_auto could not prove the goal{indentD (MessageData.ofGoal goal)}")
+  | none => return some (.error (← getRef) (← addMessageContext m!"vreact_auto could not prove the goal{indentD (MessageData.ofGoal goal)}"))
 
 open Lean Meta Elab Tactic in
 /-- The expensive fallbacks (`simp_all` variants) after `finishCheap` failed with `err`:
@@ -708,9 +972,19 @@ private def finishCore : TacticM (Option Exception) := do
   return firstErr
 
 open Lean Meta in
+/-- `σ.mode`, `o.inner.mode`: projections (at most four) of a local. -/
+private partial def isFieldChain (e : Expr) (fuel : Nat := 4) : MetaM Bool := do
+  if fuel == 0 then return false
+  let .const fn _ := e.getAppFn | return false
+  unless (← getProjectionFnInfo? fn).isSome && e.getAppNumArgs ≥ 1 do return false
+  let a := e.appArg!
+  if a.isFVar then return true
+  isFieldChain a (fuel - 1)
+
+open Lean Meta in
 /-- Terms of the goal (then of the hypotheses) whose type is a small enumeration or union (a
 non-recursive inductive type without parameters or indices, with 2–8 constructors, other than
-`Bool`/`Int`): locals, and fields of locals (`σ.mode`), in order of occurrence.  (After `split`
+`Bool`/`Int`): locals, and fields of locals (`σ.mode`, `o.inner.mode`), in order of occurrence.  (After `split`
 on a `match t with … | _ => …` the goal may be `False` with facts `t = .c v q → False`.) -/
 private def splitCandidates (g : MVarId) : MetaM (Array Expr) := g.withContext do
   let lctx ← getLCtx
@@ -725,10 +999,7 @@ private def splitCandidates (g : MVarId) : MetaM (Array Expr) := g.withContext d
      if e.hasAnyFVar (fun fv => !lctx.contains fv) then return
      let ok ← match e with
        | .fvar fv => pure !(lctx.get! fv).isLet
-       | _ =>
-         if let .const fn _ := e.getAppFn then
-           pure ((← getProjectionFnInfo? fn).isSome && e.getAppNumArgs ≥ 1 && e.appArg!.isFVar)
-         else pure false
+       | _ => isFieldChain e
      unless ok do return
      let ty ← whnfR (← inferType e)
      let .const n _ := ty | return
@@ -761,7 +1032,7 @@ private def splitExistsProp? (g : MVarId) : MetaM (Option (List MVarId)) := g.wi
 
 open Lean Meta Elab Tactic in
 /-- A goal `∀ i : Int, lo ≤ i → i < hi → …` with numeral bounds (`forall(0, 3, i => …)` to
-establish, at most 8 values): introduced, and split into the cases `i = lo`, …, `i = hi - 1`
+establish, at most 16 values: a board of 9 or 16 cells): introduced, and split into the cases `i = lo`, …, `i = hi - 1`
 (substituted, so `[a, b, c][i.toNat]` evaluates). -/
 private def enumBounded? (g : MVarId) : TacticM (Option (List MVarId)) := do
   let tgt ← whnfR (← instantiateMVars (← g.getType))
@@ -781,7 +1052,7 @@ private def enumBounded? (g : MVarId) : TacticM (Option (List MVarId)) := do
         if t.isAppOfArity ``LT.lt 4 && t.getArg! 2 == i then
           if let some v ← getIntValue? t.appArg! then hi? := some v
       let (some lo, some hi) := (lo?, hi?) | continue
-      unless lo < hi && hi - lo ≤ 8 do continue
+      unless lo < hi && hi - lo ≤ 16 do continue
       let mut out := []
       let mut cur := g
       for k in List.range (hi - lo).toNat do
@@ -797,6 +1068,7 @@ private def enumBounded? (g : MVarId) : TacticM (Option (List MVarId)) := do
 open Lean Meta Elab Tactic in
 /-- `vreact_finish` (see `finishCore`), with fallbacks for the goals it fails on, each case
 normalised again and finished at most `depth` levels deep:
+* a conjunction: the fallbacks on each conjunct that needs them (no level used);
 * a guarded existential goal `∃ (h : a), b h`: `a`, then `b h` (`splitExistsProp?`);
 * a bounded quantifier with numeral bounds: one case per value (`enumBounded?`);
 * a goal that mentions a small enumeration or union (`c : Color`, `t : T` of a discriminated
@@ -818,6 +1090,7 @@ partial def vreactFinishAux (depth : Nat) : TacticM Unit := do
       evalTactic (← `(tactic| vreact_norm))
       evalTactic (← `(tactic| vreact_try (repeat' split)))
       evalTactic (← `(tactic| all_goals vreact_norm))
+      evalTactic (← `(tactic| all_goals vreact_memmap))
       evalTactic (← `(tactic| all_goals vreact_keyfacts))
       evalTactic (← `(tactic| all_goals vreact_bounded))
       evalTactic (← `(tactic| all_goals vreact_subperm))
@@ -825,6 +1098,16 @@ partial def vreactFinishAux (depth : Nat) : TacticM Unit := do
         setGoals [gj]
         vreactFinishAux (depth - 1)
     setGoals []
+  -- a conjunction: the fallbacks on each conjunct (an invariant `(cells.length === 9 && forall(0,
+  -- 9, …)) ∧ (turn === 1 || turn === 2)`), at the same depth (a conjunct is not a conjunction)
+  let conj ← conjunctGoals g
+  if conj.length ≥ 2 then
+    if (← tryTactic do
+        for gi in conj do
+          setGoals [gi]
+          vreactFinishAux depth
+        setGoals []).isNone then return
+    s.restore
   -- guarded existentials, bounded quantifiers
   if (← tryTactic do
       let some goals ← splitExistsProp? g | throwError "no"
@@ -863,6 +1146,7 @@ macro_rules
          -- calls exposed by the last split (e.g. in match arms of a transparent reducer)
          all_goals vreact_contracts
          all_goals vreact_norm
+         all_goals vreact_memmap
          all_goals vreact_keyfacts
          all_goals vreact_bounded
          all_goals vreact_subperm

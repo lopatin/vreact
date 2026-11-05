@@ -118,12 +118,42 @@ theorem rem.post (a b : Int) (h : b ≠ 0) :
     have := Int.emod_nonneg (-a) (b := (b.natAbs : Int)) (by omega)
     have := Int.emod_lt_of_pos (-a) h1
     omega
+/-- The exact values of `a % b` that index arithmetic needs (a contract like `rem.post`): `a`
+itself when `|a| < |b|` with the sign of `a` (`(sel + 1) % n === sel + 1` for `sel + 1 < n`), and
+`0` for `a = ±b` (`n % n === 0`: the step from the last slide to the first). -/
+theorem rem.post2 (a b : Int) (h : b ≠ 0) :
+    (0 ≤ a → a < (b.natAbs : Int) → rem a b h = a) ∧
+    (-(b.natAbs : Int) < a → a ≤ 0 → rem a b h = a) ∧
+    (a = b ∨ a = -b → rem a b h = 0) := by
+  unfold rem
+  refine ⟨fun h0 h1 => ?_, fun h0 h1 => ?_, fun hab => ?_⟩
+  · rw [if_pos h0]; exact Int.emod_eq_of_lt h0 h1
+  · by_cases ha : 0 ≤ a
+    · have : a = 0 := by omega
+      subst this; simp
+    · rw [if_neg ha, Int.emod_eq_of_lt (by omega) (by omega)]; omega
+  · have hd : (b.natAbs : Int) ∣ a := by
+      rw [Int.natAbs_dvd]
+      rcases hab with rfl | rfl
+      · exact Int.dvd_refl _
+      · exact (Int.dvd_neg).2 (Int.dvd_refl _)
+    have hd' : (b.natAbs : Int) ∣ -a := (Int.dvd_neg).2 hd
+    split
+    · exact Int.emod_eq_zero_of_dvd hd
+    · rw [Int.emod_eq_zero_of_dvd hd']; rfl
 /-- `%` with a variable divisor: `grind` decides `%` by a numeral only, so it gets the range of
 `emod` (which `rem` unfolds to) for every `a % b`. -/
 theorem emod_nonneg_of_ne (a b : Int) (h : b ≠ 0) : 0 ≤ a % b := Int.emod_nonneg a h
 theorem emod_lt_of_pos (a b : Int) (h : 0 < b) : a % b < b := Int.emod_lt_of_pos a h
 grind_pattern emod_nonneg_of_ne => a % b
 grind_pattern emod_lt_of_pos => a % b
+/-- The exact values (`rem.post2` for `emod`, which `rem` unfolds to): `a % b = a` for `0 ≤ a <
+b`, and `a % |a| = 0` (E-matching modulo equalities also finds `(sel + 1) % |n|` when `sel + 1 = n`). -/
+theorem emod_eq_self_of_lt (a b : Int) (h0 : 0 ≤ a) (h1 : a < b) : a % b = a := Int.emod_eq_of_lt h0 h1
+theorem emod_natAbs_self (a : Int) : a % (a.natAbs : Int) = 0 :=
+  Int.emod_eq_zero_of_dvd (Int.natAbs_dvd.2 (Int.dvd_refl a))
+grind_pattern emod_eq_self_of_lt => a % b
+grind_pattern emod_natAbs_self => a % (a.natAbs : Int)
 
 /-- `Math.floor(a / b)` on integers. (Lean's `/` on `Int` rounds toward −∞ for positive divisors.) -/
 def floorDiv (a b : Int) (_h : b ≠ 0) : Int := if 0 < b then a / b else (-a) / (-b)
