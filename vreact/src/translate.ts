@@ -1197,6 +1197,14 @@ function arrayMethod(name: string, xs: Val, c: ts.CallExpression, env: Env, expe
     case "toSorted": {
       if (!args[0]) fail(c, "toSorted needs a comparator (a, b) => number");
       arity(c, "toSorted", 1, 1);
+      if (elem.k === "opt") {
+        // JS moves `undefined` elements to the end without calling the comparator
+        const undef = (t: ts.Type) => !!(t.flags & ts.TypeFlags.Undefined);
+        const at = ts.isPropertyAccessExpression(c.expression) ? env.m.checker.getTypeAtLocation(c.expression.expression) : undefined;
+        const et = at && env.m.checker.getIndexTypeOfType(at, ts.IndexKind.Number);
+        if (!et || undef(et) || (et.isUnion() && et.types.some(undef)))
+          fail(c, "toSorted on an array that may contain undefined is not supported (JS sorts undefined to the end without calling the comparator); filter or map the elements to a defined type first");
+      }
       const lam = lambda(args[0], env, [elem, elem], T.int);
       if (lam.obligations) fail(args[0], "comparators cannot contain proof obligations");
       if (lam.body.type.k !== "int") fail(args[0], "comparator must return an int");

@@ -64,7 +64,15 @@ Every expression maps to a Lean term whose value is the JavaScript value.
 * Array methods `map filter some every find findIndex includes indexOf slice
   concat join reduce toSorted toReversed with at flatMap` and spread `[...xs, x]`
   map to their exact list counterparts (`slice` implements JS's negative-index
-  clamping, `toSorted` is a stable sort, `with` carries a bounds obligation).
+  clamping, `with` carries a bounds obligation). `toSorted(cmp)` follows
+  ECMA-262: for a comparator that is *consistent* on the elements (`JS.Consistent`:
+  reflexive, symmetric and transitive `=`, transitive `<` and `>`) the result is the
+  unique stable sort; otherwise the order is implementation-defined (V8 and a
+  merge sort differ, e.g. for `(a, b) => a.k < b.k ? -1 : 1` on ties), and the model
+  only knows that the result is a permutation of the input (`JS.unspecifiedSort`, an
+  unspecified function of the list and the comparator). `toSorted` on an array that
+  may contain `undefined` is rejected (JS moves `undefined` to the end without
+  calling the comparator).
   Every modelled method and `Math.*`/spec helper has an exact arity: optional
   arguments that are not modelled (`thisArg`, `fromIndex`, string positions) are
   rejected, never ignored. `includes`, `indexOf` and key-less `distinct` compare
@@ -358,7 +366,9 @@ hook rules hold (static checks). For every function: its body is safe and its
   (`vreact_ob`, `VReact/Budget.lean`): running out is a failure of that
   obligation (its goal is closed with `sorry`), never a proof.
 * **The JS runtime model** (`JS.lean`): e.g. that `Array.prototype.slice` behaves
-  like `JS.slice`. Definitions follow ECMA-262 directly.
+  like `JS.slice`. Definitions follow ECMA-262 directly; where ECMA-262 leaves a
+  result implementation-defined (`toSorted` with an inconsistent comparator) the
+  model fixes only what every engine guarantees (a permutation).
 * **The React model**: that React 18 behaves as described in §2–3 (discrete-event
   flushing, per-hook update queues and rebasing, reconciliation by
   position/key/type), and the event table of `component.ts` (React handler prop

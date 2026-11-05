@@ -61,6 +61,13 @@ non-discriminated unions (`string | number`), `ReactNode`/`children` props.
   them): on records/arrays/tuples JS compares identity (use `some`/a key), on
   `number` SameValueZero. `find`/`at` on arrays of optional values are rejected
   (a found `null` and "not found" would be conflated).
+  `toSorted`: proofs know the result is a permutation (length, membership,
+  `distinct` keys); the *order* is known only for a consistent comparator
+  (ECMA-262: `cmp(a, a) = 0`, symmetric ties, transitive — e.g. `(a, b) => a.k - b.k`;
+  `(a, b) => a.k < b.k ? -1 : 1` is not consistent: JS engines order its ties
+  differently; Lean lemmas `JS.consistent_sub`, `JS.pairwise_toSorted`,
+  `JS.pair_sublist_toSorted` state the order for `proofs/`). Rejected on arrays that
+  may contain `undefined`.
 * Strings: `length trim includes startsWith endsWith slice repeat toLowerCase
   toUpperCase` — exact UTF-16 semantics (case mapping is opaque to proofs),
   including literals with lone surrogates (`"\uD800"`). No position arguments:
@@ -193,4 +200,4 @@ or a user component.
 | `async`, fetch | keep I/O in an unverified module that calls verified reducers |
 | guarded updates in `vreact synth` | write the guard by hand; synth fills straight-line code |
 | a reducer over a discriminated union calling `@opaque` model functions | supported (contracts are instantiated inside the `switch` arms) |
-| invariants about sums (`reduce`) under filter/map | provable, but needs a Lean lemma in `proofs/` (automation handles append, filter, map, membership, `distinct`, counts via `length`) |
+| invariants about sums (`reduce`) under filter/map | provable, but needs a Lean lemma in `proofs/` (automation handles append, filter, map, `slice`, `toSorted`, `toReversed`, `with`, `indexOf`, `range`, membership, `distinct`, and counts `xs.filter(p).length` under append, delete-by-id, map-updates and mark-all) |
