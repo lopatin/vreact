@@ -58,17 +58,20 @@ attribute [vreact_simp] Bool.ite_eq_true_distrib Bool.ite_eq_false_distrib ite_f
   ite_true_left ite_true_right Bool.false_eq_true
 
 open Lean Meta Elab Tactic in
-/-- `simp … at *` skips hypotheses that other locals depend on.  A render-level
+/-- `simp … at *` skips hypotheses that other locals or the goal depend on.  A render-level
 `const cur = xs[i]` is `let cur := JS.get xs i (proof)`, and that proof uses the
 invariant `hinv` (or the precondition `hpre`), so `hinv` would stay folded for every
-later obligation.  Add a copy of each such hypothesis; `simp` normalises the copy. -/
+later obligation; likewise a handler whose outcome indexes (`items[sel].id` in a
+`filter`) has that proof in its goal.  Add a copy of each such hypothesis; `simp`
+normalises the copy. -/
 elab "vreact_expose" : tactic => withMainContext do
   let decls := (← getLCtx).foldl (init := #[]) fun acc d => if d.isImplementationDetail then acc else acc.push d
   let mut g ← getMainGoal
+  let tgt ← instantiateMVars (← g.getType)
   for d in decls do
     let ty ← instantiateMVars d.type
     unless ← isProp ty do continue
-    let mut used := false
+    let mut used := tgt.containsFVar d.fvarId
     for d' in decls do
       if d'.index ≤ d.index then continue
       if (← instantiateMVars d'.type).containsFVar d.fvarId then used := true; break
@@ -139,6 +142,110 @@ elab "vreact_unpack" : tactic => withMainContext do
       g := g'
       work := work.push (p, t)
   replaceMainGoal [g]
+
+section KeyFacts
+open Lean Meta Elab Tactic
+
+/-- A key comparison `JS.eq e k` / `JS.eq k e` in the body of a predicate over `x` (`e`
+mentions `x`, `k` does not): `(fun x => e, k, inst, k first?)`. -/
+private def keyCmp? (x c : Expr) : MetaM (Option (Expr × Expr × Expr × Bool)) := do
+  unless c.isAppOfArity ``JS.eq 4 do return none
+  let a := c.getArg! 2; let b := c.getArg! 3
+  let inA := a.containsFVar x.fvarId!; let inB := b.containsFVar x.fvarId!
+  if inA && !inB then return some (← mkLambdaFVars #[x] a, b, c.getArg! 1, false)
+  if inB && !inA then return some (← mkLambdaFVars #[x] b, a, c.getArg! 1, true)
+  return none
+
+/-- A key test `ite (e = k) A B` / `ite (k = e) A B` inside `b` (`e` mentions `x`, `k` does
+not), as `(the ite, e, k, k first?)`. -/
+private def keyIte? (x b : Expr) : Option (Expr × Expr × Expr × Bool) := Id.run do
+  let some t := b.find? fun s => Id.run do
+      unless s.isAppOfArity ``ite 5 do return false
+      let c := s.getArg! 1
+      unless c.isAppOfArity ``Eq 3 do return false
+      let l := c.getArg! 1; let r := c.getArg! 2
+      let inL := l.containsFVar x.fvarId!; let inR := r.containsFVar x.fvarId!
+      return (inL && !inR) || (inR && !inL)
+    | return none
+  let c := t.getArg! 1
+  let l := c.getArg! 1; let r := c.getArg! 2
+  if l.containsFVar x.fvarId! then return some (t, l, r, false) else return some (t, r, l, true)
+
+/-- The facts of `Lists.lean` ("counts by key") for the count `(l.filter p).length`. -/
+private def keyFactsOf (p l : Expr) : MetaM (Array Expr) := do
+  let .lam n ty body bi := p | return #[]
+  withLocalDecl n bi ty fun x => do
+    let b := body.instantiate1 x
+    let mut out := #[]
+    -- deleting / keeping by key: `fun y => !JS.eq y.id k`, `fun y => JS.eq y.id k`
+    let (neg, c) := if b.isAppOfArity ``Bool.not 1 || b.isAppOfArity ``not 1 then (true, b.appArg!) else (false, b)
+    if let some (f, k, inst, kFirst) ← keyCmp? x c then
+      let lem := match neg, kFirst with
+        | true, false => ``length_filter_ne_key | true, true => ``length_filter_ne_key'
+        | false, false => ``length_filter_eq_key | false, true => ``length_filter_eq_key'
+      out := out.push (← mkAppOptM lem #[none, none, some inst, some f, some k, some l])
+    -- a predicate after a map-update by key: `fun y => … (if y.id = k then A else B) …`
+    if let some (t, e, k, kFirst) := keyIte? x b then
+      let f ← mkLambdaFVars #[x] e
+      let β ← inferType k
+      let inst ← synthInstance (← mkAppM ``DecidableEq #[β])
+      -- `q`: the predicate with the `else` branch (the elements whose key is not `k`)
+      let q ← mkLambdaFVars #[x] (b.replace fun s => if s == t then some (t.getArg! 4) else none)
+      let extra ← withLocalDeclD `z (← inferType t) fun zv => do
+        let bAbs := b.replace fun s => if s == t then some zv else none
+        -- h : ∀ x, f x ≠ k → p x = q x  (`congrArg` of `if_neg` at the `ite`)
+        let h ← withLocalDeclD `hx (← mkAppM ``Ne #[e, k]) fun hx => do
+          let hnc ← if kFirst then
+              withLocalDeclD `he (t.getArg! 1) fun he => do mkLambdaFVars #[he] (mkApp hx (← mkEqSymm he))
+            else pure hx
+          let eqIte ← mkAppOptM ``if_neg #[t.getArg! 1, t.getArg! 2, hnc, t.getArg! 0, t.getArg! 3, t.getArg! 4]
+          let pf ← mkCongrArg (← mkLambdaFVars #[zv] bAbs) eqIte
+          mkLambdaFVars #[x, hx] pf
+        let hsymm ← withLocalDeclD `hx (← mkAppM ``Ne #[e, k]) fun hx => do
+          mkLambdaFVars #[x, hx] (← mkEqSymm (mkApp2 h x hx))
+        let le ← mkAppOptM ``length_filter_le_of_agree_off_key #[none, none, some inst, some p, some q, some f, some k, some l, some h]
+        let ge ← mkAppOptM ``length_filter_le_of_agree_off_key #[none, none, some inst, some q, some p, some f, some k, some l, some hsymm]
+        let eq ← mkAppOptM ``length_filter_agree_off_key #[none, none, some inst, some p, some q, some f, some k, some l, some h]
+        return #[le, ge, eq]
+      out := out ++ extra
+    return out
+
+/-- `vreact_keyfacts`: for each count `(l.filter P).length` in the goal or a hypothesis whose
+predicate deletes/keeps by a key or was map-updated by a key, add the facts of `Lists.lean`
+("counts by key"), instantiated and beta-reduced, as hypotheses.  (`grind` cannot match
+patterns inside the predicate.) -/
+elab "vreact_keyfacts" : tactic => withMainContext do
+  let goal ← getMainGoal
+  let lctx ← getLCtx
+  let mut targets : Array Expr := #[← instantiateMVars (← goal.getType)]
+  for d in lctx do
+    if !d.isImplementationDetail then targets := targets.push (← instantiateMVars d.type)
+  let found ← IO.mkRef (#[] : Array (Expr × Expr))
+  for t in targets do
+    forEachExpr t fun sub => do
+      if sub.hasLooseBVars || sub.hasMVar then return
+      if sub.hasAnyFVar (fun fv => !lctx.contains fv) then return
+      let_expr List.length _ fl := sub | return
+      let_expr List.filter _ p l := fl | return
+      unless p.isLambda do return
+      let cur ← found.get
+      unless cur.any (· == (p, l)) do found.set (cur.push (p, l))
+  if (← found.get).isEmpty then return
+  let mut have_ : Array Expr := #[]
+  for d in lctx do
+    if !d.isImplementationDetail then have_ := have_.push (← instantiateMVars d.type)
+  let mut g := goal
+  for (p, l) in ← found.get do
+    let facts ← try keyFactsOf p l catch _ => pure #[]
+    for pf in facts do
+      let ty ← try Core.betaReduce (← instantiateMVars (← inferType pf)) catch _ => continue
+      if have_.contains ty then continue
+      have_ := have_.push ty
+      let (_, g') ← (← g.assert (← mkFreshUserName `hkey) ty pf).intro1P
+      g := g'
+  replaceMainGoal [g]
+
+end KeyFacts
 
 open Lean Meta Elab Tactic in
 /-- Run `tac` on the main goal as one alternative of `vreact_finish`: `none` if it closes the
@@ -241,6 +348,7 @@ macro_rules
          -- calls exposed by the last split (e.g. in match arms of a transparent reducer)
          all_goals vreact_contracts
          all_goals vreact_norm
+         all_goals vreact_keyfacts
          all_goals vreact_finish)))
 
 end VReact

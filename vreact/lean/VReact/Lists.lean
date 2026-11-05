@@ -11,11 +11,56 @@ and relate counts `(xs.filter p).length` before and after an update.
 -/
 namespace VReact
 
+/-! ## Sub-permutations: distinct keys through chains of list operations
+
+The views rendered from state are chains of list operations (`items.toSorted(cmp).slice(a, b)`,
+`xs.filter(p).slice(2).toReversed()`, …).  Each operation that neither duplicates nor invents
+elements gives a fact `SubPerm (op l) l` (`l₁` is a permutation of a sublist of `l₂`), and
+generic transfer lemmas move `Nodup` facts (distinct keys) and counts from `l₂` to `l₁`.
+The transfer lemma is instantiated for each `SubPerm l₁ l₂` and term `l₁.map f`, and its
+instance `(l₂.map f).Nodup → (l₁.map f).Nodup` mentions `l₂.map f`, which instantiates it for
+the next operation down the chain, so `grind` follows a chain of any length to the
+hypothesis about the state (one operation per E-matching round). -/
+
+/-- `l₁` is a permutation of a sublist of `l₂` (Mathlib's `List.Subperm`). -/
+def SubPerm {α} (l₁ l₂ : List α) : Prop := ∃ l : List α, l.Perm l₁ ∧ l.Sublist l₂
+
+theorem SubPerm.of_sublist {α} {l₁ l₂ : List α} (h : l₁.Sublist l₂) : SubPerm l₁ l₂ := ⟨l₁, .refl _, h⟩
+theorem SubPerm.of_perm {α} {l₁ l₂ : List α} (h : l₁.Perm l₂) : SubPerm l₁ l₂ := ⟨l₂, h.symm, .refl _⟩
+theorem SubPerm.map {α β} (f : α → β) {l₁ l₂ : List α} (h : SubPerm l₁ l₂) : SubPerm (l₁.map f) (l₂.map f) := by
+  obtain ⟨l, hp, hs⟩ := h; exact ⟨l.map f, hp.map f, hs.map f⟩
+theorem SubPerm.nodup {α} {l₁ l₂ : List α} (h : SubPerm l₁ l₂) (h₂ : l₂.Nodup) : l₁.Nodup := by
+  obtain ⟨l, hp, hs⟩ := h; exact hp.nodup_iff.mp (h₂.sublist hs)
+theorem SubPerm.nodup_map {α β} {f : α → β} {l₁ l₂ : List α} (h : SubPerm l₁ l₂) (h₂ : (l₂.map f).Nodup) :
+    (l₁.map f).Nodup := (h.map f).nodup h₂
+theorem SubPerm.length_filter_le {α} (p : α → Bool) {l₁ l₂ : List α} (h : SubPerm l₁ l₂) :
+    (l₁.filter p).length ≤ (l₂.filter p).length := by
+  obtain ⟨l, hp, hs⟩ := h; exact (hp.filter p).length_eq ▸ (hs.filter p).length_le
+
+-- the operations
+theorem subPerm_filter {α} (p : α → Bool) (l : List α) : SubPerm (l.filter p) l := .of_sublist List.filter_sublist
+theorem subPerm_slice {α} (l : List α) (a : Int) (b : Option Int) : SubPerm (JS.slice l a b) l :=
+  .of_sublist (JS.slice_sublist l a b)
+theorem subPerm_toSorted {α} (l : List α) (cmp : α → α → Int) : SubPerm (JS.toSorted l cmp) l :=
+  .of_perm (JS.toSorted_perm l cmp)
+theorem subPerm_reverse {α} (l : List α) : SubPerm l.reverse l := .of_perm (List.reverse_perm l)
+theorem subPerm_take {α} (n : Nat) (l : List α) : SubPerm (l.take n) l := .of_sublist (List.take_sublist n l)
+theorem subPerm_drop {α} (n : Nat) (l : List α) : SubPerm (l.drop n) l := .of_sublist (List.drop_sublist n l)
+grind_pattern subPerm_filter => l.filter p
+grind_pattern subPerm_slice => JS.slice l a b
+grind_pattern subPerm_toSorted => JS.toSorted l cmp
+grind_pattern subPerm_reverse => l.reverse
+grind_pattern subPerm_take => l.take n
+grind_pattern subPerm_drop => l.drop n
+-- the transfers
+grind_pattern SubPerm.nodup_map => SubPerm l₁ l₂, l₁.map f
+grind_pattern SubPerm.nodup => SubPerm l₁ l₂, l₁.Nodup
+grind_pattern SubPerm.length_filter_le => SubPerm l₁ l₂, l₁.filter p
+
 /-- Removing elements keeps keys distinct. -/
 theorem nodup_map_filter {α β} (f : α → β) (p : α → Bool) (l : List α) (h : (l.map f).Nodup) :
     ((l.filter p).map f).Nodup :=
-  h.sublist ((List.filter_sublist).map f)
-grind_pattern nodup_map_filter => (l.filter p).map f, (l.map f).Nodup
+  (subPerm_filter p l).nodup_map h
 
 attribute [grind →] List.mem_of_find?_eq_some
 -- `xs[i]` is an element of `xs` (`JS.get_mem`, after `JS.get` is unfolded to `getElem`)
@@ -54,7 +99,6 @@ attribute [vreact_simp] List.filter_map List.length_map List.length_filter_le
 theorem length_filter_filter_le {α} (p q : α → Bool) (l : List α) :
     ((l.filter q).filter p).length ≤ (l.filter p).length :=
   ((List.filter_sublist).filter p).length_le
-grind_pattern length_filter_filter_le => (l.filter q).filter p
 
 theorem length_filter_le_of_imp {α} {p q : α → Bool} {l : List α} (h : ∀ x ∈ l, q x = true → p x = true) :
     (l.filter q).length ≤ (l.filter p).length := by
@@ -92,6 +136,74 @@ theorem length_filter_lt_of_mem {α} {p : α → Bool} {l : List α} {x : α} (h
     (l.filter p).length < l.length :=
   List.length_filter_lt_length_iff_exists.mpr ⟨x, hx, by simp [hp]⟩
 grind_pattern length_filter_lt_of_mem => x ∈ l, l.filter p
+
+/-! ### Counts by key
+
+`grind` cannot match a pattern inside a predicate (`fun y => !JS.eq y.id k`), so the facts
+below are added by `vreact_keyfacts` (`Tactic.lean`) for each count `(l.filter P).length` of a
+goal whose predicate has the shape they describe.  Together with
+`Nodup ↔ ∀ a, count a ≤ 1` and `0 < count a ↔ a ∈ ·` they give: deleting by the key of a
+present element of a list with distinct keys removes exactly one element; a map-update by key
+changes a count by at most one, and by exactly the change at that element when it is
+present. -/
+
+/-- Filtering out key `k` removes as many elements as `k` occurs among the keys. -/
+theorem length_filter_ne_key {α β} [DecidableEq β] (f : α → β) (k : β) (l : List α) :
+    (l.filter (fun y => !JS.eq (f y) k)).length + (l.map f).count k = l.length := by
+  induction l with
+  | nil => simp
+  | cons a t ih => by_cases h : f a = k <;> simp [h, JS.eq] at * <;> omega
+theorem length_filter_ne_key' {α β} [DecidableEq β] (f : α → β) (k : β) (l : List α) :
+    (l.filter (fun y => !JS.eq k (f y))).length + (l.map f).count k = l.length := by
+  induction l with
+  | nil => simp
+  | cons a t ih => by_cases h : f a = k <;> simp [h, JS.eq, eq_comm (a := k)] at * <;> omega
+/-- Keeping key `k` keeps as many elements as `k` occurs among the keys. -/
+theorem length_filter_eq_key {α β} [DecidableEq β] (f : α → β) (k : β) (l : List α) :
+    (l.filter (fun y => JS.eq (f y) k)).length = (l.map f).count k := by
+  have := length_filter_ne_key f k l
+  have := length_filter_add_length_filter_not (fun y => JS.eq (f y) k) l
+  omega
+theorem length_filter_eq_key' {α β} [DecidableEq β] (f : α → β) (k : β) (l : List α) :
+    (l.filter (fun y => JS.eq k (f y))).length = (l.map f).count k := by
+  have := length_filter_ne_key' f k l
+  have := length_filter_add_length_filter_not (fun y => JS.eq k (f y)) l
+  omega
+
+/-- Two predicates that agree on the elements whose key is not `k` (a count before and after
+the map-update `xs.map(x => x.id === k ? {...x, done: !x.done} : x)`): their counts differ by at
+most the number of elements with key `k`. -/
+theorem length_filter_le_of_agree_off_key {α β} [DecidableEq β] {p q : α → Bool} (f : α → β) (k : β)
+    (l : List α) (h : ∀ x, f x ≠ k → p x = q x) :
+    (l.filter p).length ≤ (l.filter q).length + (l.map f).count k := by
+  induction l with
+  | nil => simp
+  | cons a t ih =>
+    by_cases hk : f a = k
+    · have e : ((a :: t).map f).count k = (t.map f).count k + 1 := by simp [List.count_cons, hk]
+      rw [e]
+      cases hpa : p a <;> cases hqa : q a <;>
+        simp only [List.filter_cons, hpa, hqa, if_true, if_false, Bool.false_eq_true, List.length_cons] <;> omega
+    · simp only [List.filter_cons, h a hk, List.map_cons, List.count_cons, hk, beq_iff_eq]
+      cases q a <;> simp <;> omega
+/-- … and with distinct keys and `x₀` the element with key `k`, they differ exactly by the
+difference at `x₀`. -/
+theorem length_filter_agree_off_key {α β} [DecidableEq β] {p q : α → Bool} (f : α → β) (k : β)
+    (l : List α) (h : ∀ x, f x ≠ k → p x = q x) :
+    ∀ x₀ ∈ l, f x₀ = k → (l.map f).Nodup →
+      (l.filter p).length + (if q x₀ = true then 1 else 0) = (l.filter q).length + (if p x₀ = true then 1 else 0) := by
+  induction l with
+  | nil => simp
+  | cons a t ih =>
+    intro x₀ hx hk hn
+    simp only [List.map_cons, List.nodup_cons, List.mem_map, not_exists, not_and] at hn
+    rcases List.mem_cons.mp hx with rfl | hx'
+    · have hpq : t.filter p = t.filter q := List.filter_congr fun y hy => h y (fun e => hn.1 y hy (e.trans hk.symm))
+      cases hp : p x₀ <;> cases hq : q x₀ <;> simp [List.filter_cons, hp, hq, hpq]
+    · have hka : f a ≠ k := fun e => hn.1 x₀ hx' (hk.trans e.symm)
+      have := ih x₀ hx' hk hn.2
+      simp only [List.filter_cons, h a hka]
+      cases q a <;> simp <;> omega
 
 @[vreact_simp] theorem nodup_reverse_iff {α} (xs : List α) : xs.reverse.Nodup ↔ xs.Nodup := by
   simp only [List.Nodup, List.pairwise_reverse]
