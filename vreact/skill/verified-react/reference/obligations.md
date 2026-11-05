@@ -13,7 +13,7 @@ first one that fails.
 | `handler-robust` | a continuous- or default-priority-event handler (`onMouseMove`, `onScroll`, `onTransitionEnd`, `onLoad`, …), or `onFocus`/`onBlur`/`onInvalid` (the DOM fires them inside other batches), keeps the invariant from **any** valid state | use functional updates; avoid relying on render values |
 | `handler-rebased` | in a component with effects/timers/continuous handlers that set state, a discrete handler keeps the invariant also when React re-applies it on top of their pending updates (fields they write may differ from the snapshot) | guard inside the functional update (`setR(p => p.lo < p.hi ? … : p)`) instead of on the snapshot |
 | `callback-rebased` | the same for a callback you pass to a child, in such a component | as for `handler-rebased` |
-| `effect-robust` | an effect / timer callback keeps the invariant from any valid state (stale closure) | functional update over the whole related state (one record) |
+| `effect-robust` | an effect / timer callback keeps the invariant from any valid state (stale closure); a timer callback may use the early returns (`if (c) return;`) and `assert`/`assume` before its top-level registration | functional update over the whole related state (one record); an early return on the captured value before `setTimeout` |
 | `init-invariant` | initial state satisfies the invariant | initial values; literal data in `useState(...)` |
 | `props-stability` | the invariant survives a re-render with new props (React keeps state) | do not tie state invariants to changeable props; clamp in render |
 | `unique-keys` | keys of a rendered list are distinct | add `distinct(...)` to the invariant or the child's `requires` |

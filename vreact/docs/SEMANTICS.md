@@ -170,6 +170,8 @@ outcome obligations (invariant preservation, robustness, the parent's emit) are
 proved outside the body's term, the rest of the body is `if h : c then … else
 (no updates, no callback)`: the `else` is unreachable (`c` is proved, or assumed and
 reported), and splitting on the `if` hands those obligations `h : c` too. A
+timer registered in an effect body is checked under that body's top-level early
+returns, asserts and assumes before the registration (§2.6). A
 function's `ensures` theorems are proved about its result, outside its body: a
 fact inside the body does not reach them (state it as `requires`, or `ensures` of a
 helper).
@@ -310,6 +312,23 @@ only calls `clearTimeout` / `clearInterval` and makes external writes
 possibly under `if`/`else` with pure conditions —
 no setters, `dispatch`, parent callbacks or local helpers.
 Running a robust effect any number of times (StrictMode) is safe.
+
+A timer is registered only by a statement at the top level of the effect body
+(`setTimeout(…)` / `const id = setInterval(…)`). Its callback is checked under the
+path condition of that registration. That condition is made of the top-level
+early returns `if (c) return;` (no `else`) and the `assert(c)` / `assume(c)`
+statements before it. The callback captures the same snapshot as the effect: an
+effect cannot assign a variable it captures, and a captured `let` is not
+reassigned after the effect is created. So the model's task is
+`if c then skip else callback` for an early return, and `if c then callback else
+skip` for an assert or assume. The `skip` branch stands for a timer the program
+never registers, and it does nothing. A condition about the snapshot says nothing
+about the state the timer fires against, so `setLeft(l => l - 1)` still needs its
+own guard (`CxTimerGuardFail.tsx`). A condition is used only if it translates in
+the component's scope without obligations of its own: one that reads a const
+local to the effect body is left out, which only weakens the facts.
+(`CxTimerGuard.tsx`: the guarded countdown
+`if (left <= 0) return; setTimeout(() => setLeft(left - 1), …)`.)
 
 Hooks (`useState`, `useReducer`, `useEffect`, `useMemo`, `useCallback`) are
 matched by React by call order, so they must be top-level statements of the
@@ -460,20 +479,40 @@ hook rules hold (static checks). For every function: its body is safe and its
     script dispatched the click (`el.click()`, `dispatchEvent`, testing libraries,
     jsdom): a submit button (`<button>` other than `type="button"`/`"reset"`,
     `<input type="submit">`/`"image"`, or a dynamic `type`) fires `submit` at its
-    form, a reset button `reset`. Rejected: `onClick` on such a button, on an
-    element around it, or on an element inside it (unless that element is the
-    click's own activation target: a button, link, checkbox, …), when the
-    button's form submit/reset reaches `onSubmit`/`onReset` (on its form or
-    above), or when the button names its form with `form=…` (which may be
-    anywhere); a user component inside such a button. The same for an invoker
-    button (`commandfor`/`command`): its command runs on an element anywhere, and
+    form, a reset button `reset`. Which button a click inside a button activates
+    is browser-specific. The DOM specification (and jsdom) activates the
+    innermost element with an activation behaviour. Chromium dispatches
+    `DOMActivate` at the click's target as its default action. That event
+    bubbles to the enclosing `<button>`, which submits, resets or invokes,
+    unless the target handled the click itself. Only a checkbox, a radio
+    button and a link (`<a href>`) do that, and each only for a click on
+    itself. A click on a nested `<button>`, on an `<input>` of another type,
+    on a `<select>`, `<textarea>`, `<summary>`, `<details>` or `<img>`, or on
+    the content of a link inside the button activates the button (Chromium 152,
+    react-dom 18.3.1). VTS covers both behaviours.
+    Rejected: `onClick` on such a button, on an element around it, or on an
+    element inside it, except a checkbox, radio button or `<a href>` with a
+    static `type`/`href`. This applies when the button's form submit/reset
+    reaches `onSubmit`/`onReset` (on its form or above), or when the button
+    names its form with `form=…` (which may be anywhere). Also rejected: a
+    `<label>` inside such a button, with or without handlers (one click on the
+    label activates the button twice, once for the label's click and once for
+    the click it dispatches to its control), another such button inside it,
+    and a user component inside it. The same for an invoker button
+    (`commandfor`/`command`): its command runs on an element anywhere, and
     `request-close` fires `cancel` at a dialog synchronously (`onCancel`).
   - A `<label>` dispatches a click on it (or on non-interactive content inside
     it) again to its control — the element `htmlFor` names, or its first form
     control — after focusing it; when the control is inside, that click passes
-    the label and its ancestors again. Rejected: `onClick` on a label, on an
-    element around a label, or on a non-interactive element inside a label; a
-    user component inside a label.
+    the label and its ancestors again. Interactive content stops this, for
+    itself and everything inside it: `<button>`, `<label>`, `<select>`,
+    `<textarea>`, `<details>`, `<input>` other than `type="hidden"`, and
+    `<a href>`. A `<summary>` is not interactive content. Chromium treats a
+    `<summary>` outside a `<details>` as plain content, and a details' own
+    summary is inside the `<details>`, which stops the label. Rejected:
+    `onClick` on a label, on an element around a label, or on an element inside
+    a label that is not interactive content and not inside any; a user
+    component inside a label.
 
   Checked safe, so accepted (with react-dom 18.3.1 under jsdom 25 and in
   Chromium): a checkbox's or radio's `click` is followed by

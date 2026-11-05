@@ -11,7 +11,7 @@ import ts from "typescript";
 import { T, type VType, type Param, type Field, leanType, showType, typeOfNode } from "./types.ts";
 import { type Env, ModCtx, type CompCtx, type CompInfo, type StateVar, type FnInfo, type Binding, bind, freshLocal } from "./ctx.ts";
 import { expr, prop, propAll, block, branch, handlerFn, checkDeps, hookName, specFn, symbolOf, bindParam, type BlockCtx, typeOf, valueBlock, lambda, outcome, checkClosures, topLevelHookDecls } from "./translate.ts";
-import { fail, leanField, leanIdent, leanStr, jsStr, paren, nodeText, indent } from "./util.ts";
+import { fail, leanField, leanIdent, leanStr, jsStr, paren, nodeText, indent, VtsError } from "./util.ts";
 
 /* ─────────────────────── React 18.3.1 event model ───────────────────────
  * Native DOM events → React handler props, and their priorities, as in
@@ -563,6 +563,8 @@ function effectCode(c: ts.CallExpression, env: Env, info: CompInfo): string {
     if (ts.isCallExpression(e) && ts.isIdentifier(e.expression) && ["setInterval", "setTimeout"].includes(e.expression.text)) return e.arguments[0];
     return null;
   };
+  // the path condition of the timers registered so far down the effect body (`timerGuard`)
+  const guards: TimerGuard[] = [];
   for (const s of stmts) {
     if (ts.isReturnStatement(s)) {
       // cleanup: not translated, so it may not touch any component's state
@@ -575,10 +577,12 @@ function effectCode(c: ts.CallExpression, env: Env, info: CompInfo): string {
       cb = timerCb(s.declarationList.declarations[0].initializer!);
     }
     if (cb) {
-      const h = handlerFn(cb, env, "robust", []);
-      tasks.push(`(fun _ => ${h.code})`);
+      const timer = cb;
+      tasks.push(`(fun _ => ${guardedTimer(guards, 0, env, (e) => handlerFn(timer, e, "robust", []).code)})`);
       continue;
     }
+    const g = timerGuard(s, env);
+    if (g) guards.push(g);
     sync.push(s);
   }
   // translate the synchronous part as a robust handler body
@@ -598,6 +602,63 @@ function effectCode(c: ts.CallExpression, env: Env, info: CompInfo): string {
     ? m.ob(c, "effect-robust", `timer callbacks of the effect preserve the invariant of ${info.name} from any state`)
     : `(/-⟦gen⟧-/ by simp)`;
   return `(VReact.Effect.mk (S := ${info.ns}.State) (E := E) (inv := ${info.ns}.inv props) (${deps}) ${paren(setup)} ${okSetup}\n     (/-⟦gen⟧-/ by vreact_noemit)\n     [${tasks.join(", ")}] ${okTasks})`;
+}
+
+/**
+ * A condition that held when the effect body went past a top-level statement: an
+ * early return `if (c) return;` (no `else`) leaves `!c`; `assert(c)` (proved where it
+ * stands) and `assume(c)` (assumed, and reported) leave `c`.
+ */
+interface TimerGuard {
+  cond: ts.Expression;
+  holds: boolean;
+}
+
+function timerGuard(s: ts.Statement, env: Env): TimerGuard | null {
+  if (ts.isIfStatement(s) && !s.elseStatement) {
+    const t = s.thenStatement;
+    const bare = (x: ts.Statement) => ts.isReturnStatement(x) && !x.expression;
+    if (bare(t) || (ts.isBlock(t) && t.statements.length === 1 && bare(t.statements[0]))) return { cond: s.expression, holds: false };
+    return null;
+  }
+  if (ts.isExpressionStatement(s) && ts.isCallExpression(s.expression) && s.expression.arguments.length === 1) {
+    const f = specFn(env, s.expression.expression);
+    if (f === "assert" || f === "assume") return { cond: s.expression.arguments[0], holds: true };
+  }
+  return null;
+}
+
+/**
+ * A timer callback (`body`), checked under the path condition of its registration.
+ * The effect body registers the timer only past `guards` (top-level early returns,
+ * asserts, assumes), each about the snapshot the effect runs with — the same one the
+ * callback captures (an effect cannot assign a variable it captures, and a captured
+ * `let` is not reassigned after the effect is created).  So the callback is
+ * `if h : c then body else skip` (or the reverse): the skip branch is a timer the real
+ * program never registers, and does nothing, which preserves every invariant.  A
+ * guard is used only if it translates in the component's environment (effect-local
+ * consts are not in scope there; the guards before it may narrow) without
+ * obligations of its own (those stay with the effect body); others are left out,
+ * which only weakens the timer's facts.
+ */
+function guardedTimer(guards: TimerGuard[], i: number, env: Env, body: (e: Env) => string): string {
+  if (i === guards.length) return body(env);
+  const g = guards[i];
+  const m = env.m;
+  let usable = false;
+  m.dryRun(() => {
+    const n0 = m.obligations.length;
+    try {
+      branch(g.cond, env, () => "true", () => "false");
+      usable = m.obligations.length === n0;
+    } catch (err) {
+      if (!(err instanceof VtsError)) throw err;
+    }
+  });
+  if (!usable) return guardedTimer(guards, i + 1, env, body);
+  const skip = outcome({ kind: "robust", updates: [], emit: null, eventVar: null }, env.comp!);
+  const next = (e: Env) => guardedTimer(guards, i + 1, e, body);
+  return g.holds ? branch(g.cond, env, next, () => skip) : branch(g.cond, env, () => skip, next);
 }
 
 const CLEANUP_RULE = "effect cleanups may only clear timers (clearTimeout/clearInterval) and make external writes (console.*, localStorage.*, document.title = …), possibly under if/else: React runs a cleanup later, with the props and state of the render that created it, and the cleanup is not verified";
@@ -829,17 +890,28 @@ function attrValue(a: ts.JsxAttribute): ts.Expression | null {
  *  - `<details>` toggles and popovers toggle (`toggle` is a queued task; React 18
  *    has no `onBeforeToggle`); links navigate; a dialog's `close` is a queued task.
  *
+ * Which element a click activates is not the DOM-spec rule (the innermost element
+ * with an activation behaviour) in Chromium: there the default handling of a click
+ * dispatches `DOMActivate` at its target, which bubbles to an enclosing `<button>`
+ * and submits, resets or invokes it, unless the target handles the click itself —
+ * only a checkbox, a radio button and a link do (`stopsButtonActivation`).  So a
+ * click on a nested button, a text field, a `<summary>`, a `<label>` (twice: once
+ * for the click, once for the click it dispatches to its control) or the content of
+ * a link inside a submit button submits.  A label is stopped by interactive content
+ * and everything in it (`stopsLabelActivation`).
+ *
  * Implicit submission by Enter and the keyboard activation of buttons follow
  * trusted key events only, which the browser dispatches from native code, with
  * microtask checkpoints in between.  The model runs one handler per event, so VTS
  * rejects every layout in which one discrete event, with its activation behaviour,
  * could run two discrete handlers, or one twice: two handler props of one element
  * sharing a native event; an element with handlers containing a descendant handler
- * that shares a native event, or a user component; `onClick` on, around, or (not
- * inside interactive content) within a submit/reset button whose form owner has
- * `onSubmit`/`onReset` at or above it — or that names its form (`form=…`), which may
- * be anywhere —, an invoker button, or a `<label>`; a user component within such a
- * button or a label.
+ * that shares a native event, or a user component; `onClick` on, around, or within
+ * (except on a checkbox, radio button or link) a submit/reset button whose form owner
+ * has `onSubmit`/`onReset` at or above it — or that names its form (`form=…`), which
+ * may be anywhere —, or an invoker button; `onClick` on, around, or within (not
+ * inside interactive content) a `<label>`; a label, or another such button, within
+ * such a button; a user component within such a button or a label.
  * Focus and `invalid` events are side effects (`SIDE_EFFECT_NATIVE`): robust.
  *
  * `bubble` describes the enclosing elements during the (synchronous, recursive)
@@ -877,9 +949,6 @@ function withBubble<T>(b: Bubble, f: () => T): T {
   }
 }
 
-/** Input types with an activation behaviour of their own: a click on them activates them, not an enclosing button. */
-const ACTIVATING_INPUTS = new Set(["checkbox", "radio", "submit", "image", "reset", "button", "file", "color"]);
-
 /** `<button>` / `<input>`: may a click on it submit / reset its form owner?  A dynamic `type` may do either. */
 function formActivation(tag: string, e: ts.JsxElement | ts.JsxSelfClosingElement): { submit: boolean; reset: boolean } {
   const t = staticAttr(e, "type");
@@ -894,22 +963,44 @@ function formActivation(tag: string, e: ts.JsxElement | ts.JsxSelfClosingElement
 }
 
 /**
- * Does a click on (or inside) `<tag>` stop there, instead of activating an
- * enclosing submit/reset button (`label` false) or label (`label` true)?  An
- * element with an activation behaviour of its own is the click's activation
- * target; a label also ignores clicks on interactive content inside it.  Unsure
- * cases (a dynamic `type` or `href`) do not stop it.
+ * Is `<tag>` interactive content, so that a click on it, or on anything inside it,
+ * does not activate an enclosing `<label>`?  (HTML "interactive content"; Chromium's
+ * `IsInInteractiveContent`, which walks from the click's target up to the label.)
+ * A `<summary>` is not: outside a `<details>` it is plain content to Chromium, and a
+ * details' own summary lies inside the `<details>`, which is.  Unsure cases (a dynamic
+ * `type` or `href`) do not stop the label.
  */
-function stopsActivation(tag: string, e: ts.JsxElement | ts.JsxSelfClosingElement, label: boolean): boolean {
-  if (tag === "button" || tag === "label" || tag === "summary") return true;
-  if (tag === "a" || tag === "area") return typeof staticAttr(e, "href") === "string";
+function stopsLabelActivation(tag: string, e: ts.JsxElement | ts.JsxSelfClosingElement): boolean {
+  if (["button", "label", "select", "textarea", "details"].includes(tag)) return true;
+  if (tag === "a") return typeof staticAttr(e, "href") === "string";
   if (tag === "input") {
     const t = staticAttr(e, "type");
-    if (t === undefined) return false;
-    const ty = (t ?? "text").toLowerCase();
-    return label ? ty !== "hidden" : ACTIVATING_INPUTS.has(ty);
+    return t !== undefined && (t ?? "text").toLowerCase() !== "hidden";
   }
-  return label && ["select", "textarea", "details"].includes(tag);
+  return false;
+}
+
+/**
+ * Does a click whose target is `<tag>` itself not activate an enclosing submit,
+ * reset or command button?  Not the DOM-spec rule ("the click's activation target is
+ * the innermost element with an activation behaviour"), which jsdom follows, but
+ * Chromium's: the default handling of a click dispatches `DOMActivate` at its target
+ * — which bubbles to the enclosing `<button>` and submits, resets or invokes it —
+ * unless the target's own default handler marks the click handled.  Only a checkbox
+ * or radio button (its click toggles it) and a link (`<a href>`: it navigates) do;
+ * a nested `<button>`, `<input type=button|file|color|text>`, `<select>`,
+ * `<textarea>`, `<summary>`, `<details>`, `<img>` and the content of a link do not
+ * (Chromium 152, react-dom 18.3.1).  It covers this element only, never its
+ * descendants: a click on a span inside a link inside the button submits.  Unsure
+ * cases (a dynamic `type` or `href`) do not stop the button.
+ */
+function stopsButtonActivation(tag: string, e: ts.JsxElement | ts.JsxSelfClosingElement): boolean {
+  if (tag === "a") return typeof staticAttr(e, "href") === "string";
+  if (tag === "input") {
+    const t = staticAttr(e, "type");
+    return typeof t === "string" && ["checkbox", "radio"].includes(t.toLowerCase());
+  }
+  return false;
 }
 
 /** Check the handler props of `<tag>` against each other and the enclosing elements; returns the context for its children. */
@@ -931,8 +1022,14 @@ function checkEvents(tag: string, e: ts.JsxElement | ts.JsxSelfClosingElement, h
   const names = handlers.map((a) => a.name.getText());
   const onClick = names.includes("onClick");
   const SCRIPTED = "in one batch when a script dispatches the click (el.click(), testing libraries)";
-  // activation: an enclosing activator still activated by a click here, and this element's own
-  const enclosing = bubble.act && !stopsActivation(tag, e, bubble.act.label) ? bubble.act : null;
+  // activation: the enclosing activator a click on this element still activates
+  // (`enclosing`), the one a click inside it does (`passOn`, for the children), and
+  // this element's own (`mine`).  Interactive content stops a label for itself and
+  // its content; a checkbox, radio or link stops a button for itself only.
+  let enclosing = bubble.act;
+  let passOn = bubble.act;
+  if (bubble.act?.label && stopsLabelActivation(tag, e)) enclosing = passOn = null;
+  else if (bubble.act && !bubble.act.label && stopsButtonActivation(tag, e)) enclosing = null;
   let mine: Activation | null = null;
   const fa = formActivation(tag, e);
   if (tag === "label") {
@@ -960,7 +1057,13 @@ function checkEvents(tag: string, e: ts.JsxElement | ts.JsxSelfClosingElement, h
     if (onClick) fail(e, `onClick on ${mine.what}: one click runs both handlers, ${SCRIPTED} (put the logic in the target's handler)`);
     if (bubble.onClick) fail(e, `${mine.what} is nested inside an element with ${bubble.onClick}: one click runs both handlers, ${SCRIPTED} (move the handler)`);
   }
-  if (enclosing && onClick) fail(e, `onClick on <${tag}> inside ${enclosing.what}: one click runs this handler and, through the activation of the enclosing element, another one (or this one again), ${SCRIPTED} (move the handler out)`);
+  // an activator inside one that a click on it still activates (only a button can
+  // enclose one: interactive content stops a label): in Chromium one click activates
+  // both — a label inside a submit button submits its form twice (once for the click,
+  // once for the click it dispatches to its control), a nested command button runs
+  // its command and the enclosing button submits
+  if (mine && enclosing) fail(e, `${mine.what} inside ${enclosing.what}: one click on it, or inside it, activates both (in Chromium the default handling of the click bubbles to the enclosing button), so one click runs two handlers, or one twice, ${SCRIPTED} (do not nest it in the button)`);
+  if (enclosing && onClick) fail(e, `onClick on <${tag}> inside ${enclosing.what}: one click runs this handler and, through the activation of the enclosing element, another one (or this one again), ${SCRIPTED} (move the handler out${enclosing.label ? "" : "; inside a button, only a checkbox, a radio button or an <a href> handles its own click"})`);
   const natives = new Map(bubble.natives);
   for (const [n, p] of own) natives.set(n, `${p} on <${tag}>`);
   const handlerOf = (prop: string) => (names.includes(prop) ? `${prop} on <${tag}>` : null);
@@ -969,7 +1072,7 @@ function checkEvents(tag: string, e: ts.JsxElement | ts.JsxSelfClosingElement, h
     handlers: [...bubble.handlers, ...names],
     onClick: onClick ? `onClick on <${tag}>` : bubble.onClick,
     form: tag === "form" ? { submit: handlerOf("onSubmit") ?? bubble.natives.get("submit") ?? null, reset: handlerOf("onReset") ?? bubble.natives.get("reset") ?? null } : bubble.form,
-    act: mine ?? enclosing,
+    act: mine ?? passOn,
   };
 }
 

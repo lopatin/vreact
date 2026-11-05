@@ -176,7 +176,10 @@ also be safe when React rebases them onto those pending updates (guard inside th
 functional update: `setR(p => p.lo < p.hi ? … : p)`). Rejected: unknown handler
 names, `onSelect`, capture-phase handlers (`onClickCapture`).
 
-Effects: setters and timers (`setTimeout`/`setInterval` callbacks become tasks),
+Effects: setters and timers (`setTimeout`/`setInterval` callbacks become tasks;
+register them at the top level of the effect body; a timer's callback may use the
+early returns `if (c) return;` and the `assert`/`assume` before it, as in
+`if (left <= 0) return; setTimeout(() => setLeft(left - 1), 1000)`),
 external writes (`localStorage.setItem`, `document.title = …`, `console.*`) are
 allowed and have no modelled effect; no async. A cleanup is an inline
 `() => { … }` that only calls `clearTimeout`/`clearInterval` and makes those
@@ -201,9 +204,15 @@ same native event (`<li onClick>` around `<input type="checkbox" onChange>`)
 or a user component. A click also runs what it activates: a submit (reset) button
 submits (resets) its form, and a `<label>` clicks its control again. So no `onClick`
 on, around or inside a submit/reset button whose form has `onSubmit`/`onReset`
-(or that has `form=…`): use `type="button"` or put the logic in `onSubmit`; no
-`onClick` on, around or inside a `<label>` (except on the controls in it), and no
-user component inside such a button or a label (use `htmlFor`).
+(or that has `form=…`), or an invoker button (`commandfor`): use `type="button"` or
+put the logic in `onSubmit`. Inside such a button only a checkbox, a radio button
+or an `<a href>` may have `onClick`. In Chromium a click on anything else inside
+it, including a nested button or a text field, also activates the button. No
+`<label>` or second such button may go inside it either. No `onClick` on, around
+or inside a `<label>`, except on interactive content in it (a control, a button,
+a link, a `<select>`, a `<details>`) and on elements inside that content. A
+`<summary>` alone does not count. No user component may go inside such a button
+or a label (use `htmlFor`).
 
 ## Not yet supported (workarounds)
 
