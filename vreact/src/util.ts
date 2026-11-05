@@ -104,7 +104,11 @@ function hasLoneSurrogate(s: string): boolean {
   return false;
 }
 
-/** A Lean string literal (for names, tags and well-formed text; JS string values use `jsStr`). */
+/**
+ * A Lean string literal (for names, tags and well-formed text; JS string values use `jsStr`).
+ * `⟦` (the obligation marker `/-⟦obN⟧-/` begins with it) is escaped, so the text of a
+ * string never looks like a marker in the generated Lean.
+ */
 export function leanStr(s: string): string {
   if (hasLoneSurrogate(s)) throw new Error("internal: lone surrogate in a Lean string literal");
   let out = '"';
@@ -116,6 +120,7 @@ export function leanStr(s: string): string {
     else if (ch === "\t") out += "\\t";
     else if (ch === "\r") out += "\\r";
     else if (c < 0x20 || c === 0x7f) out += "\\x" + c.toString(16).padStart(2, "0");
+    else if (ch === "⟦") out += "\\u27e6";
     else out += ch;
   }
   return out + '"';

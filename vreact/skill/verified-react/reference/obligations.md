@@ -109,6 +109,15 @@ first one that fails.
    of the needed instance, or a variable bound, usually helps.) A timeout or
    error Lean reports for a whole declaration leaves its obligations unproved
    ("not checked", with the reason).
+8. **Failures do not stop the check.** `vreact_ob` reports a failed obligation as
+   a Lean *warning* (`vreact: …`, with the goal) and admits its goal with
+   `sorry`, so the rest of the module and the modules importing it are still
+   checked; a proved one reports `vreact:ok` (the report counts nothing as
+   proved without it). Whatever relies on a failed obligation has `sorryAx` in
+   its axioms and is `INCOMPLETE`, with the failed item named as the reason. An
+   obligation whose goal itself depends on that `sorry` (e.g. it unfolds a
+   function whose index obligation failed) is reported `vreact:blocked …` and
+   counted as *not checked*: fix the failure it depends on first.
 
 ## What not to do
 

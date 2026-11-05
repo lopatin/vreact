@@ -4,13 +4,15 @@
  * `verified`/`fail`/`status` cases are checked together in one Lean build; `reject` cases
  * must be refused by the translator with the given message. Tokens `key=value` add
  * report checks (see `checkReport`): `Name=<status>` for a component/function/constant of
- * the case, `verdict=…`, `proved=N`, `unchecked=N`, `errors=<cause>`, `failtext=<word>`.
+ * the case, `verdict=…`, `proved=N`, `unchecked=N`, `errors=<cause>`, `failtext=<word>`,
+ * `why.Name=<text>` (the item's reported reason mentions the text; `~` stands for a space).
  * A directory `cases/<Name>/` is a multi-file case with its own project: its .ts/.tsx files
  * and subdirectories go to src/, `proofs/` and `vreact.json` are copied, `tsconfig.json` replaces the default
  * one (a file `NO_TSCONFIG` means none); the header of its first source file applies.
  */
 import fs from "node:fs";
 import path from "node:path";
+import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { loadConfig, verify, CAUSE_LABEL, type Report } from "../src/cli.ts";
 import { translate } from "../src/module.ts";
@@ -107,6 +109,12 @@ function checkReport(r: Report, files: string[], expect: string[], whole: boolea
     } else if (k === "failtext") {
       const fs_ = r.failures.filter((f) => mine(f.where));
       if (!fs_.length || !fs_.every((f) => f.leanFull.includes(v))) why.push(`expected every failure to mention "${v}": ${fs_.map((f) => f.where + " " + f.lean.split("\n")[0]).join(" | ")}`);
+    } else if (k.startsWith("why.")) {
+      // why.<Name>=<text>: the reported reason of the item contains the text (`~` for a space)
+      const it = items.find((x) => x.name === k.slice(4)) as { reason?: string } | undefined;
+      const want = v.replace(/~/g, " ");
+      if (!it) why.push(`no component/function/constant ${k.slice(4)}`);
+      else if (!it.reason?.includes(want)) why.push(`${k.slice(4)}: expected the reason to mention "${want}", got ${JSON.stringify(it.reason)}`);
     } else {
       const it = items.find((x) => x.name === k);
       if (!it) why.push(`no component/function/constant ${k}`);
@@ -128,33 +136,52 @@ console.log("message attribution (judge)");
     "def render (x : Int) : Nat × Nat :=", "  ((/-⟦ob2⟧-/ by vreact_ob vreact_auto), (/-⟦ob3⟧-/ by vreact_ob vreact_auto))", // 8-9
     "def component : Nat := render 0 |>.1", // 10
     "theorem g.post : True :=", "  (/-⟦ob5⟧-/ by vreact_ob vreact_auto)", // 11-12
-    "end VTS.m", "#eval \"vreact:checked\"", // 13-14
+    "theorem k.post : True ∧ True ∧ True :=", "  ⟨(/-⟦ob6⟧-/ by vreact_ob vreact_auto), (/-⟦ob7⟧-/ by vreact_ob vreact_auto), (/-⟦ob8⟧-/ by vreact_ob vreact_auto)⟩", // 13-14
+    "end VTS.m", "#eval \"vreact:checked\"", // 15-16
   ].join("\n");
   fs.writeFileSync(path.join(out, "VTS", "m", "View.lean"), view);
   fs.writeFileSync(path.join(out, "VTS", "m", "Defs.lean"), "namespace VTS.m\ndef h : Nat := (/-⟦ob4⟧-/ by vreact_ob vreact_auto)\nend VTS.m\n");
+  // `vreact_ob` reports its result at its token, 13 columns after the marker `/-⟦obN⟧-/ by `
+  const at = (id: number) => {
+    const mk = findMarkers(out).find((m) => m.id === id)!;
+    return `${mk.file.split(path.sep).join("/")}:${mk.line}:${mk.col + 13}`;
+  };
   const lake = [
     "✖ [3/9] Building VTS.m.View",
     "error: VTS/m/View.lean:4:0: (deterministic) timeout at `whnf`, maximum number of heartbeats (1000000) has been reached",
     "error: VTS/m/View.lean:8:4: unexpected elaboration failure",
+    `info: ${at(2)}: vreact:ok`,
     "error: VTS/m/View.lean:10:23: Unknown identifier `render`",
-    "info: VTS/m/View.lean:14:0: \"vreact:checked\"",
+    `info: ${at(5)}: vreact:ok`,
+    // ob6: a forged `vreact:ok` next to a failure; ob7: no result of its own, only a forged
+    // `vreact:ok` from a user proof at its position; ob8: proved
+    `info: ${at(6)}: vreact:ok`,
+    `warning: ${at(6)}: vreact: \`grind\` failed`,
+    "⊢ False",
+    `info: ${at(8)}: vreact:ok`,
+    `info: Proofs/m.lean:${at(7).split(":").slice(1).join(":")}: vreact:ok`,
+    "info: VTS/m/View.lean:16:0: \"vreact:checked\"",
     "error: Proofs/m.lean: bad import 'VTS.mm.Defs'",
     "error: build cycle detected:",
     "  vts/+VTS.m.View:leanArts",
     "error: build failed",
   ].join("\n");
   const msgs = parseMessages(lake);
+  const ids = [1, 2, 3, 4, 5, 6, 7, 8];
   const ob = (id: number) => ({ id, kind: "k", desc: `ob${id}`, where: `src/m.ts:${id}:1`, file: "m.ts", line: id });
-  const v = judge([1, 2, 3, 4, 5].map(ob), msgs, findMarkers(out), out);
+  const v = judge(ids.map(ob), msgs, findMarkers(out), out);
   const st = (id: number) => (v.failed.some((f) => f.ob.id === id) ? "failed" : v.unchecked.some((u) => u.id === id) ? "unchecked" : "proved");
-  const want: Record<number, string> = { 1: "failed", 2: "unchecked", 3: "unchecked", 4: "unchecked", 5: "proved" };
-  const got = Object.fromEntries([1, 2, 3, 4, 5].map((i) => [i, st(i)]));
+  const want: Record<number, string> = { 1: "failed", 2: "unchecked", 3: "unchecked", 4: "unchecked", 5: "proved", 6: "failed", 7: "unchecked", 8: "proved" };
+  const got = Object.fromEntries(ids.map((i) => [i, st(i)]));
   const causes = v.internal.map((i) => i.cause).join(",");
-  if (JSON.stringify(got) === JSON.stringify(want)) ok("judge: decl-level timeout fails its only obligation; a broken declaration's obligations and an unelaborated file's are not proved");
+  if (JSON.stringify(got) === JSON.stringify(want)) ok("judge: decl-level timeout fails its only obligation; a broken declaration's obligations, an unelaborated file's and one without `vreact:ok` are not proved; a failure beats a forged `vreact:ok`");
   else bad("judge attribution", `expected ${JSON.stringify(want)}, got ${JSON.stringify(got)}`);
+  const f6 = v.failed.find((f) => f.ob.id === 6)?.message;
+  if (f6 === "`grind` failed\n⊢ False") ok("judge: a `vreact_ob` failure shows Lean's text and goal");
+  else bad("judge failure text", JSON.stringify(f6));
   if (causes === "timeout,internal,follow-on,build,build") ok("judge: error causes", causes);
   else bad("judge causes", `expected timeout,internal,follow-on,build,build, got ${causes}`);
-  if (v.declErrors.has("VTS.m.f.post") && v.declErrors.has("VTS.m.render") && !v.declErrors.has("VTS.m.g.post")) ok("judge: declarations with errors");
+  if (v.declErrors.has("VTS.m.f.post") && v.declErrors.has("VTS.m.render") && !v.declErrors.has("VTS.m.g.post") && !v.declErrors.has("VTS.m.k.post")) ok("judge: declarations with errors (a `vreact_ob` failure is not one)");
   else bad("judge declErrors", [...v.declErrors.keys()].join(","));
 }
 
@@ -212,6 +239,35 @@ for (const name of dirCases) {
   if (!why.length) ok(name, expect.join(" "));
   else bad(name, why.join("; "));
 }
+// the command line: misuse prints the usage (never a stack trace); a report larger than a pipe
+// buffer reaches a pipe complete (the exit code is set, the process is not cut off by exit())
+console.log("command line");
+{
+  const bin = path.join(here, "..", "bin", "vreact.js");
+  const run = (args: string[], cwd = dir) => spawnSync(process.execPath, [bin, ...args], { cwd, encoding: "utf8", maxBuffer: 256 * 1024 * 1024 });
+  const misuse: string[][] = [["synth"], ["synth", "a.tsx", "b.tsx"], ["verify", "--jsn"], ["verify", "--root"], ["verify", "--root", path.join(work, "no-such-dir")], ["verify", "src/x.ts"], ["frobnicate"], ["verify", "--root", work]];
+  const bad_: string[] = [];
+  for (const args of misuse) {
+    const p = run(args);
+    const out = `${p.stdout}${p.stderr}`;
+    if (p.status !== 2 || /^\s+at /m.test(out) || !/^vreact: /m.test(out)) bad_.push(`vreact ${args.join(" ")}: exit ${p.status}: ${out.split("\n").slice(0, 3).join(" | ")}`);
+  }
+  const help = run(["--help"]);
+  if (help.status !== 0 || !help.stdout.startsWith("usage:")) bad_.push(`vreact --help: exit ${help.status}`);
+  if (!bad_.length) ok(`command line: ${misuse.length} misuses print a message and the usage (exit 2), no stack trace`);
+  else bad("command line misuse", bad_.join("\n    "));
+  // the semantic batch's report (the build is up to date: lake only replays it)
+  const p = run(["verify", "--json"]);
+  let parsed: Report | null = null;
+  try {
+    parsed = JSON.parse(p.stdout);
+  } catch {
+    /* reported below */
+  }
+  if (parsed && p.stdout.length > 65536 && p.status === (parsed.ok ? 0 : 1) && parsed.obligations.total === r.obligations.total) ok(`command line: verify --json through a pipe is complete (${p.stdout.length} bytes)`);
+  else bad("verify --json through a pipe", `exit ${p.status}, ${p.stdout.length} bytes, ${parsed ? "parsed" : "not valid JSON"}${parsed && p.stdout.length <= 65536 ? " (too small to test a pipe buffer)" : ""}`);
+}
+
 // the report of doctored Lean output of a verified fixture never says VERIFIED (tests/honesty.ts)
 console.log("report honesty (doctored Lean output)");
 honestyChecks(here, work, ok, bad);

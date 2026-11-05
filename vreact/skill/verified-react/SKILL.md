@@ -128,9 +128,11 @@ export function ItemList(props: ItemListProps) {
 `vreact verify` reports, per component/function (and per constant, when not
 `VERIFIED`): `VERIFIED`, `VERIFIED*` (own obligations proved, relies on
 `@trusted` contracts), `TRUSTED`, `ASSUMES` (relies on `assume(…)` facts),
-`INCOMPLETE` (failed obligation, `hole()`/`sorry`, or a declaration Lean could
-not finish), `UNCHECKED` (Lean never got to it because a module it imports
-failed), plus each failed obligation as
+`INCOMPLETE` (a failed or unchecked obligation, `hole()`/`sorry`, a declaration
+Lean could not finish, or it relies on an item that is not verified — the line
+under it names the reason, e.g. `↳ it uses clamp (src/lib.ts), which is not
+verified: an obligation of it failed`), `UNCHECKED` (Lean never got to it: a
+Lean build/import error or an internal error stopped its file), plus each failed obligation as
 `file:line:col [kind] description` followed by the Lean goal. In the goal, the
 hypotheses are what is known (props precondition, invariant, branch
 conditions, `h_…` facts); `⊢ False` after `grind` means the facts were
@@ -139,9 +141,14 @@ Goals are abridged; `vreact verify --full` prints them completely (`--json`
 has both `lean` and `leanFull`). `vreact explain <file>` prints the generated
 Lean; `.vreact/` is an ordinary Lake project, so `cd .vreact && lake env lean
 VTS/<module>/View.lean` (with `~/.elan/bin` on PATH) re-checks one file.
-A file marked `?` in the table has obligations that were not checked (the
-reason is printed: a module it depends on failed, or its declaration did not
-elaborate) — fix the first failure or the listed Lean build error and re-run.
+A failed obligation does not stop the check: everything else, also in the
+modules that import the failing one, is still checked, so one run shows every
+failure. An item that uses a failed one is `INCOMPLETE` even when its own
+obligations are proved (they relied on the failed contract); fix the failure it
+names first. A file marked `?` in the table has obligations that were not
+checked (the reason is printed: its goal depends on a failure elsewhere — fix
+that first —, its declaration did not elaborate, or a Lean build error stopped
+the file) — fix the first failure or the listed Lean build error and re-run.
 Each obligation has its own time budget; one that runs out fails with
 `(deterministic) timeout` at that obligation (help the prover, or raise
 `"heartbeats"` in vreact.json — default 1000000).

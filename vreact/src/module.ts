@@ -177,6 +177,27 @@ export function translate(cfg: Config): TranslateResult {
     res.errors.push(new VtsError(sf, `module name clash: ${a} and ${b} translate to ${same} (a module is named after its path without the .ts/.tsx extension, other characters than letters, digits and _ become _, and a segment that is a Lean keyword or Lean name gets a trailing _); rename one of the files`));
   }
   if (res.errors.length) return res;
+  // ---- a module's generated files go to the directory VTS/<segments>/: two modules whose
+  // directories differ only in letter case (src/lib.ts → VTS/lib/, src/Lib/x.ts → VTS/Lib/x/)
+  // would share one directory on a case-insensitive disk, where Lean's messages name a path
+  // that is not the one on disk ----
+  const dirs = new Map<string, { dir: string; sf: ts.SourceFile }>();
+  for (const sf of sfs) {
+    const segs = nsOfFile(sf.fileName).split(".");
+    for (let k = 2; k <= segs.length; k++) {
+      const dir = segs.slice(0, k).join("/");
+      const other = dirs.get(dir.toLowerCase());
+      if (!other) {
+        dirs.set(dir.toLowerCase(), { dir, sf });
+        continue;
+      }
+      if (other.dir === dir) continue;
+      const a = path.relative(cfg.root, other.sf.fileName), b = path.relative(cfg.root, sf.fileName);
+      res.errors.push(new VtsError(sf, `module path clash: ${a} and ${b} put their generated Lean into the directories ${other.dir}/ and ${dir}/, which differ only in letter case (one directory on a case-insensitive disk); rename one of them so that the names (here \`${other.dir.split("/").pop()}\` and \`${dir.split("/").pop()}\`) are spelled the same or differ by more than case`));
+      break;
+    }
+  }
+  if (res.errors.length) return res;
 
   // ---- import graph & topological order ----
   const importsOf = new Map<ts.SourceFile, ts.SourceFile[]>();
@@ -251,6 +272,8 @@ export function translate(cfg: Config): TranslateResult {
     };
     walk(cfg.proofsDir);
   }
+  /** the Lean declarations each module generates (full names), for `nameClashes` */
+  const declared = new Map<ts.SourceFile, string[]>();
   // the user lemmas about a module's functions (proofs/<Up>.lean) are imported into the Defs of
   // every module importing it, so they help those modules' function bodies and contracts too
   const upProofs = upstreamProofs(
@@ -344,8 +367,11 @@ export function translate(cfg: Config): TranslateResult {
     view += `#eval "vreact:checked"\n`;
     leanFiles.push({ rel: path.join(rel, "Defs.lean"), text: withBudget(defs, cfg.heartbeats) });
     leanFiles.push({ rel: path.join(rel, "View.lean"), text: withBudget(view, cfg.heartbeats) });
+    declared.set(sf, [...leanDecls(defs), ...leanDecls(view)].map((d) => d.name).filter((n): n is string => !!n));
     res.modules.push(modRes);
   }
+  if (res.errors.length) return res;
+  nameClashes(order, declared, nsOfFile, cfg.root, res);
   if (res.errors.length) return res;
   // root module and lake project
   const rootImports = res.modules.map((mr) => `import ${mr.viewModule}`).join("\n");
@@ -373,6 +399,40 @@ export function translate(cfg: Config): TranslateResult {
   }
   res.ok = true;
   return res;
+}
+
+/**
+ * A module's namespace must not be a name another module declares: `src/a.ts` declaring `b`
+ * (`VTS.a.b`, with `VTS.a.b.post` for its ensures) and a module `src/a/b.ts` (namespace
+ * `VTS.a.b`, whose `post` would be `VTS.a.b.post` too) cannot both be imported by one Lean
+ * module, and a contract lookup by name (`b.post`) could find the other module's declaration.
+ * Every name a module declares below its own namespace, and every namespace such a name opens
+ * (`VTS.a.b` for `VTS.a.b.post`, a component's `VTS.a.Cart`), is taken; another module's
+ * namespace may not be one of them. (Any exact clash of two modules' declarations is such a
+ * case: one module's namespace lies inside the other's.)
+ */
+function nameClashes(order: ts.SourceFile[], declared: Map<ts.SourceFile, string[]>, nsOfFile: (f: string) => string, root: string, res: TranslateResult) {
+  const taken = new Map<string, { sf: ts.SourceFile; decl: string }>();
+  for (const sf of order) {
+    const ns = nsOfFile(sf.fileName);
+    for (const d of declared.get(sf) ?? []) {
+      if (!d.startsWith(ns + ".")) continue;
+      const segs = d.split(".");
+      for (let k = ns.split(".").length + 1; k <= segs.length; k++) {
+        const p = segs.slice(0, k).join(".");
+        if (!taken.has(p)) taken.set(p, { sf, decl: d });
+      }
+    }
+  }
+  for (const sf of order) {
+    const ns = nsOfFile(sf.fileName);
+    const t = taken.get(ns);
+    if (!t || t.sf === sf) continue;
+    const owner = nsOfFile(t.sf.fileName);
+    const tsName = t.decl.slice(owner.length + 1).split(".")[0].replace(/^«|»$/g, "").replace(/'$/, "");
+    res.errors.push(new VtsError(sf.statements[0] ?? sf,
+      `Lean name clash: the module ${path.relative(root, sf.fileName)} has the Lean namespace ${ns}, which ${path.relative(root, t.sf.fileName)} already uses for its declaration \`${tsName}\` (${t.decl}); rename the file (or its directory) or the declaration \`${tsName}\``));
+  }
 }
 
 /** Heartbeats (in thousands) of each proof obligation (`vreact_ob`, see VReact/Budget.lean). */

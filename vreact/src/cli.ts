@@ -2,7 +2,7 @@
 /**
  * vreact — formally verified React (VTS → Lean 4).
  *
- *   vreact verify  [--root DIR] [--json] [--quiet]   translate, check with Lean, report
+ *   vreact verify  [--root DIR] [--json] [--full] [--quiet]   translate, check with Lean, report
  *   vreact translate [--root DIR]                     only generate the Lean project
  *   vreact synth <file.tsx> [--root DIR] [--write]    fill hole() placeholders (see synth.ts)
  *   vreact explain <file.tsx> [--root DIR]            print the generated Lean for a module
@@ -29,9 +29,19 @@ interface ProjectConfig {
 
 export function loadConfig(root: string, only?: string[]): Config {
   const cfgFile = path.join(root, "vreact.json");
-  const pc: ProjectConfig = fs.existsSync(cfgFile) ? JSON.parse(fs.readFileSync(cfgFile, "utf8")) : {};
+  let pc: ProjectConfig = {};
+  if (fs.existsSync(cfgFile)) {
+    try {
+      pc = JSON.parse(fs.readFileSync(cfgFile, "utf8"));
+    } catch (e) {
+      throw new Error(`${cfgFile} is not valid JSON: ${e instanceof Error ? e.message : e}`);
+    }
+    if (typeof pc !== "object" || pc === null || Array.isArray(pc)) throw new Error(`${cfgFile}: expected an object such as { "src": "src" }`);
+  }
   if (pc.heartbeats !== undefined && !(Number.isInteger(pc.heartbeats) && pc.heartbeats >= 0)) throw new Error(`${cfgFile}: "heartbeats" must be a non-negative integer (thousands of heartbeats per obligation)`);
   const srcDir = path.resolve(root, pc.src ?? "src");
+  if (!pc.include && !(fs.existsSync(srcDir) && fs.statSync(srcDir).isDirectory()))
+    throw new Error(`no source directory ${srcDir}: run vreact in the project directory (or pass --root DIR), or set "src" in vreact.json`);
   const exclude = new Set((pc.exclude ?? ["main.tsx", "main.ts", "vite-env.d.ts"]).map((e) => path.resolve(srcDir, e)));
   const files: string[] = [];
   const walk = (d: string) => {
@@ -118,6 +128,9 @@ function itemStatus(v: Verdict, it: Item, trustedAxioms: Set<string>, broken: bo
 /** A reported item as the report sees it (see `items`). */
 interface Item {
   key: string;
+  /** the TypeScript name (`App.certificate` for a certificate) and source file, for messages */
+  name: string;
+  file: string;
   module: string;
   /** the obligations its status depends on; `ownObs`: those generated for it (not for a part reported on its own) */
   obs: number[];
@@ -131,28 +144,29 @@ interface Item {
   own: string;
 }
 
-function items(tr: TranslateResult): { comps: Item[]; certs: Item[]; fns: Item[]; consts: Item[] } {
+function items(tr: TranslateResult, root: string): { comps: Item[]; certs: Item[]; fns: Item[]; consts: Item[] } {
   const out = { comps: [] as Item[], certs: [] as Item[], fns: [] as Item[], consts: [] as Item[] };
   for (const mr of tr.modules) {
+    const file = relp(root, mr.tsFile);
     for (const c of mr.components) {
       const root = new Set(["root_pre", "element", "certificate"].map((s) => `${c.ns}.${s}`));
-      out.comps.push({ key: c.ns, module: mr.ns, obs: c.obs, ownObs: c.obs, refs: c.refs, owns: (q) => q.startsWith(c.ns + ".") && !root.has(q), axiomNames: [`${c.ns}.component`], own: c.ns });
+      out.comps.push({ key: c.ns, name: c.name, file, module: mr.ns, obs: c.obs, ownObs: c.obs, refs: c.refs, owns: (q) => q.startsWith(c.ns + ".") && !root.has(q), axiomNames: [`${c.ns}.component`], own: c.ns });
     }
     for (const c of mr.certificates) {
       const base = c.qname.replace(/\.certificate$/, "");
       const root = new Set(["root_pre", "element", "certificate"].map((s) => `${base}.${s}`));
       // (its obligations include its root component's, which belong to the component)
       const comp = new Set(mr.components.find((x) => x.ns === base)?.obs ?? []);
-      out.certs.push({ key: c.qname, module: mr.ns, obs: c.obs, ownObs: c.obs.filter((o) => !comp.has(o)), refs: c.refs, owns: (q) => root.has(q), axiomNames: [c.qname], own: base });
+      out.certs.push({ key: c.qname, name: `${c.name}.certificate`, file, module: mr.ns, obs: c.obs, ownObs: c.obs.filter((o) => !comp.has(o)), refs: c.refs, owns: (q) => root.has(q), axiomNames: [c.qname], own: base });
     }
     for (const f of mr.functions) {
       // a function is as verified as its definition and all its postcondition theorems
       const names = new Set([f.qname, ...f.posts]);
-      out.fns.push({ key: f.qname, module: mr.ns, obs: f.obs, ownObs: f.obs, refs: f.refs, owns: (q) => names.has(q), axiomNames: [...names], own: f.qname });
+      out.fns.push({ key: f.qname, name: f.name, file, module: mr.ns, obs: f.obs, ownObs: f.obs, refs: f.refs, owns: (q) => names.has(q), axiomNames: [...names], own: f.qname });
     }
     for (const c of mr.constants) {
       const names = new Set([c.qname, ...c.facts]);
-      out.consts.push({ key: c.qname, module: mr.ns, obs: c.obs, ownObs: c.obs, refs: c.refs, owns: (q) => names.has(q), axiomNames: [...names], own: c.qname });
+      out.consts.push({ key: c.qname, name: c.name, file, module: mr.ns, obs: c.obs, ownObs: c.obs, refs: c.refs, owns: (q) => names.has(q), axiomNames: [...names], own: c.qname });
     }
   }
   return out;
@@ -232,10 +246,11 @@ export interface Report {
   verdict: "verified" | "verified-modulo-trusted" | "incomplete" | "not-verified";
   stage: "typescript" | "translation" | "lean";
   obligations: { total: number; proved: number; failed: number; unchecked: number };
-  components: { name: string; file: string; status: Status; axioms: string[] }[];
-  functions: { name: string; file: string; status: Status }[];
-  constants: { name: string; file: string; status: Status }[];
-  certificates: { name: string; theorem: string; status: Status; axioms: string[] }[];
+  /** `reason`: why an INCOMPLETE / UNCHECKED item is not verified (its own failure, or which dependency failed) */
+  components: { name: string; file: string; status: Status; axioms: string[]; reason?: string }[];
+  functions: { name: string; file: string; status: Status; reason?: string }[];
+  constants: { name: string; file: string; status: Status; reason?: string }[];
+  certificates: { name: string; theorem: string; status: Status; axioms: string[]; reason?: string }[];
   failures: { where: string; kind: string; desc: string; lean: string; leanFull: string }[];
   /** obligations that were not (completely) checked, with the reason */
   notChecked: { where: string; kind: string; desc: string; reason: string }[];
@@ -243,6 +258,9 @@ export interface Report {
   sorries: string[];
   errors: string[];
 }
+
+/** The reason of an item that is incomplete only because of a hole() or sorry in its own code. */
+const HOLE = "pending: it has a hole() / sorry";
 
 export const CAUSE_LABEL: Record<ErrorCause, string> = {
   build: "Lean build error (imports, lakefile, missing or clashing files)",
@@ -309,7 +327,7 @@ export function reportFrom(cfg: Config, tr: TranslateResult, messages: LeanMessa
   };
   const markers = findMarkers(cfg.outDir);
   const v: Verdict = judge(tr.obligations, messages, markers, cfg.outDir);
-  const its = items(tr);
+  const its = items(tr, cfg.root);
   const all = [...its.comps, ...its.certs, ...its.fns, ...its.consts];
   const broken = brokenCones(tr, v, all);
   // an obligation of an item whose cone has a broken declaration is not about the translated code
@@ -323,6 +341,77 @@ export function reportFrom(cfg: Config, tr: TranslateResult, messages: LeanMessa
     }
     v.proved = v.proved.filter((o) => !ids.has(o.id));
   }
+  const byKey = new Map(all.map((x) => [x.key, x]));
+  /** the item and the items it uses, directly or not (breadth-first: the closest first) */
+  const cone = (it: Item): Item[] => {
+    const out = [it];
+    const seen = new Set([it.key]);
+    for (let i = 0; i < out.length; i++)
+      for (const r of out[i].refs) {
+        const x = byKey.get(r);
+        if (x && !seen.has(r)) seen.add(r), out.push(x);
+      }
+    return out;
+  };
+  /** what Lean reported wrong with an item itself */
+  const ownTrouble = (it: Item): string | undefined => {
+    const ids = new Set(it.ownObs);
+    const nf = v.failed.filter((f) => ids.has(f.ob.id)).length;
+    if (nf) return `${nf === 1 ? "an obligation" : `${nf} obligations`} of it failed`;
+    const nu = v.unchecked.filter((u) => ids.has(u.id));
+    if (nu.length) return `${nu.length === 1 ? "an obligation" : `${nu.length} obligations`} of it ${nu.length === 1 ? "was" : "were"} not checked: ${v.reasons.get(nu[0].id) ?? "not checked"}`;
+    const de = [...v.declErrors].find(([q]) => it.owns(q));
+    if (de) return `${de[0]} has an error (${de[1].split("\n")[0].slice(0, 100)})`;
+    if (v.sorries.some((s) => !!s.decl && it.owns(s.decl))) return HOLE;
+    return undefined;
+  };
+  const inProofs = (f: string) => /^Proofs[\\/]/.test(f);
+  const proofTrouble = v.sorries.some((s) => inProofs(s.file)) || v.internal.some((i) => i.cause === "proof");
+  // The obligations of an item count as proved only if its declarations were elaborated with
+  // clean axioms: Lean reported the axioms of each, and `sorryAx` among them comes from a
+  // reported failure, hole or broken declaration (of the item or one it uses) or from a user
+  // proof. Otherwise Lean admitted something without saying why, and nothing in the item is
+  // counted as proved.
+  const troubled = new Set(all.filter((x) => ownTrouble(x) !== undefined || broken.has(x.key)).map((x) => x.key));
+  for (const it of all) {
+    const ids = new Set(it.ownObs);
+    const mine = v.proved.filter((o) => ids.has(o.id));
+    if (!mine.length) continue;
+    const missing = it.axiomNames.find((q) => !v.axioms.has(q));
+    const sorry = it.axiomNames.find((q) => v.axioms.get(q)?.includes("sorryAx"));
+    const why =
+      missing !== undefined ? `Lean reported no axioms for ${missing}, so it may not have been added`
+      : sorry !== undefined && !proofTrouble && !cone(it).some((x) => troubled.has(x.key)) ? `${sorry} depends on sorryAx, but Lean reported no failure or sorry it could come from`
+      : undefined;
+    if (why === undefined) continue;
+    for (const ob of mine) {
+      v.unchecked.push(ob);
+      v.reasons.set(ob.id, `${why}: the obligation is not counted as proved`);
+    }
+    v.proved = v.proved.filter((o) => !ids.has(o.id));
+  }
+  /** why an INCOMPLETE or UNCHECKED item is not verified: its own trouble first, then the closest troubled item it uses */
+  const reasonOf = (it: Item, st: Status): string | undefined => {
+    if (st !== "incomplete" && st !== "unchecked") return undefined;
+    const own = ownTrouble(it);
+    const dep = cone(it).slice(1).find((x) => ownTrouble(x) !== undefined);
+    // (obligations that could not be checked because they depend on a failure elsewhere: name it)
+    const ids = new Set(it.ownObs);
+    const onlyBlocked = !v.failed.some((f) => ids.has(f.ob.id)) && v.unchecked.some((u) => ids.has(u.id)) && v.unchecked.every((u) => !ids.has(u.id) || v.blocked.has(u.id));
+    if (own !== undefined && !(dep && onlyBlocked)) return own;
+    const b = broken.get(it.key);
+    if (b !== undefined && !dep) return b;
+    if (dep) return `it uses ${dep.name}${dep.file !== it.file ? ` (${dep.file})` : ""}, which is not verified: ${ownTrouble(dep)}${onlyBlocked ? " (so some of its own obligations could not be checked)" : ""}`;
+    if (own !== undefined) return own;
+    const missing = it.axiomNames.find((q) => !v.axioms.has(q));
+    if (missing !== undefined) return `Lean reported no axioms for ${missing} (its module was not checked to the end)`;
+    if (it.axiomNames.some((q) => v.axioms.get(q)?.includes("sorryAx"))) return proofTrouble ? "its proof depends on sorry (sorryAx), e.g. from a user proof that failed or uses sorry" : "its proof depends on sorry (sorryAx)";
+    return undefined;
+  };
+  const withReason = (it: Item, st: Status) => {
+    const r = reasonOf(it, st);
+    return r === undefined ? {} : { reason: r };
+  };
   const trustedAxioms = trustedAxiomsOf(tr);
   report.obligations = { total: tr.obligations.length, proved: v.proved.length, failed: v.failed.length, unchecked: v.unchecked.length };
   for (const f of v.failed) report.failures.push({ where: f.ob.where, kind: f.ob.kind, desc: f.ob.desc, lean: summarizeLeanError(f.message), leanFull: f.message });
@@ -334,19 +423,23 @@ export function reportFrom(cfg: Config, tr: TranslateResult, messages: LeanMessa
   for (const mr of tr.modules) {
     for (const c of mr.components) {
       const it = its.comps[k.comp++];
-      report.components.push({ name: c.name, file: `${relp(cfg.root, mr.tsFile)}:${c.line}`, status: c.trusted ? "trusted" : status(it), axioms: v.axioms.get(`${c.ns}.component`) ?? [] });
+      const st = c.trusted ? "trusted" : status(it);
+      report.components.push({ name: c.name, file: `${relp(cfg.root, mr.tsFile)}:${c.line}`, status: st, axioms: v.axioms.get(`${c.ns}.component`) ?? [], ...withReason(it, st) });
     }
     for (const c of mr.certificates) {
       const it = its.certs[k.cert++];
-      report.certificates.push({ name: c.name, theorem: c.qname, status: status(it), axioms: v.axioms.get(c.qname) ?? [] });
+      const st = status(it);
+      report.certificates.push({ name: c.name, theorem: c.qname, status: st, axioms: v.axioms.get(c.qname) ?? [], ...withReason(it, st) });
     }
     for (const f of mr.functions) {
       const it = its.fns[k.fn++];
-      report.functions.push({ name: f.name, file: relp(cfg.root, mr.tsFile), status: f.trusted ? "trusted" : status(it) });
+      const st = f.trusted ? "trusted" : status(it);
+      report.functions.push({ name: f.name, file: relp(cfg.root, mr.tsFile), status: st, ...withReason(it, st) });
     }
     for (const c of mr.constants) {
       const it = its.consts[k.cst++];
-      report.constants.push({ name: c.name, file: relp(cfg.root, mr.tsFile), status: status(it) });
+      const st = status(it);
+      report.constants.push({ name: c.name, file: relp(cfg.root, mr.tsFile), status: st, ...withReason(it, st) });
     }
   }
   const statuses = [...report.components, ...report.functions, ...report.constants, ...report.certificates].map((x) => x.status);
@@ -372,22 +465,24 @@ function printReport(r: Report, tr: TranslateResult, v: Verdict, cfg: Config, ms
   }
   for (const f of v.failed) byFile.get(f.ob.where.split(":")[0])!.failed++;
   for (const u of v.unchecked) byFile.get(u.where.split(":")[0])!.unchecked++;
+  // why an item is INCOMPLETE / UNCHECKED (its own failure, or the dependency that failed)
+  const why = (x: { reason?: string }) => (x.reason ? "\n" + C.d(`      ↳ ${x.reason}`) : "");
   console.log("");
   console.log(C.b("Components"));
-  for (const c of r.components) console.log(`  ${badge(c.status).padEnd(18)} ${c.name.padEnd(22)} ${C.d(c.file)}`);
+  for (const c of r.components) console.log(`  ${badge(c.status).padEnd(18)} ${c.name.padEnd(22)} ${C.d(c.file)}${why(c)}`);
   if (r.functions.length) {
     console.log(C.b("Functions"));
-    for (const f of r.functions) console.log(`  ${badge(f.status).padEnd(18)} ${f.name}`);
+    for (const f of r.functions) console.log(`  ${badge(f.status).padEnd(18)} ${f.name}${why(f)}`);
   }
   // constants are listed only when something is wrong with them (most are plain data)
   const badConsts = r.constants.filter((c) => c.status !== "verified");
   if (badConsts.length) {
     console.log(C.b("Constants"));
-    for (const c of badConsts) console.log(`  ${badge(c.status).padEnd(18)} ${c.name}`);
+    for (const c of badConsts) console.log(`  ${badge(c.status).padEnd(18)} ${c.name}${why(c)}`);
   }
   if (r.certificates.length) {
     console.log(C.b("App certificates (VReact.run_allInv instantiated)"));
-    for (const c of r.certificates) console.log(`  ${badge(c.status).padEnd(18)} ${c.theorem}  ${C.d("axioms: " + (c.axioms.join(", ") || "none"))}`);
+    for (const c of r.certificates) console.log(`  ${badge(c.status).padEnd(18)} ${c.theorem}  ${C.d("axioms: " + (c.axioms.join(", ") || "none"))}${why(c)}`);
   }
   console.log(C.b("Obligations by file"));
   for (const [f, e] of byFile) {
@@ -443,7 +538,9 @@ function printReport(r: Report, tr: TranslateResult, v: Verdict, cfg: Config, ms
     : r.verdict === "verified-modulo-trusted" ? C.y(`✔ VERIFIED modulo ${modulo}`)
     : r.verdict === "incomplete" ? C.y("◐ INCOMPLETE (holes / trusted stubs / unchecked parts remain)")
     : C.r("✗ NOT VERIFIED");
-  const holes = [...r.functions, ...r.constants].filter((x) => x.status === "incomplete").map((x) => x.name);
+  // (only items with a hole() / sorry of their own: an item that is INCOMPLETE for another
+  // reason shows that reason above)
+  const holes = [...r.components, ...r.functions, ...r.constants].filter((x) => x.reason === HOLE).map((x) => x.name);
   if (trusted.length) console.log(C.y(`\ntrusted (not verified, contracts assumed): ${trusted.join(", ")}`));
   if (assumes.length) console.log(C.y(`${trusted.length ? "" : "\n"}assumes (checked, but relies on unproved assume(…) facts): ${assumes.join(", ")}`));
   if (items.some((x) => x.status === "relative")) console.log(C.y(`VERIFIED* = all own obligations proved; relies on the contracts of the trusted declarations above`));
@@ -461,41 +558,89 @@ function printReport(r: Report, tr: TranslateResult, v: Verdict, cfg: Config, ms
   );
 }
 
-async function main() {
-  const argv = process.argv.slice(2);
+const USAGE = `usage:
+  vreact verify    [--root DIR] [--json] [--full] [--quiet]
+                                           translate to Lean, check every obligation, report
+                                           (--full: complete Lean goals of failed obligations)
+  vreact translate [--root DIR]            generate the Lean project only (.vreact/)
+  vreact explain   [file.tsx] [--root DIR] print the generated Lean model
+  vreact synth     <file.tsx> [--root DIR] [--write]
+                                           synthesize hole() placeholders against the spec`;
+
+/** A misuse of the command line: reported with the usage, never with a stack trace. */
+export class UsageError extends Error {}
+
+const COMMANDS: Record<string, { flags: string[]; files: "none" | "optional" | "one" }> = {
+  verify: { flags: ["--json", "--quiet", "--full"], files: "none" },
+  translate: { flags: [], files: "none" },
+  explain: { flags: [], files: "optional" },
+  synth: { flags: ["--write", "--json"], files: "one" },
+};
+
+async function main(argv: string[]) {
   const cmd = argv[0];
-  const flag = (n: string) => argv.includes(n);
-  const opt = (n: string) => {
-    const i = argv.indexOf(n);
-    return i >= 0 ? argv[i + 1] : undefined;
-  };
-  const root = path.resolve(opt("--root") ?? process.cwd());
-  const positional = argv.slice(1).filter((a, i, all) => !a.startsWith("--") && !(i > 0 && ["--root"].includes(all[i - 1])));
+  if (cmd === undefined || cmd === "help" || cmd === "--help" || cmd === "-h") {
+    console.log(USAGE);
+    return;
+  }
+  const spec = Object.hasOwn(COMMANDS, cmd) ? COMMANDS[cmd] : undefined;
+  if (!spec) throw new UsageError(`unknown command "${cmd}"`);
+  // the command's flags, `--root DIR`, and its file arguments
+  const flags = new Set<string>();
+  const positional: string[] = [];
+  let rootArg: string | undefined;
+  for (let i = 1; i < argv.length; i++) {
+    const a = argv[i];
+    if (a === "--root") {
+      if (i + 1 >= argv.length || argv[i + 1].startsWith("-")) throw new UsageError("--root needs a directory: --root DIR");
+      rootArg = argv[++i];
+    } else if (a.startsWith("--root=")) rootArg = a.slice("--root=".length);
+    else if (a.startsWith("-")) {
+      if (!spec.flags.includes(a)) throw new UsageError(`unknown option ${a} for "vreact ${cmd}" (options: ${["--root DIR", ...spec.flags].join(", ")})`);
+      flags.add(a);
+    } else positional.push(a);
+  }
+  if (spec.files === "none" && positional.length) throw new UsageError(`"vreact ${cmd}" takes no file argument (got ${positional.join(" ")}); the project directory is --root DIR`);
+  if (spec.files === "one" && positional.length !== 1) throw new UsageError(positional.length ? `"vreact ${cmd}" takes one file (got ${positional.join(" ")})` : `"vreact ${cmd}" needs a file: vreact ${cmd} <file.tsx>`);
+  if (spec.files === "optional" && positional.length > 1) throw new UsageError(`"vreact ${cmd}" takes at most one file (got ${positional.join(" ")})`);
+  const root = path.resolve(rootArg ?? process.cwd());
+  if (!fs.existsSync(root) || !fs.statSync(root).isDirectory()) throw new UsageError(`--root ${rootArg ?? root}: not a directory`);
+  const flag = (n: string) => flags.has(n);
+  // (results are exit codes, never process.exit: a large report written to a pipe is flushed
+  // only after this function has returned)
   switch (cmd) {
     case "verify": {
       const cfg = loadConfig(root);
       const r = verify(cfg, { json: flag("--json"), quiet: flag("--quiet"), full: flag("--full") });
       if (flag("--json")) console.log(JSON.stringify(r, null, 2));
-      process.exit(r.ok ? 0 : 1);
+      process.exitCode = r.ok ? 0 : 1;
+      return;
     }
     case "translate": {
       const cfg = loadConfig(root);
       const tr = translate(cfg);
       if (!tr.ok) {
         printTranslationErrors(tr, root);
-        process.exit(1);
+        process.exitCode = 1;
+        return;
       }
       console.log(`wrote ${tr.modules.length} module(s), ${tr.obligations.length} obligation(s) to ${relp(root, cfg.outDir)}/`);
       return;
     }
     case "explain": {
       const cfg = loadConfig(root);
+      const target = positional[0] ? path.resolve(root, positional[0]) : null;
+      if (target && !cfg.files.includes(target)) {
+        console.log(fs.existsSync(target) ? `✗ ${positional[0]} is not one of the project's VTS files (see "src"/"include"/"exclude" in vreact.json)` : `✗ ${positional[0]}: no such file`);
+        process.exitCode = 1;
+        return;
+      }
       const tr = translate(cfg);
       if (!tr.ok) {
         printTranslationErrors(tr, root);
-        process.exit(1);
+        process.exitCode = 1;
+        return;
       }
-      const target = positional[0] ? path.resolve(root, positional[0]) : null;
       for (const m of tr.modules) {
         if (target && m.tsFile !== target) continue;
         for (const part of ["Defs", "View"]) {
@@ -511,15 +656,20 @@ async function main() {
       await synthCommand(root, positional, { write: flag("--write"), json: flag("--json") });
       return;
     }
-    default:
-      console.log(`usage:
-  vreact verify    [--root DIR] [--json] [--full]  translate to Lean, check every obligation, report
-                                           (--full: complete Lean goals of failed obligations)
-  vreact translate [--root DIR]            generate the Lean project only (.vreact/)
-  vreact explain   [file.tsx] [--root DIR] print the generated Lean model
-  vreact synth     <file.tsx> [--write]    synthesize hole() placeholders against the spec`);
-      process.exit(cmd ? 1 : 0);
   }
 }
 
-if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) main();
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  main(process.argv.slice(2)).catch((e: unknown) => {
+    if (e instanceof UsageError) {
+      console.error(`vreact: ${e.message}\n\n${USAGE}`);
+      process.exitCode = 2;
+      return;
+    }
+    // a problem of the project or the environment (no Lean, a bad vreact.json, a missing source
+    // directory, …): its message; the stack trace only on request
+    const err = e instanceof Error ? e : new Error(String(e));
+    console.error(`vreact: ${err.message}${process.env.VREACT_DEBUG ? "\n" + err.stack : "\n(set VREACT_DEBUG=1 to see where it happened)"}`);
+    process.exitCode = 2;
+  });
+}
