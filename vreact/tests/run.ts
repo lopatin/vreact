@@ -14,7 +14,8 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { loadConfig, verify, CAUSE_LABEL, type Report } from "../src/cli.ts";
 import { translate } from "../src/module.ts";
-import { parseMessages, judge, findMarkers } from "../src/lean.ts";
+import { parseMessages, judge, findMarkers, leanDecls } from "../src/lean.ts";
+import { honestyChecks } from "./honesty.ts";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const casesDir = path.join(here, "cases");
@@ -89,7 +90,9 @@ if (r.stage !== "lean") {
 function checkReport(r: Report, files: string[], expect: string[], whole: boolean): string[] {
   const why: string[] = [];
   const mine = (f: string) => files.some((x) => f === `src/${x}` || f.startsWith(`src/${x}:`));
-  const items = [...r.components, ...r.functions, ...r.constants].filter((x) => mine(x.file));
+  // certificates as `<Root>.certificate` (they have no file: matched by their module)
+  const certs = r.certificates.filter((c) => whole || files.some((x) => c.theorem.startsWith(`VTS.${x.replace(/\.tsx?$/, "")}.`))).map((c) => ({ ...c, name: `${c.name}.certificate`, file: "" }));
+  const items = [...[...r.components, ...r.functions, ...r.constants].filter((x) => mine(x.file)), ...certs];
   for (const t of expect.filter((t) => t.includes("="))) {
     const [k, v] = t.split("=");
     if (k === "verdict" || k === "proved" || k === "failed" || k === "unchecked") {
@@ -155,6 +158,17 @@ console.log("message attribution (judge)");
   else bad("judge declErrors", [...v.declErrors.keys()].join(","));
 }
 
+// declarations of a generated file: escaped keywords (`end'`, `namespace'`, `def'`) that start a
+// continuation line are not commands
+{
+  const text = ["namespace VTS.m", "def open' (x : Int) : Int :=", "  (let end' : Int := x;", "end')", "theorem open'.post : True :=", "  trivial",
+    "def f : Int :=", "  (let namespace' : Int := 1;", "(let def' : Int := namespace';", "def'))", "#print axioms VTS.m.f", "end VTS.m"].join("\n");
+  const got = leanDecls(text).filter((d) => d.name).map((d) => `${d.name}@${d.start}-${d.end}`).join(" ");
+  const want = "VTS.m.open'@2-4 VTS.m.open'.post@5-6 VTS.m.f@7-10";
+  if (got === want) ok("leanDecls: escaped keywords at the start of a line are not commands");
+  else bad("leanDecls keywords", `expected ${want}, got ${got}`);
+}
+
 // directory cases: each is its own project
 const dirCases = fs.readdirSync(casesDir).filter((f) => fs.statSync(path.join(casesDir, f)).isDirectory()).sort();
 if (dirCases.length) console.log("multi-file cases (own project each)");
@@ -196,5 +210,8 @@ for (const name of dirCases) {
   if (!why.length) ok(name, expect.join(" "));
   else bad(name, why.join("; "));
 }
+// the report of doctored Lean output of a verified fixture never says VERIFIED (tests/honesty.ts)
+console.log("report honesty (doctored Lean output)");
+honestyChecks(here, work, ok, bad);
 console.log(`\n${failed === 0 ? "✔" : "✗"} ${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

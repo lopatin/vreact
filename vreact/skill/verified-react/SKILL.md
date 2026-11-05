@@ -165,8 +165,13 @@ postcondition, root-precondition, unreachable, assert).
 3. Add an intermediate fact: `assert(cond)` (proved, then available).
 4. Write a Lean lemma in `proofs/<Module>.lean` (`import VTS.<Module>.Defs`);
    tag it `@[vreact_simp]` if it is a rewrite rule. It helps the module's
-   component obligations (function contracts are proved before it, in
-   `Defs.lean`). See `reference/obligations.md`.
+   component obligations and everything (functions, contracts, components) in
+   the modules that import `<Module>`, but not `<Module>`'s own function
+   contracts, which are proved before it in `Defs.lean`. For a lemma about `f`
+   that `f`'s own `ensures` (or a function next to `f`) needs: state it
+   generically in `proofs/Base.lean` (imported everywhere), or move the
+   function that needs it to a module that imports `f`'s module. See
+   `reference/obligations.md`.
 5. Never use `assume(…)` or `@trusted` to make a failure go away without telling
    the user; both are reported and keep the result from being `VERIFIED`.
 
