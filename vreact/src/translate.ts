@@ -196,6 +196,12 @@ function pathKey(env: Env, e: ts.Expression): string | null {
   return null;
 }
 
+/** Is `e` (a variable or property path) narrowed to a non-null value here? */
+function narrowedSome(env: Env, e: ts.Expression): boolean {
+  const k = pathKey(env, e);
+  return !!k && env.narrow.get(k)?.kind === "some";
+}
+
 function isNullLit(e: ts.Expression): boolean {
   return e.kind === ts.SyntaxKind.NullKeyword || (ts.isIdentifier(e) && e.text === "undefined");
 }
@@ -324,7 +330,10 @@ function expr0(e: ts.Expression, env: Env, expected?: VType): Val {
     }
     case ts.SyntaxKind.NonNullExpression: {
       const inner = expr((e as ts.NonNullExpression).expression, env);
-      if (inner.type.k !== "opt") fail(e, "`!` applied to a non-optional value");
+      if (inner.type.k !== "opt") {
+        if (narrowedSome(env, (e as ts.NonNullExpression).expression)) return inner; // already known non-null
+        fail(e, "`!` applied to a non-optional value");
+      }
       const ob = m.ob(e, "non-null", `\`${nodeText(e)}\` is not null/undefined`);
       return { code: `(Option.get ${paren(inner.code)} ${ob})`, type: inner.type.elem };
     }
@@ -404,7 +413,10 @@ function propertyAccess(pa: ts.PropertyAccessExpression, env: Env): Val {
   // optional chaining x?.f
   if (pa.questionDotToken) {
     const base = expr(pa.expression, env);
-    if (base.type.k !== "opt") fail(pa, "?. on a non-optional value");
+    if (base.type.k !== "opt") {
+      if (narrowedSome(env, pa.expression)) return fieldOf(base, name, pa, env); // already known non-null
+      fail(pa, "?. on a non-optional value");
+    }
     const { name: v } = freshLocal(env, "v");
     const inner = fieldOf({ code: v, type: base.type.elem }, name, pa, env);
     if (inner.type.k === "opt") return { code: `(Option.bind ${paren(base.code)} (fun ${v} => ${inner.code}))`, type: inner.type };
@@ -540,7 +552,10 @@ function binary(b: ts.BinaryExpression, env: Env, expected?: VType): Val {
   }
   if (op === K.QuestionQuestionToken) {
     const l = expr(b.left, env);
-    if (l.type.k !== "opt") fail(b, "?? on a non-optional value");
+    if (l.type.k !== "opt") {
+      if (narrowedSome(env, b.left)) return l; // already known non-null
+      fail(b, "?? on a non-optional value");
+    }
     if (isNullLit(stripParens(b.right))) return l;
     const r = expr(b.right, env, l.type.elem);
     return { code: `(Option.getD ${paren(l.code)} ${paren(r.code)})`, type: l.type.elem };
@@ -556,7 +571,10 @@ function binary(b: ts.BinaryExpression, env: Env, expected?: VType): Val {
     if (isNullLit(b.right) || isNullLit(b.left)) {
       const other = isNullLit(b.right) ? b.left : b.right;
       const v = expr(other, env);
-      if (v.type.k !== "opt") fail(b, "comparison with null/undefined of a non-optional value");
+      if (v.type.k !== "opt") {
+        if (narrowedSome(env, other)) return { code: neg ? "true" : "false", type: T.bool }; // already known non-null
+        fail(b, "comparison with null/undefined of a non-optional value");
+      }
       return { code: neg ? `(Option.isSome ${paren(v.code)})` : `(Option.isNone ${paren(v.code)})`, type: T.bool };
     }
     let l = expr(b.left, env);
@@ -1182,6 +1200,8 @@ export function branch(c: ts.Expression, env: Env, onTrue: (e: Env) => string, o
       }
       fail(c, `truthiness of ${showType(t)} is ambiguous (0, "" and false are falsy): compare with null explicitly`);
     }
+    // an object known to be non-null (narrowed) is truthy
+    if (t && ["rec", "arr", "union", "tuple"].includes(t.k) && narrowedSome(env, e)) return onTrue(env);
   }
   const v = expr(e, env, T.bool);
   const h = env.m.fresh("h");
@@ -1197,6 +1217,8 @@ function narrowBranch(nt: NarrowTest, env: Env, onTrue: (e: Env) => string, onFa
   const key = pathKey(env, nt.target)!;
   const h = env.m.fresh("h");
   if (nt.kind === "null") {
+    // already narrowed to non-null (an enclosing test, or `x = e` with a non-null e): decided statically
+    if (narrowedSome(env, nt.target)) return nt.positive ? onFalse(env) : onTrue(env);
     if (target.type.k !== "opt") fail(nt.target, "null test on a non-optional value");
     const base = ts.isIdentifier(nt.target) ? leanIdent(nt.target.text) : ts.isPropertyAccessExpression(nt.target) ? leanIdent(nt.target.name.text) : "v";
     const { env: e1, name: v } = freshLocal(env, base);
