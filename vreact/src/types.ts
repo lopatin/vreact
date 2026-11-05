@@ -496,6 +496,16 @@ function unionOf(
     }
     variants.push({ lit, ctor: lit, fields });
   }
+  // Constructor names live in the type's namespace next to the discriminant accessor
+  // (`A.type`) and the shared-field accessors (`A.n`): a variant whose tag is one of those
+  // names (`{ type: "type" }`) gets a primed constructor, as does one whose Lean name another
+  // variant already has (`leanField` primes Lean's own auxiliary names: "rec" and "rec'").
+  const d0 = (n: string): string => leanField(n).replace(/^«(.*)»$/, "$1");
+  const taken = new Set([d0(tag), ...sharedFields(variants).map((f) => d0(f.name))]);
+  for (const v of variants) {
+    while (taken.has(d0(v.ctor))) v.ctor += "'";
+    taken.add(d0(v.ctor));
+  }
   env.reg.add({ qname, short: leanIdent(name), module: env.nsOf(sf), def: { k: "union", tag, variants }, decl: key });
   return { k: "union", name: qname };
 }

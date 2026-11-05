@@ -104,11 +104,38 @@ first one that fails.
    checked. Make the goal smaller (`@opaque` helpers with `ensures`, `assert`)
    before raising the budget. (`vreact_auto could not prove the goal (grind
    stopped at Lean's recursion limit)` is not a timeout: `grind` gave up on a
-   hypothesis shape it cannot handle, e.g. `forall(0, 3, …)` with a literal
-   bound, and the other strategies did not prove the goal either; an `assert`
-   of the needed instance, or a variable bound, usually helps.) A timeout or
-   error Lean reports for a whole declaration leaves its obligations unproved
-   ("not checked", with the reason).
+   hypothesis shape it cannot handle, and the other strategies did not prove
+   the goal either. Guarded contracts `xs.length === 3 && forall(0, 3, i =>
+   xs[i] >= 0)` are split and instantiated at the indices of the goal
+   automatically; in a shape that is not, an `assert` of the needed instance
+   usually helps.) A timeout or error Lean reports for a whole declaration
+   leaves its obligations unproved ("not checked", with the reason). Budgets
+   are per obligation also when Lean elaborates declarations in parallel; the
+   one-time cost of a shared auxiliary lemma (equation lemmas of a big `match`)
+   goes to whichever obligation needs it first (well under 1% in practice).
+8. **What the automation knows about lists.** Distinct keys and counts follow
+   chains of `filter`/`slice`/`toSorted`/`toReversed` from a list whose
+   `distinct(...)` is a hypothesis (an invariant, a `requires`), also through
+   `const`s and through a `map` that keeps the key (`xs.map(bump).slice(0, 3)`
+   keyed by `id` when `bump` returns `{...r, age: …}`); deleting by the key of a
+   present element of a list with distinct keys removes exactly one element, and
+   a map-update by key (`xs.map(x => x.id === k ? {...x, done: !x.done} : x)`,
+   also written with `!==` or as an `if` that returns `x` early) changes a
+   `filter(...).length` by at most one. Facts about every (or some) element of a
+   map-updated list are stated about the updated elements, so a reducer with
+   many map-update arms stays within one obligation's budget. A disjunction over
+   the cases of an enumeration or union (`(c === "red" && n === 1) || (c ===
+   "green" && …)`, also on `o.inner.mode`) is proved by splitting the
+   enumeration (up to three nested fallback levels). `%` with a non-negative
+   dividend and a non-zero divisor is in `[0, |divisor|)`, and its exact value
+   is known where index arithmetic needs it: `a % n === a` for `0 <= a < |n|`
+   (and for `-|n| < a <= 0`), `n % n === 0`.
+9. **Bounded quantifiers.** `forall(lo, hi, i => …)` and guarded `&&` in
+   hypotheses are split and instantiated at the indices of the goal, also
+   nested (`g[r][c]` of a 2-D grid); to *establish* one with numeral bounds
+   (an `init` of 9 cells, `cells.with(k, v)` under `forall(0, 9, i => cells[i]
+   >= 0 && cells[i] <= 2)`), the goal is split into its conjuncts and, if
+   needed, into one case per index (at most 16 values).
 
 ## What not to do
 

@@ -19,6 +19,14 @@ reported as not verified), and elaboration continues with the next obligation.
 Ordinary tactic failures are passed on unchanged.  The generated files set
 `maxHeartbeats` of each file to cover all obligations of its largest
 declaration, so the command budget only bounds the non-obligation work.
+
+The count is per obligation also when Lean elaborates the declarations of a file in parallel:
+`IO.getNumHeartbeats` is the current thread's counter, and an obligation's tactic runs on one
+thread.  (Measured: three copies of a 740k-heartbeat obligation in one file used the same count,
+±0.02%, in parallel and sequentially.)  The one exception is the cost of realizing an auxiliary
+declaration several obligations share (equation lemmas, `match` splitters), which is paid by the
+first obligation that needs it (about 0.6% there).  A copy of a theorem placed after the original
+`f.post` is not comparable: `vreact_contracts` adds `f.post` as a fact for the call of `f`.
 -/
 
 register_option vreact.heartbeats : Nat := {

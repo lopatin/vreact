@@ -380,7 +380,11 @@ hook rules hold (static checks). For every function: its body is safe and its
   errors without a position (imports, build cycles) are shown and make the
   result not verified. Each obligation runs with its own heartbeat budget
   (`vreact_ob`, `VReact/Budget.lean`): running out is a failure of that
-  obligation (its goal is closed with `sorry`), never a proof. An axiom report
+  obligation (its goal is closed with `sorry`), never a proof. The count is
+  per obligation also under parallel elaboration (Lean's heartbeat counter is
+  per thread, and an obligation runs on one thread); the cost of realizing an
+  auxiliary declaration that several obligations share (equation lemmas,
+  `match` splitters) goes to the first one that needs it. An axiom report
   or the sentinel counts only when Lean printed it at the generator's own
   `#print axioms X` / sentinel line (a user proof printing the same text is
   ignored; several reports for one name are joined). A generated declaration
