@@ -122,6 +122,7 @@ handler may not contain an element with the same handler or a user component.
 | recursion, `while` | `for…of`, array methods |
 | generics | monomorphic helpers |
 | `async`, fetch | keep I/O in an unverified module that calls verified reducers |
-| guarded updates in `vreact synth` | write the guard by hand; synth fills straight-line code |
+| guarded updates in `vreact synth` | write the guard by hand with a hole per branch; synth fills straight-line code (all holes of a function are proved together) |
+| `vreact synth` on a `/** @trusted */` function or a component | refused (Lean checks nothing in a trusted body): remove `@trusted` / move the expression into a model function |
 | a reducer over a discriminated union calling `@opaque` model functions | supported (contracts are instantiated inside the `switch` arms) |
 | invariants about sums (`reduce`) under filter/map | provable, but needs a Lean lemma in `proofs/` (automation handles append, filter, map, membership, `distinct`, counts via `length`) |
