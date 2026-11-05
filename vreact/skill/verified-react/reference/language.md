@@ -164,11 +164,13 @@ Handlers (`onClick`, `onChange`, `onSubmit`, `onKeyDown`, …): arrow functions 
 local closures; the event parameter supports `e.target.value`,
 `e.target.checked`, `e.key`, `e.preventDefault()`. Setters, `dispatch`, at most
 one parent callback per path. Only React's discrete events (`onClick`,
-`onChange`, `onInput`, `onKeyDown`, `onSubmit`, `onFocus`, `onBlur`, …) are
+`onChange`, `onInput`, `onKeyDown`, `onSubmit`, …) are
 checked from the render snapshot; continuous (`onMouseMove`, `onScroll`,
 `onMouseEnter`, …) and default-priority events (`onTransitionEnd`,
 `onAnimationEnd`, `onLoad`, `onError`, media events, …) must be robust and may
-not call parent callbacks. In a component with such handlers or with effects /
+not call parent callbacks — and so must `onFocus`, `onBlur` and `onInvalid`: the
+DOM also fires them inside another event's batch (`autoFocus`, a label click
+focusing its control, form validation). In a component with such handlers or with effects /
 timers that set state, discrete handlers and callbacks passed to children must
 also be safe when React rebases them onto those pending updates (guard inside the
 functional update: `setR(p => p.lo < p.hi ? … : p)`). Rejected: unknown handler
@@ -196,7 +198,12 @@ combine handlers fired by the same native event (a checkbox's `onClick` +
 `onChange` both run on click; `onInput` + a text input's `onChange` both run on
 input), and an element with a handler may not contain a handler fired by the
 same native event (`<li onClick>` around `<input type="checkbox" onChange>`)
-or a user component.
+or a user component. A click also runs what it activates: a submit (reset) button
+submits (resets) its form, and a `<label>` clicks its control again. So no `onClick`
+on, around or inside a submit/reset button whose form has `onSubmit`/`onReset`
+(or that has `form=…`): use `type="button"` or put the logic in `onSubmit`; no
+`onClick` on, around or inside a `<label>` (except on the controls in it), and no
+user component inside such a button or a label (use `htmlFor`).
 
 ## Not yet supported (workarounds)
 

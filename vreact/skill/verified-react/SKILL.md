@@ -122,6 +122,9 @@ export function ItemList(props: ItemListProps) {
   a handler fired by the same native event (`onClick` around a checkbox's
   `onChange`: both run on click) or a user component, and one element may not
   combine such handlers (checkbox `onClick` + `onChange`; `onInput` + `onChange`).
+  A click's activation counts too: no `onClick` on, around or inside a submit
+  button of a form with `onSubmit` (use `type="button"`) or a `<label>`.
+  `onFocus`/`onBlur`/`onInvalid` must be robust (no parent callbacks).
 
 ## Reading results
 
