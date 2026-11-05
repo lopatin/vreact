@@ -855,11 +855,11 @@ function arrayMethod(name: string, xs: Val, c: ts.CallExpression, env: Env, expe
     }
     case "toSorted": {
       if (!args[0]) fail(c, "toSorted needs a comparator (a, b) => number");
-      if (elem.k === "opt" && ts.isPropertyAccessExpression(c.expression)) {
+      if (elem.k === "opt") {
         // JS moves `undefined` elements to the end without calling the comparator
-        const at = env.m.checker.getTypeAtLocation(c.expression.expression);
-        const et = env.m.checker.getIndexTypeOfType(at, ts.IndexKind.Number);
         const undef = (t: ts.Type) => !!(t.flags & ts.TypeFlags.Undefined);
+        const at = ts.isPropertyAccessExpression(c.expression) ? env.m.checker.getTypeAtLocation(c.expression.expression) : undefined;
+        const et = at && env.m.checker.getIndexTypeOfType(at, ts.IndexKind.Number);
         if (!et || undef(et) || (et.isUnion() && et.types.some(undef)))
           fail(c, "toSorted on an array that may contain undefined is not supported (JS sorts undefined to the end without calling the comparator); filter or map the elements to a defined type first");
       }

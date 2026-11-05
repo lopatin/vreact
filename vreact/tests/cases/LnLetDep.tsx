@@ -23,3 +23,31 @@ export function LnFirst(props: P) {
     </div>
   );
 }
+
+type Tab = { readonly id: string; readonly title: string };
+const TABS: readonly Tab[] = [
+  { id: "a", title: "A" },
+  { id: "b", title: "B" },
+];
+export function LnTabs() {
+  const [active, setActive] = useState<int>(0);
+  invariant(0 <= active && active < TABS.length);
+  const current = TABS[active];
+  return (
+    <div>
+      {TABS.map((t) => (
+        <button
+          key={t.id}
+          className={t.id === current.id ? "tab active" : "tab"}
+          onClick={() => {
+            const i = TABS.findIndex((x) => x.id === t.id);
+            if (i >= 0) setActive(i);
+          }}
+        >
+          {t.title}
+        </button>
+      ))}
+      <button onClick={() => setActive((active + 1) % TABS.length)}>next</button>
+    </div>
+  );
+}

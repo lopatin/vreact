@@ -20,6 +20,12 @@ export function sortByAge(xs: readonly Row[]): readonly Row[] {
   return xs.toSorted((p, q) => (p.age < q.age ? -1 : 1));
 }
 
+// null (unlike undefined) is passed to the comparator, so this is modelled exactly
+export function sortNullable(xs: readonly (int | null)[]): readonly (int | null)[] {
+  ensures((r: readonly (int | null)[]) => r.length === xs.length);
+  return xs.toSorted((a, b) => (a ?? 0) - (b ?? 0));
+}
+
 export function firstN(xs: readonly Row[], n: int): readonly Row[] {
   requires(distinct(xs, (x) => x.id));
   ensures((r: readonly Row[]) => distinct(r, (x) => x.id));
