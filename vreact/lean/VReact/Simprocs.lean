@@ -51,6 +51,30 @@ dsimproc [vreact_simp] reduceStrAppend ((_ : JS.Str) ++ (_ : JS.Str)) := fun e =
   cases a; cases b; cases c
   exact congrArg JS.Str.mk (List.append_assoc _ _ _)
 
+/-- The code units of a literal string (as `reduceOfString` leaves it). -/
+private def unitsLit? (e : Expr) : Option (List Nat) := do
+  guard (e.isAppOfArity ``JS.Str.mk 1)
+  let (_, xs) ← e.appArg!.listLit?
+  xs.mapM fun x => match x.getAppFnArgs with
+    | (``OfNat.ofNat, #[_, .lit (.natVal n), _]) => some n
+    | _ => none
+
+/-- `includes`/`startsWith`/`endsWith` of two literal strings are decided (`"a@b".includes("@")`):
+the code-unit lists are compared as numbers (code units are below 2^16, so as `UInt16`s they
+compare the same).  Definitional (`dsimproc`): the kernel re-checks it by evaluation. -/
+dsimproc [vreact_simp] reduceStrIncludes (JS.strIncludes _ _) := fun e => do
+  let_expr JS.strIncludes s t ← e | return .continue
+  let (some a, some b) := (unitsLit? s, unitsLit? t) | return .continue
+  return .done (toExpr (JS.isInfixB b a))
+dsimproc [vreact_simp] reduceStartsWith (JS.startsWith _ _) := fun e => do
+  let_expr JS.startsWith s t ← e | return .continue
+  let (some a, some b) := (unitsLit? s, unitsLit? t) | return .continue
+  return .done (toExpr (b.isPrefixOf a))
+dsimproc [vreact_simp] reduceEndsWith (JS.endsWith _ _) := fun e => do
+  let_expr JS.endsWith s t ← e | return .continue
+  let (some a, some b) := (unitsLit? s, unitsLit? t) | return .continue
+  return .done (toExpr (b.isSuffixOf a))
+
 /-! ### Callbacks over `l.attach` that do not use the membership proof
 
 A callback with proof obligations is translated over `l.attach` (`fun p => let x := p.1; have
