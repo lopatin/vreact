@@ -128,9 +128,11 @@ export function ItemList(props: ItemListProps) {
 `vreact verify` reports, per component/function (and per constant, when not
 `VERIFIED`): `VERIFIED`, `VERIFIED*` (own obligations proved, relies on
 `@trusted` contracts), `TRUSTED`, `ASSUMES` (relies on `assume(…)` facts),
-`INCOMPLETE` (failed obligation, `hole()`/`sorry`, or a declaration Lean could
-not finish), `UNCHECKED` (Lean never got to it because a module it imports
-failed), plus each failed obligation as
+`INCOMPLETE` (a failed or unchecked obligation, `hole()`/`sorry`, a declaration
+Lean could not finish, or it relies on an item that is not verified — the line
+under it names the reason, e.g. `↳ it uses clamp (src/lib.ts), which is not
+verified: an obligation of it failed`), `UNCHECKED` (Lean never got to it: a
+Lean build/import error or an internal error stopped its file), plus each failed obligation as
 `file:line:col [kind] description` followed by the Lean goal. In the goal, the
 hypotheses are what is known (props precondition, invariant, branch
 conditions, `h_…` facts); `⊢ False` after `grind` means the facts were
@@ -139,9 +141,16 @@ Goals are abridged; `vreact verify --full` prints them completely (`--json`
 has both `lean` and `leanFull`). `vreact explain <file>` prints the generated
 Lean; `.vreact/` is an ordinary Lake project, so `cd .vreact && lake env lean
 VTS/<module>/View.lean` (with `~/.elan/bin` on PATH) re-checks one file.
-A file marked `?` in the table has obligations that were not checked (the
-reason is printed: a module it depends on failed, or its declaration did not
-elaborate) — fix the first failure or the listed Lean build error and re-run.
+A failed obligation does not stop the check: everything else, also in the
+modules that import the failing one, is still checked, so one run shows every
+failure. An item that uses a failed one is `INCOMPLETE` even when its own
+obligations are proved (they relied on the failed contract); fix the failure it
+names first. A file marked `?` in the table has obligations that were not
+checked (the reason is printed: it depends on a failure elsewhere — its goal,
+or the proof Lean found, contains the `sorry` of a failed obligation or a
+`hole()`; fix that first —, its declaration did not elaborate, or a Lean build
+error stopped the file) — fix the first failure or the listed Lean build error
+and re-run.
 Each obligation has its own time budget; one that runs out fails with
 `(deterministic) timeout` at that obligation (help the prover, or raise
 `"heartbeats"` in vreact.json — default 1000000).
@@ -165,13 +174,15 @@ postcondition, root-precondition, unreachable, assert).
 3. Add an intermediate fact: `assert(cond)` (proved, then available).
 4. Write a Lean lemma in `proofs/<Module>.lean` (`import VTS.<Module>.Defs`);
    tag it `@[vreact_simp]` if it is a rewrite rule. It helps the module's
-   component obligations and everything (functions, contracts, components) in
-   the modules that import `<Module>`, but not `<Module>`'s own function
-   contracts, which are proved before it in `Defs.lean`. For a lemma about `f`
-   that `f`'s own `ensures` (or a function next to `f`) needs: state it
-   generically in `proofs/Base.lean` (imported everywhere), or move the
-   function that needs it to a module that imports `f`'s module. See
-   `reference/obligations.md`.
+   component obligations, the `ensures` of the module's functions that no other
+   function or constant of the module uses (they are proved after it, in
+   `Posts.lean`), and everything (functions, contracts, components) in the
+   modules that import `<Module>`. It does not help function bodies of
+   `<Module>`, nor the `ensures` of a function that another function or
+   constant of `<Module>` calls (those are proved in `Defs.lean`, before it,
+   so the caller can use them). For such a lemma: state it generically in
+   `proofs/Base.lean` (imported everywhere), or move the function that needs
+   it to a module that imports `<Module>`. See `reference/obligations.md`.
 5. Never use `assume(…)` or `@trusted` to make a failure go away without telling
    the user; both are reported and keep the result from being `VERIFIED`.
 

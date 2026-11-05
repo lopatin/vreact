@@ -63,6 +63,10 @@ export function honestyChecks(here: string, work: string, ok: (name: string, msg
   const showRender = lineOf(VIEW, /^namespace Show$/) + lines(VIEW).slice(lineOf(VIEW, /^namespace Show$/)).findIndex((l) => /^def render /.test(l)) + 1;
   const incPost = markerAt(DEFS, /^theorem inc\.post/);
   const printInc = lineOf(DEFS, /^#print axioms VTS\.model\.inc$/);
+  // `vreact_ob`'s result for inc's postcondition: at its token, 13 columns after the marker
+  const incOb = `${defsP}:${incPost.line}:${incPost.col + 13}`;
+  const incOk = new RegExp(`^info: ${esc(incOb)}: vreact:ok$`, "m");
+  if (!incOk.test(raw)) throw new Error(`honesty: no vreact:ok for inc's postcondition at ${incOb}`);
 
   /** the report must not say VERIFIED, and the named items must not be verified */
   const never = (...names: string[]): Check => (r) => {
@@ -105,6 +109,15 @@ export function honestyChecks(here: string, work: string, ok: (name: string, msg
     ["a missing sentinel", drop(new RegExp(`^info: ${esc(defsP)}:\\d+:\\d+: "vreact:checked"`)), and(never("inc", "clamp"), proved(total - 3), verdict("incomplete"))],
     ["a forged sentinel (real one dropped)", (s) => add(`info: ${defsP}:${incDef}:0: "vreact:checked"`, `info: Proofs/Base.lean:2:0: "vreact:checked"`)(drop(new RegExp(`^info: ${esc(defsP)}:\\d+:\\d+: "vreact:checked"`))(s)), and(never("inc", "clamp"), proved(total - 3))],
     ["a sorry warning", add(`warning: ${defsP}:${incDef}:0: declaration uses 'sorry'`), and(never("inc"), verdict("incomplete"))],
+    // `vreact_ob`'s evidence (see VReact/Budget.lean): an obligation is proved only with a
+    // `vreact:ok` of its own at its marker and no failure there
+    ["a missing vreact:ok", drop(incOk), and(never("inc"), proved(total - 1), expect("unchecked", (r) => r.obligations.unchecked, 1), (r) => (r.notChecked.some((u) => u.desc.includes("postcondition of inc") && u.reason.includes("vreact:ok")) ? [] : ["inc's postcondition not reported as unchecked for want of vreact:ok"]))],
+    ["a warning-severity failure (vreact_ob admitted the goal) instead of vreact:ok", (s) => drop(incOk)(s) + `\nwarning: ${incOb}: vreact: \`grind\` failed\n⊢ False\nwarning: ${defsP}:${lineOf(DEFS, /^theorem inc\.post/)}:0: declaration uses 'sorry'\n`, and(never("inc"), verdict("not-verified"), expect("failed", (r) => r.obligations.failed, 1), status("clamp", "verified"))],
+    ["a failure next to the real vreact:ok (a forged result from a simproc inside the obligation)", add(`warning: ${incOb}: vreact: injected failure`), and(never("inc"), verdict("not-verified"), expect("failed", (r) => r.obligations.failed, 1))],
+    ["a forged vreact:ok from a user proof (real one dropped)", (s) => add(`info: Proofs/Base.lean:${incPost.line}:${incPost.col + 13}: vreact:ok`, `info: Proofs/Base.lean:2:0: vreact:ok`)(drop(incOk)(s)), and(never("inc"), proved(total - 1))],
+    ["a forged vreact:ok at another position of the generated file (real one dropped)", (s) => add(`info: ${defsP}:${incDef}:0: vreact:ok`, `info: ${defsP}:${incPost.line}:${incPost.col + 60}: vreact:ok`)(drop(incOk)(s)), and(never("inc"), proved(total - 1))],
+    ["a vreact failure warning at no marker of a generated file", add(`warning: ${defsP}:${incDef}:0: vreact: injected failure`), and(never("inc"), verdict("not-verified"))],
+    ["sorryAx that no failure explains", replace(/'VTS\.model\.inc\.post' depends on axioms: \[propext\]/, "'VTS.model.inc.post' depends on axioms: [propext, sorryAx]"), and(never("inc"), proved(total - 1), (r) => (r.notChecked.some((u) => u.desc.includes("postcondition of inc") && u.reason.includes("sorryAx")) ? [] : ["inc's postcondition counted as proved although its axioms have an unexplained sorryAx"]))],
   ];
   let n = 0;
   for (const [name, mutate, check, st] of cases) {

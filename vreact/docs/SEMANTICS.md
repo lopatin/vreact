@@ -367,27 +367,59 @@ hook rules hold (static checks). For every function: its body is safe and its
   Each source file is one Lean module `VTS.<path>` (`Defs.lean`: types,
   constants, functions each followed by its `ensures` theorems; `View.lean`:
   components and certificates); files whose module names coincide, also up to
-  letter case, are rejected. User lemmas `proofs/<path>.lean` are imported by
+  letter case, are rejected, and so are modules whose generated directories
+  differ only in case (`src/lib.ts` and `src/Lib/x.ts`) and modules that would
+  generate the same Lean name (`src/a/b.ts` declaring `post` next to a function
+  `b` of `src/a.ts` with an `ensures`: both `VTS.a.b.post`; also the names Lean
+  derives from a structure or inductive — fields, constructors, `rec`, … —
+  and, below another module's function `f`, `f.post`, `f.post2`, …, `f.eq_1`,
+  …). Namespaces may otherwise nest (`src/ui/Board.tsx` next to a component
+  `Board` of `src/ui.tsx`). User lemmas `proofs/<path>.lean` are imported by
   that module's `View.lean` and by the `Defs.lean` of every module importing it
   (unless that would close an import cycle); `proofs/Base.lean` by every
-  `Defs.lean`.
-* **The report.** `vreact verify` reads Lean's messages: an error at an
-  obligation's marker fails it; an obligation counts as proved only if its file
-  was elaborated to the end (the `vreact:checked` sentinel), and its declaration
-  has no other error. Every component, certificate, function, contract, constant
-  and fact has a `#print axioms`; `sorryAx`, a `declaration uses 'sorry'`
-  warning or an error in one of its declarations makes it `INCOMPLETE`; lake
-  errors without a position (imports, build cycles) are shown and make the
-  result not verified. Each obligation runs with its own heartbeat budget
-  (`vreact_ob`, `VReact/Budget.lean`): running out is a failure of that
-  obligation (its goal is closed with `sorry`), never a proof. The count is
-  per obligation also under parallel elaboration (Lean's heartbeat counter is
-  per thread, and an obligation runs on one thread); the cost of realizing an
-  auxiliary declaration that several obligations share (equation lemmas,
-  `match` splitters) goes to the first one that needs it. An axiom report
-  or the sentinel counts only when Lean printed it at the generator's own
-  `#print axioms X` / sentinel line (a user proof printing the same text is
-  ignored; several reports for one name are joined). A generated declaration
+  `Defs.lean`. When every importing module can import them, the `ensures`
+  theorems of the module's functions that no other function or constant of the
+  module uses are proved after the lemmas, in `Posts.lean` (imported by the
+  module's `View.lean` and the importing modules' `Defs.lean`).
+* **The report.** Every obligation runs under `vreact_ob` (`VReact/Budget.lean`),
+  with its own heartbeat budget (per obligation also under parallel elaboration:
+  Lean's heartbeat counter is per thread, and an obligation runs on one thread; the
+  cost of realizing an auxiliary declaration that several obligations share goes to
+  the first one that needs it), and reports its result at its marker: the
+  information `vreact:ok` when the automation proved it; otherwise a *warning*
+  `vreact: …` (failed: the failure text and the goal) or `vreact:blocked …`
+  (it depends on `sorry` from a failure elsewhere: its goal contains one, the
+  proof found uses one — also through a definition it unfolded, or an
+  auxiliary lemma —, it failed on a goal that unfolds to a `hole()`, or Lean
+  hid the automation's error because it mentions such a `sorry`), and the goal
+  is admitted with `sorry`. A blocked obligation is *not checked*: neither
+  proved (a proof through the admitted proof of a false statement proves
+  nothing) nor failed. Running out of the budget, goals left over, an error
+  the automation logged and a proof that uses a `sorry` the automation made
+  are failures, never proofs. (A proof that refers to another declaration whose
+  proof was admitted — a callee's failed contract — is a proof modulo that
+  contract and counts as proved; the item is `INCOMPLETE` by its axioms.) A failure is not a Lean error, so the module and every module
+  importing it are still built and checked; the admitted goal shows as
+  `sorryAx` in the axioms of whatever depends on it. `vreact verify` counts an
+  obligation as proved only if every copy of its marker has `vreact:ok`, none
+  has a failure (a `vreact:` warning or an error), its file was elaborated to
+  the end (the `vreact:checked` sentinel), its declaration has no other error,
+  and its item's axioms are reported, with any `sorryAx` among them coming from
+  a reported failure, hole or error (of the item, an item it uses, or a user
+  proof); missing evidence means *not checked*, never proved. Every component,
+  certificate, function, contract, constant and fact has a `#print axioms`;
+  `sorryAx`, a `declaration uses 'sorry'` warning (other than an admitted
+  goal's) or an error in one of its declarations makes it `INCOMPLETE`: an item
+  whose own obligations are proved is `INCOMPLETE` when it relies on one that is
+  not, and the report names that dependency. `UNCHECKED` (no axiom report) is
+  left for items Lean never got to: lake or import errors, an error that stopped
+  a file. Lake errors without a position (imports, build cycles) are shown and
+  make the result not verified. An axiom report, the sentinel or `vreact:ok`
+  counts only when Lean printed it at the
+  generator's own `#print axioms X` / sentinel line / `vreact_ob` token (a user
+  proof printing the same text is ignored, and `vreact_ob` drops `vreact:`
+  messages that code running inside the obligation logs; several reports for
+  one name are joined). A generated declaration
   with an error makes every obligation of its item unproved; when Lean still
   reports clean axioms for its name, something else (e.g. a declaration of a
   user proof) stands in for it, so every item that uses it, directly or not, is

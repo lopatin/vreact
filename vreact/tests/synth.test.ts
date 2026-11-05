@@ -117,8 +117,11 @@ const cases: Record<string, () => Promise<void>> = {
     const dir = project("blocked-dep");
     const { by, writes } = await synth(dir, "src/limits.ts", { write: true });
     const c = by("capped")[0];
-    check("blocked-dep: capped not proved (imported module fails)", !!c && !c.proved && /did not check/.test(c.note ?? "") && /model\.ts/.test(c.note ?? ""), c?.note);
-    check("blocked-dep: nothing written", writes.length === 0);
+    // a failed obligation is a warning (vreact_ob admits its goal), so Lean still checks the
+    // modules importing model.ts; capped does not use the failing grow: its fill is proved
+    // (before: limits.ts was not checked at all)
+    check("blocked-dep: capped proved although an imported module fails", !!c && c.proved && c.solution === "0", c?.note);
+    check("blocked-dep: written", writes.length === 1);
   },
   // a contracted helper: only addTodo's own postconditions are tested on its result
   async helpers() {

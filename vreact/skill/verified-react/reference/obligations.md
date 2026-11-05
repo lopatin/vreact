@@ -71,19 +71,30 @@ first one that fails.
    `Defs.lean` holds types, constants and functions, each function followed by
    its `ensures` theorems (so later function bodies, here and in importing
    modules, can use them). `proofs/<Module>.lean` imports that `Defs.lean`, so
-   it comes after it: it helps the component obligations in the module's own
-   `View.lean` and **everything in the modules that import `<Module>`** (their
+   it comes after it. With such a file, the `ensures` theorems of the functions
+   that no other function or constant of the module uses move to
+   `VTS/<Module>/Posts.lean`, after the lemmas (the module's `View.lean` and the
+   `Defs.lean` of the modules importing it import `Posts.lean`). So the lemmas
+   help the component obligations in the module's own `View.lean`, those
+   `ensures`, and **everything in the modules that import `<Module>`** (their
    `Defs.lean` imports `Proofs.<Module>`: function bodies, `ensures`, views).
-   It cannot help `<Module>`'s own function bodies and contracts. So, for a
-   lemma about a function `f` of module `A`:
+   They cannot help `<Module>`'s own function bodies, nor the `ensures` of a
+   function that another function or constant of `<Module>` uses (proved in
+   `Defs.lean`, before the lemmas). So, for a lemma about a function `f` of
+   module `A`:
 
-   * needed by a function of module `B` that imports `A`, or by `A`'s
-     components: put it in `proofs/A.lean`;
-   * needed by `f`'s own `ensures`, or by another function of `A`: state it
-     generically (about lists, integers, … — not about `VTS.A.f`) in
-     `proofs/Base.lean`, which every `Defs.lean` imports; or move the function
-     that needs it to a module that imports `A`; or help it with `assert(…)`
-     and contracts of helper functions.
+   * needed by a function of module `B` that imports `A`, by `A`'s components,
+     or by the `ensures` of a function of `A` that nothing else in `A` calls
+     (`f` itself, say): put it in `proofs/A.lean`;
+   * needed by a function body of `A`, or by the `ensures` of a function of
+     `A` that another function of `A` calls: state it generically (about
+     lists, integers, … — not about `VTS.A.f`) in `proofs/Base.lean`, which
+     every `Defs.lean` imports; or move the function that needs it to a module
+     that imports `A`; or help it with `assert(…)` and contracts of helper
+     functions.
+
+   A lemma in `proofs/A.lean` cannot use the `ensures` theorems that are in
+   `Posts.lean` (they come after it); prove the fact from the definitions.
 
    (A `proofs/A.lean` that itself imports `VTS.B.…` of a module `B` importing
    `A` would form an import cycle; `B` then sees only `A`'s definitions.)
@@ -136,6 +147,21 @@ first one that fails.
    (an `init` of 9 cells, `cells.with(k, v)` under `forall(0, 9, i => cells[i]
    >= 0 && cells[i] <= 2)`), the goal is split into its conjuncts and, if
    needed, into one case per index (at most 16 values).
+10. **Failures do not stop the check.** `vreact_ob` reports a failed obligation as
+    a Lean *warning* (`vreact: …`, with the goal) and admits its goal with
+    `sorry`, so the rest of the module and the modules importing it are still
+    checked; a proved one reports `vreact:ok` (the report counts nothing as
+    proved without it). Whatever relies on a failed obligation has `sorryAx` in
+    its axioms and is `INCOMPLETE`, with the failed item named as the reason. An
+    obligation that depends on such a `sorry` itself is reported
+    `vreact:blocked …` and counted as *not checked*, neither proved nor failed:
+    its goal contains it (an index obligation in its `ensures` or `requires`
+    failed), the proof Lean found uses it (e.g. it unfolds a function whose
+    index obligation failed: a proof through the admitted proof of a false
+    statement proves nothing), or it failed on a goal that unfolds to a
+    `hole()`. Fix the failure it depends on first. (Using the *contract* of a
+    function whose `ensures` failed is ordinary modular reasoning: that
+    obligation counts as proved, and its item is `INCOMPLETE`.)
 
 ## What not to do
 
