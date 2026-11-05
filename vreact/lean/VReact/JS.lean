@@ -103,6 +103,28 @@ def str {α} [ToJS α] (a : α) : Str := ToJS.str a
 the dividend and magnitude `|a| mod |b|`.  (`%` below is Lean's Euclidean `emod`.) -/
 def rem (a b : Int) (_h : b ≠ 0) : Int :=
   if 0 ≤ a then a % (b.natAbs : Int) else -((-a) % (b.natAbs : Int))
+/-- The range of `a % b` (ECMA remainder, the sign of the dividend): `0 ≤ r < |b|` for
+`a ≥ 0`, `-|b| < r ≤ 0` for `a < 0`.  A contract (`f.post`, see `vreact_contracts`), so the
+facts are in the context of every goal with a `%`, also for `omega`. -/
+theorem rem.post (a b : Int) (h : b ≠ 0) :
+    (0 ≤ a → 0 ≤ rem a b h ∧ rem a b h < (b.natAbs : Int)) ∧
+    (a < 0 → -(b.natAbs : Int) < rem a b h ∧ rem a b h ≤ 0) := by
+  have h1 : (0 : Int) < (b.natAbs : Int) := by omega
+  unfold rem
+  constructor
+  · intro ha; simp only [ha, if_true]
+    exact ⟨Int.emod_nonneg _ (by omega), Int.emod_lt_of_pos _ h1⟩
+  · intro ha; simp only [show ¬ 0 ≤ a by omega, if_false]
+    have := Int.emod_nonneg (-a) (b := (b.natAbs : Int)) (by omega)
+    have := Int.emod_lt_of_pos (-a) h1
+    omega
+/-- `%` with a variable divisor: `grind` decides `%` by a numeral only, so it gets the range of
+`emod` (which `rem` unfolds to) for every `a % b`. -/
+theorem emod_nonneg_of_ne (a b : Int) (h : b ≠ 0) : 0 ≤ a % b := Int.emod_nonneg a h
+theorem emod_lt_of_pos (a b : Int) (h : 0 < b) : a % b < b := Int.emod_lt_of_pos a h
+grind_pattern emod_nonneg_of_ne => a % b
+grind_pattern emod_lt_of_pos => a % b
+
 /-- `Math.floor(a / b)` on integers. (Lean's `/` on `Int` rounds toward −∞ for positive divisors.) -/
 def floorDiv (a b : Int) (_h : b ≠ 0) : Int := if 0 < b then a / b else (-a) / (-b)
 /-- `Math.trunc(a / b)` on integers. -/
