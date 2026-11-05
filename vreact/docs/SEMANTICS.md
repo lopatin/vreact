@@ -43,12 +43,37 @@ exact, total meaning in Lean, while still covering what real React code uses.
 value a `none` stands for is taken from the TypeScript type of the expression
 (optional fields, `find()`, `at()` and `?.` give `undefined`). A strict test
 against the other nullish value (`t.due === null` with `due?: int`), a strict
-test of a value that may be either, and `===` between a `T | null` and a
-`T | undefined` value are rejected: `== null` covers both.
+test of a value that may be either (or whose type is `any`/`unknown`), and `===`
+between a `T | null` and a `T | undefined` value are rejected: `== null` covers
+both. This needs `strictNullChecks` and `noImplicitAny` (both part of `strict`;
+rejected without them).
+
+The parameters of function values are typed from the values they receive: the
+declared return type for `ensures((r) => …)`, the callback prop's parameter types
+for `callbackRequires` and for handlers passed to a child, the state type for a
+functional update, the element (and `int` index) type for array-method callbacks
+and quantifiers. TypeScript does not check an annotation there against that type
+(`ensures` takes `any`; a callback annotation only has to accept the argument, so
+`unknown` or `int | null` for an `int | undefined` argument pass), so an annotation
+must be exactly that type — the same VTS type and the same nullish value at each
+optional position (`number` may annotate an `int`: TypeScript does not tell them
+apart) — or is rejected; default values, `?` and rest parameters are
+rejected. An unannotated `ensures` parameter is TypeScript `any`, and so is what
+is computed from it (`r.v`, `r[0]`): where such a value with an optional part goes
+to a place whose TypeScript type tells null from undefined (an argument, an
+element, a field, an initializer), its nullish value (from the declared return
+type) must be the one that type says, or it is rejected (`isNull(r)` with
+`isNull(x: int | null)` on an `int | undefined` result): annotate `r`, and
+TypeScript checks it. Inline object types and string-literal unions are structural: the same
+inline type in one module is one Lean type (`hole<{ readonly v: int }>()` in a
+function returning `{ readonly v: int }`). A value is widened where TypeScript
+allows it: an `int` to a `number`, a present value to an optional one, an array
+elementwise (`int[]` to `(int | null)[]`), an enum member to its string.
 
 Rejected: `any`, `as` casts, classes, `this`, mutation of objects/arrays,
 `==` (except `== null`), `===` on objects (reference identity), generics,
-exceptions (`try`), `var`, `while`, recursion (for now), `async`.
+exceptions (`try`), `var`, `while`, recursion (for now), recursive types,
+`async`.
 
 ### 1.2 Expressions and statements — semantics by translation
 
@@ -86,6 +111,11 @@ Every expression maps to a Lean term whose value is the JavaScript value.
   code units `JS.Str.mk […]`.
 * `===` on `number` is IEEE equality (`Float` `==`, `NaN !== NaN`), in code and in
   contracts alike. Unary `+` is only accepted on numbers (the identity).
+* `a + b` with a string operand (by its TypeScript type) is concatenation; an
+  `int`, `boolean` or enum operand is converted exactly as in a template literal
+  (`-5 + "a"` is `"-5a"`); a `number` or possibly-null operand is rejected.
+  Bitwise operators (`~ & | ^ << >> >>>`, also as `&=` …) are rejected (ToInt32 is
+  not modelled), as are compound assignments other than `+=` and `-=`.
 * `x!` carries the obligation `x ≠ null`; `?.` and `??` map to `Option.map/getD`.
 * Narrowing (`x !== null`, `x.kind === "add"`, `switch (x.kind)`, early
   `return`) is compiled to Lean `match`, so the narrowed facts are available to
@@ -93,18 +123,32 @@ Every expression maps to a Lean term whose value is the JavaScript value.
   when it leaves one variant (else branch, code after an early return, the right
   of `||`, a ternary's false branch); with more variants left, the complement is
   split into one arm per variant only when later code needs it (a later test
-  excludes all but one).
+  excludes all but one, or a field the remaining variants share). A variant
+  narrowing of a `T | null` path (tested non-null first) also makes it present.
   Assigning a present value to an optional `let`
   narrows it as well; any later assignment (also in a `for…of`) drops what was
   known. A null test, `??`, `?.` or `!` on a value known to be present is decided
-  statically (the value is not null).
+  statically (the value is not null); the operand is still evaluated, so its own
+  obligations (`xs[5] === null`: the index; `g(x) != null`: g's precondition;
+  `x! === null`: non-null) remain.
 * Names: a VTS identifier that is a Lean token, a root-level Lean name the
   generated code may use unqualified (`max`, `some`, `List`, …) or a fixed name of
   the generated code (`σ`, `props`, `h_pre`, …) is primed (`max'`; fields and
-  constructors also avoid `rec`, `mk`, `casesOn`, …); names the translator invents
-  are subscripted (`h₁`, `idx₀`). Neither `'` nor subscript digits can occur in a
-  TypeScript identifier, so generated names and user names never capture each
-  other. The lists are generated from Lean by `lean/scripts/GenNames.lean`.
+  constructors also avoid `rec`, `mk`, `casesOn`, `rec_1`, …). A name shaped like
+  the instances Lean declares for the module's types (`instReprP`,
+  `instDecidableEqP`, `instToJSK`, `instToJSList'` for a type `List`: any `inst`
+  followed by a capital) gets `''` (an instance name ends in at most one `'`), and
+  a declared type of that shape is rejected (its instances could be another
+  type's). A name starting with `_` is «quoted» with the `_` written `\u005f`
+  (Lean reads `_hyg`, `_cstage1`, … specially). Names the
+  translator invents are subscripted (`h₁`, `idx₀`). Neither `'` nor subscript
+  digits can occur in a TypeScript identifier, so generated names and user names
+  never capture each other. The lists are generated from Lean by
+  `lean/scripts/GenNames.lean`. Enum members and discriminants are any strings:
+  an ASCII identifier is used as is (primed if Lean generates that name in the
+  type's namespace), anything else is «quoted» with `\`, `'`, `«`, `»`, control
+  characters and lone surrogates written `\uXXXX` — injective, and the source stays
+  UTF-8; union accessors are primed (`A.kind'`), so no constructor can clash.
   Component names follow the same rule (`function Type()` is the namespace
   `Type'`); a module path segment that would clash gets a `_` suffix instead, as
   it is also a directory name (`src/end/Sort.tsx` is the module `VTS.end_.Sort_`,
@@ -114,7 +158,10 @@ Every expression maps to a Lean term whose value is the JavaScript value.
   condition becomes a hypothesis), `for (const x of xs)` ↦ `List.foldl` over
   the tuple of assigned locals (no `return`/`continue`, and a `break` only to end
   a `switch` case), `switch` ↦ `match` / if-chain (first matching
-  label; `default` in any position takes the values no label matches), `throw`
+  label; `default` in any position takes the values no label matches; labels of
+  a switch on an int, string, boolean or number are compared with `===`, and may be
+  literals, negated literals or constants — a non-integer label on an int is
+  rejected, it can never match), `throw`
   ↦ an obligation that the point is unreachable.
 * A JSX const (`const row = <p>{e}</p>;`) is translated where it is declared —
   JS evaluates the element's attributes and `{…}` children there, whether or not
@@ -156,6 +203,25 @@ and `xs.every(x => p)` as `∀ x, ∀ (h : x ∈ xs), p`, so an index obligation
 `p`, … sees its guard. (In code, `implies` is a function call: both arguments are
 evaluated.) Several `requires` (or `invariant`) statements are one condition
 `c₁ && c₂ && …`: a later one may rely on the earlier ones as guards.
+Narrowing tests in a guard narrow what JS evaluates under it, as in code — also
+in a compound guard: in `b || s.kind === "a" || s.to.length > 0` (left-associated,
+any length), `x !== null && y !== null && x + y > 0`, `!(x === null || y === null) || …`,
+`implies(x !== null && …, …)` and `c ? … : …` the later operand is translated where
+every earlier operand failed (held), each test becoming a `match`. Such a compound
+guard is decomposed only when a later operand needs its narrowing; otherwise it
+stays one condition (the normal forms above).
+
+`assert(c)` / `assume(c)` bind the hypothesis `c` for everything after them. In an
+event handler, effect, timer callback or callback passed to a child, whose
+outcome obligations (invariant preservation, robustness, the parent's emit) are
+proved outside the body's term, the rest of the body is `if h : c then … else
+(no updates, no callback)`: the `else` is unreachable (`c` is proved, or assumed and
+reported), and splitting on the `if` hands those obligations `h : c` too. A
+timer registered in an effect body is checked under that body's top-level early
+returns, asserts and assumes before the registration (§2.6). A
+function's `ensures` theorems are proved about its result, outside its body: a
+fact inside the body does not reach them (state it as `requires`, or `ensures` of a
+helper).
 
 ---
 
@@ -181,11 +247,22 @@ this reason; `FunctionalBatch.tsx` is accepted.
 ### 2.2 Snapshots: discrete events, robust updates, rebasing
 
 React 18 has three event priorities (react-dom 18.3.1 `getEventPriority`).
-Only the updates of a *discrete* event (click, input, keydown, submit, focus, …:
-exactly the `DiscreteEventPriority` events, a whitelist in `component.ts` and
-`Core.discreteEvents`) are flushed synchronously, so the next discrete event
-runs a handler of the latest render, whose snapshot is the current state. A
-discrete handler must therefore preserve the invariant **from its snapshot**.
+Only the updates of a *discrete* event (click, input, keydown, submit, …:
+the `DiscreteEventPriority` events, a whitelist in `component.ts` and
+`Core.discreteEvents`) are flushed synchronously — in a microtask, or at the end of
+the event when its ChangeEventPlugin restores a controlled input — so the next
+discrete event runs a handler of the latest render, whose snapshot is the current
+state. A discrete handler must therefore preserve the invariant **from its
+snapshot**. This assumes that React flushes before the next event: true for user
+input, which the browser dispatches from native code (a microtask checkpoint after
+every listener), and for a script that lets a microtask checkpoint pass between
+two calls that dispatch events (`el.click()`, `dispatchEvent`, `el.focus()`), or
+wraps each in its own `act` (React Testing Library's `fireEvent`). A script that
+makes several such calls in one go — including emulators of browser default
+actions, such as user-event's emulation of implicit submission (keydown, then
+click and submit) without `act` — is outside the model. What the DOM itself
+dispatches *inside* one call — a click's activation behaviour — belongs to that
+event; §5 says how VTS keeps it to one handler.
 
 Continuous events (mousemove, scroll, wheel, mouseenter, …), default-priority
 events (transitionend, animationend, load, error, media events, …), effects and
@@ -193,7 +270,15 @@ asynchronous callbacks (timers) are rendered later and may run with a stale
 snapshot, so their outcomes must be **robust**: preserve the invariant from
 *every* state that satisfies it; they may not call parent callbacks. This is
 what rejects the classic stale-closure bug (`StaleTimer.tsx`) and accepts the
-functional-update fix (`RobustTimer.tsx`).
+functional-update fix (`RobustTimer.tsx`). Focus and `invalid` events are
+discrete in React, but the DOM also dispatches them inside the batch of another
+event or of React's commit, before the earlier updates are rendered — `autoFocus`
+focuses during the commit (onBlur of the element losing focus, anywhere in the
+app, and onFocus of the new one run in one batch, after a trusted click too:
+`CxFocusRobust.tsx`), a click on a `<label>` focuses its control, `el.focus()`
+fires blur and focus, form validation fires `invalid` at every invalid control —
+so `onFocus`, `onBlur`, `onInvalid` (and the composition events, whose fallback
+uses `focusout`) are checked robust as well.
 
 **Rebasing.** These *deferred* updates are still pending when a later discrete
 event runs. React keeps one update queue per hook; it renders the discrete
@@ -275,6 +360,23 @@ possibly under `if`/`else` with pure conditions —
 no setters, `dispatch`, parent callbacks or local helpers.
 Running a robust effect any number of times (StrictMode) is safe.
 
+A timer is registered only by a statement at the top level of the effect body
+(`setTimeout(…)` / `const id = setInterval(…)`). Its callback is checked under the
+path condition of that registration. That condition is made of the top-level
+early returns `if (c) return;` (no `else`) and the `assert(c)` / `assume(c)`
+statements before it. The callback captures the same snapshot as the effect: an
+effect cannot assign a variable it captures, and a captured `let` is not
+reassigned after the effect is created. So the model's task is
+`if c then skip else callback` for an early return, and `if c then callback else
+skip` for an assert or assume. The `skip` branch stands for a timer the program
+never registers, and it does nothing. A condition about the snapshot says nothing
+about the state the timer fires against, so `setLeft(l => l - 1)` still needs its
+own guard (`CxTimerGuardFail.tsx`). A condition is used only if it translates in
+the component's scope without obligations of its own: one that reads a const
+local to the effect body is left out, which only weakens the facts.
+(`CxTimerGuard.tsx`: the guarded countdown
+`if (left <= 0) return; setTimeout(() => setLeft(left - 1), …)`.)
+
 Hooks (`useState`, `useReducer`, `useEffect`, `useMemo`, `useCallback`) are
 matched by React by call order, so they must be top-level statements of the
 component, before any statement that may return (an `if`, a `switch`, …); a hook
@@ -350,7 +452,7 @@ left with `hpre` only, and Lean's goal shows the counterexample
 For every component: initial state satisfies the invariant; the invariant
 survives prop changes; every handler (discrete: from the snapshot, or
 rebase-safe when the component has deferred updates; continuous,
-default-priority, effects, timers: from any state) preserves it; rendering never
+default-priority, focus/blur/invalid, effects, timers: from any state) preserves it; rendering never
 fails (indices, divisions, non-null assertions, preconditions of called
 functions — also in keys and boolean children); keys are
 distinct; child preconditions hold; callback contracts hold in both directions;
@@ -367,23 +469,59 @@ hook rules hold (static checks). For every function: its body is safe and its
   Each source file is one Lean module `VTS.<path>` (`Defs.lean`: types,
   constants, functions each followed by its `ensures` theorems; `View.lean`:
   components and certificates); files whose module names coincide, also up to
-  letter case, are rejected. User lemmas `proofs/<path>.lean` are imported by
+  letter case, are rejected, and so are modules whose generated directories
+  differ only in case (`src/lib.ts` and `src/Lib/x.ts`) and modules that would
+  generate the same Lean name (`src/a/b.ts` declaring `post` next to a function
+  `b` of `src/a.ts` with an `ensures`: both `VTS.a.b.post`; also the names Lean
+  derives from a structure or inductive — fields, constructors, `rec`, … —
+  and, below another module's function `f`, `f.post`, `f.post2`, …, `f.eq_1`,
+  …). Namespaces may otherwise nest (`src/ui/Board.tsx` next to a component
+  `Board` of `src/ui.tsx`). User lemmas `proofs/<path>.lean` are imported by
   that module's `View.lean` and by the `Defs.lean` of every module importing it
   (unless that would close an import cycle); `proofs/Base.lean` by every
-  `Defs.lean`.
-* **The report.** `vreact verify` reads Lean's messages: an error at an
-  obligation's marker fails it; an obligation counts as proved only if its file
-  was elaborated to the end (the `vreact:checked` sentinel), and its declaration
-  has no other error. Every component, certificate, function, contract, constant
-  and fact has a `#print axioms`; `sorryAx`, a `declaration uses 'sorry'`
-  warning or an error in one of its declarations makes it `INCOMPLETE`; lake
-  errors without a position (imports, build cycles) are shown and make the
-  result not verified. Each obligation runs with its own heartbeat budget
-  (`vreact_ob`, `VReact/Budget.lean`): running out is a failure of that
-  obligation (its goal is closed with `sorry`), never a proof. An axiom report
-  or the sentinel counts only when Lean printed it at the generator's own
-  `#print axioms X` / sentinel line (a user proof printing the same text is
-  ignored; several reports for one name are joined). A generated declaration
+  `Defs.lean`. When every importing module can import them, the `ensures`
+  theorems of the module's functions that no other function or constant of the
+  module uses are proved after the lemmas, in `Posts.lean` (imported by the
+  module's `View.lean` and the importing modules' `Defs.lean`).
+* **The report.** Every obligation runs under `vreact_ob` (`VReact/Budget.lean`),
+  with its own heartbeat budget (per obligation also under parallel elaboration:
+  Lean's heartbeat counter is per thread, and an obligation runs on one thread; the
+  cost of realizing an auxiliary declaration that several obligations share goes to
+  the first one that needs it), and reports its result at its marker: the
+  information `vreact:ok` when the automation proved it; otherwise a *warning*
+  `vreact: …` (failed: the failure text and the goal) or `vreact:blocked …`
+  (it depends on `sorry` from a failure elsewhere: its goal contains one, the
+  proof found uses one — also through a definition it unfolded, or an
+  auxiliary lemma —, it failed on a goal that unfolds to a `hole()`, or Lean
+  hid the automation's error because it mentions such a `sorry`), and the goal
+  is admitted with `sorry`. A blocked obligation is *not checked*: neither
+  proved (a proof through the admitted proof of a false statement proves
+  nothing) nor failed. Running out of the budget, goals left over, an error
+  the automation logged and a proof that uses a `sorry` the automation made
+  are failures, never proofs. (A proof that refers to another declaration whose
+  proof was admitted — a callee's failed contract — is a proof modulo that
+  contract and counts as proved; the item is `INCOMPLETE` by its axioms.) A failure is not a Lean error, so the module and every module
+  importing it are still built and checked; the admitted goal shows as
+  `sorryAx` in the axioms of whatever depends on it. `vreact verify` counts an
+  obligation as proved only if every copy of its marker has `vreact:ok`, none
+  has a failure (a `vreact:` warning or an error), its file was elaborated to
+  the end (the `vreact:checked` sentinel), its declaration has no other error,
+  and its item's axioms are reported, with any `sorryAx` among them coming from
+  a reported failure, hole or error (of the item, an item it uses, or a user
+  proof); missing evidence means *not checked*, never proved. Every component,
+  certificate, function, contract, constant and fact has a `#print axioms`;
+  `sorryAx`, a `declaration uses 'sorry'` warning (other than an admitted
+  goal's) or an error in one of its declarations makes it `INCOMPLETE`: an item
+  whose own obligations are proved is `INCOMPLETE` when it relies on one that is
+  not, and the report names that dependency. `UNCHECKED` (no axiom report) is
+  left for items Lean never got to: lake or import errors, an error that stopped
+  a file. Lake errors without a position (imports, build cycles) are shown and
+  make the result not verified. An axiom report, the sentinel or `vreact:ok`
+  counts only when Lean printed it at the
+  generator's own `#print axioms X` / sentinel line / `vreact_ob` token (a user
+  proof printing the same text is ignored, and `vreact_ob` drops `vreact:`
+  messages that code running inside the obligation logs; several reports for
+  one name are joined). A generated declaration
   with an error makes every obligation of its item unproved; when Lean still
   reports clean axioms for its name, something else (e.g. a declaration of a
   user proof) stands in for it, so every item that uses it, directly or not, is
@@ -409,18 +547,73 @@ hook rules hold (static checks). For every function: its body is safe and its
   external effects with no state change; reading external data is not modelled.
 * **Outside the subset:** the entry point (`main.tsx`), React itself, the DOM,
   CSS.
-* **Event bubbling and multi-handler events** are handled by a static
-  restriction rather than modelled: the runtime runs one handler per event, and
-  VTS rejects every layout in which one discrete native event could reach two
-  handlers — two props of one element dispatched by the same native event (a
-  checkbox's `onClick` and `onChange` both run on `click`; `onInput` and a text
-  input's `onChange` both run on `input`: react-dom's ChangeEventPlugin), an
-  element with handlers containing a descendant handler that shares a native
-  event (e.g. `<li onClick>` around a checkbox's `onChange`) or a user
-  component, and a submit button with `onClick` inside `<form onSubmit>`.
-  Handlers of continuous/default-priority events are robust and cannot call
-  parents, so several of them in one batch compose. `onSelect` and capture-phase
-  handlers are rejected; unknown handler names are rejected, never discrete.
+* **Event bubbling, multi-handler events and activation behaviour** are handled
+  by a static restriction rather than modelled: the runtime runs one handler per
+  event, and VTS rejects every layout in which one event — one native dispatch
+  together with what the DOM dispatches synchronously inside it (§2.2) — could run
+  two discrete handlers, or one twice, before React renders:
+  - two props of one element dispatched by the same native event (a checkbox's
+    `onClick` and `onChange` both run on `click`; `onInput` and a text input's
+    `onChange` both run on `input`: react-dom's ChangeEventPlugin);
+  - an element with handlers containing a descendant handler that shares a
+    native event (e.g. `<li onClick>` around a checkbox's `onChange`) or a user
+    component;
+  - a click's activation behaviour, which runs before React renders when a
+    script dispatched the click (`el.click()`, `dispatchEvent`, testing libraries,
+    jsdom): a submit button (`<button>` other than `type="button"`/`"reset"`,
+    `<input type="submit">`/`"image"`, or a dynamic `type`) fires `submit` at its
+    form, a reset button `reset`. Which button a click inside a button activates
+    is browser-specific. The DOM specification (and jsdom) activates the
+    innermost element with an activation behaviour. Chromium dispatches
+    `DOMActivate` at the click's target as its default action. That event
+    bubbles to the enclosing `<button>`, which submits, resets or invokes,
+    unless the target handled the click itself. Only a checkbox, a radio
+    button and a link (`<a href>`) do that, and each only for a click on
+    itself. A click on a nested `<button>`, on an `<input>` of another type,
+    on a `<select>`, `<textarea>`, `<summary>`, `<details>` or `<img>`, or on
+    the content of a link inside the button activates the button (Chromium 152,
+    react-dom 18.3.1). VTS covers both behaviours.
+    Rejected: `onClick` on such a button, on an element around it, or on an
+    element inside it, except a checkbox, radio button or `<a href>` with a
+    static `type`/`href`. This applies when the button's form submit/reset
+    reaches `onSubmit`/`onReset` (on its form or above), or when the button
+    names its form with `form=…` (which may be anywhere). Also rejected: a
+    `<label>` inside such a button, with or without handlers (one click on the
+    label activates the button twice, once for the label's click and once for
+    the click it dispatches to its control), another such button inside it,
+    and a user component inside it. The same for an invoker button
+    (`commandfor`/`command`): its command runs on an element anywhere, and
+    `request-close` fires `cancel` at a dialog synchronously (`onCancel`).
+  - A `<label>` dispatches a click on it (or on non-interactive content inside
+    it) again to its control — the element `htmlFor` names, or its first form
+    control — after focusing it; when the control is inside, that click passes
+    the label and its ancestors again. Interactive content stops this, for
+    itself and everything inside it: `<button>`, `<label>`, `<select>`,
+    `<textarea>`, `<details>`, `<input>` other than `type="hidden"`, and
+    `<a href>`. A `<summary>` is not interactive content. Chromium treats a
+    `<summary>` outside a `<details>` as plain content, and a details' own
+    summary is inside the `<details>`, which stops the label. Rejected:
+    `onClick` on a label, on an element around a label, or on an element inside
+    a label that is not interactive content and not inside any; a user
+    component inside a label.
+
+  Checked safe, so accepted (with react-dom 18.3.1 under jsdom 25 and in
+  Chromium): a checkbox's or radio's `click` is followed by
+  `input`/`change` only after React has rendered (its ChangeEventPlugin flushes
+  to restore the controlled input), so `onInput` there sees the new state;
+  `<details>` fires `toggle` in a later task (and `onToggle` is robust); links
+  navigate later; a `popovertarget` button fires `beforetoggle` (no React 18
+  prop) and a later `toggle`, and a dialog's `close` event is a later task too;
+  implicit submission by Enter and the keyboard activation of a
+  button follow trusted key events only (a scripted `keydown` has no default
+  action), which the browser dispatches from native code with microtask
+  checkpoints in between. Focus and `invalid` events, which the DOM also fires
+  inside other batches (label activation focuses the control; `autoFocus`
+  focuses during React's commit; validation on submit), have robust handlers
+  (§2.2), and robust handlers cannot call parents, so several of them in one
+  batch compose with each other and with the one discrete handler. `onSelect`
+  and capture-phase handlers are rejected; unknown handler names are rejected,
+  never discrete.
 
 Lean's kernel checks every proof; `sorry`, `@trusted` and `assume(…)`
 (`VReact.assumed`, reported `ASSUMES`) show up in the axiom report, so nothing
@@ -433,3 +626,10 @@ function's obligations failed, and their axioms contain no `sorryAx` — so a
 function with several holes is proved once all are filled, a `@trusted`
 function is refused, and a failure elsewhere that keeps the function from being
 checked is reported as "not proved". The written text is the text Lean checked.
+A proof whose axioms include @trusted declarations or `assume(…)` facts is
+reported relative to them (`--json`: `"status": "proved-relative"` and
+`relative_to`). Synth types candidates with the narrowing the translator has at
+the hole (with the variants left after exclusions, which the translator splits
+on when a fill needs them), and searches a hole once per fill of the earlier holes a call can
+also evaluate (holes in different cases or branches are searched once); both
+only steer the search — Lean still checks every fill of a function together.

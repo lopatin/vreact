@@ -103,6 +103,58 @@ def str {α} [ToJS α] (a : α) : Str := ToJS.str a
 the dividend and magnitude `|a| mod |b|`.  (`%` below is Lean's Euclidean `emod`.) -/
 def rem (a b : Int) (_h : b ≠ 0) : Int :=
   if 0 ≤ a then a % (b.natAbs : Int) else -((-a) % (b.natAbs : Int))
+/-- The range of `a % b` (ECMA remainder, the sign of the dividend): `0 ≤ r < |b|` for
+`a ≥ 0`, `-|b| < r ≤ 0` for `a < 0`.  A contract (`f.post`, see `vreact_contracts`), so the
+facts are in the context of every goal with a `%`, also for `omega`. -/
+theorem rem.post (a b : Int) (h : b ≠ 0) :
+    (0 ≤ a → 0 ≤ rem a b h ∧ rem a b h < (b.natAbs : Int)) ∧
+    (a < 0 → -(b.natAbs : Int) < rem a b h ∧ rem a b h ≤ 0) := by
+  have h1 : (0 : Int) < (b.natAbs : Int) := by omega
+  unfold rem
+  constructor
+  · intro ha; simp only [ha, if_true]
+    exact ⟨Int.emod_nonneg _ (by omega), Int.emod_lt_of_pos _ h1⟩
+  · intro ha; simp only [show ¬ 0 ≤ a by omega, if_false]
+    have := Int.emod_nonneg (-a) (b := (b.natAbs : Int)) (by omega)
+    have := Int.emod_lt_of_pos (-a) h1
+    omega
+/-- The exact values of `a % b` that index arithmetic needs (a contract like `rem.post`): `a`
+itself when `|a| < |b|` with the sign of `a` (`(sel + 1) % n === sel + 1` for `sel + 1 < n`), and
+`0` for `a = ±b` (`n % n === 0`: the step from the last slide to the first). -/
+theorem rem.post2 (a b : Int) (h : b ≠ 0) :
+    (0 ≤ a → a < (b.natAbs : Int) → rem a b h = a) ∧
+    (-(b.natAbs : Int) < a → a ≤ 0 → rem a b h = a) ∧
+    (a = b ∨ a = -b → rem a b h = 0) := by
+  unfold rem
+  refine ⟨fun h0 h1 => ?_, fun h0 h1 => ?_, fun hab => ?_⟩
+  · rw [if_pos h0]; exact Int.emod_eq_of_lt h0 h1
+  · by_cases ha : 0 ≤ a
+    · have : a = 0 := by omega
+      subst this; simp
+    · rw [if_neg ha, Int.emod_eq_of_lt (by omega) (by omega)]; omega
+  · have hd : (b.natAbs : Int) ∣ a := by
+      rw [Int.natAbs_dvd]
+      rcases hab with rfl | rfl
+      · exact Int.dvd_refl _
+      · exact (Int.dvd_neg).2 (Int.dvd_refl _)
+    have hd' : (b.natAbs : Int) ∣ -a := (Int.dvd_neg).2 hd
+    split
+    · exact Int.emod_eq_zero_of_dvd hd
+    · rw [Int.emod_eq_zero_of_dvd hd']; rfl
+/-- `%` with a variable divisor: `grind` decides `%` by a numeral only, so it gets the range of
+`emod` (which `rem` unfolds to) for every `a % b`. -/
+theorem emod_nonneg_of_ne (a b : Int) (h : b ≠ 0) : 0 ≤ a % b := Int.emod_nonneg a h
+theorem emod_lt_of_pos (a b : Int) (h : 0 < b) : a % b < b := Int.emod_lt_of_pos a h
+grind_pattern emod_nonneg_of_ne => a % b
+grind_pattern emod_lt_of_pos => a % b
+/-- The exact values (`rem.post2` for `emod`, which `rem` unfolds to): `a % b = a` for `0 ≤ a <
+b`, and `a % |a| = 0` (E-matching modulo equalities also finds `(sel + 1) % |n|` when `sel + 1 = n`). -/
+theorem emod_eq_self_of_lt (a b : Int) (h0 : 0 ≤ a) (h1 : a < b) : a % b = a := Int.emod_eq_of_lt h0 h1
+theorem emod_natAbs_self (a : Int) : a % (a.natAbs : Int) = 0 :=
+  Int.emod_eq_zero_of_dvd (Int.natAbs_dvd.2 (Int.dvd_refl a))
+grind_pattern emod_eq_self_of_lt => a % b
+grind_pattern emod_natAbs_self => a % (a.natAbs : Int)
+
 /-- `Math.floor(a / b)` on integers. (Lean's `/` on `Int` rounds toward −∞ for positive divisors.) -/
 def floorDiv (a b : Int) (_h : b ≠ 0) : Int := if 0 < b then a / b else (-a) / (-b)
 /-- `Math.trunc(a / b)` on integers. -/
@@ -386,7 +438,8 @@ distinct, membership and counts are unchanged. -/
     (((xs.set i xs[j]).set j xs[i]).filter p).length = (xs.filter p).length :=
   ((List.set_set_perm hi hj).filter p).length_eq
 
-/-! ### `slice` is a sublist: membership and distinct keys carry over -/
+/-! ### `slice` is a sublist: membership and distinct keys carry over (chains of operations:
+`SubPerm` in `Lists.lean`) -/
 
 theorem slice_sublist {α} (xs : List α) (a : Int) (b : Option Int) : (slice xs a b).Sublist xs := by
   unfold slice; exact (List.take_sublist _ _).trans (List.drop_sublist _ _)

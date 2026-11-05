@@ -206,13 +206,21 @@ export function findDecls(outDir: string): Map<string, LeanDecl[]> {
   return out;
 }
 
-/** A runtime limit hit outside `vreact_ob` (which reports its own as an ordinary failure): the declaration was aborted. */
+/** A runtime limit hit outside `vreact_ob` (which reports its own as a failure warning): the declaration was aborted. */
 const ABORT = /\(deterministic\) timeout|maximum recursion depth has been reached/;
 const isAbort = (text: string) => ABORT.test(text) && !text.startsWith("vreact:");
 const BUILD = /bad import|unknown module prefix|build cycle|no such file|does not exist|import .* failed|environment already contains|object file|lakefile|unknown package|failed to (?:load|read|fetch)/;
 const FOLLOW_ON = /Unknown (?:identifier|constant)|unknown (?:identifier|constant)/;
 /** The sentinel `#eval "vreact:checked"` that ends every generated file: Lean got to the end of it. */
 const SENTINEL = /^"vreact:checked"$/;
+/**
+ * `vreact_ob`'s result at an obligation's marker: proved (info), failed (a warning; the goal
+ * was admitted), or blocked (a warning: it depends on `sorry` from elsewhere that its goal
+ * or the proof found contains, so it was not checked on its own; the goal was admitted)
+ */
+const OB_OK = /^vreact:ok$/;
+const OB_FAIL = /^vreact: /;
+const OB_BLOCKED = /^vreact:blocked /;
 
 export interface Verdict {
   proved: Obligation[];
@@ -236,6 +244,8 @@ export interface Verdict {
   sorries: LeanMessage[];
   /** generated files Lean elaborated to the end */
   checkedFiles: Set<string>;
+  /** obligations in `unchecked` that `vreact_ob` could not check: they depend on `sorry` from elsewhere (in their goal or the proof found) */
+  blocked: Set<number>;
 }
 
 /** `#print axioms X` (the generator writes one per line) */
@@ -255,19 +265,35 @@ export function builtModules(raw: string): Set<string> {
 /**
  * Attribute Lean's messages to obligations and declarations.
  *
- * An obligation counts as proved only if its file was elaborated to the end (the
- * `vreact:checked` sentinel was printed), no error was reported at its marker, and its
- * declaration has no other error: an error elsewhere in the declaration (a timeout at the
- * declaration start, an elaboration error, an aborting runtime limit) means Lean may never
- * have finished the obligation. Lake errors without a position are kept as `build` errors.
- * Axiom reports and the sentinel count only when Lean printed them at the generator's
- * `#print axioms X` / sentinel line of a generated file (a user proof cannot fake them by
- * printing the same text); an error at the marker of no known obligation is not an
- * obligation's failure.
+ * `vreact_ob` (VReact/Budget.lean) reports every obligation it ran at its marker: the info
+ * `vreact:ok` when the automation proved it, a warning `vreact: <why>` when it did not, and
+ * a warning `vreact:blocked <why>` when it depends on `sorry` from elsewhere (its goal or the
+ * proof found contains one: then the obligation is not checked rather than proved or
+ * failed); in both cases the goal is
+ * admitted with `sorry`, so the module still builds. An obligation counts as proved only if
+ *  - every copy of its marker has that positive evidence and none has a failure (a
+ *    `vreact:` warning or an error at the marker; a forged `vreact:ok` next to a failure does
+ *    not help, and missing evidence means "not checked", never "proved");
+ *  - its file was elaborated to the end (the `vreact:checked` sentinel was printed);
+ *  - its declaration has no other error: an error elsewhere in the declaration (a timeout at
+ *    the declaration start, an elaboration error, an aborting runtime limit) means Lean may
+ *    not have kept the obligation's proof.
+ * (The report also requires that the axioms of the obligation's item are reported, and that
+ * `sorryAx` in them is explained by a reported failure or sorry; see `reportFrom`.)
+ * Lake errors without a position are kept as `build` errors. Evidence, axiom reports and the
+ * sentinel count only when Lean printed them at the generator's marker / `#print axioms X` /
+ * sentinel position in a generated file (a user proof cannot fake them by printing the same
+ * text); a result at the marker of no known obligation is not an obligation's.
  */
 export function judge(obligations: Obligation[], messages: LeanMessage[], markers: Marker[], outDir: string, _built?: Set<string>): Verdict {
   const decls = findDecls(outDir);
   const failedIds = new Map<number, string>();
+  /** the marker copies with positive evidence */
+  const okMarkers = new Set<Marker>();
+  /** obligations `vreact_ob` could not check (they depend on `sorry` from elsewhere) */
+  const blockedIds = new Map<number, string>();
+  /** declarations with a failed or blocked obligation copy (their `sorry` is the admitted goal) */
+  const failedDecls = new Set<LeanDecl>();
   const internal: LeanMessage[] = [];
   const axioms = new Map<string, string[]>();
   const checkedFiles = new Set<string>();
@@ -279,6 +305,16 @@ export function judge(obligations: Obligation[], messages: LeanMessage[], marker
   const generated = (rel: string) => decls.has(rel);
   const known = new Set(obligations.map((ob) => ob.id));
   const firstErr = new Map<string, LeanMessage>();
+  const markersAt = new Map<string, Marker[]>();
+  for (const mk of markers) markersAt.set(`${mk.file}:${mk.line}`, [...(markersAt.get(`${mk.file}:${mk.line}`) ?? []), mk]);
+  /** the marker of a known obligation on the message's line closest to the left of its column */
+  const markerOf = (rel: string, msg: LeanMessage): Marker | null => {
+    if (!msg.line || !isGenerated(rel)) return null;
+    const cands = (markersAt.get(`${rel}:${msg.line}`) ?? []).filter((mk) => mk.col <= msg.col && msg.col <= mk.col + 40);
+    const mk = cands.length ? cands.reduce((a, b) => (b.col > a.col ? b : a)) : null;
+    // (a marker of no known obligation cannot take a result: an error there stays the declaration's)
+    return mk && mk.id !== 0 && known.has(mk.id) ? mk : null;
+  };
   // the lines of the generated files: an axiom report or the sentinel counts only when Lean
   // printed it for the command the generator wrote at that line (never from a user proof)
   const texts = new Map<string, string[]>();
@@ -287,12 +323,21 @@ export function judge(obligations: Obligation[], messages: LeanMessage[], marker
     if (!texts.has(rel)) texts.set(rel, fs.readFileSync(path.join(outDir, rel), "utf8").split("\n"));
     return texts.get(rel)!;
   };
+  const failAt = (mk: Marker, d: LeanDecl | undefined, text: string) => {
+    if (!failedIds.has(mk.id)) failedIds.set(mk.id, text);
+    if (d) failedDecls.add(d), badOf(d).failedObs++;
+  };
   for (const msg of messages) {
     const rel = msg.file ? path.normalize(path.isAbsolute(msg.file) ? path.relative(outDir, msg.file) : msg.file) : msg.file;
     msg.file = rel;
     const d = msg.line ? declAt(decls.get(rel), msg.line) : undefined;
     msg.decl = d?.name ?? null;
     if (msg.severity === "info") {
+      if (OB_OK.test(msg.text.trim())) {
+        const mk = markerOf(rel, msg);
+        if (mk) okMarkers.add(mk);
+        continue;
+      }
       const lines = msg.line ? linesOf(rel) : undefined;
       const cmd = lines?.[msg.line - 1]?.trim();
       const pa = cmd ? PRINT_AXIOMS.exec(cmd) : null;
@@ -307,21 +352,35 @@ export function judge(obligations: Obligation[], messages: LeanMessage[], marker
       continue;
     }
     if (msg.severity === "warning") {
+      if (OB_FAIL.test(msg.text) || OB_BLOCKED.test(msg.text)) {
+        // an obligation `vreact_ob` could not prove or not check (its goal was admitted with `sorry`)
+        const mk = markerOf(rel, msg);
+        if (mk && OB_BLOCKED.test(msg.text)) {
+          if (!blockedIds.has(mk.id)) blockedIds.set(mk.id, msg.text.replace(OB_BLOCKED, ""));
+          if (d) failedDecls.add(d);
+          continue;
+        }
+        if (mk) {
+          failAt(mk, d, msg.text.replace(OB_FAIL, ""));
+          continue;
+        }
+        // in a generated file but at no obligation's marker (not where the generator put a
+        // `vreact_ob`): a failure of the declaration it lies in
+        if (isGenerated(rel) && generated(rel)) {
+          if (d) badOf(d).errs.push(msg);
+          internal.push(msg);
+        }
+        continue;
+      }
       if (generated(rel) && /declaration uses [`']sorry[`']/.test(msg.text)) sorries.push(msg);
       continue;
     }
     if (generated(rel) && msg.line && (firstErr.get(rel)?.line ?? Infinity) > msg.line) firstErr.set(rel, msg);
     if (d?.name && !declErrors.has(d.name)) declErrors.set(d.name, msg.text);
-    // the marker on that line closest to the left of the error column
-    const cands = markers.filter((mk) => mk.file === rel && mk.line === msg.line && mk.col <= msg.col && msg.col <= mk.col + 40);
-    const mk = cands.length ? cands.reduce((a, b) => (b.col > a.col ? b : a)) : null;
-    // (a marker of no known obligation cannot take the error: it stays an error of the declaration)
-    if (mk && mk.id !== 0 && known.has(mk.id)) {
-      if (!failedIds.has(mk.id)) failedIds.set(mk.id, msg.text);
-      if (d) {
-        badOf(d).failedObs++;
-        if (isAbort(msg.text)) badOf(d).aborted = true;
-      }
+    const mk = markerOf(rel, msg);
+    if (mk) {
+      failAt(mk, d, msg.text);
+      if (d && isAbort(msg.text)) badOf(d).aborted = true;
       continue;
     }
     if (d) badOf(d).errs.push(msg);
@@ -351,6 +410,7 @@ export function judge(obligations: Obligation[], messages: LeanMessage[], marker
   const markersOf = new Map<number, Marker[]>();
   for (const mk of markers) markersOf.set(mk.id, [...(markersOf.get(mk.id) ?? []), mk]);
   const pending = new Map<LeanDecl, Obligation[]>();
+  const blockedObs = new Set<number>();
   for (const ob of obligations) {
     const f = failedIds.get(ob.id);
     const mks = markersOf.get(ob.id) ?? [];
@@ -381,6 +441,19 @@ export function judge(obligations: Obligation[], messages: LeanMessage[], marker
       pending.set(broken, [...(pending.get(broken) ?? []), ob]);
       continue;
     }
+    const blocked = blockedIds.get(ob.id);
+    if (blocked !== undefined) {
+      unchecked.push(ob);
+      blockedObs.add(ob.id);
+      reasons.set(ob.id, `it depends on \`sorry\` from a failure elsewhere (a failed obligation, a declaration with an error, or a hole()) that its goal or its proof contains, so Lean could not check it on its own: fix that first`);
+      continue;
+    }
+    const silent = mks.find((mk) => !okMarkers.has(mk));
+    if (silent) {
+      unchecked.push(ob);
+      reasons.set(ob.id, `Lean reported no result for it (no \`vreact:ok\` at ${silent.file}:${silent.line}:${silent.col}): its proof was not run, so it is not counted as proved`);
+      continue;
+    }
     proved.push(ob);
   }
   // obligations of declarations that failed for a reason Lean did not report at a marker
@@ -397,7 +470,13 @@ export function judge(obligations: Obligation[], messages: LeanMessage[], marker
         reasons.set(ob.id, `${dn} did not elaborate (${why}), so Lean may not have finished this obligation`);
       }
   }
-  return { proved, failed, unchecked, internal, axioms, reasons, declErrors, brokenDecls, sorries, checkedFiles };
+  // the `sorry` warning of a declaration with a failed obligation is that obligation's
+  // admitted goal (reported as the failure), not a hole
+  const admitted = (s: LeanMessage) => {
+    const d = s.line ? declAt(decls.get(s.file), s.line) : undefined;
+    return !!d && failedDecls.has(d);
+  };
+  return { proved, failed, unchecked, internal, axioms, reasons, declErrors, brokenDecls, sorries: sorries.filter((s) => !admitted(s)), checkedFiles, blocked: blockedObs };
 }
 
 /** Keep the informative part of a Lean failure (the goal). */

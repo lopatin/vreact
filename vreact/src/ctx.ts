@@ -95,7 +95,12 @@ export interface HandlerAcc {
 }
 
 export type Binding =
-  | { k: "val"; code: string; type: VType }
+  /**
+   * `ts`: the TypeScript type of the value, when that of the identifier says nothing (`any`): the
+   * parameter of an unannotated `ensures((r) => …)` (the declared return type), or of a callback
+   * whose context is `any` (`r.every((x) => …)`: the element type of `r`'s real type)
+   */
+  | { k: "val"; code: string; type: VType; ts?: ts.Type }
   | { k: "setter"; sv: StateVar }
   | { k: "dispatch"; sv: StateVar }
   | { k: "closure"; fn: ts.ArrowFunction | ts.FunctionExpression; env: Env }
@@ -114,6 +119,12 @@ export interface Narrowed {
   fields?: Map<string, Val>;
 }
 
+/** A translated `hole<T>()` and the environment in effect there (read by `vreact synth`). */
+export interface HoleEnv {
+  node: ts.CallExpression;
+  env: Env;
+}
+
 export interface Env {
   m: ModCtx;
   vars: Map<ts.Symbol, Binding>;
@@ -129,6 +140,13 @@ export interface Env {
   fnName?: string;
   /** the key function of a keyed `.map`: its JSX consts are translated by the node function */
   keyFn?: boolean;
+  /**
+   * Set only while `vreact synth` records hole environments (`Program.holeEnvs`), and read only
+   * by synth: the variants a union-typed path can still have here, where tests excluded the
+   * others but the translation kept one `_` arm (several variants were left). Code there that
+   * needs one of them makes the translator split that arm per variant (see narrowBranch).
+   */
+  remaining?: Map<string, string[]>;
 }
 
 /** Per-program translation context. */
@@ -139,6 +157,8 @@ export class Program {
   root: string;
   typeEnv: TypeEnv;
   modNs = new Map<string, string>();
+  /** set by `vreact synth`: every translation of a `hole<T>()` kept in the output, with its environment (narrowing) */
+  holeEnvs?: HoleEnv[];
   constructor(checker: ts.TypeChecker, root: string, nsOf: (sf: ts.SourceFile) => string) {
     this.checker = checker;
     this.root = root;
@@ -165,6 +185,8 @@ export class ModCtx {
   obligations: Obligation[];
   counter: { n: number };
   hyp = 0;
+  /** a throw-away context for type queries (its terms are discarded) */
+  dry = false;
   /** imported modules needed by this file (Lean module names) */
   deps: Set<string>;
   sf: ts.SourceFile;
@@ -204,11 +226,13 @@ export class ModCtx {
   dryRun(f: () => void) {
     const n = this.counter.n;
     const len = this.obligations.length;
+    const holes = this.prog.holeEnvs?.length ?? 0;
     try {
       f();
     } finally {
       this.counter.n = n;
       this.obligations.length = len;
+      if (this.prog.holeEnvs) this.prog.holeEnvs.length = holes;
     }
   }
   describe(node: ts.Node): string {

@@ -16,7 +16,7 @@ Two files that map to the same module, or to names differing only in letter
 case, are rejected (`module name clash`): e.g. `limits.ts` + `limits.tsx`,
 `my-x.ts` + `my_x.ts`, `todo.ts` + `Todo.tsx`. Rename one of them.
 
-The tsconfig needs `"strict": true` and `"lib": ["ES2023", "DOM"]` (for
+The tsconfig needs `"strict": true` (with `strictNullChecks` and `noImplicitAny`) and `"lib": ["ES2023", "DOM"]` (for
 `toSorted`/`toReversed`/`with`); without a tsconfig, vreact uses these defaults.
 
 ## Types
@@ -49,6 +49,27 @@ non-discriminated unions (`string | number`), `ReactNode`/`children` props.
   false (`t.due === null` on `due?: int`), or on a value that may be either, is
   rejected: use `== null`. Two optional values compared with `===` must use the
   same nullish value.
+* Annotations of function parameters must be exactly the type of the value
+  received (or be left out): `ensures((r: T) => …)` with `T` the declared return
+  type, a `callbackRequires`/handler parameter the callback's parameter type, a
+  functional update's the state type, an array callback's the element type (`int`
+  for an index; `number` also works for an int). TypeScript does not check these
+  (`(v: unknown) => …`, `(r: int | null) => …` for an `int | undefined` value pass
+  it), so others are rejected; so are default values, `?` and rest parameters there.
+* An unannotated `ensures((r) => …)` parameter is `any` to TypeScript: passing `r`
+  (or `r.f`, `r[i]`) where the type tells null from undefined (`isNull(r)` with
+  `isNull(x: int | null)`, `xs.includes(r)`, `{ f: r }`) is rejected unless its
+  nullish value, from the return type, is that one. Annotate `r` with the return
+  type to have TypeScript check it.
+* `+` with a string operand concatenates; `int`, `boolean` and enum operands are
+  converted as in template literals (`x + "px"`); a `number` or nullable operand is
+  rejected (use an int, or `${n}`). Bitwise operators (`~ & | ^ << >> >>>`) and
+  compound assignments other than `+=`/`-=` are rejected.
+* Widening as in TypeScript: an `int[]` where `(int | null)[]` is expected
+  (elementwise, also in a spread), an enum member where a `string` is expected
+  (`return k;`, `k === s`). The same inline object type or string-literal union
+  in one module is one type (e.g. `hole<{ readonly v: int }>()` returned from a
+  function declared to return `{ readonly v: int }`).
 * `&& || ! ?: ?? ?.` (also `a ?? b ?? 0`) and template literals.
 * `xs[i]` (obligation: `0 <= i < xs.length`), `t[0]` on tuples, `x!` (obligation).
 * Arrays: `length map filter some every find findIndex includes indexOf slice
@@ -76,7 +97,10 @@ non-discriminated unions (`string | number`), `ReactNode`/`children` props.
 * `Math.max/min/abs/sign/floor/trunc/round/ceil`, `String(x)`.
 * Names: any identifier works. Ones that are Lean keywords or root names
   (`matches`, `rec`, `show`, `max`, `List`, …) get a `'` in Lean (`VTS.m.max'`),
-  also components (`function Type()` → `VTS.m.Type'`). File/directory names that
+  also components (`function Type()` → `VTS.m.Type'`); names shaped like Lean's
+  derived instances (`instReprP`: `inst` + capital) get `''`, and a *type* of that
+  name is rejected (rename it). Enum members may be any
+  strings (escaped into distinct constructors). File/directory names that
   are such names get a `_` (`src/end/Sort.tsx` → `VTS.end_.Sort_`, lemmas in
   `proofs/end_/Sort_.lean`).
 * Calls to verified top-level functions (their `requires` become obligations)
@@ -85,7 +109,8 @@ non-discriminated unions (`string | number`), `ReactNode`/`children` props.
   fields of the narrowed variant become available, also inside handlers created there.
   The complement narrows too when one variant is left (`if (s.kind === "a") return …;
   return s.onlyInB;`, `else`, `s.kind === "a" || s.b > 0`, `c ? … : s.b`), also after
-  several exclusions.
+  several exclusions; with several variants left, the fields they share are available.
+  A `T | null` value tested non-null and then to be a variant is that (present) variant.
   Assigning a present value to a `let x: T | null` (`x = 0`, `let x: int | null = 3`)
   narrows it too; assigning again (or in a loop) forgets it.
 
@@ -93,7 +118,9 @@ non-discriminated unions (`string | number`), `ReactNode`/`children` props.
 
 `const`, `let` + reassignment (locals only), `if/else`, `return`, `switch`
 (cases end with `return`/`break`, also `case "x": { …; break; }`; no fall-through;
-`default` anywhere, also grouped `case "a": default:`), `for (const x of xs)` (may
+`default` anywhere, also grouped `case "a": default:`; on an int/string/boolean/number:
+literal, negated-literal or constant labels compared with `===`, a non-integer label
+on an int is rejected; on an enum or `x.kind`: string literals), `for (const x of xs)` (may
 assign outer `let`s; no `return`/`continue` inside, `break` only to end a `switch`
 case), `throw` (must be provably
 unreachable), `assert(c)`, `assume(c)`. No `while`, `try`, `var`, recursion.
@@ -110,7 +137,7 @@ use `for…of` or `reduce`. Array callbacks may read outer `let`s.
 ```ts
 export function f(x: int, xs: readonly int[]): int {
   requires(0 <= x && x < xs.length);          // first statements
-  ensures((r: int) => r >= 0);                // annotate the result type
+  ensures((r: int) => r >= 0);                // r: exactly the return type (or no annotation)
   …
 }
 /** @opaque */  …   // callers see only requires/ensures
@@ -164,17 +191,22 @@ Handlers (`onClick`, `onChange`, `onSubmit`, `onKeyDown`, …): arrow functions 
 local closures; the event parameter supports `e.target.value`,
 `e.target.checked`, `e.key`, `e.preventDefault()`. Setters, `dispatch`, at most
 one parent callback per path. Only React's discrete events (`onClick`,
-`onChange`, `onInput`, `onKeyDown`, `onSubmit`, `onFocus`, `onBlur`, …) are
+`onChange`, `onInput`, `onKeyDown`, `onSubmit`, …) are
 checked from the render snapshot; continuous (`onMouseMove`, `onScroll`,
 `onMouseEnter`, …) and default-priority events (`onTransitionEnd`,
 `onAnimationEnd`, `onLoad`, `onError`, media events, …) must be robust and may
-not call parent callbacks. In a component with such handlers or with effects /
+not call parent callbacks — and so must `onFocus`, `onBlur` and `onInvalid`: the
+DOM also fires them inside another event's batch (`autoFocus`, a label click
+focusing its control, form validation). In a component with such handlers or with effects /
 timers that set state, discrete handlers and callbacks passed to children must
 also be safe when React rebases them onto those pending updates (guard inside the
 functional update: `setR(p => p.lo < p.hi ? … : p)`). Rejected: unknown handler
 names, `onSelect`, capture-phase handlers (`onClickCapture`).
 
-Effects: setters and timers (`setTimeout`/`setInterval` callbacks become tasks),
+Effects: setters and timers (`setTimeout`/`setInterval` callbacks become tasks;
+register them at the top level of the effect body; a timer's callback may use the
+early returns `if (c) return;` and the `assert`/`assume` before it, as in
+`if (left <= 0) return; setTimeout(() => setLeft(left - 1), 1000)`),
 external writes (`localStorage.setItem`, `document.title = …`, `console.*`) are
 allowed and have no modelled effect; no async. A cleanup is an inline
 `() => { … }` that only calls `clearTimeout`/`clearInterval` and makes those
@@ -196,7 +228,18 @@ combine handlers fired by the same native event (a checkbox's `onClick` +
 `onChange` both run on click; `onInput` + a text input's `onChange` both run on
 input), and an element with a handler may not contain a handler fired by the
 same native event (`<li onClick>` around `<input type="checkbox" onChange>`)
-or a user component.
+or a user component. A click also runs what it activates: a submit (reset) button
+submits (resets) its form, and a `<label>` clicks its control again. So no `onClick`
+on, around or inside a submit/reset button whose form has `onSubmit`/`onReset`
+(or that has `form=…`), or an invoker button (`commandfor`): use `type="button"` or
+put the logic in `onSubmit`. Inside such a button only a checkbox, a radio button
+or an `<a href>` may have `onClick`. In Chromium a click on anything else inside
+it, including a nested button or a text field, also activates the button. No
+`<label>` or second such button may go inside it either. No `onClick` on, around
+or inside a `<label>`, except on interactive content in it (a control, a button,
+a link, a `<select>`, a `<details>`) and on elements inside that content. A
+`<summary>` alone does not count. No user component may go inside such a button
+or a label (use `htmlFor`).
 
 ## Not yet supported (workarounds)
 
@@ -207,7 +250,8 @@ or a user component.
 | recursion, `while` | `for…of`, array methods |
 | generics | monomorphic helpers |
 | `async`, fetch | keep I/O in an unverified module that calls verified reducers |
-| guarded updates in `vreact synth` | write the guard by hand with a hole per branch; synth fills straight-line code (all holes of a function are proved together) |
+| guarded updates in `vreact synth` | write the guard by hand with a hole per branch; synth fills straight-line code (all holes of a function are proved together; a hole per `case`/branch is searched once) |
+| `vreact synth` on a function whose contract's Lean statement mentions a function that still has a hole (called in the contract, or in the body or `requires` of a function it calls; not in a `@trusted` body or a callee's `ensures`) | not searched ("the contract depends on unfinished function f"): fill or write `f` first |
 | `vreact synth` on a `/** @trusted */` function or a component | refused (Lean checks nothing in a trusted body): remove `@trusted` / move the expression into a model function |
 | a reducer over a discriminated union calling `@opaque` model functions | supported (contracts are instantiated inside the `switch` arms) |
 | invariants about sums (`reduce`) under filter/map | provable, but needs a Lean lemma in `proofs/` (automation handles append, filter, map, `slice`, `toSorted`, `toReversed`, `with` (also swaps `xs.with(i, xs[j]).with(j, xs[i])`), `indexOf`/`findIndex` ranges, `range`, membership, `distinct`, concatenation of string literals, and counts `xs.filter(p).length` under append, delete-by-id, map-updates and mark-all) |
