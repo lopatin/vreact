@@ -40,7 +40,9 @@ non-discriminated unions (`string | number`), `ReactNode`/`children` props.
   `distinct` keys); the *order* is known only for a consistent comparator
   (ECMA-262: `cmp(a, a) = 0`, symmetric ties, transitive — e.g. `(a, b) => a.k - b.k`;
   `(a, b) => a.k < b.k ? -1 : 1` is not consistent: JS engines order its ties
-  differently). Rejected on arrays that may contain `undefined`.
+  differently; Lean lemmas `JS.consistent_sub`, `JS.pairwise_toSorted`,
+  `JS.pair_sublist_toSorted` state the order for `proofs/`). Rejected on arrays that
+  may contain `undefined`.
 * Strings: `length trim includes startsWith endsWith slice repeat toLowerCase
   toUpperCase` — exact UTF-16 semantics (case mapping is opaque to proofs).
 * `Math.max/min/abs/sign/floor/trunc/round/ceil`, `String(x)`.

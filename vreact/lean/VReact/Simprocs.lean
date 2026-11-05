@@ -28,18 +28,18 @@ so facts about untouched fields (distinct ids, bounds on other fields) carry ove
 syntactically instead of by case analysis inside the lambda.  Only structure
 projections are rewritten (the proof is `apply_ite`/`apply_dite`). -/
 simproc [vreact_simp] pushProjIte (_) := fun e => do
+  -- cheap syntactic checks first: this simproc is tried on every subterm
+  let .app f s := e | return .continue
+  let .const cond [u] := s.getAppFn | return .continue
+  unless (cond == ``ite || cond == ``dite) && s.getAppNumArgs == 5 do return .continue
   let .const fn _ := e.getAppFn | return .continue
   let some info ← getProjectionFnInfo? fn | return .continue
   if info.fromClass then return .continue
   unless e.getAppNumArgs == info.numParams + 1 do return .continue
-  let s := e.appArg!
-  let .const cond [u] := s.getAppFn | return .continue
-  unless (cond == ``ite || cond == ``dite) && s.getAppNumArgs == 5 do return .continue
   let #[α, c, inst, a, b] := s.getAppArgs | return .continue
   -- The terms are built directly (no `mkAppM`): simp has already rewritten `c` but not
   -- the instance `inst`, which is only definitionally of type `Decidable c`.
   try
-    let f := e.appFn!
     let β ← inferType e
     let v ← getLevel β
     if cond == ``ite then
