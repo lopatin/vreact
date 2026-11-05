@@ -100,6 +100,9 @@ function loadProgram(cfg: Config): { program: ts.Program; diags: string[] } {
   // (strictNullChecks defaults to strict; without it TypeScript types say nothing about null and
   // undefined, which the translation reads to tell them apart)
   if (!(options.strictNullChecks ?? options.strict)) diags.push("tsconfig: VTS requires \"strict\": true, with strictNullChecks (null safety is part of the model)");
+  // (without noImplicitAny an unannotated parameter is `any`: TypeScript checks nothing about it,
+  // in particular not whether it is null or undefined)
+  if (!(options.noImplicitAny ?? options.strict)) diags.push("tsconfig: VTS requires \"strict\": true, with noImplicitAny (TypeScript checks nothing about an implicitly-any value)");
   const program = ts.createProgram(cfg.files, options, cfg.overrides ? overrideHost(options, cfg.overrides) : undefined);
   const host: ts.FormatDiagnosticsHost = {
     getCanonicalFileName: (f) => f,
@@ -708,9 +711,10 @@ function translateFunction(fn: ts.FunctionDeclaration, info: FnInfo, m: ModCtx):
       if (!ts.isIdentifier(p.name)) fail(p, "result parameter must be an identifier");
       // `ensures` takes `(result: any) => boolean`: TypeScript never checks the annotation, so it
       // must be exactly the declared return type (the null/undefined checks read it)
-      checkParamAnnotation(p, info.ret, m.checker.getTypeFromTypeNode(fn.type!), env);
+      const retTs = m.checker.getTypeFromTypeNode(fn.type!);
+      checkParamAnnotation(p, info.ret, retTs, env);
       const e2 = { ...env, vars: new Map(env.vars) };
-      e2.vars.set(symbolOf(env, p.name)!, { k: "val", code: call, type: info.ret });
+      e2.vars.set(symbolOf(env, p.name)!, { k: "val", code: call, type: info.ret, ts: retTs });
       const body = lam.body;
       if (ts.isBlock(body)) fail(body, "ensures body must be an expression");
       const stmt = prop(body, e2);

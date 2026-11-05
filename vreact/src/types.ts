@@ -1,5 +1,5 @@
 import ts from "typescript";
-import { fail, leanField, leanAccessor, leanIdent, leanStr, jsStr, capitalize, subscripted } from "./util.ts";
+import { fail, leanField, leanAccessor, leanIdent, leanStr, jsStr, capitalize, subscripted, INSTANCE_NAME_RE } from "./util.ts";
 
 /**
  * VTS types.  Every TypeScript type accepted by the subset maps to one of these,
@@ -427,13 +427,27 @@ function typeRef(node: ts.TypeReferenceNode, env: TypeEnv, hint: string): VType 
   const decl = sym.declarations?.[0];
   if (!decl) fail(node, `cannot resolve type ${name}`);
   if (args.length) fail(node, `generic type ${name}<…> not supported in VTS`);
+  if (inProgress.has(decl)) fail(node, `type ${name} refers to itself: recursive types are not supported in VTS (use an array of records with ids, e.g. a parent id field)`);
   return typeOfDecl(decl, env);
 }
+
+/** The declarations whose VTS type is being computed (a reference back to one is a recursive type). */
+const inProgress = new Set<ts.Declaration>();
 
 /** The VTS type denoted by a type alias / interface declaration. */
 export function typeOfDecl(decl: ts.Declaration, env: TypeEnv): VType {
   const existing = env.reg.byDecl.get(decl);
   if (existing) return { k: existing.def.k, name: existing.qname } as VType;
+  if (inProgress.has(decl)) fail(decl, `recursive types are not supported in VTS`);
+  inProgress.add(decl);
+  try {
+    return typeOfDecl0(decl, env);
+  } finally {
+    inProgress.delete(decl);
+  }
+}
+
+function typeOfDecl0(decl: ts.Declaration, env: TypeEnv): VType {
   const sf = decl.getSourceFile();
   if (ts.isInterfaceDeclaration(decl)) {
     if (decl.typeParameters?.length) fail(decl, "generic interfaces are not supported in VTS");
@@ -492,7 +506,7 @@ function recordFromMembers(
       return { k: "rec", name: hit.qname };
     }
   }
-  const short = decl ? leanIdent(name) : inlineTypeName(name, env, sf);
+  const short = decl ? declTypeIdent(name, decl) : inlineTypeName(name, env, sf);
   const qname = `${env.nsOf(sf)}.${short}`;
   const nt: NamedType = { qname, short, module: env.nsOf(sf), def: { k: "rec", fields }, decl: key };
   env.reg.add(nt);
@@ -505,8 +519,10 @@ function recordFromMembers(
  * the name is taken (by another type, or by a type declared in the module), so that two
  * different inline types never share a name.
  */
-function inlineTypeName(name: string, env: TypeEnv, sf: ts.SourceFile): string {
+function inlineTypeName(hint: string, env: TypeEnv, sf: ts.SourceFile): string {
   const ns = env.nsOf(sf);
+  // (never of the shape of an instance name, see `declTypeIdent`)
+  const name = INSTANCE_NAME_RE.test(hint) ? capitalize(hint) : hint;
   const declared = sf.statements.some((st) => (ts.isTypeAliasDeclaration(st) || ts.isInterfaceDeclaration(st)) && st.name.text === name);
   let short = leanIdent(name);
   for (let k = 2; declared || env.reg.byName.has(`${ns}.${short}`); k++) {
@@ -516,12 +532,27 @@ function inlineTypeName(name: string, env: TypeEnv, sf: ts.SourceFile): string {
   return short;
 }
 
+/**
+ * The Lean name of a declared type.  Lean names the instances it derives for a type `T` (Lean
+ * name) `inst<Class>T`, in the module namespace (`instReprP`, `instToJSList'` for a type `List`,
+ * whose Lean name is `List'`): user values of that shape are renamed (`leanIdent`), and a type of
+ * that shape is rejected (its own name, or its instances' names, could be another's).
+ */
+function declTypeIdent(name: string, decl: ts.Node): string {
+  if (INSTANCE_NAME_RE.test(name)) {
+    const at = (decl as ts.Node & { name?: ts.Node }).name ?? decl;
+    fail(at, `the type name \`${name}\` is reserved in VTS: Lean names the instances it derives for a type T \`inst<Class>T\` (e.g. instReprList for a type List), so this type could clash with one; rename it`);
+  }
+  return leanIdent(name);
+}
+
 function enumType(lits: string[], env: TypeEnv, name: string, decl: ts.Declaration | undefined, sf: ts.SourceFile): VType {
   if (decl) {
     const existing = env.reg.byDecl.get(decl);
     if (existing) return { k: "enum", name: existing.qname };
-    const qname = `${env.nsOf(sf)}.${leanIdent(name)}`;
-    env.reg.add({ qname, short: leanIdent(name), module: env.nsOf(sf), def: { k: "enum", lits }, decl });
+    const short = declTypeIdent(name, decl);
+    const qname = `${env.nsOf(sf)}.${short}`;
+    env.reg.add({ qname, short, module: env.nsOf(sf), def: { k: "enum", lits }, decl });
     return { k: "enum", name: qname };
   }
   // an inline string-literal union: the same members in this module are the same type
@@ -593,7 +624,8 @@ function unionOf(
     objs.every((o) => o.members.some((p) => ts.isPropertySignature(p) && p.name.getText() === c && p.type && ts.isLiteralTypeNode(p.type) && ts.isStringLiteral(p.type.literal))),
   );
   if (!tag) fail(node, `union of object types needs a common string-literal discriminant property (e.g. kind: "add")`);
-  const qname = `${env.nsOf(sf)}.${leanIdent(name)}`;
+  const short = decl ? declTypeIdent(name, decl) : leanIdent(INSTANCE_NAME_RE.test(name) ? capitalize(name) : name);
+  const qname = `${env.nsOf(sf)}.${short}`;
   const key = decl ?? node;
   const existing = env.reg.byDecl.get(key);
   if (existing) return { k: "union", name: existing.qname };
@@ -613,6 +645,6 @@ function unionOf(
     }
     variants.push({ lit, ctor: lit, fields });
   }
-  env.reg.add({ qname, short: leanIdent(name), module: env.nsOf(sf), def: { k: "union", tag, variants }, decl: key });
+  env.reg.add({ qname, short, module: env.nsOf(sf), def: { k: "union", tag, variants }, decl: key });
   return { k: "union", name: qname };
 }

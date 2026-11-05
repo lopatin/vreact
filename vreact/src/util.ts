@@ -53,6 +53,13 @@ export function nodeText(node: ts.Node, max = 80): string {
  *    resolution, a local would shadow it), or a fixed name of the generated code
  *    (`σ`, `props`, `h_pre`, `VTS`, …) gets a `'` suffix, which TypeScript
  *    identifiers cannot contain;
+ *  - a user name of the shape of the instances Lean declares in the module namespace
+ *    (`instReprP`, `instToJSK`, `instToJSList'` for a type `List'`: `inst` + class + the
+ *    type's Lean name, which may end in one `'`) gets `''`, which no generated name ends in
+ *    (VTS rejects type names of that shape, see `types.ts`);
+ *  - a name starting with `_` is «quoted» with that `_` written `\u005f` (Lean reads the text
+ *    of a quoted name verbatim): Lean gives `_`-names meanings (`_hyg` marks a hygienic name,
+ *    `_cstage…`, `_spec_…`, `_elambda…` are compiler auxiliaries, even primed);
  *  - names TypeScript allows but Lean does not parse (`$`, non-ASCII) are «quoted»;
  *  - binder names the translator invents carry a subscript (`h₁`, `idx₀`), which
  *    TypeScript identifiers cannot contain either.
@@ -62,13 +69,20 @@ const TOKENS = new Set(LEAN_TOKENS);
 const ROOT_NAMES = new Set(LEAN_ROOT_NAMES);
 /** Names Lean generates inside a structure/inductive namespace (`rec`, `mk`, `casesOn`, …). */
 const TYPE_AUX = new Set(LEAN_TYPE_AUX);
+/**
+ * Further names Lean reserves in a type's namespace that the sample types of `GenNames.lean` do
+ * not show: the auxiliary recursors and structural-recursion helpers of nested and recursive
+ * types (`rec_1`: a constructor of that name crashes Lean 4.35), numbered or not.
+ */
+const TYPE_AUX_FAMILY = /^(?:rec|recOn|casesOn|below|brecOn|binductionOn|ibelow|noConfusion|noConfusionType|ctorIdx|ctorElim|ctorElimType|mk)(?:_\d+)?$/;
 /** Fixed (non-fresh) names of the generated Lean. */
 const GENERATED = new Set(["E", "σ", "τ", "κ", "hpre", "hinv", "props", "ev", "acc", "VTS", "Proofs", "VReact"]);
-/**
- * Generated name shapes: `h_pre…`, and the instances Lean's `deriving` handlers and anonymous
+/** Generated name shapes: `h_pre…`, and the instances Lean's `deriving` handlers and anonymous
  * `instance`s declare in the module namespace (`instReprP`, `instDecidableEqP`, `instToJSK`, …).
  */
 const GENERATED_RE = /^h_pre\d*$|^inst[A-Z]/;
+/** The instance-name shape (see above): such user names get `''`. */
+export const INSTANCE_NAME_RE = /^inst[A-Z]/;
 const PLAIN_IDENT = /^[A-Za-z_][A-Za-z0-9_']*$/;
 /** ASCII identifiers without `'` (the names `leanField` leaves unquoted). */
 const STRICT_IDENT = /^[A-Za-z_][A-Za-z0-9_]*$/;
@@ -80,7 +94,8 @@ export function clashesWithLean(name: string): boolean {
 
 /** A Lean identifier for a TypeScript identifier (locals, params, functions, constants, types). */
 export function leanIdent(name: string): string {
-  const base = clashesWithLean(name) ? name + "'" : name;
+  if (name.length > 1 && name.startsWith("_")) return "«\\u005f" + quotedText(name.slice(1)) + "»";
+  const base = INSTANCE_NAME_RE.test(name) ? name + "''" : clashesWithLean(name) ? name + "'" : name;
   return PLAIN_IDENT.test(base) ? base : "«" + quotedText(base) + "»";
 }
 
@@ -89,15 +104,18 @@ export function leanIdent(name: string): string {
  * members and discriminants are string literals).  Injective, so that distinct members get
  * distinct constructors:
  *  - an ASCII identifier is itself (`«quoted»` if a Lean token), primed if it is one of the
- *    names Lean generates in a type's namespace (`rec'`, `mk'`);
+ *    names Lean generates in a type's namespace (`rec'`, `mk'`, `rec_1'`);
  *  - anything else is `«quoted»`, with `\`, `'`, `«`, `»`, `⟦`, control characters and lone
  *    surrogates written `\uXXXX` (`\\` for `\`, `\e` for the empty string): so it never
  *    contains a `'` (no clash with a primed name), the source stays valid UTF-8, and distinct
- *    strings stay distinct.
+ *    strings stay distinct;
+ *  - a leading `_` is written `\u005f` (quoted): Lean's `_`-names (`_hyg`, `_cstage1`, …) mean
+ *    something to it (see above).
  */
 export function leanField(name: string): string {
+  if (name.startsWith("_")) return "«\\u005f" + quotedText(name.slice(1), true) + "»";
   if (STRICT_IDENT.test(name)) {
-    if (TYPE_AUX.has(name)) return name + "'";
+    if (TYPE_AUX.has(name) || TYPE_AUX_FAMILY.test(name)) return name + "'";
     return TOKENS.has(name) ? "«" + name + "»" : name;
   }
   return "«" + (name === "" ? "\\e" : quotedText(name, true)) + "»";

@@ -45,7 +45,8 @@ value a `none` stands for is taken from the TypeScript type of the expression
 against the other nullish value (`t.due === null` with `due?: int`), a strict
 test of a value that may be either (or whose type is `any`/`unknown`), and `===`
 between a `T | null` and a `T | undefined` value are rejected: `== null` covers
-both. This needs `strictNullChecks` (rejected without it).
+both. This needs `strictNullChecks` and `noImplicitAny` (both part of `strict`;
+rejected without them).
 
 The parameters of function values are typed from the values they receive: the
 declared return type for `ensures((r) => …)`, the callback prop's parameter types
@@ -55,8 +56,15 @@ and quantifiers. TypeScript does not check an annotation there against that type
 (`ensures` takes `any`; a callback annotation only has to accept the argument, so
 `unknown` or `int | null` for an `int | undefined` argument pass), so an annotation
 must be exactly that type — the same VTS type and the same nullish value at each
-optional position — or is rejected; default values, `?` and rest parameters are
-rejected. Inline object types and string-literal unions are structural: the same
+optional position (`number` may annotate an `int`: TypeScript does not tell them
+apart) — or is rejected; default values, `?` and rest parameters are
+rejected. An unannotated `ensures` parameter is TypeScript `any`, and so is what
+is computed from it (`r.v`, `r[0]`): where such a value with an optional part goes
+to a place whose TypeScript type tells null from undefined (an argument, an
+element, a field, an initializer), its nullish value (from the declared return
+type) must be the one that type says, or it is rejected (`isNull(r)` with
+`isNull(x: int | null)` on an `int | undefined` result): annotate `r`, and
+TypeScript checks it. Inline object types and string-literal unions are structural: the same
 inline type in one module is one Lean type (`hole<{ readonly v: int }>()` in a
 function returning `{ readonly v: int }`). A value is widened where TypeScript
 allows it: an `int` to a `number`, a present value to an optional one, an array
@@ -64,7 +72,8 @@ elementwise (`int[]` to `(int | null)[]`), an enum member to its string.
 
 Rejected: `any`, `as` casts, classes, `this`, mutation of objects/arrays,
 `==` (except `== null`), `===` on objects (reference identity), generics,
-exceptions (`try`), `var`, `while`, recursion (for now), `async`.
+exceptions (`try`), `var`, `while`, recursion (for now), recursive types,
+`async`.
 
 ### 1.2 Expressions and statements — semantics by translation
 
@@ -124,9 +133,13 @@ Every expression maps to a Lean term whose value is the JavaScript value.
 * Names: a VTS identifier that is a Lean token, a root-level Lean name the
   generated code may use unqualified (`max`, `some`, `List`, …) or a fixed name of
   the generated code (`σ`, `props`, `h_pre`, …) is primed (`max'`; fields and
-  constructors also avoid `rec`, `mk`, `casesOn`, …), and so is a name shaped like
+  constructors also avoid `rec`, `mk`, `casesOn`, `rec_1`, …). A name shaped like
   the instances Lean declares for the module's types (`instReprP`,
-  `instDecidableEqP`, `instToJSK`: any `inst` followed by a capital); names the
+  `instDecidableEqP`, `instToJSK`, `instToJSList'` for a type `List`: any `inst`
+  followed by a capital) gets `''` (an instance name ends in at most one `'`), and
+  a declared type of that shape is rejected (its instances could be another
+  type's). A name starting with `_` is «quoted» with the `_` written `\u005f`
+  (Lean reads `_hyg`, `_cstage1`, … specially). Names the
   translator invents are subscripted (`h₁`, `idx₀`). Neither `'` nor subscript
   digits can occur in a TypeScript identifier, so generated names and user names
   never capture each other. The lists are generated from Lean by

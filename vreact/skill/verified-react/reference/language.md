@@ -16,7 +16,7 @@ Two files that map to the same module, or to names differing only in letter
 case, are rejected (`module name clash`): e.g. `limits.ts` + `limits.tsx`,
 `my-x.ts` + `my_x.ts`, `todo.ts` + `Todo.tsx`. Rename one of them.
 
-The tsconfig needs `"strict": true` (with `strictNullChecks`) and `"lib": ["ES2023", "DOM"]` (for
+The tsconfig needs `"strict": true` (with `strictNullChecks` and `noImplicitAny`) and `"lib": ["ES2023", "DOM"]` (for
 `toSorted`/`toReversed`/`with`); without a tsconfig, vreact uses these defaults.
 
 ## Types
@@ -53,9 +53,14 @@ non-discriminated unions (`string | number`), `ReactNode`/`children` props.
   received (or be left out): `ensures((r: T) => …)` with `T` the declared return
   type, a `callbackRequires`/handler parameter the callback's parameter type, a
   functional update's the state type, an array callback's the element type (`int`
-  for an index). TypeScript does not check these (`(v: unknown) => …`,
-  `(r: int | null) => …` for an `int | undefined` value pass it), so others are
-  rejected; so are default values, `?` and rest parameters there.
+  for an index; `number` also works for an int). TypeScript does not check these
+  (`(v: unknown) => …`, `(r: int | null) => …` for an `int | undefined` value pass
+  it), so others are rejected; so are default values, `?` and rest parameters there.
+* An unannotated `ensures((r) => …)` parameter is `any` to TypeScript: passing `r`
+  (or `r.f`, `r[i]`) where the type tells null from undefined (`isNull(r)` with
+  `isNull(x: int | null)`, `xs.includes(r)`, `{ f: r }`) is rejected unless its
+  nullish value, from the return type, is that one. Annotate `r` with the return
+  type to have TypeScript check it.
 * `+` with a string operand concatenates; `int`, `boolean` and enum operands are
   converted as in template literals (`x + "px"`); a `number` or nullable operand is
   rejected (use an int, or `${n}`). Bitwise operators (`~ & | ^ << >> >>>`) and
@@ -92,8 +97,9 @@ non-discriminated unions (`string | number`), `ReactNode`/`children` props.
 * `Math.max/min/abs/sign/floor/trunc/round/ceil`, `String(x)`.
 * Names: any identifier works. Ones that are Lean keywords or root names
   (`matches`, `rec`, `show`, `max`, `List`, …) get a `'` in Lean (`VTS.m.max'`),
-  also components (`function Type()` → `VTS.m.Type'`) and names shaped like Lean's
-  derived instances (`instReprP`: `inst` + capital). Enum members may be any
+  also components (`function Type()` → `VTS.m.Type'`); names shaped like Lean's
+  derived instances (`instReprP`: `inst` + capital) get `''`, and a *type* of that
+  name is rejected (rename it). Enum members may be any
   strings (escaped into distinct constructors). File/directory names that
   are such names get a `_` (`src/end/Sort.tsx` → `VTS.end_.Sort_`, lemmas in
   `proofs/end_/Sort_.lean`).

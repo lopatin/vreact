@@ -95,7 +95,12 @@ export interface HandlerAcc {
 }
 
 export type Binding =
-  | { k: "val"; code: string; type: VType }
+  /**
+   * `ts`: the TypeScript type of the value, when that of the identifier says nothing (`any`): the
+   * parameter of an unannotated `ensures((r) => …)` (the declared return type), or of a callback
+   * whose context is `any` (`r.every((x) => …)`: the element type of `r`'s real type)
+   */
+  | { k: "val"; code: string; type: VType; ts?: ts.Type }
   | { k: "setter"; sv: StateVar }
   | { k: "dispatch"; sv: StateVar }
   | { k: "closure"; fn: ts.ArrowFunction | ts.FunctionExpression; env: Env }

@@ -242,7 +242,8 @@ function nonNullLeafType(e: ts.Expression, env: Env): VType | undefined {
  * The TypeScript type of an expression (the source of truth for which nullish value,
  * `null` or `undefined`, an optional value can be: VTS represents both as `none`).
  * `ensures((r) => …)` types its parameter `any`; the function's declared return type is used
- * instead.  `null` when unknown.
+ * instead (and for `r.f`, `r[i]`, and a callback parameter of `r.every(…)`, the types they have
+ * in it).  `null` when unknown.
  */
 function tsTypeOf(e: ts.Expression, env: Env): ts.Type | null {
   const ck = env.m.checker;
@@ -250,17 +251,12 @@ function tsTypeOf(e: ts.Expression, env: Env): ts.Type | null {
   const t = ck.getTypeAtLocation(e);
   if (!(t.flags & ts.TypeFlags.Any)) return t;
   if (ts.isIdentifier(e)) {
-    const d = symbolOf(env, e)?.valueDeclaration;
-    if (d && ts.isParameter(d) && !d.type && (ts.isArrowFunction(d.parent) || ts.isFunctionExpression(d.parent))) {
-      const call = d.parent.parent;
-      if (ts.isCallExpression(call) && specFn(env, call.expression) === "ensures") {
-        let f: ts.Node | undefined = call;
-        while (f && !ts.isFunctionDeclaration(f)) f = f.parent;
-        const rt = f && (f as ts.FunctionDeclaration).type;
-        if (rt) return ck.getTypeFromTypeNode(rt);
-      }
-    }
-    return null;
+    // (the name of a shorthand field `{ r }` stands for the variable `r`)
+    const s = ts.isShorthandPropertyAssignment(e.parent) && e.parent.name === e ? symbolOf(env, e.parent) : symbolOf(env, e);
+    const b = s ? env.vars.get(s) : undefined;
+    if (b?.k === "val" && b.ts && !(b.ts.flags & ts.TypeFlags.Any)) return b.ts;
+    const rt = ensuresResultType(s, env);
+    return rt ? ck.getTypeFromTypeNode(rt) : null;
   }
   if (ts.isPropertyAccessExpression(e) && !e.questionDotToken) {
     const base = tsTypeOf(e.expression, env);
@@ -268,7 +264,88 @@ function tsTypeOf(e: ts.Expression, env: Env): ts.Type | null {
     const p = ck.getPropertyOfType(ck.getNonNullableType(base), e.name.text);
     return p ? ck.getTypeOfSymbolAtLocation(p, e) : null;
   }
+  if (ts.isElementAccessExpression(e) && !e.questionDotToken) {
+    const base = tsTypeOf(e.expression, env);
+    if (!base) return null;
+    if (ck.isTupleType(base)) {
+      const i = stripParens(e.argumentExpression);
+      const args = ck.getTypeArguments(base as ts.TypeReference);
+      return ts.isNumericLiteral(i) && /^\d+$/.test(i.text) && Number(i.text) < args.length ? args[Number(i.text)] : null;
+    }
+    return ck.getIndexTypeOfType(base, ts.IndexKind.Number) ?? null;
+  }
   return null;
+}
+
+/** For the parameter of an unannotated `ensures((r) => …)`: the declared return type of its function. */
+function ensuresResultType(s: ts.Symbol | undefined, env: Env): ts.TypeNode | null {
+  const d = s?.valueDeclaration;
+  if (d && ts.isParameter(d) && !d.type && (ts.isArrowFunction(d.parent) || ts.isFunctionExpression(d.parent))) {
+    const call = d.parent.parent;
+    if (ts.isCallExpression(call) && specFn(env, call.expression) === "ensures") {
+      let f: ts.Node | undefined = call;
+      while (f && !ts.isFunctionDeclaration(f)) f = f.parent;
+      return (f && (f as ts.FunctionDeclaration).type) ?? null;
+    }
+  }
+  return null;
+}
+
+/** Whether a TypeScript type is, or has a part (element, field, parameter, result) that is, `any`. */
+function containsAny(t: ts.Type, ck: ts.TypeChecker, seen = new Set<ts.Type>()): boolean {
+  if (t.flags & ts.TypeFlags.Any) return true;
+  if (seen.has(t)) return false;
+  seen.add(t);
+  if (t.isUnionOrIntersection()) return t.types.some((p) => containsAny(p, ck, seen));
+  if (!(t.flags & ts.TypeFlags.Object)) return false;
+  if (ck.isArrayType(t) || ck.isTupleType(t)) return ck.getTypeArguments(t as ts.TypeReference).some((a) => containsAny(a, ck, seen));
+  for (const sig of ck.getSignaturesOfType(t, ts.SignatureKind.Call)) {
+    if (containsAny(sig.getReturnType(), ck, seen)) return true;
+    if (sig.getParameters().some((p) => p.valueDeclaration && containsAny(ck.getTypeOfSymbolAtLocation(p, p.valueDeclaration), ck, seen))) return true;
+  }
+  // object literal types (`{ v: r }`); named records, unions and enums have declared field types
+  if ((t as ts.ObjectType).objectFlags & ts.ObjectFlags.ObjectLiteral) {
+    return ck.getPropertiesOfType(t).some((p) => p.valueDeclaration !== undefined && containsAny(ck.getTypeOfSymbolAtLocation(p, p.valueDeclaration), ck, seen));
+  }
+  return false;
+}
+
+/**
+ * A value whose TypeScript type is (or contains) `any` (the parameter of an unannotated
+ * `ensures((r) => …)`, and what is computed from it: `r.v`, `r[0]`, `r.find(…)`, the
+ * parameter of a callback of `r.every(…)`, `[r]`) where TypeScript checks a type (an argument,
+ * an element, a field, an initializer): TypeScript accepts it whatever it is, but the code it goes
+ * to reads that type to tell `null` from `undefined` (both `none` in VTS).  So each optional
+ * part of the value must have the nullish value the type there says (`isNull(x: int | null)`
+ * applied to an `int | undefined` result would be proved true for `undefined`).
+ */
+function checkUncheckedValue(e: ts.Expression, v: Val, env: Env) {
+  if (!hasOptPart(v.type)) return;
+  const ck = env.m.checker;
+  if (!containsAny(ck.getTypeAtLocation(e), ck)) return;
+  // operands whose nullish value is consumed, not passed on: `r ?? d`, `r || d`, `r!`, `case r:`
+  let n: ts.Node = e;
+  while (ts.isParenthesizedExpression(n.parent)) n = n.parent;
+  const p = n.parent;
+  if (ts.isNonNullExpression(p) || ts.isCaseClause(p)) return;
+  if (ts.isBinaryExpression(p) && p.left === n && (p.operatorToken.kind === ts.SyntaxKind.QuestionQuestionToken || p.operatorToken.kind === ts.SyntaxKind.BarBarToken)) return;
+  const slot = ck.getContextualType(e);
+  if (!slot || slot.flags & (ts.TypeFlags.Any | ts.TypeFlags.Unknown)) return;
+  const real = tsTypeOf(e, env);
+  const a = real && nullShape(real, v.type, ck);
+  const b = nullShape(slot, v.type, ck);
+  if (a !== null && b !== null && a === b) return;
+  const what = nodeText(e, 40);
+  const has = real && a !== null ? `a value of type \`${showWithKinds(v.type, real, env)}\`` : `a value of type \`${showType(v.type)}\` (whether null or undefined: unknown)`;
+  // the variable it is computed from (`r` in `r.v[0]`, `r.find(…)`)
+  let root: ts.Expression = stripParens(e);
+  while (ts.isPropertyAccessExpression(root) || ts.isElementAccessExpression(root) || ts.isCallExpression(root) || ts.isNonNullExpression(root)) root = stripParens(root.expression);
+  const rs = ts.isIdentifier(root) ? (ts.isShorthandPropertyAssignment(root.parent) && root.parent.name === root ? symbolOf(env, root.parent) : symbolOf(env, root)) : undefined;
+  const rt = ensuresResultType(rs, env);
+  const fix = rt && ts.isIdentifier(root)
+    ? `annotate the result parameter with the return type, ensures((${root.text}: ${nodeText(rt, 50)}) => …), so that TypeScript checks it`
+    : `give the parameter it comes from its exact type, so that TypeScript checks it`;
+  fail(e, `\`${what}\` has TypeScript type any, so TypeScript does not check it against the type \`${ck.typeToString(slot)}\` expected here (that type says whether a missing value is null or undefined), and it is ${has}: ${fix}`);
 }
 
 function nullishKinds(e: ts.Expression, env: Env): { null: boolean; undef: boolean } | null {
@@ -407,12 +484,24 @@ export function checkParamAnnotation(p: ts.ParameterDeclaration, real: VType, re
     if (e instanceof VtsError) reject();
     throw e;
   }
-  if (!sameType(ann!, real)) reject();
+  if (!annotationFits(ann!, real)) reject();
   if (!hasOptPart(real)) return;
   if (!realTs) fail(p.type, `cannot check the annotation \`${nodeText(p.type, 50)}\` of parameter \`${pname}\` against the value it receives (whether it is null or undefined): leave the annotation out`);
   const a = nullShape(ck.getTypeFromTypeNode(p.type), real, ck);
   const b = nullShape(realTs, real, ck);
   if (a === null || b === null || a !== b) reject();
+}
+
+/**
+ * Whether an annotation of VTS type `ann` is exact for a value of VTS type `real`: the same type,
+ * except that `number` may annotate an int (a map index, a forall variable): `int` is
+ * TypeScript's `number`, so TypeScript reads the two alike, and the translation uses `real`.
+ */
+function annotationFits(ann: VType, real: VType): boolean {
+  if (ann.k === "num" && real.k === "int") return true;
+  if ((ann.k === "opt" && real.k === "opt") || (ann.k === "arr" && real.k === "arr")) return annotationFits(ann.elem, real.elem);
+  if (ann.k === "tuple" && real.k === "tuple") return ann.elems.length === real.elems.length && ann.elems.every((e, i) => annotationFits(e, real.elems[i]));
+  return sameType(ann, real);
 }
 
 /** `distinct(xs, key)` compares keys with SameValueZero (a JS Set): keys must be ints or strings. */
@@ -473,6 +562,7 @@ function widen(v: Val, t: VType, env: Env): Val | null {
 
 export function expr(e: ts.Expression, env: Env, expected?: VType): Val {
   const v = expr0(e, env, expected);
+  checkUncheckedValue(e, v, env);
   return coerce(v, expected, e, env);
 }
 
@@ -1011,7 +1101,9 @@ function objectLiteral(o: ts.ObjectLiteralExpression, env: Env, expected?: VType
       const key = vs ? `#${symId(vs)}` : null;
       const n = key ? env.narrow.get(key) : undefined;
       if (n && n.kind === "some") return coerce({ code: n.code, type: n.type }, t, p, env);
-      return coerce(identifier(p.name, env, t, vs), t, p, env);
+      const v = identifier(p.name, env, t, vs);
+      checkUncheckedValue(p.name, v, env);
+      return coerce(v, t, p, env);
     }
     return expr(p, env, t);
   };
@@ -1147,7 +1239,9 @@ export function bindParam(name: ts.BindingName, t: VType, env: Env, realTs?: ts.
   if (ts.isIdentifier(name)) {
     const s = symbolOf(env, name)!;
     const { env: e2, name: ln } = freshLocal(env, leanIdent(name.text));
-    return { env: bind(e2, s, { k: "val", code: ln, type: t }), binder: ln };
+    // the real type of the value, for a parameter that TypeScript types `any` (see `tsTypeOf`)
+    const known = realTs && realTs !== "declared" && !(realTs.flags & ts.TypeFlags.Any) ? realTs : undefined;
+    return { env: bind(e2, s, { k: "val", code: ln, type: t, ...(known ? { ts: known } : {}) }), binder: ln };
   }
   if (ts.isObjectBindingPattern(name)) {
     if (t.k !== "rec") fail(name, "destructuring is only supported for record types");
@@ -2438,11 +2532,23 @@ function switchStmt(s: ts.SwitchStatement, env: Env, bc: BlockCtx, rest: (e: Env
   }
   // generic switch on a primitive value: if-chain (the labels of a group tested in order)
   let elseCode = defaultGroup ? block(defaultGroup.body, 0, env, bc, after) : rest(env);
-  const tests = caseGroups.map((g) => g.labels.map((l) => caseTest(dv, l, disc, env)));
+  const tests = caseGroups.map((g) => {
+    const ls = g.labels.map((l) => {
+      const before = m.obCount();
+      const code = caseTest(dv, l, disc, env);
+      return { code, obs: m.obCount() > before };
+    });
+    if (!ls.slice(1).some((l) => l.obs)) return ls.map((l) => l.code).join(" || ");
+    // a later label of the group is evaluated only when the earlier ones do not match (JS): its
+    // obligations (`case 0: case xs[3]:`) are under their negation
+    let acc = ls[ls.length - 1].code;
+    for (let i = ls.length - 2; i >= 0; i--) acc = `(if ${m.fresh("h")} : (${ls[i].code}) = true then true else ${paren(acc)})`;
+    return acc;
+  });
   for (let gi = caseGroups.length - 1; gi >= 0; gi--) {
     const g = caseGroups[gi];
     const h = m.fresh("h");
-    elseCode = `(if ${h} : (${tests[gi].join(" || ")}) = true then ${paren(block(g.body, 0, env, bc, after))} else ${paren(elseCode)})`;
+    elseCode = `(if ${h} : (${tests[gi]}) = true then ${paren(block(g.body, 0, env, bc, after))} else ${paren(elseCode)})`;
   }
   return elseCode;
 }
