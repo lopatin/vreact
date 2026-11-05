@@ -39,6 +39,13 @@ exact, total meaning in Lean, while still covering what real React code uses.
 | `[A, B]`                                     | `A × B`                                 | |
 | `(x: A) => void` (props only)                | callback with a contract                | see §2.4 |
 
+`T | null` and `T | undefined` share the Lean type `Option T`; which nullish
+value a `none` stands for is taken from the TypeScript type of the expression
+(optional fields, `find()`, `at()` and `?.` give `undefined`). A strict test
+against the other nullish value (`t.due === null` with `due?: int`), a strict
+test of a value that may be either, and `===` between a `T | null` and a
+`T | undefined` value are rejected: `== null` covers both.
+
 Rejected: `any`, `as` casts, classes, `this`, mutation of objects/arrays,
 `==` (except `== null`), `===` on objects (reference identity), generics,
 exceptions (`try`), `var`, `while`, recursion (for now), `async`.
@@ -47,6 +54,9 @@ exceptions (`try`), `var`, `while`, recursion (for now), `async`.
 
 Every expression maps to a Lean term whose value is the JavaScript value.
 
+* Every emitted literal and local is type-ascribed (`(5 : Int)`, `let x : Int := …`,
+  `(none : Option Int)`, `([…] : List Int)`), so Lean never infers a type the
+  translator did not choose (a bare numeral would default to `Nat`).
 * Arithmetic on `int` is integer arithmetic; `%` is ECMAScript's remainder
   (sign of the dividend), `Math.floor(a / b)` / `idiv(a, b)` is floor division —
   both carry the obligation `b ≠ 0`.
@@ -55,13 +65,33 @@ Every expression maps to a Lean term whose value is the JavaScript value.
   concat join reduce toSorted toReversed with at flatMap` and spread `[...xs, x]`
   map to their exact list counterparts (`slice` implements JS's negative-index
   clamping, `toSorted` is a stable sort, `with` carries a bounds obligation).
+  Every modelled method and `Math.*`/spec helper has an exact arity: optional
+  arguments that are not modelled (`thisArg`, `fromIndex`, string positions) are
+  rejected, never ignored. `includes`, `indexOf` and key-less `distinct` compare
+  with Lean equality, which is JS's SameValueZero/`===` only for primitive
+  elements (`boolean`, `int`, `string`, enums, options of these); on objects
+  (identity) and `number` (NaN) they are rejected.
 * String methods `trim includes startsWith endsWith slice repeat length` are
   exact on UTF-16 code units; `toLowerCase/toUpperCase` are opaque (Unicode case
-  mapping is not modelled: proofs cannot depend on them).
+  mapping is not modelled: proofs cannot depend on them). A literal is its cooked
+  UTF-16 value; one with a lone surrogate (not a Lean `String`) is emitted as its
+  code units `JS.Str.mk […]`.
+* `===` on `number` is IEEE equality (`Float` `==`, `NaN !== NaN`), in code and in
+  contracts alike. Unary `+` is only accepted on numbers (the identity).
 * `x!` carries the obligation `x ≠ null`; `?.` and `??` map to `Option.map/getD`.
 * Narrowing (`x !== null`, `x.kind === "add"`, `switch (x.kind)`, early
   `return`) is compiled to Lean `match`, so the narrowed facts are available to
-  every obligation in the branch.
+  every obligation in the branch. Assigning a present value to an optional `let`
+  narrows it as well; any later assignment (also in a `for…of`) drops what was
+  known. A null test, `??`, `?.` or `!` on a value known to be present is decided
+  statically (the value is not null).
+* Names: a VTS identifier that is a Lean token, a root-level Lean name the
+  generated code may use unqualified (`max`, `some`, `List`, …) or a fixed name of
+  the generated code (`σ`, `props`, `h_pre`, …) is primed (`max'`; fields and
+  constructors also avoid `rec`, `mk`, `casesOn`, …); names the translator invents
+  are subscripted (`h₁`, `idx₀`). Neither `'` nor subscript digits can occur in a
+  TypeScript identifier, so generated names and user names never capture each
+  other. The lists are generated from Lean by `lean/scripts/GenNames.lean`.
 * Statements are translated in continuation-passing style: `const` ↦ `let`,
   reassignment of a local `let` ↦ shadowing `let`, `if` ↦ dependent `if` (the
   condition becomes a hypothesis), `for (const x of xs)` ↦ `List.foldl` over
@@ -72,7 +102,7 @@ Every expression maps to a Lean term whose value is the JavaScript value.
 
 | construct                         | meaning |
 |-----------------------------------|---------|
-| `requires(c)` in a function       | hypothesis parameter `(h_pre : c)`; every call site must prove it |
+| `requires(c)` in a function       | hypothesis parameter `(h_pre : c)`; every call site must prove it (several `requires` are conjoined in order into one `h_pre`) |
 | `ensures((r: T) => c)`            | theorem `f.post : ∀ args, h_pre → c[r := f args]` |
 | `requires(c)` in a component      | the props precondition `pre`; every `<C …/>` must prove it |
 | `invariant(c)` in a component     | the state invariant `inv` (after the hooks) |
@@ -82,6 +112,15 @@ Every expression maps to a Lean term whose value is the JavaScript value.
 | `/** @opaque */` on a function    | callers see only its `ensures` (modular verification) |
 | `/** @trusted */`                 | body not verified; contract assumed (reported, appears as a Lean axiom) |
 | `hole<T>()`                       | a placeholder for `vreact synth` |
+
+A contract is a proposition with JS's evaluation order: the right operand of
+`a && b` is translated under the hypothesis `a` (`∃ (h : a), b` when `b` has
+proof obligations, plain `a ∧ b` otherwise), `a || b` as `a ∨ ∃ (h : ¬a), b`,
+`c ? x : y` as `(∀ (h : c), x) ∧ (∀ (h : ¬c), y)`, `implies(a, b)` as
+`∀ (h : a), b`, `forall(lo, hi, i => p)` as `∀ i, ∀ (h₁ : lo ≤ i), ∀ (h₂ : i < hi), p`
+and `xs.every(x => p)` as `∀ x, ∀ (h : x ∈ xs), p`, so an index obligation in `b`,
+`p`, … sees its guard. (In code, `implies` is a function call: both arguments are
+evaluated.)
 
 ---
 
@@ -237,7 +276,10 @@ hook rules hold (static checks). For every function: its body is safe and its
 ## 5. The trusted base — what is *not* verified
 
 * **The translation** from TypeScript to Lean (≈3k lines of TypeScript). It is
-  structural and syntax-directed; the regression suite pins its behaviour.
+  structural and syntax-directed; the regression suite pins its behaviour. Its
+  name escaping relies on `src/leanNames.ts` (Lean tokens and root names),
+  generated from the Lean environment by `lean/scripts/GenNames.lean`; regenerate
+  it when the Lean toolchain or the VReact library changes.
 * **The JS runtime model** (`JS.lean`): e.g. that `Array.prototype.slice` behaves
   like `JS.slice`. Definitions follow ECMA-262 directly.
 * **The React model**: that React 18 behaves as described in §2–3 (discrete-event
