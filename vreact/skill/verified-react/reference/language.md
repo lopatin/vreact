@@ -73,15 +73,26 @@ non-discriminated unions (`string | number`), `ReactNode`/`children` props.
   and to local helper arrows (inlined).
 * Narrowing: `x !== null`, `x.kind === "add"`, `switch (x.kind)`, early returns —
   fields of the narrowed variant become available, also inside handlers created there.
+  The complement narrows too when one variant is left (`if (s.kind === "a") return …;
+  return s.onlyInB;`, `else`, `s.kind === "a" || s.b > 0`, `c ? … : s.b`), also after
+  several exclusions.
   Assigning a present value to a `let x: T | null` (`x = 0`, `let x: int | null = 3`)
   narrows it too; assigning again (or in a loop) forgets it.
 
 ## Statements
 
 `const`, `let` + reassignment (locals only), `if/else`, `return`, `switch`
-(cases end with `return`/`break`, no fall-through), `for (const x of xs)` (may
+(cases end with `return`/`break`, also `case "x": { …; break; }`; no fall-through;
+`default` anywhere, also grouped `case "a": default:`), `for (const x of xs)` (may
 assign outer `let`s; no `break`/`return` inside), `throw` (must be provably
 unreachable), `assert(c)`, `assume(c)`. No `while`, `try`, `var`, recursion.
+
+Closures and `let`: JS closures read a variable when they run. So a function
+that runs later (helper arrow, handler, callback prop, `setX(prev => …)`, effect,
+timer, cleanup, `useCallback`) may not read a `let` that is reassigned after the
+function is created — copy it first: `const capNow = cap;`. No function or
+callback (array callbacks included) may assign a `let` declared outside it —
+use `for…of` or `reduce`. Array callbacks may read outer `let`s.
 
 ## Contracts
 
@@ -127,7 +138,8 @@ Order inside the body:
 3. hooks: `const [x, setX] = useState<T>(init)`, `const [s, dispatch] =
    useReducer(reducer, init)`, `useEffect(() => {…}, [deps])`,
    `useMemo(() => v, [deps])`, `useCallback(fn, [deps])` — top level,
-   unconditional, before any early return;
+   unconditional, before any `if`/`switch`/early return (never in branches,
+   loops, handlers or closures); deps exhaustive (`{ x }` reads `x`);
 4. `invariant(…)` — over props and state;
 5. render-local `const`s, helper arrows, handlers;
 6. `return <JSX/>` (early returns allowed).
@@ -143,7 +155,10 @@ must be robust and may not call parent callbacks.
 
 Effects: setters and timers (`setTimeout`/`setInterval` callbacks become tasks),
 external writes (`localStorage.setItem`, `document.title = …`, `console.*`) are
-allowed and have no modelled effect; cleanups may not set state; no async.
+allowed and have no modelled effect; no async. A cleanup is an inline
+`() => { … }` that only calls `clearTimeout`/`clearInterval` and makes those
+external writes (no setters, `dispatch`, parent callbacks or local helpers: it
+runs later with a stale render's values and is not verified).
 
 JSX: intrinsic elements with string/int/bool/enum attributes (`className`,
 `value`, `checked`, `disabled`, `placeholder`, `type`, …; no `style`, `ref`,

@@ -13,7 +13,7 @@
 import ts from "typescript";
 import { T, type VType, type Field, type Param, sameType, showType, leanType, sharedFields, type Variant, typeOfNode } from "./types.ts";
 import { type Env, type Val, ModCtx, type Binding, type StateVar, type CompCtx, type HandlerAcc, type FnInfo, type CompInfo, type Global, type Narrowed, bind, extend, freshLocal } from "./ctx.ts";
-import { fail, leanField, leanIdent, leanStr, jsStr, leanInt, paren, nodeText, capitalize } from "./util.ts";
+import { VtsError, fail, leanField, leanIdent, leanStr, jsStr, leanInt, paren, nodeText, capitalize } from "./util.ts";
 
 /* ───────────────────────────── helpers ───────────────────────────── */
 
@@ -68,6 +68,120 @@ function globalOf(env: Env, node: ts.Node): Global | undefined {
   return env.m.prog.globals.get(d);
 }
 
+/* ─────────────────── closures and mutable locals ─────────────────── */
+
+/** Array methods whose callback runs immediately (during the call). */
+const IMMEDIATE_METHODS = new Set(["map", "filter", "some", "every", "find", "findIndex", "reduce", "flatMap", "toSorted"]);
+/** vreact/spec functions whose function argument is a predicate evaluated in place. */
+const SPEC_LAMBDAS = new Set(["forall", "exists", "distinct", "ensures", "callbackRequires"]);
+
+/** The `let` declaration of a local variable symbol, if it is one. */
+function letDecl(s: ts.Symbol | undefined): ts.VariableDeclaration | null {
+  const d = s?.valueDeclaration;
+  if (d && ts.isVariableDeclaration(d) && ts.isVariableDeclarationList(d.parent) && d.parent.flags & ts.NodeFlags.Let) return d;
+  return null;
+}
+
+/** The variable an identifier refers to (shorthand properties `{ x }` resolve to the variable `x`). */
+function varSymbol(checker: ts.TypeChecker, id: ts.Identifier): ts.Symbol | undefined {
+  if (ts.isShorthandPropertyAssignment(id.parent) && id.parent.name === id) return checker.getShorthandAssignmentValueSymbol(id.parent);
+  return checker.getSymbolAtLocation(id);
+}
+
+/** Is `id` the target of an assignment, compound assignment, `++` or `--`? */
+function isWriteTarget(id: ts.Identifier): boolean {
+  let n: ts.Node = id;
+  while (ts.isParenthesizedExpression(n.parent)) n = n.parent;
+  const p = n.parent;
+  if (ts.isBinaryExpression(p) && p.left === n) {
+    const k = p.operatorToken.kind;
+    return k >= ts.SyntaxKind.FirstAssignment && k <= ts.SyntaxKind.LastAssignment;
+  }
+  if ((ts.isPrefixUnaryExpression(p) || ts.isPostfixUnaryExpression(p)) && (p.operator === ts.SyntaxKind.PlusPlusToken || p.operator === ts.SyntaxKind.MinusMinusToken)) return true;
+  return false;
+}
+
+function within(n: ts.Node, outer: ts.Node): boolean {
+  return n.pos >= outer.pos && n.end <= outer.end;
+}
+
+/**
+ * Is `fn` called immediately where it is written (array-method callbacks, spec
+ * predicates, `useMemo` / `useState` initialisers)?  Every other function value —
+ * local helpers, handlers, callback props, functional updates `setX(prev => …)`,
+ * effects, timer callbacks, cleanups, `useCallback` — runs later.
+ */
+function isImmediateFn(fn: ts.ArrowFunction | ts.FunctionExpression, env: Env): boolean {
+  let child: ts.Node = fn;
+  while (ts.isParenthesizedExpression(child.parent)) child = child.parent;
+  const p = child.parent;
+  if (!ts.isCallExpression(p) || !p.arguments.includes(child as ts.Expression)) return false;
+  const callee = p.expression;
+  if (ts.isPropertyAccessExpression(callee) && IMMEDIATE_METHODS.has(callee.name.text)) return true;
+  const sf = specFn(env, callee);
+  if (sf && SPEC_LAMBDAS.has(sf)) return true;
+  const h = hookName(env, callee);
+  return (h === "useMemo" || h === "useState") && p.arguments[0] === child;
+}
+
+/**
+ * JS closures capture variables, not values, while the translation gives a
+ * function body the environment of the point where the function is created.
+ * The two agree exactly when (a) no function that runs later reads a `let`
+ * that may be reassigned after the function was created, and (b) no function
+ * assigns a `let` declared outside it.  Both are checked here for one
+ * top-level function or component body (a `let` is only visible inside it).
+ */
+export function checkClosures(body: ts.Node, env: Env) {
+  const checker = env.m.checker;
+  const writes = new Map<ts.Symbol, ts.Node[]>();
+  const collectWrites = (n: ts.Node) => {
+    if (ts.isIdentifier(n) && isWriteTarget(n)) {
+      const s = checker.getSymbolAtLocation(n);
+      if (s && letDecl(s)) writes.set(s, [...(writes.get(s) ?? []), n]);
+    }
+    ts.forEachChild(n, collectWrites);
+  };
+  collectWrites(body);
+  /** May a write to `s` execute after `fn` has been created? */
+  const laterWrite = (s: ts.Symbol, decl: ts.Node, fn: ts.Node): boolean => {
+    const ws = writes.get(s) ?? [];
+    if (ws.some((w) => w.getStart() >= fn.end)) return true;
+    // a loop around the function (but inside the variable's scope) runs earlier writes again
+    for (let a: ts.Node | undefined = fn.parent; a && a !== body; a = a.parent) {
+      if (ts.isForOfStatement(a) && !within(decl, a) && ws.some((w) => within(w, a))) return true;
+    }
+    return false;
+  };
+  const stack: { fn: ts.ArrowFunction | ts.FunctionExpression; immediate: boolean }[] = [];
+  const visit = (n: ts.Node) => {
+    if (ts.isArrowFunction(n) || ts.isFunctionExpression(n)) {
+      stack.push({ fn: n, immediate: isImmediateFn(n, env) });
+      ts.forEachChild(n, visit);
+      stack.pop();
+      return;
+    }
+    if (ts.isIdentifier(n) && stack.length) {
+      const s = varSymbol(checker, n);
+      const d = letDecl(s);
+      if (s && d) {
+        for (let i = stack.length - 1; i >= 0; i--) {
+          const { fn, immediate } = stack[i];
+          if (within(d, fn)) break; // declared inside this function (and so inside the outer ones)
+          if (isWriteTarget(n)) {
+            fail(n, `\`${n.text}\` is a \`let\` declared outside this function: assigning it from inside a function or callback is not supported (the write would be lost in the translation). Compute the new value outside the callback, e.g. with for…of or reduce`);
+          }
+          if (!immediate && laterWrite(s, d, fn)) {
+            fail(n, `this function reads \`${n.text}\`, which is reassigned after the function is created; a JS closure sees the variable's latest value when it runs, not its value here. Copy it first (\`const ${n.text}Now = ${n.text};\`) and use the copy, or move the assignment before the function`);
+          }
+        }
+      }
+    }
+    ts.forEachChild(n, visit);
+  };
+  visit(body);
+}
+
 /** Path key for narrowing (identifier or property chain). */
 function pathKey(env: Env, e: ts.Expression): string | null {
   if (ts.isParenthesizedExpression(e)) return pathKey(env, e.expression);
@@ -80,6 +194,12 @@ function pathKey(env: Env, e: ts.Expression): string | null {
     return k ? `${k}.${e.name.text}` : null;
   }
   return null;
+}
+
+/** Is `e` (a variable or property path) narrowed to a non-null value here? */
+function narrowedSome(env: Env, e: ts.Expression): boolean {
+  const k = pathKey(env, e);
+  return !!k && env.narrow.get(k)?.kind === "some";
 }
 
 function isNullLit(e: ts.Expression): boolean {
@@ -484,7 +604,8 @@ function fieldOf(base: Val, name: string, node: ts.Node, env: Env): Val {
     if (name === u.tag) return { code: `(${t.name}.${leanField(name)} ${paren(base.code)})`, type: T.str };
     const sf = sharedFields(u.variants).find((f) => f.name === name);
     if (sf) return { code: `(${t.name}.${leanField(name)} ${paren(base.code)})`, type: sf.type };
-    fail(node, `field ${name} is not present in every variant of ${showType(t)}: narrow first (if (x.${u.tag} === "…"))`);
+    const has = u.variants.filter((v) => v.fields.some((f) => f.name === name)).map((v) => `"${v.lit}"`);
+    fail(node, `field ${name} is not present in every variant of ${showType(t)}${has.length ? ` (only in ${has.join(", ")})` : ""}: narrow first with a test on x.${u.tag} (if/else, early return, ?:, &&/||, switch) of this value — not through an alias (const isX = …) or \`in\`, and anew after reassigning a \`let\``);
   }
   if (t.k === "tuple") fail(node, "use index access t[0] on tuples");
   if (t.k === "opt") fail(node, `\`${name}\` accessed on a possibly-null value: narrow with !== null first`);
@@ -1317,6 +1438,8 @@ export function branch(c: ts.Expression, env: Env, onTrue: (e: Env) => string, o
       }
       fail(c, `truthiness of ${showType(t)} is ambiguous (0, "" and false are falsy): compare with null explicitly`);
     }
+    // an object known to be non-null (narrowed) is truthy
+    if (t && ["rec", "arr", "union", "tuple"].includes(t.k) && narrowedSome(env, e)) return onTrue(env);
   }
   const v = expr(e, env, T.bool);
   const h = env.m.fresh("h");
@@ -1334,6 +1457,8 @@ function narrowBranch(nt: NarrowTest, env: Env, onTrue: (e: Env) => string, onFa
   if (nt.kind === "null" && target.type.k !== "opt" && isPresentValue(target.type)) return (nt.positive ? onFalse : onTrue)(env);
   const h = env.m.fresh("h");
   if (nt.kind === "null") {
+    // already narrowed to non-null (an enclosing test, or `x = e` with a non-null e): decided statically
+    if (narrowedSome(env, nt.target)) return nt.positive ? onFalse(env) : onTrue(env);
     if (target.type.k !== "opt") fail(nt.target, "null test on a non-optional value");
     const base = ts.isIdentifier(nt.target) ? leanIdent(nt.target.text) : ts.isPropertyAccessExpression(nt.target) ? leanIdent(nt.target.name.text) : "v";
     const { env: e1, name: v } = freshLocal(env, base);
@@ -1349,23 +1474,53 @@ function narrowBranch(nt: NarrowTest, env: Env, onTrue: (e: Env) => string, onFa
   const u = env.m.reg.union(target.type);
   const variant = u.variants.find((v) => v.lit === nt.variant);
   if (!variant) fail(nt.target, `"${nt.variant}" is not a variant of ${showType(target.type)}`);
-  let e1 = env;
-  const names: string[] = [];
-  const fields = new Map<string, Val>();
-  for (const f of variant.fields) {
-    const r = freshLocal(e1, leanIdent(f.name));
-    e1 = r.env;
-    names.push(r.name);
-    fields.set(f.name, { code: r.name, type: f.type });
+  // already narrowed to one variant (an enclosing test or switch arm): decided statically
+  const known = env.narrow.get(key);
+  if (known && known.kind === "variant") return (known.variant === variant.lit) === nt.positive ? onTrue(env) : onFalse(env);
+  const ut = target.type;
+  /** a match pattern for variant `v`, and `env` narrowed to it (its fields bound) */
+  const arm = (v: Variant): { pat: string; env: Env } => {
+    let e1 = env;
+    const names: string[] = [];
+    const fields = new Map<string, Val>();
+    for (const f of v.fields) {
+      const r = freshLocal(e1, leanIdent(f.name));
+      e1 = r.env;
+      names.push(r.name);
+      fields.set(f.name, { code: r.name, type: f.type });
+    }
+    const narrow = new Map(e1.narrow);
+    narrow.set(key, { kind: "variant", code: target.code, type: ut, variant: v.lit, fields });
+    return { pat: `.${leanField(v.ctor)}${names.map((n) => " " + n).join("")}`, env: { ...e1, narrow } };
+  };
+  const whenIs = nt.positive ? onTrue : onFalse;
+  const whenNot = nt.positive ? onFalse : onTrue;
+  const yesArm = arm(variant);
+  let arms = `\n  | ${yesArm.pat} => ${paren(whenIs(yesArm.env))}`;
+  const others = u.variants.filter((v) => v !== variant);
+  if (others.length === 1) {
+    // the complement is a single variant: narrow to it (else branch, early return, `||`, ternary)
+    const a = arm(others[0]);
+    arms += `\n  | ${a.pat} => ${paren(whenNot(a.env))}`;
+  } else if (others.length > 1) {
+    // several variants remain: one arm, unless the code there needs to know which one
+    // (a later test excludes all but one); then one arm per remaining variant
+    const m = env.m;
+    const nObs = m.obligations.length;
+    const nCount = m.counter.n;
+    try {
+      arms += `\n  | _ => ${paren(whenNot(env))}`;
+    } catch (err) {
+      if (!(err instanceof VtsError)) throw err;
+      m.obligations.length = nObs;
+      m.counter.n = nCount;
+      for (const v of others) {
+        const a = arm(v);
+        arms += `\n  | ${a.pat} => ${paren(whenNot(a.env))}`;
+      }
+    }
   }
-  const narrow = new Map(e1.narrow);
-  narrow.set(key, { kind: "variant", code: target.code, type: target.type, variant: variant.lit, fields });
-  const inEnv = { ...e1, narrow };
-  const yes = nt.positive ? onTrue(inEnv) : onFalse(inEnv);
-  const others = u.variants.length > 1;
-  const no = others ? (nt.positive ? onFalse(env) : onTrue(env)) : null;
-  const pat = `.${leanField(variant.ctor)}${names.map((n) => " " + n).join("")}`;
-  return `(match ${h} : ${target.code} with\n  | ${pat} => ${paren(yes)}${no !== null ? `\n  | _ => ${paren(no)}` : ""})`;
+  return `(match ${h} : ${target.code} with${arms})`;
 }
 
 /**
@@ -1547,6 +1702,8 @@ export interface BlockCtx {
 
 /** A value-returning block (function bodies, block-bodied lambdas). */
 export function valueBlock(stmts: readonly ts.Statement[], env: Env, ret: VType | undefined, fnNode: ts.Node): Val {
+  // the body of a top-level function: closures over its `let`s must agree with JS
+  if (ts.isFunctionDeclaration(fnNode) && fnNode.body) checkClosures(fnNode.body, env);
   let rt = ret;
   const bc: BlockCtx = {
     kind: "value",
@@ -1615,6 +1772,12 @@ function blockOf(s: ts.Statement): readonly ts.Statement[] {
   return ts.isBlock(s) ? s.statements : [s];
 }
 
+/**
+ * `const x = useMemo(…)` / `const f = useCallback(…)` declarations at the top level of a
+ * component body, before any early return (registered by the component prepass).
+ */
+export const topLevelHookDecls = new WeakSet<ts.VariableDeclaration>();
+
 function varDecls(decls: ts.NodeArray<ts.VariableDeclaration>, j: number, env: Env, bc: BlockCtx, rest: (e: Env) => string): string {
   if (j >= decls.length) return rest(env);
   const d = decls[j];
@@ -1625,6 +1788,12 @@ function varDecls(decls: ts.NodeArray<ts.VariableDeclaration>, j: number, env: E
   // local arrow function: a closure (inlined at use sites)
   if ((ts.isArrowFunction(init) || ts.isFunctionExpression(init)) && ts.isIdentifier(d.name)) {
     return next(bind(env, symbolOf(env, d.name)!, { k: "closure", fn: init, env }));
+  }
+  // useMemo / useCallback: only as top-level hook declarations of a component (Rules of Hooks:
+  // React matches hooks by call order, so a hook in a branch, loop, handler or after an early
+  // return reads another call's cached value or throws)
+  if (ts.isCallExpression(init) && ["useMemo", "useCallback"].includes(hookName(env, init.expression) ?? "") && !topLevelHookDecls.has(d)) {
+    fail(init, `hooks must be called at the top level of a component, unconditionally (Rules of Hooks)`);
   }
   // useCallback(fn, deps) is a closure too (exhaustive deps make it equivalent to a fresh closure)
   if (ts.isCallExpression(init) && hookName(env, init.expression) === "useCallback" && ts.isIdentifier(d.name)) {
@@ -1699,6 +1868,11 @@ function bindLocal(name: ts.BindingName, v: Val, env: Env, next: (e: Env) => str
   }
   const e2 = bind(e1, s, { k: "val", code: ln, type: v.type });
   return `(let ${ln}${letType(v.type)} := ${v.code};\n${next(e2)})`;
+}
+
+/** (alias used by the for-of translation) */
+function dropNarrowing(env: Env, s: ts.Symbol): Env {
+  return forgetNarrowing(env, s);
 }
 
 /** Forget what was known (narrowing) about a local and its property paths. */
@@ -1917,21 +2091,35 @@ function switchStmt(s: ts.SwitchStatement, env: Env, bc: BlockCtx, rest: (e: Env
   }
   const groups: Group[] = [];
   let pending: string[] = [];
+  let pendingDefault = false;
+  let pendingNode: ts.Node | null = null;
   for (const cl of s.caseBlock.clauses) {
     if (ts.isCaseClause(cl)) {
       const lit = stripParens(cl.expression);
       if (!ts.isStringLiteralLike(lit) && !ts.isNumericLiteral(lit)) fail(cl.expression, "case labels must be literals");
       pending.push(lit.text);
-    }
+    } else pendingDefault = true;
+    pendingNode = pendingNode ?? cl;
     if (cl.statements.length === 0) continue;
-    const body = [...cl.statements];
-    const last = body[body.length - 1];
-    const endsWithBreak = ts.isBreakStatement(last);
-    if (endsWithBreak) body.pop();
-    else if (!terminates(body)) fail(cl, "switch cases must end with break, return or throw (no fall-through)");
-    groups.push({ labels: pending, body, isDefault: ts.isDefaultClause(cl), node: cl });
+    // a body ends with `break` (possibly as the last statement of a trailing block) or terminates
+    const body = withoutTrailingBreak(cl.statements);
+    if (!body && !terminates(cl.statements)) fail(cl, "switch cases must end with break, return or throw (no fall-through)");
+    groups.push({ labels: pending, body: body ?? [...cl.statements], isDefault: pendingDefault, node: pendingNode });
     pending = [];
+    pendingDefault = false;
+    pendingNode = null;
   }
+  // trailing labels without statements: they match and do nothing
+  if (pendingNode) groups.push({ labels: pending, body: [], isDefault: pendingDefault, node: pendingNode });
+  // JS takes the first case whose label matches, wherever `default` is; `default`
+  // (in any position, possibly grouped with labels) takes every value no case matches.
+  const claimed = new Set<string>();
+  for (const g of groups) {
+    g.labels = g.labels.filter((l) => !claimed.has(l));
+    g.labels.forEach((l) => claimed.add(l));
+  }
+  const defaultGroup = groups.find((g) => g.isDefault);
+  const caseGroups = groups.filter((g) => !g.isDefault && g.labels.length > 0);
   const after = (e2: Env) => rest(e2);
   // discriminated union switch: switch (a.kind)
   if (ts.isPropertyAccessExpression(disc)) {
@@ -1943,14 +2131,8 @@ function switchStmt(s: ts.SwitchStatement, env: Env, bc: BlockCtx, rest: (e: Env
       const h = m.fresh("h");
       const covered = new Set<string>();
       let arms = "";
-      let hasDefault = false;
-      for (const g of groups) {
-        if (g.isDefault && g.labels.length === 0) {
-          hasDefault = true;
-          arms += `\n  | _ => ${paren(block(g.body, 0, env, bc, after))}`;
-          continue;
-        }
-        for (const l of g.labels) if (!u.variants.some((v) => v.lit === l)) fail(g.node, `"${l}" is not a variant of ${showType(baseT)}`);
+      for (const g of groups) for (const l of g.labels) if (!u.variants.some((v) => v.lit === l)) fail(g.node, `"${l}" is not a variant of ${showType(baseT)}`);
+      for (const g of caseGroups) {
         if (g.labels.length === 1) {
           const v = u.variants.find((v) => v.lit === g.labels[0])!;
           covered.add(v.lit);
@@ -1974,9 +2156,9 @@ function switchStmt(s: ts.SwitchStatement, env: Env, bc: BlockCtx, rest: (e: Env
           });
           arms += `\n  | ${pats.join(" | ")} => ${paren(block(g.body, 0, env, bc, after))}`;
         }
-        if (g.isDefault) hasDefault = true;
       }
-      if (!hasDefault && covered.size < u.variants.length) arms += `\n  | _ => ${paren(rest(env))}`;
+      // values no case matches: the default body, or the code after the switch (last arm)
+      if (covered.size < u.variants.length) arms += `\n  | _ => ${paren(defaultGroup ? block(defaultGroup.body, 0, env, bc, after) : rest(env))}`;
       return `(match ${h} : ${target.code} with${arms})`;
     }
   }
@@ -1986,28 +2168,19 @@ function switchStmt(s: ts.SwitchStatement, env: Env, bc: BlockCtx, rest: (e: Env
     const lits = m.reg.enumLits(dv.type);
     const covered = new Set<string>();
     let arms = "";
-    let hasDefault = false;
-    for (const g of groups) {
-      if (g.isDefault && g.labels.length === 0) {
-        hasDefault = true;
-        arms += `\n  | _ => ${paren(block(g.body, 0, env, bc, after))}`;
-        continue;
-      }
-      for (const l of g.labels) if (!lits.includes(l)) fail(g.node, `"${l}" is not a member of ${showType(dv.type)}`);
+    for (const g of groups) for (const l of g.labels) if (!lits.includes(l)) fail(g.node, `"${l}" is not a member of ${showType(dv.type)}`);
+    for (const g of caseGroups) {
       g.labels.forEach((l) => covered.add(l));
       arms += `\n  | ${g.labels.map((l) => `.${leanField(l)}`).join(" | ")} => ${paren(block(g.body, 0, env, bc, after))}`;
-      if (g.isDefault) hasDefault = true;
     }
-    if (!hasDefault && covered.size < lits.length) arms += `\n  | _ => ${paren(rest(env))}`;
+    if (covered.size < lits.length) arms += `\n  | _ => ${paren(defaultGroup ? block(defaultGroup.body, 0, env, bc, after) : rest(env))}`;
     const h = m.fresh("h");
     return `(match ${h} : ${dv.code} with${arms})`;
   }
   // generic switch on a primitive value: if-chain
   let code: string | null = null;
-  const defaultGroup = groups.find((g) => g.isDefault);
   let elseCode = defaultGroup ? block(defaultGroup.body, 0, env, bc, after) : rest(env);
-  for (const g of [...groups].reverse()) {
-    if (g.labels.length === 0) continue;
+  for (const g of [...caseGroups].reverse()) {
     const conds = g.labels.map((l) => {
       const lv = dv.type.k === "enum" ? `${dv.type.name}.${leanField(l)}` : dv.type.k === "str" ? jsStr(l) : dv.type.k === "int" && /^[0-9]+$/.test(l) ? leanInt(BigInt(l)) : l;
       return `VReact.JS.eq ${paren(dv.code)} ${paren(lv)}`;
@@ -2017,6 +2190,21 @@ function switchStmt(s: ts.SwitchStatement, env: Env, bc: BlockCtx, rest: (e: Env
   }
   code = elseCode;
   return code;
+}
+
+/**
+ * The statements of a case body that ends with `break` (directly, or as the last
+ * statement of a trailing block `{ …; break; }`), without that break; null otherwise.
+ */
+function withoutTrailingBreak(stmts: readonly ts.Statement[]): ts.Statement[] | null {
+  const last = stmts[stmts.length - 1];
+  if (!last) return null;
+  if (ts.isBreakStatement(last) && !last.label) return stmts.slice(0, -1);
+  if (ts.isBlock(last)) {
+    const inner = withoutTrailingBreak(last.statements);
+    if (inner) return [...stmts.slice(0, -1), ...inner];
+  }
+  return null;
 }
 
 function terminates(stmts: readonly ts.Statement[]): boolean {
@@ -2061,7 +2249,7 @@ function forOf(s: ts.ForOfStatement, env: Env, bc: BlockCtx, rest: (e: Env) => s
     const r = freshLocal(e1, leanIdent(sym.name));
     e1 = r.env;
     accNames.push(r.name);
-    e1 = bind(e1, sym, { k: "val", code: r.name, type: (env.vars.get(sym) as { type: VType }).type });
+    e1 = dropNarrowing(bind(e1, sym, { k: "val", code: r.name, type: (env.vars.get(sym) as { type: VType }).type }), sym);
   }
   const decl = s.initializer.declarations[0];
   const pr = bindParam(decl.name, xs.type.elem, e1);
@@ -2076,7 +2264,7 @@ function forOf(s: ts.ForOfStatement, env: Env, bc: BlockCtx, rest: (e: Env) => s
   const outNames: string[] = [];
   for (const sym of assigned) {
     const r = freshLocal(e4, leanIdent(sym.name));
-    e4 = bind(r.env, sym, { k: "val", code: r.name, type: (env.vars.get(sym) as { type: VType }).type });
+    e4 = dropNarrowing(bind(r.env, sym, { k: "val", code: r.name, type: (env.vars.get(sym) as { type: VType }).type }), sym);
     outNames.push(r.name);
   }
   return `(let ${tuple(outNames)} := ${fold};\n${rest(e4)})`;
@@ -2180,16 +2368,20 @@ export function checkDeps(fn: ts.ArrowFunction | ts.FunctionExpression, depsArg:
     listed.add(k);
   }
   const missing: string[] = [];
+  // every reference counts: identifiers anywhere in the body (template literals, spreads,
+  // JSX, nested closures, element access, optional chains), shorthand properties `{ x }`
+  // resolved to the variable `x`
   const visit = (n: ts.Node) => {
     if (ts.isIdentifier(n) && !(ts.isPropertyAccessExpression(n.parent) && n.parent.name === n)) {
-      const s = symbolOf(env, n);
+      const shorthand = ts.isShorthandPropertyAssignment(n.parent) && n.parent.name === n;
+      const s = shorthand ? env.m.checker.getShorthandAssignmentValueSymbol(n.parent) : symbolOf(env, n);
       const b = s ? env.vars.get(s) : undefined;
-      if (b && (b.k === "val" || b.k === "closure" || b.k === "callback")) {
+      if (b && (b.k === "val" || b.k === "closure" || b.k === "callback" || b.k === "jsx")) {
         // reactive value: covered if it, or a path starting with it, is listed
         let full: ts.Expression = n;
-        while (ts.isPropertyAccessExpression(full.parent) && full.parent.expression === full) full = full.parent;
-        const k1 = pathKey(env, n)!;
-        const kFull = pathKey(env, full);
+        while (!shorthand && ts.isPropertyAccessExpression(full.parent) && full.parent.expression === full) full = full.parent;
+        const k1 = `#${symId(s!)}`;
+        const kFull = shorthand ? k1 : pathKey(env, full);
         const covered = listed.has(k1) || (kFull && [...listed].some((l) => kFull === l || kFull.startsWith(l + ".")));
         if (!covered && !missing.includes(n.text)) missing.push(n.text);
       }
