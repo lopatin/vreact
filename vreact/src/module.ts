@@ -20,7 +20,7 @@ import { Program, ModCtx, type Obligation, type FnInfo, type CompInfo, type Glob
 import { T, type VType, typeOfNode, typeOfDecl, emitTypeDecl, leanType } from "./types.ts";
 import { VtsError, fail, leanIdent, leanField, leanStr, paren, capitalize, nodeText, clashesWithLean } from "./util.ts";
 import { LEAN_TYPE_AUX, LEAN_ROOT_NAMES } from "./leanNames.ts";
-import { expr, prop, propAll, valueBlock, specFn, symbolOf, bindParam, typeOf } from "./translate.ts";
+import { expr, prop, propAll, valueBlock, specFn, symbolOf, bindParam, typeOf, checkParamAnnotation } from "./translate.ts";
 import { translateComponent, compSignature, baseEnv } from "./component.ts";
 import { leanDecls } from "./lean.ts";
 
@@ -102,7 +102,12 @@ function loadProgram(cfg: Config): { program: ts.Program; diags: string[] } {
     options = { ...parsed.options, noEmit: true };
   }
   const diags: string[] = [];
-  if (!options.strict && !options.strictNullChecks) diags.push("tsconfig: VTS requires \"strict\": true (null safety is part of the model)");
+  // (strictNullChecks defaults to strict; without it TypeScript types say nothing about null and
+  // undefined, which the translation reads to tell them apart)
+  if (!(options.strictNullChecks ?? options.strict)) diags.push("tsconfig: VTS requires \"strict\": true, with strictNullChecks (null safety is part of the model)");
+  // (without noImplicitAny an unannotated parameter is `any`: TypeScript checks nothing about it,
+  // in particular not whether it is null or undefined)
+  if (!(options.noImplicitAny ?? options.strict)) diags.push("tsconfig: VTS requires \"strict\": true, with noImplicitAny (TypeScript checks nothing about an implicitly-any value)");
   const program = ts.createProgram(cfg.files, options, cfg.overrides ? overrideHost(options, cfg.overrides) : undefined);
   const host: ts.FormatDiagnosticsHost = {
     getCanonicalFileName: (f) => f,
@@ -321,14 +326,11 @@ export function translate(cfg: Config): TranslateResult {
     let posts = `namespace ${ns}\n\n`;
     /** functions whose postconditions are in Posts.lean */
     const deferred = new Set<string>();
+    // the types of this module go here, emitted once the module is translated: inline types
+    // first met in bodies (local annotations, `hole<{ … }>()`, `useState<"a" | "b">`) are
+    // registered during the translation (in registration order: a type after the ones it uses)
+    const typesAt = defs.length;
     try {
-      // types declared in this module
-      for (const nt of prog.reg.order) {
-        if (nt.module !== ns) continue;
-        // props types with callbacks are represented by the component's Props/Cb structures
-        if (nt.def.k === "rec" && nt.def.fields.some((f) => f.type.k === "fn" || (f.type.k === "opt" && f.type.elem.k === "fn"))) continue;
-        defs += emitTypeDecl(nt, prog.reg) + "\n";
-      }
       // constants & functions, dependency-ordered; each function's postconditions right
       // after it, so that the bodies of later functions (in this module and in importing
       // modules' Defs) can use them through `vreact_contracts`
@@ -385,6 +387,14 @@ export function translate(cfg: Config): TranslateResult {
       }
       throw e;
     }
+    let types = "";
+    for (const nt of prog.reg.order) {
+      if (nt.module !== ns) continue;
+      // props types with callbacks are represented by the component's Props/Cb structures
+      if (nt.def.k === "rec" && nt.def.fields.some((f) => f.type.k === "fn" || (f.type.k === "opt" && f.type.elem.k === "fn"))) continue;
+      types += emitTypeDecl(nt, prog.reg) + "\n";
+    }
+    defs = defs.slice(0, typesAt) + types + defs.slice(typesAt);
     // every declaration's axioms are reported, in the file that declares it (so a failure in
     // a function body still leaves the other functions of the module with a real status)
     defs += `\nend ${ns}\n\n`;
@@ -914,8 +924,12 @@ function translateFunction(fn: ts.FunctionDeclaration, info: FnInfo, m: ModCtx):
     posts.forEach(({ lam }, k) => {
       const p = lam.parameters[0];
       if (!ts.isIdentifier(p.name)) fail(p, "result parameter must be an identifier");
+      // `ensures` takes `(result: any) => boolean`: TypeScript never checks the annotation, so it
+      // must be exactly the declared return type (the null/undefined checks read it)
+      const retTs = m.checker.getTypeFromTypeNode(fn.type!);
+      checkParamAnnotation(p, info.ret, retTs, env);
       const e2 = { ...env, vars: new Map(env.vars) };
-      e2.vars.set(symbolOf(env, p.name)!, { k: "val", code: call, type: info.ret });
+      e2.vars.set(symbolOf(env, p.name)!, { k: "val", code: call, type: info.ret, ts: retTs });
       const body = lam.body;
       if (ts.isBlock(body)) fail(body, "ensures body must be an expression");
       const stmt = prop(body, e2);
