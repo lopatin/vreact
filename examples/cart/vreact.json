@@ -1,0 +1,6 @@
+{
+  "src": "src",
+  "exclude": ["main.tsx"],
+  "proofs": "proofs",
+  "out": ".vreact"
+}

@@ -1,0 +1,22 @@
+translated 2 module(s), 14 proof obligation(s) → .vreact/ ; checking with Lean…
+
+Components
+Functions
+  VERIFIED           validTitle
+  VERIFIED           validPoints
+  VERIFIED           allCards
+  VERIFIED           wellFormed
+  VERIFIED           cardsIn
+  VERIFIED           findCard
+  VERIFIED           keepsCards
+  VERIFIED           removeEverywhere
+  VERIFIED           addCard
+  VERIFIED           deleteCard
+  VERIFIED           moveCard
+  VERIFIED           setWipLimit
+  VERIFIED           boardReducer
+Obligations by file
+  ✓ src/model.ts                             12/12
+  ✓ src/reducer.ts                           2/2
+
+✔ VERIFIED  14/14 obligations proved; components: 0/0 verified  (6.9s)

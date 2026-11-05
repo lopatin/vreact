@@ -1,0 +1,26 @@
+# Verified React — a formally verified React code-generation skill
+
+| | |
+|---|---|
+| **The skill** | `.claude/skills/verified-react/` (source: `vreact/skill/verified-react/`). Teaches Claude to write React in a verifiable TypeScript subset, verify it, synthesize parts of it, and iterate to a kernel-checked certificate. |
+| **The tool** | `vreact/`: TS→Lean 4 translator, React semantic model and runtime soundness proof in Lean, proof automation, synthesizer. See `vreact/README.md`. |
+| **The model** | `vreact/docs/SEMANTICS.md`: what "verified" means here, and exactly what is trusted. |
+| **The walkthrough** | `docs/WALKTHROUGH.md`: building `examples/kanban` incrementally, spec-first, synthesis, top-down with trusted stubs, bugs caught, to a fully verified app (79 obligations, certificate on standard axioms only). Raw outputs are in `docs/walkthrough/`. |
+| **The app** | `examples/kanban` (`npm run dev` in that folder) and its verification (`npx vreact verify`). |
+| **More examples** | `examples/seats` (seat booking, opaque constant data), `examples/cart` (a small cart built step by step: model, synthesis, top-down App with a trusted stub, two bugs caught). |
+
+## Getting started (fresh clone)
+
+Requirements: Node ≥ 22.6 and Lean 4 via [elan](https://github.com/leanprover/elan)
+(the Lean version is pinned in `vreact/lean/lean-toolchain`).
+
+```bash
+# installs the tool's npm deps, builds the Lean library, and wires the app
+bash vreact/skill/verified-react/scripts/setup.sh examples/kanban
+cd examples/kanban && npx vreact verify      # ✔ VERIFIED 79/79
+npm run dev                                  # the same .tsx files, running in React 18
+```
+
+The other examples work the same way (`setup.sh examples/seats`, `setup.sh examples/cart`).
+To use the skill from Claude Code, open this repository: it is installed at
+`.claude/skills/verified-react/` (its `tool` link points at `vreact/`).

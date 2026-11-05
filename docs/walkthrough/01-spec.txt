@@ -1,0 +1,19 @@
+translated 1 module(s), 0 proof obligation(s) → .vreact/ ; checking with Lean…
+
+Components
+Functions
+  VERIFIED           validTitle
+  VERIFIED           validPoints
+  VERIFIED           allCards
+  VERIFIED           wellFormed
+  VERIFIED           findCard
+  VERIFIED           keepsCards
+  VERIFIED           removeEverywhere
+  INCOMPLETE         addCard
+  INCOMPLETE         deleteCard
+  INCOMPLETE         moveCard
+  INCOMPLETE         setWipLimit
+Obligations by file
+pending (hole() / sorry): addCard, deleteCard, moveCard, setWipLimit
+
+◐ INCOMPLETE (holes / trusted stubs / unchecked parts remain)  0/0 obligations proved; components: 0/0 verified  (0.4s)

@@ -1,0 +1,80 @@
+:root {
+  --bg: #f4f2ee;
+  --panel: #ffffff;
+  --ink: #1d1d1f;
+  --muted: #6b6b70;
+  --line: #e2ded6;
+  --accent: #2f6f4e;
+  --accent-soft: #e3efe8;
+  --warn: #a8461f;
+  --warn-soft: #f7e6dc;
+  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  color: var(--ink);
+  background: var(--bg);
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #18181a;
+    --panel: #232326;
+    --ink: #ececee;
+    --muted: #9a9aa2;
+    --line: #34343a;
+    --accent: #7cc49d;
+    --accent-soft: #24352c;
+    --warn: #f0a07a;
+    --warn-soft: #3a2a22;
+  }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); }
+.app { max-width: 1080px; margin: 0 auto; padding: 24px 16px 48px; }
+header { display: flex; flex-wrap: wrap; align-items: center; gap: 16px 24px; margin-bottom: 16px; }
+h1 { font-size: 22px; margin: 0; letter-spacing: -0.01em; }
+h1::after { content: " ✓"; color: var(--accent); }
+button {
+  font: inherit; border: 1px solid var(--line); background: var(--panel); color: var(--ink);
+  border-radius: 6px; padding: 4px 10px; cursor: pointer;
+}
+button:hover:not(:disabled) { border-color: var(--accent); }
+button:disabled { opacity: 0.4; cursor: default; }
+input {
+  font: inherit; border: 1px solid var(--line); background: var(--panel); color: var(--ink);
+  border-radius: 6px; padding: 6px 10px;
+}
+.stats { display: flex; gap: 14px; align-items: center; color: var(--muted); font-size: 14px; }
+.stats progress { width: 120px; accent-color: var(--accent); }
+.wip { display: flex; gap: 6px; align-items: center; font-size: 14px; color: var(--muted); }
+.wip b { color: var(--ink); min-width: 1.2em; text-align: center; }
+.add { display: flex; gap: 8px; align-items: center; margin-bottom: 10px; flex-wrap: wrap; }
+.add input { flex: 1; min-width: 200px; }
+.points { font-variant-numeric: tabular-nums; color: var(--muted); font-size: 13px; }
+.filter { width: 100%; margin-bottom: 12px; }
+.notice { background: var(--accent-soft); color: var(--accent); border-radius: 6px; padding: 6px 10px; margin: 0 0 12px; }
+.columns { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+@media (max-width: 720px) { .columns { grid-template-columns: 1fr; } }
+.column { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 12px; min-height: 160px; }
+.column.full { border-color: var(--warn); background: linear-gradient(var(--warn-soft), var(--panel) 60px); }
+.column h2 { font-size: 15px; margin: 0 0 10px; display: flex; justify-content: space-between; }
+.column h2 small { color: var(--muted); font-weight: 500; }
+.column ul { list-style: none; padding: 0; margin: 0; display: grid; gap: 8px; }
+.card { display: flex; align-items: center; gap: 8px; border: 1px solid var(--line); border-radius: 8px; padding: 8px; }
+.card.selected { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-soft); }
+.card .title { flex: 1; text-align: left; border: none; padding: 0; background: none; }
+.card .actions { display: flex; gap: 4px; }
+.card .actions button { padding: 2px 7px; }
+.details { margin-top: 16px; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 12px 16px; }
+.details h3 { margin: 0 0 4px; font-size: 16px; }
+.details p { margin: 0 0 10px; color: var(--muted); }
+
+/* seats */
+.venue { display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 16px;
+  background: var(--panel); border: 1px solid var(--line); border-radius: 10px; }
+.stage { width: 60%; text-align: center; font-size: 12px; text-transform: uppercase; letter-spacing: 0.2em;
+  color: var(--muted); border-bottom: 3px solid var(--line); padding-bottom: 6px; margin-bottom: 10px; }
+.row { display: flex; gap: 8px; }
+.seat { width: 48px; height: 40px; font-variant-numeric: tabular-nums; }
+.seat-selected { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); font-weight: 600; }
+.seat-booked { background: var(--warn-soft); border-color: var(--warn); color: var(--warn); }
+.actions { display: flex; gap: 8px; justify-content: center; margin-top: 16px; }
+.meter { letter-spacing: 0.15em; color: var(--accent); }
+.limit { color: var(--warn); }
