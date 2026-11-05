@@ -10,7 +10,7 @@
 import ts from "typescript";
 import { T, type VType, type Param, type Field, leanType, showType, typeOfNode } from "./types.ts";
 import { type Env, ModCtx, type CompCtx, type CompInfo, type StateVar, type FnInfo, type Binding, bind, freshLocal } from "./ctx.ts";
-import { expr, prop, block, branch, handlerFn, checkDeps, hookName, specFn, symbolOf, bindParam, type BlockCtx, typeOf, valueBlock, lambda, outcome, checkClosures, topLevelHookDecls } from "./translate.ts";
+import { expr, prop, propAll, block, branch, handlerFn, checkDeps, hookName, specFn, symbolOf, bindParam, type BlockCtx, typeOf, valueBlock, lambda, outcome, checkClosures, topLevelHookDecls } from "./translate.ts";
 import { fail, leanField, leanIdent, leanStr, jsStr, paren, nodeText, indent } from "./util.ts";
 
 /* ─────────────────────── React 18.3.1 event model ───────────────────────
@@ -125,7 +125,8 @@ export function compSignature(fn: ts.FunctionDeclaration, ns: string, module: st
       } else data.push(f);
     }
   }
-  return { name, ns: `${ns}.${name}`, module, data, callbacks, decl: fn, trusted, propsType };
+  // the Lean namespace of the component: renamed when the name is a Lean token or Lean name (`Type`, `List`, …)
+  return { name, ns: `${ns}.${leanIdent(name)}`, module, data, callbacks, decl: fn, trusted, propsType };
 }
 
 interface Prepass {
@@ -170,7 +171,7 @@ export function translateComponent(fn: ts.FunctionDeclaration, info: CompInfo, m
   deferredFields.set(comp, computeDeferred(body, comp, env));
 
   // ---- declarations ----
-  let out = `namespace ${info.name}\n\n`;
+  let out = `namespace ${leanIdent(info.name)}\n\n`;
   out += `/-- Props (data part) of ${info.name}. -/\nstructure Props where\n${info.data.map((f) => `  ${leanField(f.name)} : ${leanType(f.type)}`).join("\n")}\n\n`;
   out += `/-- Callback props of ${info.name}; each carries its contract. -/\nstructure Cb (props : Props) (E : Type) : Type where\n`;
   for (const cb of info.callbacks) {
@@ -215,6 +216,7 @@ export function translateComponent(fn: ts.FunctionDeclaration, info: CompInfo, m
         const node = jsxNode(e, env2);
         return effects.length ? `(VReact.VNode.withEffects [${effects.join(",\n  ")}]\n  ${paren(node)})` : node;
       },
+      jsxConst: jsxConstCtx(comp),
     };
     (bc as BlockCtx & { onEffect?: (c: ts.CallExpression, env: Env) => void }).onEffect = (c, env2) => {
       effects.push(effectCode(c, env2, info));
@@ -223,7 +225,7 @@ export function translateComponent(fn: ts.FunctionDeclaration, info: CompInfo, m
     out += `${sig} :=\n  ${lets}${renderBody}\n\n`;
   }
   out += `def component : VReact.Component spec := ⟨fun d cb s hpre hinv => render d cb s hpre hinv⟩\n\n`;
-  out += `end ${info.name}\n`;
+  out += `end ${leanIdent(info.name)}\n`;
   return out;
 }
 
@@ -353,16 +355,17 @@ function prepass(stmts: readonly ts.Statement[], env: Env, comp: CompCtx, m: Mod
   const pp: Prepass = { pre: [], inv: [], stateVars: [], inits: [], contracts: new Map(), renderStmts: [], propsEnv: env };
   let sawNonHook = false;
   let stateEnv: Env = env; // props + state (as σ.field) for invariants
+  // several requires / invariants form one condition each, in order: a later one may use
+  // the earlier ones as guards (`propAll`, as for function preconditions)
+  const reqs: ts.Expression[] = [];
+  const invs: ts.Expression[] = [];
   for (const s of stmts) {
     if (ts.isExpressionStatement(s) && ts.isCallExpression(s.expression)) {
       const c = s.expression;
       const sf = specFn(env, c.expression);
-      if (sf === "requires") {
-        pp.pre.push(prop(c.arguments[0], env));
-        continue;
-      }
-      if (sf === "invariant") {
-        pp.inv.push(prop(c.arguments[0], stateEnv));
+      if (sf === "requires" || sf === "invariant") {
+        if (c.arguments.length !== 1) fail(c, `${sf}(condition)`);
+        (sf === "requires" ? reqs : invs).push(c.arguments[0]);
         continue;
       }
       if (sf === "callbackRequires") {
@@ -429,6 +432,9 @@ function prepass(stmts: readonly ts.Statement[], env: Env, comp: CompCtx, m: Mod
     if (ts.isIfStatement(s) || ts.isReturnStatement(s) || ts.isSwitchStatement(s) || mayReturn(s)) sawNonHook = true;
     pp.renderStmts.push(s);
   }
+  // (an invariant can only mention state declared before it: TypeScript rejects the rest)
+  if (reqs.length) pp.pre.push(propAll(reqs, env));
+  if (invs.length) pp.inv.push(propAll(invs, stateEnv));
   return pp;
 }
 
@@ -563,22 +569,36 @@ function effectCode(c: ts.CallExpression, env: Env, info: CompInfo): string {
   return `(VReact.Effect.mk (S := ${info.ns}.State) (E := E) (inv := ${info.ns}.inv props) (${deps}) ${paren(setup)} ${okSetup}\n     (/-⟦gen⟧-/ by vreact_noemit)\n     [${tasks.join(", ")}] ${okTasks})`;
 }
 
-const CLEANUP_RULE = "effect cleanups may only clear timers (clearTimeout/clearInterval) and make external writes (console.*, localStorage.*, document.title = …): React runs a cleanup later, with the props and state of the render that created it, and the cleanup is not verified";
+const CLEANUP_RULE = "effect cleanups may only clear timers (clearTimeout/clearInterval) and make external writes (console.*, localStorage.*, document.title = …), possibly under if/else: React runs a cleanup later, with the props and state of the render that created it, and the cleanup is not verified";
 
 /**
  * An effect cleanup is not translated (the model has no cleanup step), so it must not be
  * able to affect any component state: only timer clearing and the documented external
- * writes, whose arguments are pure expressions.  Setters, dispatch, parent callbacks and
- * local helpers (which may reach them) are rejected, directly or nested.
+ * writes, whose arguments are pure expressions, possibly under `if`/`else` with a pure
+ * condition.  Setters, dispatch, parent callbacks and local helpers (which may reach
+ * them) are rejected, directly or nested.
  */
 function checkCleanup(e0: ts.Expression, env: Env) {
   let e: ts.Expression = e0;
   while (ts.isParenthesizedExpression(e)) e = e.expression;
   if (!ts.isArrowFunction(e) && !ts.isFunctionExpression(e)) fail(e0, `an effect cleanup must be an inline function \`() => { … }\`; ${CLEANUP_RULE}`);
   if (e.parameters.length) fail(e, "effect cleanups take no parameters");
-  const items: ts.Node[] = ts.isBlock(e.body) ? [...e.body.statements] : [e.body];
+  checkCleanupItems(ts.isBlock(e.body) ? [...e.body.statements] : [e.body], env);
+}
+
+function checkCleanupItems(items: readonly ts.Node[], env: Env) {
   for (const it of items) {
     if (ts.isEmptyStatement(it)) continue;
+    if (ts.isBlock(it)) {
+      checkCleanupItems(it.statements, env);
+      continue;
+    }
+    if (ts.isIfStatement(it)) {
+      pureCleanupExpr(it.expression, env);
+      checkCleanupItems([it.thenStatement], env);
+      if (it.elseStatement) checkCleanupItems([it.elseStatement], env);
+      continue;
+    }
     let x: ts.Node = ts.isExpressionStatement(it) ? it.expression : it;
     while (ts.isParenthesizedExpression(x)) x = x.expression;
     if (ts.isCallExpression(x)) {
@@ -653,6 +673,11 @@ function isJsx(e: ts.Node): boolean {
   return ts.isJsxElement(e) || ts.isJsxSelfClosingElement(e) || ts.isJsxFragment(e);
 }
 
+/** How render blocks translate a JSX const at its declaration: a VNode of this render. */
+function jsxConstCtx(comp: CompCtx): NonNullable<BlockCtx["jsxConst"]> {
+  return { code: (e, env) => jsxNode(e, env), type: `VReact.VNode ${comp.stateType} E (${comp.invName} ${comp.propsVar}) ${comp.snap}` };
+}
+
 /** A VNode term for a JSX-valued expression. */
 export function jsxNode(e0: ts.Expression, env: Env): string {
   const e = ts.isParenthesizedExpression(e0) ? e0.expression : e0;
@@ -667,7 +692,12 @@ export function jsxNode(e0: ts.Expression, env: Env): string {
   if (ts.isIdentifier(e)) {
     const s = symbolOf(env, e);
     const b = s ? env.vars.get(s) : undefined;
-    if (b?.k === "jsx") return jsxNode(b.node, { ...b.env, scope: env.scope });
+    if (b?.k === "jsx") {
+      // translated (its obligations checked) at the declaration; translated again here
+      // only for the event-bubbling checks of this position
+      env.m.dryRun(() => jsxNode(b.node, { ...b.env, scope: env.scope }));
+      return b.code;
+    }
   }
   if (ts.isCallExpression(e) && ts.isPropertyAccessExpression(e.expression) && e.expression.name.text === "map") return keyedMap(e, env);
   // a value rendered as text
@@ -981,21 +1011,20 @@ function keyedMap(c: ts.CallExpression, env: Env): string {
   const p = fn.parameters[0];
   // key function
   const kEnvR = bindParam(p.name, xs.type.elem, env);
-  const keyBody = (envK: Env): string => {
-    const kv = expr(keyE, envK);
+  const asKey = (kv: { code: string; type: VType }): string => {
     if (kv.type.k === "int") return `VReact.Key.int ${paren(kv.code)}`;
     if (kv.type.k === "str") return `VReact.Key.str ${paren(kv.code)}`;
     fail(keyE, "keys must be int or string");
   };
   const keyCode = ts.isBlock(fn.body)
-    ? valueBlock(fn.body.statements.slice(0, -1).concat([ts.factory.createReturnStatement(keyE)]) as unknown as ts.Statement[], kEnvR.env, undefined, fn).code
-    : keyBody(kEnvR.env);
+    ? asKey(valueBlock(fn.body.statements.slice(0, -1).concat([ts.factory.createReturnStatement(keyE)]) as unknown as ts.Statement[], { ...kEnvR.env, keyFn: true }, undefined, fn))
+    : asKey(expr(keyE, kEnvR.env));
   // node function (with membership hypothesis)
   const nEnvR = bindParam(p.name, xs.type.elem, env);
   const hm = m.fresh("hmem");
   let nodeCode: string;
   if (ts.isBlock(fn.body)) {
-    const bc: BlockCtx = { kind: "render", fnNode: fn, onReturn: (e, e2) => jsxNode(e!, e2) };
+    const bc: BlockCtx = { kind: "render", fnNode: fn, onReturn: (e, e2) => jsxNode(e!, e2), jsxConst: jsxConstCtx(env.comp!) };
     nodeCode = block(fn.body.statements, 0, nEnvR.env, bc, () => fail(fn, "missing return"));
   } else nodeCode = jsxNode(fn.body, nEnvR.env);
   const ob = m.ob(keyAttr, "unique-keys", `keys ${nodeText(keyE)} are distinct across ${nodeText(pa.expression)}`);

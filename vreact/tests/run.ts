@@ -6,7 +6,7 @@
  * report checks (see `checkReport`): `Name=<status>` for a component/function/constant of
  * the case, `verdict=…`, `proved=N`, `unchecked=N`, `errors=<cause>`, `failtext=<word>`.
  * A directory `cases/<Name>/` is a multi-file case with its own project: its .ts/.tsx files
- * go to src/, `proofs/` and `vreact.json` are copied, `tsconfig.json` replaces the default
+ * and subdirectories go to src/, `proofs/` and `vreact.json` are copied, `tsconfig.json` replaces the default
  * one (a file `NO_TSCONFIG` means none); the header of its first source file applies.
  */
 import fs from "node:fs";
@@ -182,6 +182,8 @@ for (const name of dirCases) {
   fs.rmSync(dir, { recursive: true, force: true });
   fs.mkdirSync(path.join(dir, "src"), { recursive: true });
   for (const f of files) fs.copyFileSync(path.join(src, f), path.join(dir, "src", f));
+  // subdirectories other than proofs/ are source directories (nested modules)
+  for (const f of fs.readdirSync(src)) if (f !== "proofs" && fs.statSync(path.join(src, f)).isDirectory()) fs.cpSync(path.join(src, f), path.join(dir, "src", f), { recursive: true });
   if (fs.existsSync(path.join(src, "proofs"))) fs.cpSync(path.join(src, "proofs"), path.join(dir, "proofs"), { recursive: true });
   if (fs.existsSync(path.join(src, "vreact.json"))) fs.copyFileSync(path.join(src, "vreact.json"), path.join(dir, "vreact.json"));
   if (fs.existsSync(path.join(src, "tsconfig.json"))) fs.copyFileSync(path.join(src, "tsconfig.json"), path.join(dir, "tsconfig.json"));

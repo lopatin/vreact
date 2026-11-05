@@ -102,7 +102,8 @@ export type Binding =
   | { k: "callback"; cb: CallbackInfo }
   | { k: "props" }
   | { k: "event"; leanVar: string }
-  | { k: "jsx"; node: ts.Expression; env: Env };
+  /** a JSX const: translated (obligations checked) at its declaration, bound to the Lean local `code` */
+  | { k: "jsx"; node: ts.Expression; env: Env; code: string };
 
 export interface Narrowed {
   /** narrowed value (Option payload / variant) */
@@ -126,6 +127,8 @@ export interface Env {
   curState?: string;
   /** Lean hypotheses in scope that justify obligations (names only, for documentation). */
   fnName?: string;
+  /** the key function of a keyed `.map`: its JSX consts are translated by the node function */
+  keyFn?: boolean;
 }
 
 /** Per-program translation context. */
@@ -195,6 +198,18 @@ export class ModCtx {
   }
   obCount(): number {
     return this.obligations.length;
+  }
+  /** Run a translation only for the checks it makes (its term is discarded): the
+   * obligations it registers are withdrawn, so none is left unemitted. */
+  dryRun(f: () => void) {
+    const n = this.counter.n;
+    const len = this.obligations.length;
+    try {
+      f();
+    } finally {
+      this.counter.n = n;
+      this.obligations.length = len;
+    }
   }
   describe(node: ts.Node): string {
     return nodeText(node);
