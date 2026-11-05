@@ -1,0 +1,9 @@
+node_modules/
+.lake/
+.vreact/
+vreact/tests/.work/
+vreact/tests/.audit/
+.claude/worktrees/
+dist/
+*.log
+.DS_Store

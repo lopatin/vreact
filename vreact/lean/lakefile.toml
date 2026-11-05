@@ -1,0 +1,6 @@
+name = "VReact"
+version = "0.1.0"
+defaultTargets = ["VReact"]
+
+[[lean_lib]]
+name = "VReact"

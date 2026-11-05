@@ -1,0 +1,220 @@
+import ts from "typescript";
+import { TypeRegistry, type VType, type Param, type Field, type TypeEnv } from "./types.ts";
+import { relLoc, nodeText } from "./util.ts";
+
+/** A translated Lean term together with its VTS type. */
+export interface Val {
+  code: string;
+  type: VType;
+}
+
+/** Information about a pure top-level function. */
+export interface FnInfo {
+  qname: string;
+  name: string;
+  params: Param[];
+  ret: VType;
+  hasPre: boolean;
+  trusted: boolean;
+  /** @opaque: callers reason only through the contract (no unfolding) */
+  opaque: boolean;
+  decl: ts.FunctionDeclaration;
+  module: string;
+}
+
+export interface ConstInfo {
+  qname: string;
+  type: VType;
+  decl: ts.VariableDeclaration;
+  /** @opaque: not unfolded by automation; facts come from module-level assert(…) */
+  opaque: boolean;
+  /** module-level facts about this constant (assert statements) */
+  facts: ts.Expression[];
+}
+
+export interface CallbackInfo {
+  name: string;
+  params: Param[];
+}
+
+/** What a parent needs to know about a child component. */
+export interface CompInfo {
+  name: string;
+  /** Lean namespace of the component (e.g. VTS.Board.Column). */
+  ns: string;
+  module: string;
+  data: Field[];
+  callbacks: CallbackInfo[];
+  decl: ts.FunctionDeclaration;
+  trusted: boolean;
+  propsType: VType | null;
+}
+
+export type Global =
+  | { k: "fn"; info: FnInfo }
+  | { k: "const"; info: ConstInfo }
+  | { k: "comp"; info: CompInfo };
+
+export interface Obligation {
+  id: number;
+  kind: string;
+  desc: string;
+  where: string;
+  file: string;
+  line: number;
+}
+
+/** State variable of a component (one useState / useReducer slot). */
+export interface StateVar {
+  name: string;
+  field: string;
+  type: VType;
+  reducer?: FnInfo;
+  actionType?: VType;
+}
+
+export interface CompCtx {
+  info: CompInfo;
+  stateType: string;
+  stateVars: StateVar[];
+  /** Lean name of the props data parameter. */
+  propsVar: string;
+  /** Lean name of the callbacks record. */
+  cbVar: string;
+  /** Lean name of the snapshot state. */
+  snap: string;
+  invName: string;
+}
+
+export interface HandlerAcc {
+  kind: "discrete" | "robust";
+  updates: string[];
+  emit: string | null;
+  /** Lean name of the event parameter (if any). */
+  eventVar: string | null;
+}
+
+export type Binding =
+  | { k: "val"; code: string; type: VType }
+  | { k: "setter"; sv: StateVar }
+  | { k: "dispatch"; sv: StateVar }
+  | { k: "closure"; fn: ts.ArrowFunction | ts.FunctionExpression; env: Env }
+  | { k: "callback"; cb: CallbackInfo }
+  | { k: "props" }
+  | { k: "event"; leanVar: string }
+  | { k: "jsx"; node: ts.Expression; env: Env };
+
+export interface Narrowed {
+  /** narrowed value (Option payload / variant) */
+  kind: "some" | "variant";
+  code: string;
+  type: VType;
+  variant?: string;
+  fields?: Map<string, Val>;
+}
+
+export interface Env {
+  m: ModCtx;
+  vars: Map<ts.Symbol, Binding>;
+  narrow: Map<string, Narrowed>;
+  /** Lean names in scope (for capture-avoiding naming). */
+  scope: Set<string>;
+  mode: "code" | "spec";
+  comp?: CompCtx;
+  handler?: HandlerAcc;
+  /** inside a functional update `setX(prev => …)` / reducer argument: current-state access */
+  curState?: string;
+  /** Lean hypotheses in scope that justify obligations (names only, for documentation). */
+  fnName?: string;
+}
+
+/** Per-program translation context. */
+export class Program {
+  checker: ts.TypeChecker;
+  reg = new TypeRegistry();
+  globals = new Map<ts.Node, Global>();
+  root: string;
+  typeEnv: TypeEnv;
+  modNs = new Map<string, string>();
+  constructor(checker: ts.TypeChecker, root: string, nsOf: (sf: ts.SourceFile) => string) {
+    this.checker = checker;
+    this.root = root;
+    this.typeEnv = {
+      checker,
+      reg: this.reg,
+      nsOf,
+      isSpecInt: (node) => {
+        if (node.typeName.getText() !== "int") return false;
+        let sym = checker.getSymbolAtLocation(node.typeName);
+        if (!sym) return false;
+        if (sym.flags & ts.SymbolFlags.Alias) sym = checker.getAliasedSymbol(sym);
+        const d = sym.declarations?.[0];
+        return !!d && /vreact[\\/](spec|lib)|vreact-spec/.test(d.getSourceFile().fileName);
+      },
+    };
+  }
+}
+
+/** Per generated Lean file context: obligations and fresh names. */
+export class ModCtx {
+  prog: Program;
+  ns: string;
+  obligations: Obligation[];
+  counter: { n: number };
+  hyp = 0;
+  /** imported modules needed by this file (Lean module names) */
+  deps: Set<string>;
+  sf: ts.SourceFile;
+  constructor(prog: Program, ns: string, sf: ts.SourceFile, obligations: Obligation[], counter: { n: number }) {
+    this.prog = prog;
+    this.ns = ns;
+    this.sf = sf;
+    this.obligations = obligations;
+    this.counter = counter;
+    this.deps = new Set();
+  }
+  get checker() {
+    return this.prog.checker;
+  }
+  get reg() {
+    return this.prog.reg;
+  }
+  fresh(base: string): string {
+    this.hyp++;
+    return `${base}_${this.hyp}`;
+  }
+  /** Emit a proof obligation discharged by `vreact_auto`, tagged with a source marker. */
+  ob(node: ts.Node, kind: string, desc: string, tactic = "vreact_auto"): string {
+    const id = ++this.counter.n;
+    const sf = node.getSourceFile();
+    const { line } = sf.getLineAndCharacterOfPosition(node.getStart(sf));
+    this.obligations.push({ id, kind, desc, where: relLoc(node, this.prog.root), file: sf.fileName, line: line + 1 });
+    return `(/-⟦ob${id}⟧-/ by ${tactic})`;
+  }
+  obCount(): number {
+    return this.obligations.length;
+  }
+  describe(node: ts.Node): string {
+    return nodeText(node);
+  }
+}
+
+export function extend(env: Env, patch: Partial<Env>): Env {
+  return { ...env, ...patch };
+}
+
+export function bind(env: Env, sym: ts.Symbol, b: Binding): Env {
+  const vars = new Map(env.vars);
+  vars.set(sym, b);
+  return { ...env, vars };
+}
+
+/** Choose a capture-free Lean name for a new local. */
+export function freshLocal(env: Env, base: string): { env: Env; name: string } {
+  let name = base;
+  let i = 1;
+  while (env.scope.has(name)) name = `${base}_${i++}`;
+  const scope = new Set(env.scope);
+  scope.add(name);
+  return { env: { ...env, scope }, name };
+}

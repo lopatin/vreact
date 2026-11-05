@@ -1,0 +1,257 @@
+# The vreact semantic model
+
+What does "formally verified" mean for a React app built with vreact? This
+document gives the precise answer: the language subset (VTS), its meaning in
+Lean 4, the model of React, the proof obligations, the soundness theorem, and
+the trusted base.
+
+```
+ .tsx (VTS)  ──vreact translate──▶  Lean 4 definitions + proof obligations  ──Lean kernel──▶  ✔ / ✗
+   │                                     │
+   │ tsc + Vite (unchanged code)         └─ VReact library: JS runtime model, React model,
+   ▼                                        runtime semantics + soundness theorem, tactics
+ browser
+```
+
+The `.tsx` you run is the `.tsx` you verify: vreact never generates the
+JavaScript. It *reads* your code and gives it a meaning in Lean.
+
+---
+
+## 1. VTS — Verified TypeScript
+
+VTS is a subset of TypeScript chosen so that every accepted construct has an
+exact, total meaning in Lean, while still covering what real React code uses.
+
+### 1.1 Types
+
+| TypeScript                                   | Lean                                    | notes |
+|----------------------------------------------|-----------------------------------------|-------|
+| `boolean`                                    | `Bool`                                  | |
+| `int` (alias of `number` from `vreact/spec`) | `Int`                                   | mathematical integers (2^53 not modelled) |
+| `number`                                     | `Float`                                 | IEEE-754; executable but opaque to proofs |
+| `string`                                     | `JS.Str` = list of UTF-16 code units    | **exact** JS strings (emoji, lone surrogates) |
+| `"a" \| "b"`                                 | `inductive` enum                        | |
+| `{ readonly f: T }`, `interface`             | `structure`                             | |
+| `{kind:"a",…} \| {kind:"b",…}`               | `inductive`, one constructor per variant | discriminated unions |
+| `readonly T[]`, `T[]`                        | `List T`                                | immutable |
+| `T \| null`, `T \| undefined`, `f?: T`       | `Option T`                              | not both null and undefined |
+| `[A, B]`                                     | `A × B`                                 | |
+| `(x: A) => void` (props only)                | callback with a contract                | see §2.4 |
+
+Rejected: `any`, `as` casts, classes, `this`, mutation of objects/arrays,
+`==` (except `== null`), `===` on objects (reference identity), generics,
+exceptions (`try`), `var`, `while`, recursion (for now), `async`.
+
+### 1.2 Expressions and statements — semantics by translation
+
+Every expression maps to a Lean term whose value is the JavaScript value.
+
+* Arithmetic on `int` is integer arithmetic; `%` is ECMAScript's remainder
+  (sign of the dividend), `Math.floor(a / b)` / `idiv(a, b)` is floor division —
+  both carry the obligation `b ≠ 0`.
+* `xs[i]` carries the obligation `0 ≤ i < xs.length` (JS would return `undefined`).
+* Array methods `map filter some every find findIndex includes indexOf slice
+  concat join reduce toSorted toReversed with at flatMap` and spread `[...xs, x]`
+  map to their exact list counterparts (`slice` implements JS's negative-index
+  clamping, `toSorted` is a stable sort, `with` carries a bounds obligation).
+* String methods `trim includes startsWith endsWith slice repeat length` are
+  exact on UTF-16 code units; `toLowerCase/toUpperCase` are opaque (Unicode case
+  mapping is not modelled: proofs cannot depend on them).
+* `x!` carries the obligation `x ≠ null`; `?.` and `??` map to `Option.map/getD`.
+* Narrowing (`x !== null`, `x.kind === "add"`, `switch (x.kind)`, early
+  `return`) is compiled to Lean `match`, so the narrowed facts are available to
+  every obligation in the branch.
+* Statements are translated in continuation-passing style: `const` ↦ `let`,
+  reassignment of a local `let` ↦ shadowing `let`, `if` ↦ dependent `if` (the
+  condition becomes a hypothesis), `for (const x of xs)` ↦ `List.foldl` over
+  the tuple of assigned locals, `throw` ↦ an obligation that the point is
+  unreachable.
+
+### 1.3 Contracts (`vreact/spec`)
+
+| construct                         | meaning |
+|-----------------------------------|---------|
+| `requires(c)` in a function       | hypothesis parameter `(h_pre : c)`; every call site must prove it |
+| `ensures((r: T) => c)`            | theorem `f.post : ∀ args, h_pre → c[r := f args]` |
+| `requires(c)` in a component      | the props precondition `pre`; every `<C …/>` must prove it |
+| `invariant(c)` in a component     | the state invariant `inv` (after the hooks) |
+| `callbackRequires(cb, (…) => c)`  | the contract of a callback prop (§2.4) |
+| `assert(c)` / `assume(c)`         | obligation + fact / trusted fact (reported) |
+| `forall exists distinct implies`  | bounded quantifiers, key uniqueness (`List.Nodup`), implication |
+| `/** @opaque */` on a function    | callers see only its `ensures` (modular verification) |
+| `/** @trusted */`                 | body not verified; contract assumed (reported, appears as a Lean axiom) |
+| `hole<T>()`                       | a placeholder for `vreact synth` |
+
+---
+
+## 2. The React model (`lean/VReact/Core.lean`)
+
+### 2.1 State and the update queue
+
+A component's hook state (all `useState`/`useReducer` slots) is a structure
+`S`. A setter call does not change the state: React queues an update and
+processes the queue after the handler. One setter call is an `Update S := S → S`:
+
+* `setX(v)` ↦ `fun st => {st with x := v}` — `v` was computed from the **render
+  snapshot** (the closure's values);
+* `setX(f)` ↦ `fun st => {st with x := f st.x}` — functional update;
+* `dispatch(a)` ↦ `fun st => {st with r := reducer st.r a}`.
+
+`Outcome.apply` folds the queue over the state — exactly React's batching.
+Consequently (proved in `Runtime.lean`): `setN(n+1); setN(n+1)` increments once,
+`setN(m => m+1); setN(m => m+1)` increments twice, and a replace-update ignores
+earlier queued updates. The regression case `StaleBatch.tsx` is rejected for
+this reason; `FunctionalBatch.tsx` is accepted.
+
+### 2.2 Snapshots: discrete events vs. robust updates
+
+React flushes the updates of a *discrete* event (click, input, keydown,
+submit, …) synchronously, so the next discrete event runs a handler of the
+latest render, whose snapshot is the current state. A discrete handler must
+therefore preserve the invariant **from its snapshot**.
+
+Continuous events (mousemove, scroll, wheel, …), effects and asynchronous
+callbacks (timers) may run with a stale snapshot, so their outcomes must be
+**robust**: preserve the invariant from *every* state that satisfies it. This is
+what rejects the classic stale-closure bug (`StaleTimer.tsx`) and accepts the
+functional-update fix (`RobustTimer.tsx`).
+
+### 2.3 Rendering is proof-carrying
+
+`render : (props) → (state) → pre props → inv props state → VNode …` is a pure
+function returning a view tree in which
+
+* every event handler stores the proof that its outcome is safe (§2.2),
+* every child element `<C …/>` stores the proof of `C.pre`,
+* every keyed list stores the proof that its keys are pairwise distinct
+  (React's reconciliation requirement; `int` and `string` keys never mix),
+* every parent callback handed to a child stores the proof that, assuming the
+  child's callback contract, the parent's invariant is preserved.
+
+A render function that type-checks in Lean can only ever offer the user
+invariant-preserving interactions.
+
+### 2.4 Composition: callbacks as assume/guarantee
+
+A child declares `callbackRequires(props.onPick, (i) => 0 <= i && i < props.n)`.
+
+* **Guarantee (child):** every call `props.onPick(e)` must prove the contract.
+* **Assume (parent):** the parent's function passed as `onPick` is verified
+  under the contract. In Lean the callback returns an `Emit` — the parent
+  outcome packaged with the proof that it preserves the parent's invariant
+  against the parent's (current) snapshot.
+
+A handler may invoke at most one parent callback per execution path (two would
+compose two parent outcomes that were only checked separately).
+
+### 2.5 Lifecycle obligations
+
+* `init_inv` — mounting (`useState(init)`, `useReducer(r, init)`) establishes the invariant.
+* `stable` — when the parent re-renders with new props, React keeps the state:
+  `inv props s → pre props' → inv props' s`. An invariant like
+  `count <= props.max` is rejected (`PropsStability.tsx`): the parent may lower `max`.
+
+### 2.6 Effects
+
+`useEffect(body, deps)` runs after commit when its dependency values changed.
+Its synchronous updates and the timers it registers must be robust and may not
+call parent callbacks; `deps` must be exhaustive (otherwise stale closures).
+Running a robust effect any number of times (StrictMode) is safe.
+
+---
+
+## 3. The runtime and the soundness theorem (`lean/VReact/Runtime.lean`)
+
+The runtime state is a tree of mounted instances (`Inst`): each records the
+element that created it (component spec, props, callbacks, render closure), its
+state **with the proof of its invariant**, its effect dependencies, its timers,
+and its children. A child's callback-result type mentions the parent's current
+state, so a child can only hand its parent outcomes proven safe for it.
+
+Transitions:
+
+| transition       | React behaviour modelled |
+|------------------|--------------------------|
+| `mount`          | initialisers, render, mount children |
+| `reconcile`      | match new child elements to old instances by position/key **and component identity**: same component ⇒ keep state (`mount_keeps_state`), otherwise mount fresh (`mount_fresh_state`); removed children unmount |
+| `dispatch`       | a discrete event runs one handler of the latest render; its queue is processed; its parent-callback outcome propagates up the instance path; affected instances re-render |
+| `flushEffects`   | after commit, effects whose deps changed run (robust), timers are (re)registered |
+| `fireTask`       | a timer callback fires against the current state |
+
+**Theorem `run_allInv`.** For every sequence of actions (user events, effect
+flushes, timer firings), every mounted instance satisfies its invariant.
+
+The proof is by construction: `dispatch`, `flushEffects`, `fireTask` and
+`reconcile` can only be *defined* because each component supplies its
+obligations. `vreact verify` instantiates the theorem for every root component
+as `App.certificate`; `#print axioms App.certificate` then lists every
+assumption the whole application relies on. A fully verified app depends only
+on Lean's standard axioms `propext`, `Classical.choice`, `Quot.sound`.
+
+---
+
+## 3½. What the translation looks like
+
+`Stats.tsx` (from the walkthrough):
+
+```tsx
+export function Stats(props: StatsProps) {
+  requires(props.todo >= 0 && props.doing >= 0 && props.done >= 0);
+  const total = props.todo + props.doing + props.done;
+  const pct = total === 0 ? 0 : idiv(props.done * 100, total);
+  return <div className="stats">…<span>{pct}% done</span>…</div>;
+}
+```
+
+becomes (abridged) a `VReact.Spec` plus a proof-carrying render:
+
+```lean
+def pre (props : Props) : Prop := ((props.todo ≥ 0) ∧ (props.doing ≥ 0)) ∧ (props.done ≥ 0)
+
+def render {E : Type} (props : Props) (κ : Cb props E) (σ : State) (hpre : pre props) (hinv : inv props σ) :
+    VReact.VNode State E (inv props) σ :=
+  let total := props.todo + props.doing + props.done
+  let pct := if h_1 : VReact.JS.eq total 0 = true then 0
+             else VReact.JS.floorDiv (props.done * 100) total (by vreact_auto)   -- obligation: total ≠ 0
+  VReact.VNode.elem "div" [⟨"className", .str (JS.Str.ofString "stats")⟩] [] (…)
+```
+
+The divisor obligation is discharged in a context that contains `h_1 :
+¬ total = 0` — the branch condition. Without the guard, the same obligation is
+left with `hpre` only, and Lean's goal shows the counterexample
+`props.doing + props.done + props.todo = 0`.
+
+---
+
+## 4. What is verified
+
+For every component: initial state satisfies the invariant; the invariant
+survives prop changes; every handler (discrete: from the snapshot; continuous,
+effects, timers: from any state) preserves it; rendering never fails (indices,
+divisions, non-null assertions, preconditions of called functions); keys are
+distinct; child preconditions hold; callback contracts hold in both directions;
+hook rules hold (static checks). For every function: its body is safe and its
+`ensures` hold.
+
+## 5. The trusted base — what is *not* verified
+
+* **The translation** from TypeScript to Lean (≈3k lines of TypeScript). It is
+  structural and syntax-directed; the regression suite pins its behaviour.
+* **The JS runtime model** (`JS.lean`): e.g. that `Array.prototype.slice` behaves
+  like `JS.slice`. Definitions follow ECMA-262 directly.
+* **The React model**: that React 18 behaves as described in §2–3 (discrete-event
+  flushing, update queues, reconciliation by position/key/type).
+* **Abstractions:** integers are unbounded; floats are opaque to proofs; Unicode
+  case mapping is opaque; `localStorage`, `console`, `document.title` writes are
+  external effects with no state change; reading external data is not modelled.
+* **Outside the subset:** the entry point (`main.tsx`), React itself, the DOM,
+  CSS.
+* **Event bubbling** is handled by a static restriction rather than modelled: the
+  runtime runs one handler per event, and VTS rejects every layout in which one
+  event could reach two handlers (an element with `onX` containing a nested
+  `onX` or a user component; a submit button with `onClick` inside
+  `<form onSubmit>`).
+
+Lean's kernel checks every proof; `sorry` and `@trusted` show up in the axiom
+report, so nothing unverified can be mistaken for verified.

@@ -1,0 +1,83 @@
+translated 9 module(s), 79 proof obligation(s) → .vreact/ ; checking with Lean…
+
+Components
+  INCOMPLETE         CardView               src/components/CardView.tsx:14
+  UNCHECKED          ColumnView             src/components/ColumnView.tsx:17
+  INCOMPLETE         AddCardForm            src/components/AddCardForm.tsx:8
+  INCOMPLETE         Stats                  src/components/Stats.tsx:6
+  VERIFIED           WipControl             src/components/WipControl.tsx:6
+  VERIFIED           Details                src/components/Details.tsx:5
+  UNCHECKED          App                    src/App.tsx:13
+Functions
+  VERIFIED           validTitle
+  VERIFIED           validPoints
+  VERIFIED           allCards
+  VERIFIED           wellFormed
+  VERIFIED           cardsIn
+  VERIFIED           findCard
+  VERIFIED           keepsCards
+  VERIFIED           removeEverywhere
+  VERIFIED           addCard
+  VERIFIED           deleteCard
+  VERIFIED           moveCard
+  VERIFIED           setWipLimit
+  VERIFIED           boardReducer
+App certificates (VReact.run_allInv instantiated)
+  UNCHECKED          VTS.App.App.certificate  axioms: none
+Obligations by file
+  ✓ src/model.ts                             12/12
+  ✓ src/reducer.ts                           2/2
+  ✗ src/components/CardView.tsx              9/10
+  ✓ src/components/ColumnView.tsx            10/10
+  ✗ src/components/AddCardForm.tsx           6/7
+  ✗ src/components/Stats.tsx                 2/3
+  ✓ src/components/WipControl.tsx            6/6
+  ✓ src/components/Details.tsx               4/4
+  ✓ src/App.tsx                              25/25
+
+Failed obligations
+✗ src/components/AddCardForm.tsx:20:9  [callback-contract] callback contract of onAdd(draft, points)
+    │ `grind` failed
+    │ case grind
+    │ E : Type
+    │ props : Props
+    │ κ : Cb props E
+    │ σ : State
+    │ draft : JS.Str := σ.draft
+    │ points : Int := σ.points
+    │ title : JS.Str := JS.trim draft
+    │ e : DomEvent
+    │ hinv : ↑σ.draft.units.length ≤ 60 ∧ 1 ≤ σ.points ∧ σ.points ≤ 13
+    │ h : σ.draft.units.length = 0
+    │ ⊢ False
+✗ src/components/CardView.tsx:28:75  [callback-contract] callback contract of onMove(props.card.id, right)
+    │ `grind` failed
+    │ case grind
+    │ E : Type
+    │ props : Props
+    │ κ : Cb props E
+    │ σ : State
+    │ left : Option model.ColumnId :=
+    │   if h_1 : JS.eq props.col model.ColumnId.done = true then some model.ColumnId.doing
+    │   else if h_2 : JS.eq props.col model.ColumnId.doing = true then some model.ColumnId.todo else none
+    │ right : Option model.ColumnId := some model.ColumnId.done
+    │ right_1 : model.ColumnId
+    │ x : DomEvent
+    │ h_5 : model.ColumnId.done = right_1
+    │ h : right_1 = props.col
+    │ ⊢ False
+✗ src/components/Stats.tsx:9:15  [nonzero-divisor] divisor total is non-zero
+    │ `grind` failed
+    │ case grind
+    │ E : Type
+    │ props : Props
+    │ κ : Cb props E
+    │ σ : State
+    │ total : Int := props.todo + props.doing + props.done
+    │ hpre : (0 ≤ props.todo ∧ 0 ≤ props.doing) ∧ 0 ≤ props.done
+    │ h : props.doing + props.done + props.todo = 0
+    │ ⊢ False
+
+35 obligation(s) not checked because a dependency failed to build.
+
+✗ NOT VERIFIED  41/79 obligations proved, 3 failed, 35 unchecked; components: 2/7 verified  (7.1s)
