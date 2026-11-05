@@ -72,17 +72,35 @@ export function clashesWithLean(name: string): boolean {
   return TOKENS.has(name) || ROOT_NAMES.has(name) || GENERATED.has(name) || GENERATED_RE.test(name);
 }
 
+/**
+ * `«base»`: Lean takes everything up to the next `»` as the name. The characters that cannot or
+ * must not stand between the quotes are escaped, injectively (`\` itself is escaped too): `»`,
+ * line breaks, other control characters and unpaired surrogates, and `⟦` (the obligation
+ * marker `/-⟦obN⟧-/` begins with it, so a property name or string-literal type member never
+ * looks like a marker in the generated Lean).
+ */
+function quoteName(base: string): string {
+  let out = "";
+  for (const ch of base) {
+    const c = ch.codePointAt(0)!;
+    if (ch === "\\") out += "\\\\";
+    else if (ch === "»" || ch === "⟦" || c < 0x20 || (c >= 0x7f && c < 0xa0) || c === 0x2028 || c === 0x2029 || (c >= 0xd800 && c <= 0xdfff)) out += "\\u" + c.toString(16).padStart(4, "0");
+    else out += ch;
+  }
+  return "«" + out + "»";
+}
+
 /** A Lean identifier for a TypeScript identifier (locals, params, functions, constants, types). */
 export function leanIdent(name: string): string {
   const base = clashesWithLean(name) ? name + "'" : name;
-  return PLAIN_IDENT.test(base) ? base : "«" + base + "»";
+  return PLAIN_IDENT.test(base) ? base : quoteName(base);
 }
 
-/** A Lean identifier for a structure field / constructor / enum member. */
+/** A Lean identifier for a structure field / constructor / enum member (any property name or string literal). */
 export function leanField(name: string): string {
   // fields and constructors live in the type's namespace: avoid the names Lean generates there
   const base = TYPE_AUX.has(name) ? name + "'" : name;
-  if (TOKENS.has(base) || !PLAIN_IDENT.test(base)) return "«" + base + "»";
+  if (TOKENS.has(base) || !PLAIN_IDENT.test(base)) return quoteName(base);
   return base;
 }
 

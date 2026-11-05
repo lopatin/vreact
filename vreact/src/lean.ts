@@ -215,8 +215,8 @@ const FOLLOW_ON = /Unknown (?:identifier|constant)|unknown (?:identifier|constan
 const SENTINEL = /^"vreact:checked"$/;
 /**
  * `vreact_ob`'s result at an obligation's marker: proved (info), failed (a warning; the goal
- * was admitted), or blocked (a warning: it failed on a goal that depends on `sorry` from
- * elsewhere, so it was not really checked; the goal was admitted)
+ * was admitted), or blocked (a warning: it depends on `sorry` from elsewhere that its goal
+ * or the proof found contains, so it was not checked on its own; the goal was admitted)
  */
 const OB_OK = /^vreact:ok$/;
 const OB_FAIL = /^vreact: /;
@@ -244,7 +244,7 @@ export interface Verdict {
   sorries: LeanMessage[];
   /** generated files Lean elaborated to the end */
   checkedFiles: Set<string>;
-  /** obligations in `unchecked` that `vreact_ob` could not check: their goal depends on `sorry` from elsewhere */
+  /** obligations in `unchecked` that `vreact_ob` could not check: they depend on `sorry` from elsewhere (in their goal or the proof found) */
   blocked: Set<number>;
 }
 
@@ -267,8 +267,9 @@ export function builtModules(raw: string): Set<string> {
  *
  * `vreact_ob` (VReact/Budget.lean) reports every obligation it ran at its marker: the info
  * `vreact:ok` when the automation proved it, a warning `vreact: <why>` when it did not, and
- * a warning `vreact:blocked <why>` when it failed on a goal that depends on `sorry` from
- * elsewhere (then the obligation is not checked rather than failed); in both cases the goal is
+ * a warning `vreact:blocked <why>` when it depends on `sorry` from elsewhere (its goal or the
+ * proof found contains one: then the obligation is not checked rather than proved or
+ * failed); in both cases the goal is
  * admitted with `sorry`, so the module still builds. An obligation counts as proved only if
  *  - every copy of its marker has that positive evidence and none has a failure (a
  *    `vreact:` warning or an error at the marker; a forged `vreact:ok` next to a failure does
@@ -289,7 +290,7 @@ export function judge(obligations: Obligation[], messages: LeanMessage[], marker
   const failedIds = new Map<number, string>();
   /** the marker copies with positive evidence */
   const okMarkers = new Set<Marker>();
-  /** obligations `vreact_ob` could not check (their goal depends on `sorry` from elsewhere) */
+  /** obligations `vreact_ob` could not check (they depend on `sorry` from elsewhere) */
   const blockedIds = new Map<number, string>();
   /** declarations with a failed or blocked obligation copy (their `sorry` is the admitted goal) */
   const failedDecls = new Set<LeanDecl>();
@@ -444,7 +445,7 @@ export function judge(obligations: Obligation[], messages: LeanMessage[], marker
     if (blocked !== undefined) {
       unchecked.push(ob);
       blockedObs.add(ob.id);
-      reasons.set(ob.id, `its goal depends on \`sorry\` from a failure elsewhere (a failed obligation, a declaration with an error, or a hole()), so Lean could not check it: fix that first`);
+      reasons.set(ob.id, `it depends on \`sorry\` from a failure elsewhere (a failed obligation, a declaration with an error, or a hole()) that its goal or its proof contains, so Lean could not check it on its own: fix that first`);
       continue;
     }
     const silent = mks.find((mk) => !okMarkers.has(mk));

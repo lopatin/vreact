@@ -368,21 +368,34 @@ hook rules hold (static checks). For every function: its body is safe and its
   constants, functions each followed by its `ensures` theorems; `View.lean`:
   components and certificates); files whose module names coincide, also up to
   letter case, are rejected, and so are modules whose generated directories
-  differ only in case (`src/lib.ts` and `src/Lib/x.ts`) and a module whose
-  namespace is the name of another module's declaration (`src/a/b.ts` next to a
-  function `b` of `src/a.ts`). User lemmas `proofs/<path>.lean` are imported by
+  differ only in case (`src/lib.ts` and `src/Lib/x.ts`) and modules that would
+  generate the same Lean name (`src/a/b.ts` declaring `post` next to a function
+  `b` of `src/a.ts` with an `ensures`: both `VTS.a.b.post`; also the names Lean
+  derives from a structure or inductive — fields, constructors, `rec`, … —
+  and, below another module's function `f`, `f.post`, `f.post2`, …, `f.eq_1`,
+  …). Namespaces may otherwise nest (`src/ui/Board.tsx` next to a component
+  `Board` of `src/ui.tsx`). User lemmas `proofs/<path>.lean` are imported by
   that module's `View.lean` and by the `Defs.lean` of every module importing it
   (unless that would close an import cycle); `proofs/Base.lean` by every
-  `Defs.lean`.
+  `Defs.lean`. When every importing module can import them, the `ensures`
+  theorems of the module's functions that no other function or constant of the
+  module uses are proved after the lemmas, in `Posts.lean` (imported by the
+  module's `View.lean` and the importing modules' `Defs.lean`).
 * **The report.** Every obligation runs under `vreact_ob` (`VReact/Budget.lean`),
   with its own heartbeat budget, and reports its result at its marker: the
   information `vreact:ok` when the automation proved it; otherwise a *warning*
   `vreact: …` (failed: the failure text and the goal) or `vreact:blocked …`
-  (the goal depends on `sorry` from a failure elsewhere, or Lean hid the
-  automation's error because it mentions such a `sorry`), and the goal is
-  admitted with `sorry`. Running out of the budget, goals left over, an error
-  the automation logged and a proof that uses `sorry` are failures, never
-  proofs. A failure is not a Lean error, so the module and every module
+  (it depends on `sorry` from a failure elsewhere: its goal contains one, the
+  proof found uses one — also through a definition it unfolded, or an
+  auxiliary lemma —, it failed on a goal that unfolds to a `hole()`, or Lean
+  hid the automation's error because it mentions such a `sorry`), and the goal
+  is admitted with `sorry`. A blocked obligation is *not checked*: neither
+  proved (a proof through the admitted proof of a false statement proves
+  nothing) nor failed. Running out of the budget, goals left over, an error
+  the automation logged and a proof that uses a `sorry` the automation made
+  are failures, never proofs. (A proof that refers to another declaration whose
+  proof was admitted — a callee's failed contract — is a proof modulo that
+  contract and counts as proved; the item is `INCOMPLETE` by its axioms.) A failure is not a Lean error, so the module and every module
   importing it are still built and checked; the admitted goal shows as
   `sorryAx` in the axioms of whatever depends on it. `vreact verify` counts an
   obligation as proved only if every copy of its marker has `vreact:ok`, none

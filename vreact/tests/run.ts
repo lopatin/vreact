@@ -245,7 +245,7 @@ console.log("command line");
 {
   const bin = path.join(here, "..", "bin", "vreact.js");
   const run = (args: string[], cwd = dir) => spawnSync(process.execPath, [bin, ...args], { cwd, encoding: "utf8", maxBuffer: 256 * 1024 * 1024 });
-  const misuse: string[][] = [["synth"], ["synth", "a.tsx", "b.tsx"], ["verify", "--jsn"], ["verify", "--root"], ["verify", "--root", path.join(work, "no-such-dir")], ["verify", "src/x.ts"], ["frobnicate"], ["verify", "--root", work]];
+  const misuse: string[][] = [["synth"], ["synth", "a.tsx", "b.tsx"], ["verify", "--jsn"], ["verify", "--root"], ["verify", "--root="], ["verify", "--root", path.join(work, "no-such-dir")], ["verify", "src/x.ts"], ["frobnicate"], ["verify", "--root", work]];
   const bad_: string[] = [];
   for (const args of misuse) {
     const p = run(args);

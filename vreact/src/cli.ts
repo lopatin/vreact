@@ -594,8 +594,10 @@ async function main(argv: string[]) {
     if (a === "--root") {
       if (i + 1 >= argv.length || argv[i + 1].startsWith("-")) throw new UsageError("--root needs a directory: --root DIR");
       rootArg = argv[++i];
-    } else if (a.startsWith("--root=")) rootArg = a.slice("--root=".length);
-    else if (a.startsWith("-")) {
+    } else if (a.startsWith("--root=")) {
+      rootArg = a.slice("--root=".length);
+      if (!rootArg) throw new UsageError("--root needs a directory: --root DIR");
+    } else if (a.startsWith("-")) {
       if (!spec.flags.includes(a)) throw new UsageError(`unknown option ${a} for "vreact ${cmd}" (options: ${["--root DIR", ...spec.flags].join(", ")})`);
       flags.add(a);
     } else positional.push(a);
@@ -643,8 +645,9 @@ async function main(argv: string[]) {
       }
       for (const m of tr.modules) {
         if (target && m.tsFile !== target) continue;
-        for (const part of ["Defs", "View"]) {
+        for (const part of ["Defs", "Posts", "View"]) {
           const p = path.join(cfg.outDir, ...m.ns.split("."), `${part}.lean`);
+          if (part === "Posts" && !fs.existsSync(p)) continue;
           console.log(C.b(`── ${path.relative(root, p)} ──`));
           console.log(fs.readFileSync(p, "utf8"));
         }

@@ -142,3 +142,94 @@ warning: declaration uses `sorry`
 set_option vreact.heartbeats 1 in
 example (xs : List Int) (_h : xs.length = 3) : 0 < xs.length ∧ (List.range 200).foldl (· + ·) 0 = 19900 := by
   vreact_ob vreact_finish
+
+/-! A proof through a `sorry` from elsewhere proves nothing. When the goal holds the admitted
+proof of a false statement (an obligation above that failed) and the automation uses it, or
+when the proof unfolds a definition that holds one, the obligation is *blocked*: neither proved
+(the first goal is false) nor failed (the second is true). A `sorry` the automation makes is
+still a failure. A proof that only refers to another declaration whose proof was admitted is a
+proof modulo that declaration's contract: it is proved (and `sorryAx` is in its axioms). (The
+declarations are private: the library imports this module.) -/
+namespace VReactBudgetTest
+
+/--
+warning: vreact: no proof
+⊢ 0 > 5
+---
+warning: vreact:blocked it depends on `sorry` from elsewhere (an obligation that failed, a declaration with an error, or a hole()) that its goal or its proof contains, so this obligation could not be checked on its own; fix that first
+its proof uses `sorry` from elsewhere
+⊢ ⟨0, ⋯⟩.val > 5
+---
+warning: declaration uses `sorry`
+-/
+#guard_msgs in
+example : (⟨0, by vreact_ob fail "no proof"⟩ : {n : Nat // n > 5}).1 > 5 := by
+  vreact_ob exact Subtype.property _
+
+/--
+warning: vreact: no proof
+xs : List Nat
+⊢ 1 < xs.length
+---
+warning: declaration uses `sorry`
+-/
+#guard_msgs in
+private def second (xs : List Nat) : Nat := xs[1]'(by vreact_ob fail "no proof")
+
+/--
+warning: vreact:blocked it depends on `sorry` from elsewhere (an obligation that failed, a declaration with an error, or a hole()) that its goal or its proof contains, so this obligation could not be checked on its own; fix that first
+its proof uses `sorry` from elsewhere
+x : Nat
+⊢ second [x, x + 1] > x
+---
+warning: declaration uses `sorry`
+-/
+#guard_msgs in
+example (x : Nat) : second [x, x + 1] > x := by vreact_ob (rw [second]; simp)
+
+/--
+warning: vreact: the automation closed the goal with `sorry`
+x : Nat
+⊢ second [x, x + 1] > x
+---
+warning: declaration uses `sorry`
+-/
+#guard_msgs in
+example (x : Nat) : second [x, x + 1] > x := by vreact_ob (rw [second]; sorry)
+
+/--
+warning: vreact: no proof
+x : Nat
+⊢ x > x + 1
+---
+warning: declaration uses `sorry`
+-/
+#guard_msgs in
+private theorem wrong (x : Nat) : x > x + 1 := by vreact_ob fail "no proof"
+
+/-- info: vreact:ok -/
+#guard_msgs in
+example (y : Nat) : y > y + 1 := by vreact_ob exact wrong y
+
+-- An internal auxiliary lemma (`_auxLemma`, …) is a piece of an earlier proof, not a contract:
+-- a proof through one that holds an admitted `sorry` is blocked.
+/--
+warning: vreact: no proof
+⊢ 0 > 5
+---
+warning: declaration uses `sorry`
+-/
+#guard_msgs in
+private theorem _bt_aux : (0 : Nat) > 5 := by vreact_ob fail "no proof"
+
+/--
+warning: vreact:blocked it depends on `sorry` from elsewhere (an obligation that failed, a declaration with an error, or a hole()) that its goal or its proof contains, so this obligation could not be checked on its own; fix that first
+its proof uses `sorry` from elsewhere
+⊢ 0 > 5
+---
+warning: declaration uses `sorry`
+-/
+#guard_msgs in
+example : (0 : Nat) > 5 := by vreact_ob exact _bt_aux
+
+end VReactBudgetTest
