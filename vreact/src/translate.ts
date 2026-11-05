@@ -1609,15 +1609,7 @@ export function prop(e0: ts.Expression, env: Env): string {
   if (ts.isBinaryExpression(e)) {
     const op = e.operatorToken.kind;
     if (op === K.AmpersandAmpersandToken) return propAnd(e.left, env, (e1) => prop(e.right, e1));
-    if (op === K.BarBarToken) {
-      const nt = narrowTest(e.left, env);
-      if (nt) return propNarrow(nt, env, () => "True", (e2) => prop(e.right, e2));
-      const l = prop(e.left, env);
-      const before = env.m.obCount();
-      const r = prop(e.right, env);
-      if (env.m.obCount() === before) return `(${l} ∨ ${r})`;
-      return `(${l} ∨ ∃ (${env.m.fresh("h")} : ¬${paren(l)}), ${r})`;
-    }
+    if (op === K.BarBarToken) return propGuarded(e.left, env, "or", (e2) => prop(e.right, e2));
     const nt = narrowTest(e, env);
     if (nt) return propNarrow(nt, env, () => "True", () => "False");
     if (isEqOp(op) || isNeqOp(op)) {
@@ -1643,17 +1635,22 @@ export function prop(e0: ts.Expression, env: Env): string {
   if (ts.isConditionalExpression(e)) {
     const nt = narrowTest(e.condition, env);
     if (nt) return propNarrow(nt, env, (e1) => prop(e.whenTrue, e1), (e2) => prop(e.whenFalse, e2));
-    const c = prop(e.condition, env);
-    return `((∀ (${env.m.fresh("h")} : ${c}), ${prop(e.whenTrue, env)}) ∧ (∀ (${env.m.fresh("h")} : ¬${paren(c)}), ${prop(e.whenFalse, env)}))`;
+    return retryNarrowed(
+      e.condition,
+      env,
+      () => {
+        const c = prop(e.condition, env);
+        return `((∀ (${env.m.fresh("h")} : ${c}), ${prop(e.whenTrue, env)}) ∧ (∀ (${env.m.fresh("h")} : ¬${paren(c)}), ${prop(e.whenFalse, env)}))`;
+      },
+      () => `(${guard(e.condition, true, "imp", env, (e1) => prop(e.whenTrue, e1))} ∧ ${guard(e.condition, false, "imp", env, (e2) => prop(e.whenFalse, e2))})`,
+    );
   }
   if (ts.isCallExpression(e)) {
     const sf = specFn(env, e.expression);
     const args = e.arguments;
     if (sf === "implies") {
       arity(e, "implies", 2, 2);
-      const nt = narrowTest(args[0], env);
-      if (nt) return propNarrow(nt, env, (e1) => prop(args[1], e1), () => "True");
-      return `(∀ (${env.m.fresh("h")} : ${prop(args[0], env)}), ${prop(args[1], env)})`;
+      return propGuarded(args[0], env, "imp", (e1) => prop(args[1], e1));
     }
     if (sf === "forall" || sf === "exists") {
       arity(e, sf, 3, 3);
@@ -1722,13 +1719,90 @@ export function prop(e0: ts.Expression, env: Env): string {
  * narrowing (`x !== null && P(x)`), or a named hypothesis when `right` has obligations.
  */
 function propAnd(left: ts.Expression, env: Env, rightK: (e: Env) => string): string {
+  return propGuarded(left, env, "and", rightK);
+}
+
+/**
+ * `left && right` ("and"), `left || right` ("or") or `implies(left, right)` ("imp")
+ * as a proposition, `right` built by `rightK` where JS evaluates it: under `left`
+ * ("and", "imp") or under its failure ("or") — narrowed as `branch` narrows code,
+ * also by a compound `left` (`b || s.kind === "a" || s.to …`, `x !== null &&
+ * y !== null && x + y …`, `!(p === null || q === null) || …`).  A compound `left` is
+ * first read as one condition (the usual normal form); only when `right` needs
+ * its narrowing is it decomposed (`guard`).  Both mean the same.
+ */
+function propGuarded(left: ts.Expression, env: Env, conn: "and" | "or" | "imp", rightK: (e: Env) => string): string {
   const nt = narrowTest(left, env);
-  if (nt) return propNarrow(nt, env, rightK, () => "False");
-  const l = prop(left, env);
+  if (nt) {
+    if (conn === "and") return propNarrow(nt, env, rightK, () => "False");
+    if (conn === "imp") return propNarrow(nt, env, rightK, () => "True");
+    return propNarrow(nt, env, () => "True", rightK);
+  }
+  return retryNarrowed(left, env, () => guardAtom(prop(left, env), conn !== "or", conn === "and" ? "and" : "imp", env, rightK), () => guard(left, conn !== "or", conn === "and" ? "and" : "imp", env, rightK));
+}
+
+/**
+ * `whole()`, unless `c` is a compound condition with narrowing tests and `whole()`
+ * is rejected (a later operand needs the narrowing): then `parts()`.  The
+ * obligations of the abandoned attempt are withdrawn.
+ */
+function retryNarrowed(c: ts.Expression, env: Env, whole: () => string, parts: () => string): string {
+  const c0 = stripParens(c);
+  const compound = (ts.isPrefixUnaryExpression(c0) && c0.operator === ts.SyntaxKind.ExclamationToken) ||
+    (ts.isBinaryExpression(c0) && [ts.SyntaxKind.AmpersandAmpersandToken, ts.SyntaxKind.BarBarToken].includes(c0.operatorToken.kind));
+  if (!compound || !hasNarrowing(c0, env)) return whole();
+  const m = env.m;
+  const nObs = m.obligations.length;
+  const nCount = m.counter.n;
+  try {
+    return whole();
+  } catch (err) {
+    if (!(err instanceof VtsError)) throw err;
+    m.obligations.length = nObs;
+    m.counter.n = nCount;
+    return parts();
+  }
+}
+
+/**
+ * The proposition "c is `pos`, and (`mode` "and") / then (`mode` "imp") K", where K
+ * (`k`) is built in the environment narrowed by c being `pos` — `branch`'s
+ * decomposition: `!x` flips; `a && b` true and `a || b` false are both parts in
+ * turn (`a ∧ (b ∧ K)`, `a ∨ (b ∨ K)`); `a && b` false and `a || b` true narrow
+ * nothing (either part may be the reason) and stay one condition.
+ */
+function guard(c: ts.Expression, pos: boolean, mode: "and" | "imp", env: Env, k: (e: Env) => string): string {
+  const e = stripParens(c);
+  if (ts.isPrefixUnaryExpression(e) && e.operator === ts.SyntaxKind.ExclamationToken) return guard(e.operand, !pos, mode, env, k);
+  if (ts.isBinaryExpression(e) && hasNarrowing(e, env)) {
+    const op = e.operatorToken.kind;
+    if ((op === ts.SyntaxKind.AmpersandAmpersandToken && pos) || (op === ts.SyntaxKind.BarBarToken && !pos)) {
+      return guard(e.left, pos, mode, env, (e1) => guard(e.right, pos, mode, e1, k));
+    }
+  }
+  const nt = narrowTest(e, env);
+  if (nt) {
+    const otherwise = () => (mode === "and" ? "False" : "True");
+    return pos ? propNarrow(nt, env, k, otherwise) : propNarrow(nt, env, otherwise, k);
+  }
+  return guardAtom(prop(e, env), pos, mode, env, k);
+}
+
+/**
+ * `l` (a proposition) is `pos`, and/then `k(env)`: `l ∧ K`, `¬l ∧ K`, `∀ (h : l), K`,
+ * `l ∨ K` — with a named hypothesis (`∃ (h : …), K`, `l ∨ ∃ (h : ¬l), K`) when K has
+ * obligations that may need it.
+ */
+function guardAtom(l: string, pos: boolean, mode: "and" | "imp", env: Env, k: (e: Env) => string): string {
   const before = env.m.obCount();
-  const r = rightK(env);
-  if (env.m.obCount() === before) return `(${l} ∧ ${r})`;
-  return `(∃ (${env.m.fresh("h")} : ${l}), ${r})`;
+  const r = k(env);
+  const plain = env.m.obCount() === before;
+  if (mode === "and") {
+    const lp = pos ? l : `¬${paren(l)}`;
+    return plain ? `(${lp} ∧ ${r})` : `(∃ (${env.m.fresh("h")} : ${lp}), ${r})`;
+  }
+  if (pos) return `(∀ (${env.m.fresh("h")} : ${l}), ${r})`;
+  return plain ? `(${l} ∨ ${r})` : `(${l} ∨ ∃ (${env.m.fresh("h")} : ¬${paren(l)}), ${r})`;
 }
 
 /** Several conditions (`requires(a); requires(b)`) as one proposition, each guarded by the earlier ones. */
@@ -1978,6 +2052,22 @@ function assignLocal(target: ts.Expression, newVal: (old: Val, declared: VType) 
   return `(let ${ln}${letType(b.type)} := ${c.code};\n${next(bind(e1, s!, { k: "val", code: ln, type: b.type }))})`;
 }
 
+/**
+ * The code after `assert(c)` / `assume(c)` (whose fact is the hypothesis `h`).  In a
+ * handler, effect or timer body the outcome's own obligations (invariant
+ * preservation, robustness, emits) are proved outside the body's term, where a
+ * `have` is out of scope; so there the rest is guarded by the fact:
+ * `if h' : c then rest else skip` (`type_of% h` is `c`, written once).  The
+ * `else` is unreachable — `h` proves `c`, or `c` is assumed (`VReact.assumed`, still
+ * in the term and reported) — and does nothing (no updates, no callback), so it
+ * is safe for every obligation; splitting on the `if` gives them `h' : c`.
+ */
+function withFact(h: string, env: Env, bc: BlockCtx, rest: (e: Env) => string): string {
+  if (bc.kind !== "handler" || !env.handler || !env.comp) return rest(env);
+  const skip = outcome({ ...env.handler, updates: [], emit: null }, env.comp);
+  return `(open Classical in if ${env.m.fresh("hfact")} : type_of% ${h} then ${paren(rest(env))}\n  else ${skip})`;
+}
+
 function exprStatement(e: ts.Expression, env: Env, bc: BlockCtx, rest: (e: Env) => string): string {
   const m = env.m;
   e = stripParens(e);
@@ -2014,12 +2104,12 @@ function exprStatement(e: ts.Expression, env: Env, bc: BlockCtx, rest: (e: Env) 
         const p = prop(e.arguments[0], env);
         const h = m.fresh("hassert");
         const ob = m.ob(e, "assert", `assertion ${nodeText(e.arguments[0])}`);
-        return `(have ${h} : ${p} := ${ob};\n${rest(env)})`;
+        return `(have ${h} : ${p} := ${ob};\n${withFact(h, env, bc, rest)})`;
       }
       case "assume": {
         const p = prop(e.arguments[0], env);
         const h = m.fresh("hassume");
-        return `(have ${h} : ${p} := VReact.assumed;\n${rest(env)})`;
+        return `(have ${h} : ${p} := VReact.assumed;\n${withFact(h, env, bc, rest)})`;
       }
       case "requires":
       case "ensures":
@@ -2140,7 +2230,7 @@ function handlerEffect(t: UpdTarget, c: ts.CallExpression, env: Env, rest: (e: E
     return rest({ ...env, handler: { ...h, updates: [...h.updates, upd] } });
   }
   // callback
-  if (h.kind === "robust") fail(c, "parent callbacks cannot be invoked from effects, timers or continuous events (their snapshot may be stale)");
+  if (h.kind === "robust") fail(c, "parent callbacks cannot be invoked from effects, timers, continuous/default-priority events or onFocus/onBlur/onInvalid (robust handlers: they may run with a stale snapshot, or inside another event's batch)");
   if (h.emit) fail(c, "a handler may invoke at most one parent callback per execution path (otherwise the parent's updates would not be checked together)");
   const cb = comp.info.callbacks.find((x) => x.name === t.name)!;
   if (c.arguments.length !== cb.params.length) fail(c, `${cb.name} expects ${cb.params.length} arguments`);
@@ -2192,10 +2282,16 @@ function switchStmt(s: ts.SwitchStatement, env: Env, bc: BlockCtx, rest: (e: Env
   const defaultGroup = groups.find((g) => g.isDefault);
   const caseGroups = groups.filter((g) => !g.isDefault && g.labels.length > 0);
   const after = (e2: Env) => rest(e2);
-  // discriminated union switch: switch (a.kind)
+  // discriminated union switch: switch (a.kind).  The base of `props.mode` / `e.key` is
+  // not a value (only its fields are): no union then; the whole discriminant is typed below.
   if (ts.isPropertyAccessExpression(disc)) {
-    const baseT = typeOf(disc.expression, env);
-    if (baseT.k === "union" && m.reg.union(baseT).tag === disc.name.text) {
+    let baseT: VType | null = null;
+    try {
+      baseT = typeOf(disc.expression, env);
+    } catch (err) {
+      if (!(err instanceof VtsError)) throw err;
+    }
+    if (baseT?.k === "union" && m.reg.union(baseT).tag === disc.name.text) {
       const u = m.reg.union(baseT);
       const target = expr(disc.expression, env);
       const key = pathKey(env, disc.expression);
@@ -2411,7 +2507,7 @@ export function outcome(h: HandlerAcc, comp: CompCtx): string {
 
 function forwardCallback(cb: { name: string; params: Param[] }, node: ts.Node, env: Env, kind: "discrete" | "robust", argTypes: Param[] | "event"): { code: string; params: string[] } {
   const comp = env.comp!;
-  if (kind === "robust") fail(node, "parent callbacks cannot be invoked from continuous events / effects");
+  if (kind === "robust") fail(node, "parent callbacks cannot be invoked from effects, timers, continuous/default-priority events or onFocus/onBlur/onInvalid (robust handlers)");
   const ps = argTypes === "event" ? [] : argTypes;
   if (argTypes === "event" && cb.params.length) fail(node, `${cb.name} needs arguments; wrap it: () => ${cb.name}(…)`);
   if (argTypes !== "event" && ps.length !== cb.params.length) fail(node, `callback arity mismatch forwarding ${cb.name}`);

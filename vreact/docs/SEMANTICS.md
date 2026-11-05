@@ -157,6 +157,25 @@ and `xs.every(x => p)` as `∀ x, ∀ (h : x ∈ xs), p`, so an index obligation
 `p`, … sees its guard. (In code, `implies` is a function call: both arguments are
 evaluated.) Several `requires` (or `invariant`) statements are one condition
 `c₁ && c₂ && …`: a later one may rely on the earlier ones as guards.
+Narrowing tests in a guard narrow what JS evaluates under it, as in code — also
+in a compound guard: in `b || s.kind === "a" || s.to.length > 0` (left-associated,
+any length), `x !== null && y !== null && x + y > 0`, `!(x === null || y === null) || …`,
+`implies(x !== null && …, …)` and `c ? … : …` the later operand is translated where
+every earlier operand failed (held), each test becoming a `match`. Such a compound
+guard is decomposed only when a later operand needs its narrowing; otherwise it
+stays one condition (the normal forms above).
+
+`assert(c)` / `assume(c)` bind the hypothesis `c` for everything after them. In an
+event handler, effect, timer callback or callback passed to a child, whose
+outcome obligations (invariant preservation, robustness, the parent's emit) are
+proved outside the body's term, the rest of the body is `if h : c then … else
+(no updates, no callback)`: the `else` is unreachable (`c` is proved, or assumed and
+reported), and splitting on the `if` hands those obligations `h : c` too. A
+timer registered in an effect body is checked under that body's top-level early
+returns, asserts and assumes before the registration (§2.6). A
+function's `ensures` theorems are proved about its result, outside its body: a
+fact inside the body does not reach them (state it as `requires`, or `ensures` of a
+helper).
 
 ---
 
@@ -182,11 +201,22 @@ this reason; `FunctionalBatch.tsx` is accepted.
 ### 2.2 Snapshots: discrete events, robust updates, rebasing
 
 React 18 has three event priorities (react-dom 18.3.1 `getEventPriority`).
-Only the updates of a *discrete* event (click, input, keydown, submit, focus, …:
-exactly the `DiscreteEventPriority` events, a whitelist in `component.ts` and
-`Core.discreteEvents`) are flushed synchronously, so the next discrete event
-runs a handler of the latest render, whose snapshot is the current state. A
-discrete handler must therefore preserve the invariant **from its snapshot**.
+Only the updates of a *discrete* event (click, input, keydown, submit, …:
+the `DiscreteEventPriority` events, a whitelist in `component.ts` and
+`Core.discreteEvents`) are flushed synchronously — in a microtask, or at the end of
+the event when its ChangeEventPlugin restores a controlled input — so the next
+discrete event runs a handler of the latest render, whose snapshot is the current
+state. A discrete handler must therefore preserve the invariant **from its
+snapshot**. This assumes that React flushes before the next event: true for user
+input, which the browser dispatches from native code (a microtask checkpoint after
+every listener), and for a script that lets a microtask checkpoint pass between
+two calls that dispatch events (`el.click()`, `dispatchEvent`, `el.focus()`), or
+wraps each in its own `act` (React Testing Library's `fireEvent`). A script that
+makes several such calls in one go — including emulators of browser default
+actions, such as user-event's emulation of implicit submission (keydown, then
+click and submit) without `act` — is outside the model. What the DOM itself
+dispatches *inside* one call — a click's activation behaviour — belongs to that
+event; §5 says how VTS keeps it to one handler.
 
 Continuous events (mousemove, scroll, wheel, mouseenter, …), default-priority
 events (transitionend, animationend, load, error, media events, …), effects and
@@ -194,7 +224,15 @@ asynchronous callbacks (timers) are rendered later and may run with a stale
 snapshot, so their outcomes must be **robust**: preserve the invariant from
 *every* state that satisfies it; they may not call parent callbacks. This is
 what rejects the classic stale-closure bug (`StaleTimer.tsx`) and accepts the
-functional-update fix (`RobustTimer.tsx`).
+functional-update fix (`RobustTimer.tsx`). Focus and `invalid` events are
+discrete in React, but the DOM also dispatches them inside the batch of another
+event or of React's commit, before the earlier updates are rendered — `autoFocus`
+focuses during the commit (onBlur of the element losing focus, anywhere in the
+app, and onFocus of the new one run in one batch, after a trusted click too:
+`CxFocusRobust.tsx`), a click on a `<label>` focuses its control, `el.focus()`
+fires blur and focus, form validation fires `invalid` at every invalid control —
+so `onFocus`, `onBlur`, `onInvalid` (and the composition events, whose fallback
+uses `focusout`) are checked robust as well.
 
 **Rebasing.** These *deferred* updates are still pending when a later discrete
 event runs. React keeps one update queue per hook; it renders the discrete
@@ -276,6 +314,23 @@ possibly under `if`/`else` with pure conditions —
 no setters, `dispatch`, parent callbacks or local helpers.
 Running a robust effect any number of times (StrictMode) is safe.
 
+A timer is registered only by a statement at the top level of the effect body
+(`setTimeout(…)` / `const id = setInterval(…)`). Its callback is checked under the
+path condition of that registration. That condition is made of the top-level
+early returns `if (c) return;` (no `else`) and the `assert(c)` / `assume(c)`
+statements before it. The callback captures the same snapshot as the effect: an
+effect cannot assign a variable it captures, and a captured `let` is not
+reassigned after the effect is created. So the model's task is
+`if c then skip else callback` for an early return, and `if c then callback else
+skip` for an assert or assume. The `skip` branch stands for a timer the program
+never registers, and it does nothing. A condition about the snapshot says nothing
+about the state the timer fires against, so `setLeft(l => l - 1)` still needs its
+own guard (`CxTimerGuardFail.tsx`). A condition is used only if it translates in
+the component's scope without obligations of its own: one that reads a const
+local to the effect body is left out, which only weakens the facts.
+(`CxTimerGuard.tsx`: the guarded countdown
+`if (left <= 0) return; setTimeout(() => setLeft(left - 1), …)`.)
+
 Hooks (`useState`, `useReducer`, `useEffect`, `useMemo`, `useCallback`) are
 matched by React by call order, so they must be top-level statements of the
 component, before any statement that may return (an `if`, a `switch`, …); a hook
@@ -351,7 +406,7 @@ left with `hpre` only, and Lean's goal shows the counterexample
 For every component: initial state satisfies the invariant; the invariant
 survives prop changes; every handler (discrete: from the snapshot, or
 rebase-safe when the component has deferred updates; continuous,
-default-priority, effects, timers: from any state) preserves it; rendering never
+default-priority, focus/blur/invalid, effects, timers: from any state) preserves it; rendering never
 fails (indices, divisions, non-null assertions, preconditions of called
 functions — also in keys and boolean children); keys are
 distinct; child preconditions hold; callback contracts hold in both directions;
@@ -446,18 +501,73 @@ hook rules hold (static checks). For every function: its body is safe and its
   external effects with no state change; reading external data is not modelled.
 * **Outside the subset:** the entry point (`main.tsx`), React itself, the DOM,
   CSS.
-* **Event bubbling and multi-handler events** are handled by a static
-  restriction rather than modelled: the runtime runs one handler per event, and
-  VTS rejects every layout in which one discrete native event could reach two
-  handlers — two props of one element dispatched by the same native event (a
-  checkbox's `onClick` and `onChange` both run on `click`; `onInput` and a text
-  input's `onChange` both run on `input`: react-dom's ChangeEventPlugin), an
-  element with handlers containing a descendant handler that shares a native
-  event (e.g. `<li onClick>` around a checkbox's `onChange`) or a user
-  component, and a submit button with `onClick` inside `<form onSubmit>`.
-  Handlers of continuous/default-priority events are robust and cannot call
-  parents, so several of them in one batch compose. `onSelect` and capture-phase
-  handlers are rejected; unknown handler names are rejected, never discrete.
+* **Event bubbling, multi-handler events and activation behaviour** are handled
+  by a static restriction rather than modelled: the runtime runs one handler per
+  event, and VTS rejects every layout in which one event — one native dispatch
+  together with what the DOM dispatches synchronously inside it (§2.2) — could run
+  two discrete handlers, or one twice, before React renders:
+  - two props of one element dispatched by the same native event (a checkbox's
+    `onClick` and `onChange` both run on `click`; `onInput` and a text input's
+    `onChange` both run on `input`: react-dom's ChangeEventPlugin);
+  - an element with handlers containing a descendant handler that shares a
+    native event (e.g. `<li onClick>` around a checkbox's `onChange`) or a user
+    component;
+  - a click's activation behaviour, which runs before React renders when a
+    script dispatched the click (`el.click()`, `dispatchEvent`, testing libraries,
+    jsdom): a submit button (`<button>` other than `type="button"`/`"reset"`,
+    `<input type="submit">`/`"image"`, or a dynamic `type`) fires `submit` at its
+    form, a reset button `reset`. Which button a click inside a button activates
+    is browser-specific. The DOM specification (and jsdom) activates the
+    innermost element with an activation behaviour. Chromium dispatches
+    `DOMActivate` at the click's target as its default action. That event
+    bubbles to the enclosing `<button>`, which submits, resets or invokes,
+    unless the target handled the click itself. Only a checkbox, a radio
+    button and a link (`<a href>`) do that, and each only for a click on
+    itself. A click on a nested `<button>`, on an `<input>` of another type,
+    on a `<select>`, `<textarea>`, `<summary>`, `<details>` or `<img>`, or on
+    the content of a link inside the button activates the button (Chromium 152,
+    react-dom 18.3.1). VTS covers both behaviours.
+    Rejected: `onClick` on such a button, on an element around it, or on an
+    element inside it, except a checkbox, radio button or `<a href>` with a
+    static `type`/`href`. This applies when the button's form submit/reset
+    reaches `onSubmit`/`onReset` (on its form or above), or when the button
+    names its form with `form=…` (which may be anywhere). Also rejected: a
+    `<label>` inside such a button, with or without handlers (one click on the
+    label activates the button twice, once for the label's click and once for
+    the click it dispatches to its control), another such button inside it,
+    and a user component inside it. The same for an invoker button
+    (`commandfor`/`command`): its command runs on an element anywhere, and
+    `request-close` fires `cancel` at a dialog synchronously (`onCancel`).
+  - A `<label>` dispatches a click on it (or on non-interactive content inside
+    it) again to its control — the element `htmlFor` names, or its first form
+    control — after focusing it; when the control is inside, that click passes
+    the label and its ancestors again. Interactive content stops this, for
+    itself and everything inside it: `<button>`, `<label>`, `<select>`,
+    `<textarea>`, `<details>`, `<input>` other than `type="hidden"`, and
+    `<a href>`. A `<summary>` is not interactive content. Chromium treats a
+    `<summary>` outside a `<details>` as plain content, and a details' own
+    summary is inside the `<details>`, which stops the label. Rejected:
+    `onClick` on a label, on an element around a label, or on an element inside
+    a label that is not interactive content and not inside any; a user
+    component inside a label.
+
+  Checked safe, so accepted (with react-dom 18.3.1 under jsdom 25 and in
+  Chromium): a checkbox's or radio's `click` is followed by
+  `input`/`change` only after React has rendered (its ChangeEventPlugin flushes
+  to restore the controlled input), so `onInput` there sees the new state;
+  `<details>` fires `toggle` in a later task (and `onToggle` is robust); links
+  navigate later; a `popovertarget` button fires `beforetoggle` (no React 18
+  prop) and a later `toggle`, and a dialog's `close` event is a later task too;
+  implicit submission by Enter and the keyboard activation of a
+  button follow trusted key events only (a scripted `keydown` has no default
+  action), which the browser dispatches from native code with microtask
+  checkpoints in between. Focus and `invalid` events, which the DOM also fires
+  inside other batches (label activation focuses the control; `autoFocus`
+  focuses during React's commit; validation on submit), have robust handlers
+  (§2.2), and robust handlers cannot call parents, so several of them in one
+  batch compose with each other and with the one discrete handler. `onSelect`
+  and capture-phase handlers are rejected; unknown handler names are rejected,
+  never discrete.
 
 Lean's kernel checks every proof; `sorry`, `@trusted` and `assume(…)`
 (`VReact.assumed`, reported `ASSUMES`) show up in the axiom report, so nothing

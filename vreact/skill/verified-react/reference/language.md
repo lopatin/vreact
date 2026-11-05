@@ -165,17 +165,22 @@ Handlers (`onClick`, `onChange`, `onSubmit`, `onKeyDown`, …): arrow functions 
 local closures; the event parameter supports `e.target.value`,
 `e.target.checked`, `e.key`, `e.preventDefault()`. Setters, `dispatch`, at most
 one parent callback per path. Only React's discrete events (`onClick`,
-`onChange`, `onInput`, `onKeyDown`, `onSubmit`, `onFocus`, `onBlur`, …) are
+`onChange`, `onInput`, `onKeyDown`, `onSubmit`, …) are
 checked from the render snapshot; continuous (`onMouseMove`, `onScroll`,
 `onMouseEnter`, …) and default-priority events (`onTransitionEnd`,
 `onAnimationEnd`, `onLoad`, `onError`, media events, …) must be robust and may
-not call parent callbacks. In a component with such handlers or with effects /
+not call parent callbacks — and so must `onFocus`, `onBlur` and `onInvalid`: the
+DOM also fires them inside another event's batch (`autoFocus`, a label click
+focusing its control, form validation). In a component with such handlers or with effects /
 timers that set state, discrete handlers and callbacks passed to children must
 also be safe when React rebases them onto those pending updates (guard inside the
 functional update: `setR(p => p.lo < p.hi ? … : p)`). Rejected: unknown handler
 names, `onSelect`, capture-phase handlers (`onClickCapture`).
 
-Effects: setters and timers (`setTimeout`/`setInterval` callbacks become tasks),
+Effects: setters and timers (`setTimeout`/`setInterval` callbacks become tasks;
+register them at the top level of the effect body; a timer's callback may use the
+early returns `if (c) return;` and the `assert`/`assume` before it, as in
+`if (left <= 0) return; setTimeout(() => setLeft(left - 1), 1000)`),
 external writes (`localStorage.setItem`, `document.title = …`, `console.*`) are
 allowed and have no modelled effect; no async. A cleanup is an inline
 `() => { … }` that only calls `clearTimeout`/`clearInterval` and makes those
@@ -197,7 +202,18 @@ combine handlers fired by the same native event (a checkbox's `onClick` +
 `onChange` both run on click; `onInput` + a text input's `onChange` both run on
 input), and an element with a handler may not contain a handler fired by the
 same native event (`<li onClick>` around `<input type="checkbox" onChange>`)
-or a user component.
+or a user component. A click also runs what it activates: a submit (reset) button
+submits (resets) its form, and a `<label>` clicks its control again. So no `onClick`
+on, around or inside a submit/reset button whose form has `onSubmit`/`onReset`
+(or that has `form=…`), or an invoker button (`commandfor`): use `type="button"` or
+put the logic in `onSubmit`. Inside such a button only a checkbox, a radio button
+or an `<a href>` may have `onClick`. In Chromium a click on anything else inside
+it, including a nested button or a text field, also activates the button. No
+`<label>` or second such button may go inside it either. No `onClick` on, around
+or inside a `<label>`, except on interactive content in it (a control, a button,
+a link, a `<select>`, a `<details>`) and on elements inside that content. A
+`<summary>` alone does not count. No user component may go inside such a button
+or a label (use `htmlFor`).
 
 ## Not yet supported (workarounds)
 
