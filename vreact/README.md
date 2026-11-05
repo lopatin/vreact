@@ -55,7 +55,7 @@ vreact translate                          # only generate .vreact/
 | `lean/VReact/Tactic.lean`, `Contracts.lean`, `Lists.lean`, `Simprocs.lean` | `vreact_auto`: simp normalisation + per-call contract instantiation + `grind` |
 | `docs/SEMANTICS.md` | the formal model, obligations, soundness theorem, trusted base |
 | `skill/verified-react/` | the Claude Code skill (SKILL.md, references, setup script) |
-| `tests/` | regression suite (`run.ts`: 23 semantic/rejection cases), synthesis test, sample apps |
+| `tests/` | regression suite (`run.ts`: semantic, rejection and report-honesty cases), synthesis test, sample apps |
 
 ## Requirements
 
@@ -65,8 +65,8 @@ in `lean/lean-toolchain`). Run `skill/verified-react/scripts/setup.sh [app]`.
 ## Tests
 
 ```bash
-node --experimental-strip-types tests/run.ts          # 23 cases: React-semantics bugs caught, subset rejections
+node --experimental-strip-types tests/run.ts          # 160+ cases: React-semantics bugs caught, subset rejections, report honesty
 node --experimental-strip-types tests/synth.test.ts   # synthesis (append / remove-by-key / update-by-key, joint holes, what counts as proved)
 (cd tests/todo && node ../../bin/vreact.js verify)    # small verified app with child callbacks
-(cd ../examples/kanban && node ../vreact/bin/vreact.js verify)   # the walkthrough app: 79 obligations
+(cd ../examples/kanban && node ../../vreact/bin/vreact.js verify)   # the walkthrough app: 79 obligations
 ```
