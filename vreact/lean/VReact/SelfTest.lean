@@ -62,6 +62,42 @@ example (xs : List St) (h : (xs.map (·.count)).Nodup) (hx : xs ≠ []) :
       0 < (JS.toSorted xs (fun a b => if a.count < b.count then -1 else 1)).length := by
   vreact_auto
 
+/-! ### runtime exceptions of `grind` fall back (Au A1) -/
+
+-- `grind` raises `maximum recursion depth` on this hypothesis shape (a dependent binder with a
+-- literal `Int` bound, as `forall(0, 3, i => xs[i] >= 0)` produces); the obligation must still be
+-- proved by a later alternative (`omega` on the unpacked guard), not fail with the exception.
+example (xs : List Int)
+    (h : ∃ (_ : (xs.length : Int) = 3), ∀ i : Int, ∀ (h₁ : 0 ≤ i) (h₂ : i < 3), xs[i.toNat]'(by omega) ≥ 0) :
+    0 ≤ (1 : Int) ∧ (1 : Int) < xs.length := by
+  vreact_auto
+example (xs : List Int)
+    (h : ∃ (_ : (xs.length : Int) = 3), ∀ i : Int, ∀ (h₁ : 0 ≤ i) (h₂ : i < 3), xs[i.toNat]'(by omega) ≥ 0) :
+    True := by
+  vreact_try grind  -- (`try grind` would abort the declaration)
+  trivial
+
+/-! ### literal strings, `indexOf`/`findIndex` ranges, swaps (Au A2) -/
+
+example : JS.Str.ofString "Hello, " ++ JS.Str.ofString "world" = JS.Str.ofString "Hello, world" := by vreact_auto
+example (s : JS.Str) : s ++ JS.Str.ofString "a" ++ JS.Str.ofString "b" = s ++ JS.Str.ofString "ab" := by vreact_auto
+example : JS.Str.ofString "n=" ++ JS.str (7 : Int) = JS.Str.ofString "n=7" := by vreact_auto
+example : JS.str (-12 : Int) ++ JS.str true = JS.Str.ofString "-12true" := by vreact_auto
+example : JS.Str.ofString "a" ++ JS.Str.ofString "b" ≠ JS.Str.ofString "ba" := by vreact_auto
+example (xs : List Int) (v : Int) : JS.indexOf xs v ≥ -1 := by vreact_auto
+example (xs : List St) (p : St → Bool) : -1 ≤ JS.findIndex xs p ∧ JS.findIndex xs p < xs.length := by vreact_auto
+-- the range facts reach `omega` too (contracts of `indexOf`/`findIndex`)
+example (xs : List Int) (v : Int) : JS.indexOf xs v + 1 ≤ xs.length := by
+  vreact_contracts; omega
+example (xs : List St) (i j : Int) (hi : 0 ≤ i ∧ i < xs.length) (hj : 0 ≤ j ∧ j < xs.length)
+    (h : (xs.map (·.count)).Nodup) :
+    ((JS.withAt (JS.withAt xs i (JS.get xs j hj) hi) j (JS.get xs i hi) (by simp; omega)).map (·.count)).Nodup := by
+  vreact_auto
+example (xs : List Int) (i : Int) (hi : 0 ≤ i ∧ i + 1 < xs.length) (h : xs.Nodup) :
+    (JS.withAt (JS.withAt xs i (JS.get xs (i + 1) (by omega)) (by omega)) (i + 1) (JS.get xs i (by omega))
+      (by simp; omega)).Nodup := by
+  vreact_auto
+
 /-! ### list facts (#16, #46, #47, #61, #62, #63) -/
 
 example (xs : List JS.Str) (q : JS.Str) (h : 0 ≤ JS.indexOf xs q) : JS.indexOf xs q < xs.length := by vreact_auto

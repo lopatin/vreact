@@ -322,6 +322,45 @@ theorem getElem_indexOf {α} [BEq α] [LawfulBEq α] (xs : List α) (x : α) (h0
   simpa [indexOf] using hp
 grind_pattern getElem_indexOf => xs[(indexOf xs x).toNat]
 
+theorem getElem_findIndex {α} (xs : List α) (p : α → Bool) (h0 : 0 ≤ findIndex xs p)
+    (h : (findIndex xs p).toNat < xs.length) : p xs[(findIndex xs p).toNat] = true := by
+  obtain ⟨_, hp⟩ := findIndex_spec xs p h0
+  exact hp
+grind_pattern getElem_findIndex => xs[(findIndex xs p).toNat]
+
+theorem findIndex_nonneg_iff {α} (xs : List α) (p : α → Bool) :
+    0 ≤ findIndex xs p ↔ ∃ x ∈ xs, p x = true := by
+  have hb := findIndex_bounds xs p
+  have he := findIndex_eq_neg_one_iff xs p
+  constructor
+  · intro h
+    have : ¬ findIndex xs p = -1 := by omega
+    rw [he] at this
+    simpa using this
+  · rintro ⟨x, hx, hp⟩
+    have : ¬ findIndex xs p = -1 := by rw [he]; intro h; simp [h x hx] at hp
+    omega
+grind_pattern findIndex_nonneg_iff => findIndex xs p
+
+theorem indexOf_nonneg_iff {α} [BEq α] [LawfulBEq α] (xs : List α) (x : α) :
+    0 ≤ indexOf xs x ↔ x ∈ xs := by
+  have hb := indexOf_bounds xs x
+  have he := indexOf_eq_neg_one_iff xs x
+  constructor
+  · intro h; exact Classical.byContradiction fun hx => by have := he.mpr hx; omega
+  · intro hx; have : ¬ indexOf xs x = -1 := fun h => he.mp h hx
+    omega
+grind_pattern indexOf_nonneg_iff => indexOf xs x
+
+/-- The range of `findIndex`/`indexOf` as contracts (`f.post`, see `vreact_contracts`): they
+are added as hypotheses for every call in a goal, so `omega` and `simp_all` know them too,
+not only `grind` (through the patterns above). -/
+theorem findIndex.post {α} (xs : List α) (p : α → Bool) :
+    -1 ≤ findIndex xs p ∧ findIndex xs p < xs.length := by
+  rcases findIndex_bounds xs p with h | h <;> omega
+theorem indexOf.post {α} [BEq α] (xs : List α) (x : α) :
+    -1 ≤ indexOf xs x ∧ indexOf xs x < xs.length := findIndex.post _ _
+
 /-! ### `with` keeps the length; reading back what was written -/
 
 @[simp] theorem withAt_eq_set {α} (xs : List α) (i : Int) (v : α) (h : 0 ≤ i ∧ i < xs.length) :
@@ -329,6 +368,23 @@ grind_pattern getElem_indexOf => xs[(indexOf xs x).toNat]
 @[simp] theorem length_withAt {α} (xs : List α) (i : Int) (v : α) (h : 0 ≤ i ∧ i < xs.length) :
     (withAt xs i v h).length = xs.length := by simp
 attribute [grind =] length_withAt
+
+/-! A swap `xs.with(i, xs[j]).with(j, xs[i])` is a permutation (`List.set_set_perm`): keys stay
+distinct, membership and counts are unchanged. -/
+@[simp, grind =] theorem nodup_map_set_swap {α β} (f : α → β) (xs : List α) (i j : Nat)
+    (hi : i < xs.length) (hj : j < xs.length) :
+    (((xs.set i xs[j]).set j xs[i]).map f).Nodup ↔ (xs.map f).Nodup :=
+  ((List.set_set_perm hi hj).map f).nodup_iff
+@[simp, grind =] theorem nodup_set_swap {α} (xs : List α) (i j : Nat) (hi : i < xs.length) (hj : j < xs.length) :
+    ((xs.set i xs[j]).set j xs[i]).Nodup ↔ xs.Nodup :=
+  (List.set_set_perm hi hj).nodup_iff
+@[simp, grind =] theorem mem_set_swap {α} (xs : List α) (i j : Nat) (hi : i < xs.length) (hj : j < xs.length) (a : α) :
+    a ∈ (xs.set i xs[j]).set j xs[i] ↔ a ∈ xs :=
+  (List.set_set_perm hi hj).mem_iff
+@[simp, grind =] theorem length_filter_set_swap {α} (p : α → Bool) (xs : List α) (i j : Nat)
+    (hi : i < xs.length) (hj : j < xs.length) :
+    (((xs.set i xs[j]).set j xs[i]).filter p).length = (xs.filter p).length :=
+  ((List.set_set_perm hi hj).filter p).length_eq
 
 /-! ### `slice` is a sublist: membership and distinct keys carry over -/
 

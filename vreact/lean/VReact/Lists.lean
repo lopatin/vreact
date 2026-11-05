@@ -39,6 +39,7 @@ attribute [vreact_simp] JS.length_toSorted JS.mem_toSorted JS.nodup_map_toSorted
   JS.length_filter_toSorted JS.toSorted_nil JS.toSorted_singleton JS.nodup_range
   JS.withAt_eq_set List.length_set List.mem_reverse List.length_reverse List.map_reverse
   List.mem_flatMap
+  JS.nodup_map_set_swap JS.nodup_set_swap JS.mem_set_swap JS.length_filter_set_swap
 
 /-! Counts (`xs.filter(p).length`) under the usual state updates: append is handled by
 `filter_append`; an update `map f` is pushed under the filter (`filter_map`), so marking

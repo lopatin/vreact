@@ -21,6 +21,36 @@ dsimproc [vreact_simp] reduceOfString (JS.Str.ofString _) := fun e => do
   let lst ← mkListLit u16 elems
   return .done (mkApp (mkConst ``JS.Str.mk) lst)
 
+/-- `String(7)`, `` `${-12}` ``, `` `${true}` `` of a literal: the literal string of its decimal
+rendering (`JS.str` of `Int`/`Nat`/`Bool`, by its definition), then `reduceOfString`.
+Definitional (`dsimproc`): the kernel re-checks it by evaluating `toString`. -/
+dsimproc [vreact_simp] reduceStrOfLit (JS.str _) := fun e => do
+  let_expr JS.str ty inst x ← e | return .continue
+  let some tn := ty.constName? | return .continue
+  let s? : Option String ←
+    if tn == ``Int && inst.isConstOf ``JS.instToJSInt then pure ((← getIntValue? x).map toString)
+    else if tn == ``Nat && inst.isConstOf ``JS.instToJSNat then pure ((← getNatValue? x).map toString)
+    else if tn == ``Bool && inst.isConstOf ``JS.instToJSBool then
+      pure (if x.isConstOf ``true then some "true" else if x.isConstOf ``false then some "false" else none)
+    else pure none
+  let some s := s? | return .continue
+  return .visit (mkApp (mkConst ``JS.Str.ofString) (mkStrLit s))
+
+/-- Concatenation of two literal strings (code-unit list literals, as `reduceOfString` leaves
+them) is a literal: `"a" + "b" === "ab"`, template literals with literal parts.  Together
+with `Str.append_assoc` (`(s + "a") + "b"` ↦ `s + "ab"`).  Definitional (`dsimproc`). -/
+dsimproc [vreact_simp] reduceStrAppend ((_ : JS.Str) ++ (_ : JS.Str)) := fun e => do
+  let_expr HAppend.hAppend _ _ _ _ a b ← e | return .continue
+  let_expr JS.Str.mk la ← a | return .continue
+  let_expr JS.Str.mk lb ← b | return .continue
+  let some (_, xs) := la.listLit? | return .continue
+  let some (_, ys) := lb.listLit? | return .continue
+  return .done (mkApp (mkConst ``JS.Str.mk) (← mkListLit (mkConst ``UInt16) (xs ++ ys)))
+
+@[vreact_simp] theorem JS.Str.append_assoc (a b c : JS.Str) : a ++ b ++ c = a ++ (b ++ c) := by
+  cases a; cases b; cases c
+  exact congrArg JS.Str.mk (List.append_assoc _ _ _)
+
 /-- Record fields through a conditional: `(if c then a else b).f` ↦ `if c then a.f else b.f`
 (also for `dite`).  State updates are written `xs.map(x => cond ? {...x, f: v} : x)`; with
 this rewrite every field that the update does not touch collapses to `x.f` (`ite_self`),

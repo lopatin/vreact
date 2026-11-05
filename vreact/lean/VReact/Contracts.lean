@@ -37,6 +37,10 @@ def addContractFacts : TacticM Unit := withMainContext do
           let cs ← calls.get
           unless cs.any (· == sub) do calls.set (cs.push sub)
   let mut g := goal
+  -- `vreact_auto` runs this more than once: do not add a fact that is already a hypothesis
+  let mut have_ : Array Expr := #[]
+  for d in lctx do
+    if !d.isImplementationDetail then have_ := have_.push (← instantiateMVars d.type)
   for call in (← calls.get) do
     let .const f us := call.getAppFn | continue
     for thm in contractsOf env f do
@@ -46,6 +50,9 @@ def addContractFacts : TacticM Unit := withMainContext do
       let ty ← try inferType pf catch _ => continue
       unless (← isProp ty) do continue
       let _ := ci
+      let ty ← instantiateMVars ty
+      if have_.contains ty then continue
+      have_ := have_.push ty
       g ← g.assert (← mkFreshUserName `hcontract) ty pf
       let (_, g') ← g.intro1P
       g := g'

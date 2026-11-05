@@ -82,8 +82,13 @@ first one that fails.
    `"heartbeats"` in vreact.json, default 1000000). One that runs out fails
    *at that obligation* with `(deterministic) timeout`; the others are still
    checked. Make the goal smaller (`@opaque` helpers with `ensures`, `assert`)
-   before raising the budget. A timeout or error Lean reports for a whole
-   declaration leaves its obligations unproved ("not checked", with the reason).
+   before raising the budget. (`vreact_auto could not prove the goal (grind
+   stopped at Lean's recursion limit)` is not a timeout: `grind` gave up on a
+   hypothesis shape it cannot handle, e.g. `forall(0, 3, …)` with a literal
+   bound, and the other strategies did not prove the goal either; an `assert`
+   of the needed instance, or a variable bound, usually helps.) A timeout or
+   error Lean reports for a whole declaration leaves its obligations unproved
+   ("not checked", with the reason).
 
 ## What not to do
 
