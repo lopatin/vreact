@@ -5,7 +5,9 @@ import VReact.Core
 
 React state is mostly immutable lists updated by `filter` (remove), `map`
 (update) and append (insert); keyed lists require distinct keys.  These lemmas
-let `grind` move key-uniqueness and membership facts through those operations.
+let `grind` move key-uniqueness and membership facts through those operations,
+through the views rendered from them (`slice`, `toSorted`, `toReversed`, `range`),
+and relate counts `(xs.filter p).length` before and after an update.
 -/
 namespace VReact
 

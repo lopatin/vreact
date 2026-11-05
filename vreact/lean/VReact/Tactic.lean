@@ -44,10 +44,7 @@ attribute [vreact_simp] dite_eq_ite List.foldl_cons List.foldl_nil decide_eq_tru
   forall_eq_or_imp exists_eq_or_imp List.length_cons List.length_nil List.length_append forall_eq exists_eq_left
   or_false false_or or_assoc and_true true_and not_false_eq_true forall_const implies_true false_implies
   not_true_eq_false and_false false_and
--- quantifiers over a `map` result: `∀ c ∈ xs.map f, P c` ↦ `∀ a ∈ xs, P (f a)` (before
--- `mem_map` rewrites the membership); then conditional record updates (`pushProjIte` in
--- `Simprocs.lean`) collapse field by field with `ite_self`
-attribute [vreact_simp ↓] List.forall_mem_map
+-- conditional record updates (`pushProjIte` in `Simprocs.lean`) collapse field by field
 attribute [vreact_simp] ite_self
 
 -- Bool `if`-chains (`a && b` / `a || b` with narrowing compile to `if a then b else false`)
