@@ -26,7 +26,88 @@ export type VType =
   | { k: "arr"; elem: VType }
   | { k: "opt"; elem: VType }
   | { k: "tuple"; elems: VType[] }
-  | { k: "fn"; params: Param[]; ret: VType };
+  | { k: "fn"; params: Param[]; ret: VType }
+  /**
+   * A type parameter of a generic top-level function (identified by `id`: one per declaration),
+   * abstract in the function's body.  `eq`: equality constraint (`T extends int | string`, Lean
+   * `[DecidableEq T]`); `fields`: field constraint (`T extends { readonly id: int }`, one Lean
+   * accessor parameter `acc : T → U` per field).  Instantiations are closed, non-optional types.
+   */
+  | { k: "tvar"; name: string; lean: string; id: number; eq: boolean; fields: TField[] | null };
+
+/** A field of a type parameter's field constraint, read through the accessor parameter `acc`. */
+export interface TField {
+  name: string;
+  type: VType;
+  acc: string;
+}
+
+/**
+ * A type parameter of a generic top-level function, as the translator knows it (registered when
+ * the function's signature is collected; a reference to an unregistered type parameter — of a
+ * generic arrow, a component, a type — is rejected).
+ */
+export interface TParam {
+  /** the TypeScript name (messages) */
+  name: string;
+  /** the Lean binder name `{T : Type}` */
+  lean: string;
+  id: number;
+  decl: ts.TypeParameterDeclaration;
+  eq: boolean;
+  fields: TField[] | null;
+  /** the TypeScript types of the constraint's fields (their null/undefined kinds) */
+  fieldTs: Map<string, ts.Type>;
+}
+
+export function tvarOf(p: TParam): VType {
+  return { k: "tvar", name: p.name, lean: p.lean, id: p.id, eq: p.eq, fields: p.fields };
+}
+
+/**
+ * Types whose values JS compares by value with `===` (and SameValueZero: `includes`, `indexOf`,
+ * a Set, a Map key), exactly as Lean's `=` does: booleans, ints, strings, string-literal enums,
+ * and type parameters with an equality constraint (instantiated only with these).  Not `number`
+ * (NaN, -0) and not objects/arrays (identity).
+ */
+export function isEqType(t: VType): boolean {
+  return t.k === "bool" || t.k === "int" || t.k === "str" || t.k === "enum" || (t.k === "tvar" && t.eq);
+}
+
+/** Whether `t` mentions a type parameter (one of `ids`, or any when `ids` is omitted). */
+export function mentionsTVar(t: VType, ids?: ReadonlySet<number>): boolean {
+  switch (t.k) {
+    case "tvar":
+      return !ids || ids.has(t.id);
+    case "arr":
+    case "opt":
+      return mentionsTVar(t.elem, ids);
+    case "tuple":
+      return t.elems.some((e) => mentionsTVar(e, ids));
+    case "fn":
+      return t.params.some((p) => mentionsTVar(p.type, ids)) || mentionsTVar(t.ret, ids);
+    default:
+      return false;
+  }
+}
+
+/** `t` with the type parameters of `σ` (by id) replaced by their instantiations. */
+export function substType(t: VType, σ: ReadonlyMap<number, VType>): VType {
+  switch (t.k) {
+    case "tvar":
+      return σ.get(t.id) ?? t;
+    case "arr":
+      return T.arr(substType(t.elem, σ));
+    case "opt":
+      return T.opt(substType(t.elem, σ));
+    case "tuple":
+      return { k: "tuple", elems: t.elems.map((e) => substType(e, σ)) };
+    case "fn":
+      return { k: "fn", params: t.params.map((p) => ({ name: p.name, type: substType(p.type, σ) })), ret: substType(t.ret, σ) };
+    default:
+      return t;
+  }
+}
 
 export interface Param {
   name: string;
@@ -80,6 +161,9 @@ export class TypeRegistry {
   byShape = new Map<string, NamedType>();
   /** Per-module emission order. */
   order: NamedType[] = [];
+  /** The type parameters of the program's generic functions, by declaration and by id. */
+  tparams = new Map<ts.Node, TParam>();
+  tparamById = new Map<number, TParam>();
 
   get(qname: string): NamedType {
     const t = this.byName.get(qname);
@@ -117,9 +201,19 @@ export class TypeRegistry {
   }
 }
 
+// (every kind is handled explicitly in the functions below, without a `default`: a new kind
+// must be considered at each of them, and tsc reports a missing case)
 export function sameType(a: VType, b: VType): boolean {
   if (a.k !== b.k) return false;
   switch (a.k) {
+    case "bool":
+    case "int":
+    case "num":
+    case "str":
+    case "unit":
+    case "void":
+    case "node":
+      return true;
     case "enum":
     case "rec":
     case "union":
@@ -135,8 +229,9 @@ export function sameType(a: VType, b: VType): boolean {
       const bb = b as typeof a;
       return a.params.length === bb.params.length && a.params.every((p, i) => sameType(p.type, bb.params[i].type)) && sameType(a.ret, bb.ret);
     }
-    default:
-      return true;
+    case "tvar":
+      // by declaration: two functions' `T` are different variables
+      return a.id === (b as typeof a).id;
   }
 }
 
@@ -170,12 +265,22 @@ export function showType(t: VType): string {
       return `[${t.elems.map(showType).join(", ")}]`;
     case "fn":
       return `(${t.params.map((p) => `${p.name}: ${showType(p.type)}`).join(", ")}) => ${showType(t.ret)}`;
+    case "tvar":
+      return t.name;
   }
 }
 
-/** A canonical string of a VTS type (nominal types by name). */
+/** A canonical string of a VTS type (nominal types by name, type parameters by declaration). */
 export function typeKey(t: VType): string {
   switch (t.k) {
+    case "bool":
+    case "int":
+    case "num":
+    case "str":
+    case "unit":
+    case "void":
+    case "node":
+      return t.k;
     case "enum":
     case "rec":
     case "union":
@@ -188,19 +293,35 @@ export function typeKey(t: VType): string {
       return `(${t.elems.map(typeKey).join(",")})`;
     case "fn":
       return `fn(${t.params.map((p) => typeKey(p.type)).join(",")})=>${typeKey(t.ret)}`;
-    default:
-      return t.k;
+    case "tvar":
+      return `tvar:${t.id}`;
   }
+}
+
+/**
+ * The type parameter declarations of the program's generic functions (`registerTypeParams`):
+ * their instantiations are never null or undefined, so a type-parameter part of a TypeScript type
+ * adds no nullish value (see `kindsOfType`).
+ */
+const vtsTypeParamDecls = new WeakSet<ts.Node>();
+
+/** A type parameter of a VTS generic function (never instantiated with a nullish type)? */
+function isVtsTypeParam(t: ts.Type): boolean {
+  if (!(t.flags & ts.TypeFlags.TypeParameter)) return false;
+  const d = t.symbol?.declarations?.[0];
+  return !!d && vtsTypeParamDecls.has(d);
 }
 
 /**
  * Which nullish values (`null`, `undefined`) a TypeScript type admits (VTS represents both as
  * `none`; TypeScript types tell which one a value can be).  `null` when the type does not tell
- * (`any`, `unknown`, a type parameter: e.g. a callback parameter annotated `unknown`, which
- * TypeScript accepts for an argument of any type).
+ * (`any`, `unknown`, a type parameter other than a VTS generic function's: e.g. a callback
+ * parameter annotated `unknown`, which TypeScript accepts for an argument of any type).  A type
+ * parameter of a VTS generic function is never instantiated with a nullish type (the
+ * translator checks every instantiation), so it adds neither (`T | null` admits `null` only).
  */
 export function kindsOfType(t: ts.Type): { null: boolean; undef: boolean } | null {
-  const parts = t.isUnion() ? t.types : [t];
+  const parts = (t.isUnion() ? t.types : [t]).filter((p) => !isVtsTypeParam(p));
   if (parts.some((p) => (p.flags & (ts.TypeFlags.Any | ts.TypeFlags.Unknown | ts.TypeFlags.InstantiableNonPrimitive)) !== 0)) return null;
   return {
     null: parts.some((p) => (p.flags & ts.TypeFlags.Null) !== 0),
@@ -232,7 +353,22 @@ export function nullShape(t: ts.Type, vt: VType, ck: ts.TypeChecker): string | n
       const inner = vt.elems.map((e, i) => nullShape(args[i], e, ck));
       return inner.some((x) => x === null) ? null : `(${inner.join(",")})`;
     }
-    default:
+    case "bool":
+    case "int":
+    case "num":
+    case "str":
+    case "unit":
+    case "void":
+    case "node":
+    case "fn":
+    case "enum":
+    case "rec":
+    case "union":
+      // (records, unions, enums: nominal, their fields' kinds are those of their declaration)
+      return "";
+    case "tvar":
+      // a value of a type parameter: abstract (what its instantiation contains is not looked at
+      // where the type parameter is in scope), and never nullish itself
       return "";
   }
 }
@@ -265,16 +401,28 @@ export function leanType(t: VType): string {
       return "(" + t.elems.map(leanType).join(" × ") + ")";
     case "fn":
       throw new Error("internal: function type has no Lean value type");
+    case "tvar":
+      return t.lean;
   }
 }
 
 /** Whether Lean can derive `DecidableEq` (Floats and functions cannot). */
 export function hasDecEq(t: VType, reg: TypeRegistry, seen = new Set<string>()): boolean {
   switch (t.k) {
+    case "bool":
+    case "int":
+    case "str":
+    case "unit":
+    case "void":
+    case "enum":
+      return true;
     case "num":
     case "fn":
     case "node":
       return false;
+    case "tvar":
+      // (only where its `[DecidableEq T]` binder is in scope)
+      return t.eq;
     case "arr":
     case "opt":
       return hasDecEq(t.elem, reg, seen);
@@ -289,8 +437,6 @@ export function hasDecEq(t: VType, reg: TypeRegistry, seen = new Set<string>()):
       if (d.k === "union") return d.variants.every((v) => v.fields.every((f) => hasDecEq(f.type, reg, seen)));
       return true;
     }
-    default:
-      return true;
   }
 }
 
@@ -389,6 +535,7 @@ export function typeOfNode(node: ts.TypeNode, env: TypeEnv, hint: string): VType
       return recordFromMembers((node as ts.TypeLiteralNode).members, env, hint, node, node.getSourceFile());
     case ts.SyntaxKind.FunctionType: {
       const ft = node as ts.FunctionTypeNode;
+      if (ft.typeParameters?.length) fail(node, `generic function types are not supported in VTS (${node.getText()}): only top-level functions may have type parameters`);
       const params = ft.parameters.map((p) => {
         if (!p.type) fail(p, "callback parameters need type annotations");
         return { name: p.name.getText(), type: typeOfNode(p.type, env, hint + capitalize(p.name.getText())) };
@@ -426,9 +573,163 @@ function typeRef(node: ts.TypeReferenceNode, env: TypeEnv, hint: string): VType 
   if (sym.flags & ts.SymbolFlags.Alias) sym = env.checker.getAliasedSymbol(sym);
   const decl = sym.declarations?.[0];
   if (!decl) fail(node, `cannot resolve type ${name}`);
+  if (ts.isTypeParameterDeclaration(decl)) {
+    const p = env.reg.tparams.get(decl);
+    if (p) return tvarOf(p);
+    fail(node, foreignTypeParam(decl));
+  }
   if (args.length) fail(node, `generic type ${name}<…> not supported in VTS`);
   if (inProgress.has(decl)) fail(node, `type ${name} refers to itself: recursive types are not supported in VTS (use an array of records with ids, e.g. a parent id field)`);
   return typeOfDecl(decl, env);
+}
+
+/** Why a reference to a type parameter that is not a (registered) generic function's is rejected. */
+function foreignTypeParam(decl: ts.TypeParameterDeclaration): string {
+  const o = decl.parent;
+  const n = decl.name.text;
+  if (ts.isArrowFunction(o) || ts.isFunctionExpression(o)) {
+    return `generic arrow functions and function expressions are not supported in VTS (type parameter ${n}): make the helper a generic top-level function`;
+  }
+  if (ts.isTypeAliasDeclaration(o)) return "generic type aliases are not supported in VTS";
+  if (ts.isInterfaceDeclaration(o)) return "generic interfaces are not supported in VTS";
+  if (ts.isFunctionDeclaration(o)) return `the type parameter ${n} of ${o.name?.text ?? "this function"} is not supported (only top-level functions that are not components may be generic)`;
+  return `the type parameter ${n} is not supported here (only top-level functions may be generic)`;
+}
+
+let tparamCounter = 0;
+
+/**
+ * Register the type parameters of a generic top-level function (before its signature is
+ * converted, so that references to them are type variables) and read their constraints:
+ *  - none: abstract (passed, stored, returned; no operation looks into its values);
+ *  - an equality constraint `T extends int | string | boolean | <enum> | "lit"` (unions of these):
+ *    `===`, `includes`, `indexOf`, `distinct` on T (Lean `[DecidableEq T]`);
+ *  - a field constraint `T extends { readonly id: int; … }` (or a named object type): `x.id` on
+ *    `x : T`, through one explicit accessor parameter per field (`(T_id : T → Int)`).
+ * Anything else is rejected.  Idempotent.
+ */
+export function registerTypeParams(fn: ts.FunctionDeclaration, env: TypeEnv): TParam[] {
+  const tps = fn.typeParameters ?? [];
+  const known = tps.map((tp) => env.reg.tparams.get(tp));
+  if (known.every((p) => p)) return known as TParam[];
+  const fname = fn.name?.text ?? "f";
+  const used = new Set<string>();
+  const out: TParam[] = [];
+  for (const tp of tps) {
+    const name = tp.name.text;
+    if (tp.modifiers?.length) fail(tp, `\`${tp.modifiers.map((m) => m.getText()).join(" ")}\` type parameters are not supported in VTS: write ${fname}<${name}, …>`);
+    if (tp.default) fail(tp.default, `default type arguments are not supported in VTS (${name} = ${tp.default.getText()}): where ${name} cannot be inferred from the arguments, callers write it (${fname}<…>(…))`);
+    // (TypeScript's type names are distinct, and `leanIdent` is injective)
+    const p: TParam = { name, lean: leanIdent(name), id: ++tparamCounter, decl: tp, eq: false, fields: null, fieldTs: new Map() };
+    used.add(p.lean);
+    out.push(p);
+  }
+  for (const p of out) {
+    env.reg.tparams.set(p.decl, p);
+    env.reg.tparamById.set(p.id, p);
+    vtsTypeParamDecls.add(p.decl);
+  }
+  for (const p of out) readConstraint(p, fname, env, used);
+  return out;
+}
+
+/** Does a type node refer to a type parameter? */
+function mentionsTypeParam(n: ts.Node, ck: ts.TypeChecker): boolean {
+  let found = false;
+  const visit = (x: ts.Node) => {
+    if (found) return;
+    if (ts.isTypeReferenceNode(x)) {
+      let s = ck.getSymbolAtLocation(x.typeName);
+      if (s && s.flags & ts.SymbolFlags.Alias) s = ck.getAliasedSymbol(s);
+      if (s?.declarations?.some((d) => ts.isTypeParameterDeclaration(d))) found = true;
+    }
+    ts.forEachChild(x, visit);
+  };
+  visit(n);
+  return found;
+}
+
+const CONSTRAINT_FORMS = "an equality constraint (T extends int | string | boolean, or a string-literal enum) or a field constraint (T extends { readonly id: int; … })";
+
+function readConstraint(p: TParam, fname: string, env: TypeEnv, used: Set<string>) {
+  let c = p.decl.constraint;
+  if (!c) return;
+  while (ts.isParenthesizedTypeNode(c)) c = c.type;
+  const what = `${p.name} extends ${c.getText()}`;
+  const unsupported = (why: string): never => fail(c!, `the constraint ${what} is not supported: ${why}; VTS supports ${CONSTRAINT_FORMS}`);
+  if (mentionsTypeParam(c, env.checker)) unsupported("it mentions a type parameter (constraints must be fixed types)");
+  const K = ts.SyntaxKind;
+  if (c.kind === K.UnknownKeyword || c.kind === K.AnyKeyword) unsupported("it constrains nothing (leave it out: an unconstrained type parameter is abstract)");
+  if (c.kind === K.ObjectKeyword) unsupported("`object` says nothing about the fields (name the fields: T extends { readonly id: int })");
+  if (ts.isTypeOperatorNode(c) && c.operator === K.KeyOfKeyword) unsupported("keyof is not supported");
+  if (ts.isIntersectionTypeNode(c)) unsupported("intersections are not supported (an equality constraint and a field constraint cannot be combined)");
+  if (ts.isConditionalTypeNode(c) || ts.isMappedTypeNode(c) || ts.isIndexedAccessTypeNode(c) || ts.isTypeQueryNode(c)) unsupported("conditional, mapped, indexed and typeof types are not supported");
+  // a field constraint: an object type literal, or the name of a record type
+  let fields: Field[] | null = null;
+  if (ts.isTypeLiteralNode(c)) {
+    // `T extends {}`: not nullish, which every instantiation is anyway
+    if (c.members.length === 0) return;
+    fields = [];
+    for (const m of c.members) {
+      if (!ts.isPropertySignature(m) || !m.type) fail(m, `the field constraint of ${p.name} may only list annotated fields (f: T or f?: T; no methods or index signatures)`);
+      const f = m.name.getText();
+      let ft = typeOfNode(m.type, env, capitalize(fname) + capitalize(p.name) + capitalize(f));
+      if (m.questionToken && ft.k !== "opt") ft = T.opt(ft);
+      fields.push({ name: f, type: ft });
+    }
+  } else if (ts.isTypeReferenceNode(c) && !env.isSpecInt(c)) {
+    const t = typeOfNode(c, env, capitalize(fname) + capitalize(p.name));
+    if (t.k === "rec") fields = env.reg.rec(t);
+    else if (t.k === "union") unsupported(`${c.getText()} is a union of object types (constrain the fields its variants share: T extends { readonly f: … })`);
+  }
+  if (fields) {
+    const ct = env.checker.getTypeFromTypeNode(c);
+    p.fields = fields.map((f) => {
+      if (f.type.k === "fn" || f.type.k === "node") fail(c!, `the field ${f.name} of the constraint of ${p.name} is not a value (functions and React nodes are not supported there)`);
+      const base = `${p.name}_${f.name}`.replace(/[^A-Za-z0-9_$\u0080-￿]/g, "_");
+      let acc = leanIdent(base);
+      for (let k = 1; used.has(acc); k++) acc = leanIdent(`${base}_${k}`);
+      used.add(acc);
+      const sym = env.checker.getPropertyOfType(ct, f.name);
+      if (sym) p.fieldTs.set(f.name, env.checker.getTypeOfSymbol(sym));
+      return { name: f.name, type: f.type, acc };
+    });
+    return;
+  }
+  // an equality constraint: booleans, ints, strings, string literals and enums, or a union of them
+  for (let m of ts.isUnionTypeNode(c) ? c.types : [c]) {
+    while (ts.isParenthesizedTypeNode(m)) m = m.type;
+    if (m.kind === K.NumberKeyword || (ts.isLiteralTypeNode(m) && ts.isNumericLiteral(m.literal))) {
+      unsupported("number has no usable equality (NaN !== NaN, and SameValueZero equates -0 and 0): use int");
+    }
+    if (m.kind === K.NullKeyword || m.kind === K.UndefinedKeyword || (ts.isLiteralTypeNode(m) && m.literal.kind === K.NullKeyword)) {
+      unsupported("a type parameter is never instantiated with null or undefined (write T | null where a value may be absent)");
+    }
+    if (m.kind === K.BooleanKeyword || m.kind === K.StringKeyword) continue;
+    if (ts.isLiteralTypeNode(m) && (ts.isStringLiteral(m.literal) || m.literal.kind === K.TrueKeyword || m.literal.kind === K.FalseKeyword)) continue;
+    if (ts.isTypeReferenceNode(m)) {
+      if (env.isSpecInt(m)) continue;
+      const t = typeOfNode(m, env, capitalize(fname) + capitalize(p.name));
+      if (t.k === "num") unsupported(`${m.getText()} is number, which has no usable equality (NaN !== NaN, and SameValueZero equates -0 and 0): use int`);
+      if (isEqType(t)) continue;
+      unsupported(`${m.getText()} is ${showType(t)}, which JS does not compare by value (only booleans, ints, strings and enums are)`);
+    }
+    unsupported(`${m.getText()} is not a boolean, int, string or string-literal type`);
+  }
+  p.eq = true;
+}
+
+/** A type parameter inside an object type (a field's type): generic object types are not supported. */
+function checkNoTVarField(t: VType, at: ts.Node) {
+  if (!mentionsTVar(t)) return;
+  const names = new Set<string>();
+  const collectNames = (x: VType) => {
+    if (x.k === "tvar") names.add(x.name);
+    if (x.k === "arr" || x.k === "opt") collectNames(x.elem);
+    if (x.k === "tuple") x.elems.forEach(collectNames);
+  };
+  collectNames(t);
+  fail(at, `the type parameter ${[...names].join(", ")} appears inside an object type: generic object types are not supported in VTS (their Lean structure would depend on the type parameter); pass that value as a separate parameter of type ${[...names][0]}, or use a tuple [${[...names][0]}, …]`);
 }
 
 /** The declarations whose VTS type is being computed (a reference back to one is a recursive type). */
@@ -485,6 +786,7 @@ function recordFromMembers(
     if (!m.type) fail(m, "properties need type annotations");
     const fname = m.name.getText();
     let ft = typeOfNode(m.type, env, name + capitalize(fname));
+    checkNoTVarField(ft, m.type);
     if (m.questionToken && ft.k !== "opt") ft = T.opt(ft);
     fields.push({ name: fname, type: ft });
     optional.push(!!m.questionToken);
@@ -640,6 +942,7 @@ function unionOf(
       const fname = p.name.getText();
       if (fname === tag) continue;
       let ft = typeOfNode(p.type, env, name + capitalize(lit) + capitalize(fname));
+      checkNoTVarField(ft, p.type);
       if (p.questionToken && ft.k !== "opt") ft = T.opt(ft);
       fields.push({ name: fname, type: ft });
     }

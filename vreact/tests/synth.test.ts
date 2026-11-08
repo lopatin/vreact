@@ -286,6 +286,16 @@ const cases: Record<string, () => Promise<void>> = {
     check("Sx-dedup: no candidate checked twice", checked.length >= 2 && new Set(checked).size === checked.length, `${checked.length} checks`);
     check("Sx-dedup: above proved", solutions(by("above"))[0] === "a + b + 1 + 1", String(solutions(by("above"))[0]));
   },
+  // generic functions: random tests per instantiation (never undefined values), Lean proves the fill for every T
+  async "Gx-generic"() {
+    const dir = project("Gx-generic");
+    const { by, out } = await synth(dir, "src/gen.ts");
+    check("Gx-generic: push proved", solutions(by("push"))[0] === "[...xs, x]", String(solutions(by("push"))[0]));
+    check("Gx-generic: withKey proved", solutions(by("withKey"))[0] === "[...xs, k]", String(solutions(by("withKey"))[0]));
+    check("Gx-generic: idOf uses the constrained field", solutions(by("idOf"))[0] === "x.id", String(solutions(by("idOf"))[0]));
+    check("Gx-generic: the instantiations are reported", /tested with T = int or string/.test(out) && /tested with T = a record with id and one more field/.test(out));
+    check("Gx-generic: no undefined test values", !/undefined/.test(out), out.split("\n").filter((l) => l.includes("undefined")).join(" | "));
+  },
 };
 
 for (const [name, run] of Object.entries(cases)) {

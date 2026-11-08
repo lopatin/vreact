@@ -1,5 +1,5 @@
 import ts from "typescript";
-import { TypeRegistry, type VType, type Param, type Field, type TypeEnv } from "./types.ts";
+import { TypeRegistry, type VType, type Param, type Field, type TypeEnv, type TParam } from "./types.ts";
 import { relLoc, nodeText, subscripted } from "./util.ts";
 
 /** A translated Lean term together with its VTS type. */
@@ -12,6 +12,8 @@ export interface Val {
 export interface FnInfo {
   qname: string;
   name: string;
+  /** type parameters (generic function): Lean binders `{T : Type}`, `[DecidableEq T]`, accessors */
+  tparams: TParam[];
   params: Param[];
   ret: VType;
   hasPre: boolean;

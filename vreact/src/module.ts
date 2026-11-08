@@ -17,7 +17,7 @@ import ts from "typescript";
 import fs from "node:fs";
 import path from "node:path";
 import { Program, ModCtx, type Obligation, type FnInfo, type CompInfo, type Global, type ConstInfo, type HoleEnv } from "./ctx.ts";
-import { T, type VType, typeOfNode, typeOfDecl, emitTypeDecl, leanType } from "./types.ts";
+import { T, type VType, typeOfNode, typeOfDecl, emitTypeDecl, leanType, registerTypeParams } from "./types.ts";
 import { VtsError, fail, leanIdent, leanField, leanStr, paren, capitalize, nodeText, clashesWithLean } from "./util.ts";
 import { LEAN_TYPE_AUX, LEAN_ROOT_NAMES } from "./leanNames.ts";
 import { expr, prop, propAll, valueBlock, specFn, symbolOf, bindParam, typeOf, checkParamAnnotation } from "./translate.ts";
@@ -605,6 +605,8 @@ function header(imports: string[]): string {
     "import VReact",
     ...imports.map((i) => `import ${i}`),
     "open VReact",
+    // (a binder the translation forgot must be an error, not an auto-bound implicit)
+    "set_option autoImplicit false",
     "set_option linter.unusedVariables false",
     BUDGET_SLOT,
     "noncomputable section",
@@ -669,14 +671,17 @@ function collect(st: ts.Statement, m: ModCtx, ns: string, res: TranslateResult) 
   if (ts.isFunctionDeclaration(st)) {
     if (!st.name) fail(st, "functions need a name");
     if (st.asteriskToken || st.modifiers?.some((x) => x.kind === ts.SyntaxKind.AsyncKeyword)) fail(st, "async functions and generators are not supported");
-    if (st.typeParameters?.length) fail(st, "generic functions are not supported in VTS yet");
+    rejectGenericFunctionValues(st);
     const trusted = isTrusted(st);
     if (isComponentDecl(st)) {
+      if (st.typeParameters?.length) fail(st.typeParameters[0], `generic components are not supported in VTS (${st.name.text}<${st.typeParameters.map((t) => t.name.text).join(", ")}>): give the props concrete types, and move generic code into a generic top-level function`);
       const info = compSignature(st, ns, ns, m, trusted);
       prog.globals.set(st, { k: "comp", info });
       return;
     }
     if (/^use[A-Z]/.test(st.name.text)) fail(st, "custom hooks are not supported yet: inline the hook calls into the component");
+    // type parameters first: the signature refers to them
+    const tparams = registerTypeParams(st, prog.typeEnv);
     const params = st.parameters.map((p) => {
       if (!p.type) fail(p, "parameters need type annotations");
       if (p.initializer || p.dotDotDotToken || p.questionToken) fail(p, "default/rest/optional parameters are not supported");
@@ -686,12 +691,13 @@ function collect(st: ts.Statement, m: ModCtx, ns: string, res: TranslateResult) 
     if (!st.type) fail(st, "functions need a return type annotation");
     const ret = typeOfNode(st.type, prog.typeEnv, capitalize(st.name.text) + "Result");
     const hasPre = !!st.body?.statements.some((s) => isSpecCall(s, m, "requires"));
-    const info: FnInfo = { qname: `${ns}.${leanIdent(st.name.text)}`, name: st.name.text, params, ret, hasPre, trusted, opaque: isOpaque(st), decl: st, module: ns };
+    const info: FnInfo = { qname: `${ns}.${leanIdent(st.name.text)}`, name: st.name.text, tparams, params, ret, hasPre, trusted, opaque: isOpaque(st), decl: st, module: ns };
     prog.globals.set(st, { k: "fn", info });
     return;
   }
   if (ts.isVariableStatement(st)) {
     if (!(st.declarationList.flags & ts.NodeFlags.Const)) fail(st, "top-level variables must be const");
+    rejectGenericFunctionValues(st);
     for (const d of st.declarationList.declarations) {
       if (!ts.isIdentifier(d.name) || !d.initializer) fail(d, "top-level const needs a name and initializer");
       let t: VType | undefined = d.type ? typeOfNode(d.type, prog.typeEnv, capitalize(d.name.text)) : undefined;
@@ -729,6 +735,21 @@ function collect(st: ts.Statement, m: ModCtx, ns: string, res: TranslateResult) 
   }
   if (ts.isEmptyStatement(st)) return;
   fail(st, `top-level statement not supported in VTS (only imports, types, functions, components and constants)`);
+}
+
+/**
+ * Generic arrow functions and function expressions (`const id = <T,>(x: T) => x`): only top-level
+ * functions may have type parameters (local helpers are inlined at their calls, where their type
+ * parameters would have no binder).
+ */
+function rejectGenericFunctionValues(st: ts.Node) {
+  const visit = (n: ts.Node) => {
+    if ((ts.isArrowFunction(n) || ts.isFunctionExpression(n)) && n.typeParameters?.length) {
+      fail(n.typeParameters[0], `generic arrow functions and function expressions are not supported in VTS (type parameter ${n.typeParameters[0].name.text}): make the helper a generic top-level function`);
+    }
+    ts.forEachChild(n, visit);
+  };
+  ts.forEachChild(st, visit);
 }
 
 function isSpecCall(s: ts.Statement, m: ModCtx, name: string): boolean {
@@ -864,8 +885,31 @@ function hasHole(fn: ts.FunctionDeclaration): boolean {
 
 function translateFunction(fn: ts.FunctionDeclaration, info: FnInfo, m: ModCtx): { def: string; post: string | null; postNames: string[] } {
   let env = baseEnv(m);
+  // a generic function: its type binders, the `[DecidableEq T]` of equality constraints and the
+  // accessor parameters of field constraints come first, in this order — the same telescope for
+  // the definition and every contract theorem (`vreact_contracts` applies a theorem to a call's
+  // whole argument list).  TypeScript's type and value names are separate, Lean's are not: the
+  // value parameters and locals avoid these names (`env.scope`).
   const binders: string[] = [];
+  const typeArgs: string[] = [];
   const argNames: string[] = [];
+  if (info.tparams.length) {
+    const scope = new Set(env.scope);
+    for (const p of info.tparams) {
+      binders.push(`{${p.lean} : Type}`);
+      typeArgs.push(`(${p.lean} := ${p.lean})`);
+      scope.add(p.lean);
+    }
+    for (const p of info.tparams) if (p.eq) binders.push(`[DecidableEq ${p.lean}]`);
+    for (const p of info.tparams) {
+      for (const f of p.fields ?? []) {
+        binders.push(`(${f.acc} : ${p.lean} → ${leanType(f.type)})`);
+        argNames.push(f.acc);
+        scope.add(f.acc);
+      }
+    }
+    env = { ...env, scope };
+  }
   fn.parameters.forEach((p, i) => {
     const r = bindParam(p.name, info.params[i].type, env);
     env = r.env;
@@ -918,7 +962,8 @@ function translateFunction(fn: ts.FunctionDeclaration, info: FnInfo, m: ModCtx):
   let post: string | null = null;
   const postNames: string[] = [];
   if (posts.length) {
-    const call = `(${info.qname}${argNames.map((a) => " " + a).join("")}${hypNames.map((h) => " " + h).join("")})`;
+    // (type arguments by name: a type parameter may occur in the result type only)
+    const call = `(${info.qname}${[...typeArgs, ...argNames, ...hypNames].map((a) => " " + a).join("")})`;
     const kw = info.trusted ? "axiom" : "theorem";
     const parts: string[] = [];
     posts.forEach(({ lam }, k) => {

@@ -37,7 +37,7 @@ import { loadConfig } from "./cli.ts";
 import { translate, overrideHost, moduleNs, type Config, type TranslateResult } from "./module.ts";
 import { runLake, findMarkers, judge, type Verdict } from "./lean.ts";
 import { Program, ModCtx, type HoleEnv } from "./ctx.ts";
-import { type VType, type Field, T, typeOfNode, typeOfDecl, showType, sharedFields } from "./types.ts";
+import { type VType, type Field, T, typeOfNode, typeOfDecl, showType, sharedFields, registerTypeParams, type TParam } from "./types.ts";
 import { specFn, narrowingAt, remainingAt } from "./translate.ts";
 import { baseEnv } from "./component.ts";
 import { VtsError, capitalize } from "./util.ts";
@@ -327,6 +327,8 @@ function holeScope(narrowed: Narrow, prog: Program, params: Map<string, VType>):
       const u = reg.union(t);
       return sharedFields(variants ? u.variants.filter((v) => variants.includes(v.lit)) : u.variants);
     }
+    // a type parameter's constrained fields (`x.id` with `T extends { readonly id: int }`)
+    if (t.k === "tvar") return t.fields ?? [];
     return [];
   };
   const scope: Atom[] = [];
@@ -482,6 +484,7 @@ class Enumerator {
     if (t.k === "union") for (const v of reg.union(t).variants) for (const f of v.fields) this.register(f.type);
     if (t.k === "arr" || t.k === "opt") this.register(t.elem);
     if (t.k === "arr") this.register(T.int);
+    if (t.k === "tvar") for (const f of t.fields ?? []) this.register(f.type);
   }
   terms(t: VType, size: number): Atom[] {
     const k = key(t);
@@ -575,7 +578,9 @@ class Enumerator {
       case "bool": {
         for (const a of this.terms(T.bool, size - 1)) push(`!${wrap(a.code)}`);
         for (const [i, j] of splits(size - 1, 2)) {
-          for (const pt of [T.int, T.str]) {
+          // (values of a type parameter: only under an equality constraint)
+          const eqTVars = [...this.types.values()].filter((x) => x.k === "tvar" && x.eq);
+          for (const pt of [T.int, T.str, ...eqTVars]) {
             for (const a of this.terms(pt, i)) for (const b of this.terms(pt, j)) {
               if (a.code === b.code) continue;
               push(`${wrap(a.code)} === ${wrap(b.code)}`);
@@ -757,9 +762,32 @@ function rnd(n: number) {
 }
 const pick = <A>(xs: A[]): A => xs[rnd(xs.length)];
 
-function gen(t: VType, prog: Program, pools: Pools, depth = 0): unknown {
+/**
+ * The instantiation of a generic function's type parameters for one test input (by id): `int`
+ * or `string` for an unconstrained or equality-constrained parameter, a witness record (the
+ * constrained fields and one more) for a field-constrained one.  The function is compiled once
+ * (types are erased); Lean proves the fill once for every instantiation.
+ */
+type Inst = Map<number, VType | "witness">;
+
+function chooseInst(tparams: readonly TParam[]): Inst {
+  return new Map(tparams.map((p) => [p.id, p.fields ? "witness" : Math.random() < 0.5 ? T.int : T.str]));
+}
+
+function gen(t: VType, prog: Program, pools: Pools, depth = 0, inst?: Inst): unknown {
   const reg = prog.reg;
   switch (t.k) {
+    case "tvar": {
+      const c = inst?.get(t.id);
+      // (never a silent `undefined`: every value of a type parameter comes from an instantiation)
+      if (!c) throw new Error(`internal: no test instantiation of the type parameter ${t.name}`);
+      if (c !== "witness") return gen(c, prog, pools, depth, inst);
+      const o: Record<string, unknown> = {};
+      for (const f of t.fields ?? []) o[f.name] = gen(f.type, prog, pools, depth + 1, inst);
+      // (a field the constraint does not name: a fill that rebuilds the value loses it)
+      o.witness$ = pick(BASE_STRS);
+      return o;
+    }
     case "int":
       return pools.ints.length && Math.random() < 0.4 ? pick(pools.ints) : pick(BASE_INTS);
     case "num":
@@ -773,27 +801,27 @@ function gen(t: VType, prog: Program, pools: Pools, depth = 0): unknown {
       return lits[rnd(lits.length)];
     }
     case "opt": {
-      if (Math.random() >= 0.3) return gen(t.elem, prog, pools, depth);
+      if (Math.random() >= 0.3) return gen(t.elem, prog, pools, depth, inst);
       const a = (t as OptT).absent ?? "null";
       return a === "undefined" || (a === "both" && Math.random() < 0.5) ? undefined : null;
     }
     case "tuple":
-      return t.elems.map((e) => gen(e, prog, pools, depth));
+      return t.elems.map((e) => gen(e, prog, pools, depth, inst));
     case "rec": {
       const o: Record<string, unknown> = {};
-      for (const f of reg.rec(t)) o[f.name] = gen(f.type, prog, pools, depth + 1);
+      for (const f of reg.rec(t)) o[f.name] = gen(f.type, prog, pools, depth + 1, inst);
       return o;
     }
     case "union": {
       const u = reg.union(t);
       const v = u.variants[rnd(u.variants.length)];
       const o: Record<string, unknown> = { [u.tag]: v.lit };
-      for (const f of v.fields) o[f.name] = gen(f.type, prog, pools, depth + 1);
+      for (const f of v.fields) o[f.name] = gen(f.type, prog, pools, depth + 1, inst);
       return o;
     }
     case "arr": {
       const n = depth > 2 ? 0 : rnd(4);
-      const xs = Array.from({ length: n }, () => gen(t.elem, prog, pools, depth + 1));
+      const xs = Array.from({ length: n }, () => gen(t.elem, prog, pools, depth + 1, inst));
       // favour distinct ids (common invariant)
       if (t.elem.k === "rec" && xs.length) {
         const ids = [-3, -2, -1, 0, 1, 2, 3, 4, 5, 6].sort(() => Math.random() - 0.5);
@@ -891,9 +919,13 @@ const OWN_PRE = { own: "precondition" };
 /** what vreact/spec's hole() throws outside test mode (the contracts are evaluated outside it) */
 const isUnfilledHoleError = (e: unknown) => e instanceof Error && e.message.startsWith("vreact: unfilled hole()");
 
-function makeRunner(sb: Sandbox, target: string, fname: string, paramTypes: VType[], prog: Program, pools: Pools, textFor: (cand: string) => string): Runner {
-  // fixed sample set (re-used across candidates; counterexamples are moved to the front)
-  const samples: unknown[][] = Array.from({ length: 400 }, () => paramTypes.map((t) => gen(t, prog, pools)));
+function makeRunner(sb: Sandbox, target: string, fname: string, paramTypes: VType[], prog: Program, pools: Pools, textFor: (cand: string) => string, tparams: readonly TParam[] = []): Runner {
+  // fixed sample set (re-used across candidates; counterexamples are moved to the front); the
+  // parameters of one input share one instantiation of the type parameters
+  const samples: unknown[][] = Array.from({ length: 400 }, () => {
+    const inst = chooseInst(tparams);
+    return paramTypes.map((t) => gen(t, prog, pools, 0, inst));
+  });
   const g = globalThis as Record<string, unknown>;
   return {
     run(candidate) {
@@ -1194,6 +1226,16 @@ export async function synthCommand(root: string, files: string[], opts: { write?
       /* not needed unless a hole uses it (then the error shows up there) */
     }
   }
+  // the type parameters of generic functions (their signatures and holes mention them)
+  const tparamsOf = new Map<ts.FunctionDeclaration, TParam[]>();
+  for (const st of sf.statements) {
+    if (!ts.isFunctionDeclaration(st) || !st.typeParameters?.length || isComponent(st)) continue;
+    try {
+      tparamsOf.set(st, registerTypeParams(st, prog.typeEnv));
+    } catch (e) {
+      if (!(e instanceof VtsError)) throw e; /* reported by the translation */
+    }
+  }
   const holeCalls: ts.CallExpression[] = [];
   const findHoles = (n: ts.Node, into: ts.CallExpression[]) => {
     if (ts.isCallExpression(n) && specFn(env, n.expression) === "hole") into.push(n);
@@ -1415,6 +1457,8 @@ export async function synthCommand(root: string, files: string[], opts: { write?
       for (const st of sf.statements) {
         if (!ts.isFunctionDeclaration(st) || !st.name || st === fd || !st.type) continue;
         if (/^[A-Z]/.test(st.name.text)) continue;
+        // (a generic helper's type parameters are not the hole's types: not offered)
+        if (st.typeParameters?.length) continue;
         const hasPre = st.body?.statements.some((x) => ts.isExpressionStatement(x) && ts.isCallExpression(x.expression) && specFn(env, x.expression.expression) === "requires");
         // (a function whose holes were filled above is a helper like any other; one that calls
         // this function is not: VTS has no recursion, so such a fill would never translate; nor
@@ -1494,7 +1538,7 @@ export async function synthCommand(root: string, files: string[], opts: { write?
         hp.params.forEach((t) => en.register(t));
       }
       // the earlier holes this one cannot share a call with stay unfilled (calls reaching them are skipped)
-      const runner = makeRunner(sb!, target, task.name, pTypes as VType[], prog, pools, (cand) => applyEdits(base, [...editsOf(new Map([...accepted, ...ctx, [h, fillText(h, cand)]])), ...ownContract]));
+      const runner = makeRunner(sb!, target, task.name, pTypes as VType[], prog, pools, (cand) => applyEdits(base, [...editsOf(new Map([...accepted, ...ctx, [h, fillText(h, cand)]])), ...ownContract]), tparamsOf.get(fd) ?? []);
       return newSearch(h, en, runner, maxSize, Math.min(TIME_LIMIT_MS, Math.max(5000, deadline - Date.now())));
     };
 
@@ -1522,6 +1566,8 @@ export async function synthCommand(root: string, files: string[], opts: { write?
           return { sol: null, conflict: earlier() };
         }
         console.log(`${label}: ${showType(h.type)}   scope: ${h.scope.map((a) => a.code).join(", ")}`);
+        const tps = tparamsOf.get(fd) ?? [];
+        if (tps.length) console.log(`  tested with ${tps.map((p) => `${p.name} = ${p.fields ? `a record with ${p.fields.map((f) => f.name).join(", ")} and one more field` : "int or string"}`).join("; ")} (proved by Lean for every ${tps.map((p) => p.name).join(", ")})`);
         s = searchOf(i, ctx);
         searches.set(key, s);
       } else {
