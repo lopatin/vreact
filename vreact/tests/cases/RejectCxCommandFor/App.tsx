@@ -1,5 +1,5 @@
 // expect: reject onClick on a command button <button>
-/// <reference path="./invokers.d.ts" />
+/// <reference types="invokers" />
 // An invoker button runs a command on the element commandfor names: request-close fires
 // `cancel` at the dialog synchronously, so onClick and the dialog's onCancel run in one
 // batch (Chromium 152: one programmatic click leaves n = 2).

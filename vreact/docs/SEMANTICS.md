@@ -70,9 +70,31 @@ function returning `{ readonly v: int }`). A value is widened where TypeScript
 allows it: an `int` to a `number`, a present value to an optional one, an array
 elementwise (`int[]` to `(int | null)[]`), an enum member to its string.
 
-Rejected: `any`, `as` casts, classes, `this`, mutation of objects/arrays,
-`==` (except `== null`), `===` on objects (reference identity), generics,
-exceptions (`try`), `var`, `while`, recursion (for now), recursive types,
+Function types and React nodes have no Lean value type: a function parameter or
+result, constant, state, local, data prop, callback parameter or `hole<T>()` whose
+type contains one (also inside an array, option, tuple or a record's fields) is
+rejected; only a direct field of a component's props may be a function (a
+callback, §2.4), and a record containing one is only a props type (it is not
+emitted as a Lean type). Types declared by a library (`Date`, `HTMLElement`, React's
+other types) are not VTS types, and an interface declared twice (TypeScript merges
+the declarations) is rejected.
+
+A record value is a plain object, whose prototype is `Object.prototype`, and a
+field is an own property that reads back what was stored. Two kinds of field
+names break that and are rejected (in records, union variants and props types,
+also as string keys): `__proto__` (an object literal's `__proto__: v` sets the
+prototype and creates no property, ECMA-262 B.3.1; an object literal property
+`__proto__` is rejected too), and an optional field named like a property of
+`Object.prototype` (`constructor`, `toString`, `valueOf`, `hasOwnProperty`,
+`isPrototypeOf`, `propertyIsEnumerable`, `toLocaleString`, `__defineGetter__`,
+`__defineSetter__`, `__lookupGetter__`, `__lookupSetter__`): when the field is
+absent, reading it gives the inherited function, not `undefined` (TypeScript
+catches this only for the members its library declares). Required fields with
+these names are own properties of every value and are accepted.
+
+Rejected: `any`, `as` casts, classes, `this` (also `this` parameters), mutation of
+objects/arrays, `==` (except `== null`), `===` on objects (reference identity),
+generics, exceptions (`try`), `var`, `while`, recursion (for now), recursive types,
 `async`.
 
 ### 1.2 Expressions and statements — semantics by translation
@@ -131,6 +153,54 @@ Every expression maps to a Lean term whose value is the JavaScript value.
   statically (the value is not null); the operand is still evaluated, so its own
   obligations (`xs[5] === null`: the index; `g(x) != null`: g's precondition;
   `x! === null`: non-null) remain.
+* Builtins are recognised by the declaration a name resolves to, never by its
+  spelling: `undefined` is the checker's `undefined` symbol; `Math`, `String`,
+  `console`, `localStorage`, `document`, `setTimeout`/`setInterval`/
+  `clearTimeout`/`clearInterval` are globals declared only by library files
+  (TypeScript's standard library or installed packages); React's hooks and node
+  types (`ReactNode`, `ReactElement`, `JSX.Element`) are declarations of React's
+  type files, also through an import alias or namespace (`import { useState as
+  useS }`, `R.useState`); the `vreact/spec` functions and `int` are declarations
+  of the file `import … from "vreact/spec"` resolves to (an installed library),
+  also under an alias (`import { type int as I }` is `Int`); `ReadonlyArray`/`Array`
+  are the standard library's. A local, parameter, import or project declaration
+  spelled like one of them is that binding (`const undefined = 3` is 3; a project
+  `type int = number` is `number`; `import * as Math from "./m"` is not
+  JavaScript's Math, and a use of it is rejected). A hook is React's only when
+  its name, or the namespace before the dot, is bound by an import: React's
+  types also declare a UMD global `React`, which a module bundle does not define
+  (tsconfig `allowUmdGlobalAccess`, which lets a module use it, is rejected).
+  Every scan of what code reads (closures, initialisation order, the order of
+  the Lean declarations, dependency cones in the report) resolves the name of a
+  shorthand property `{ x }` to the variable `x` it reads, and skips type
+  annotations (erased).
+* Local helper functions are inlined with each parameter bound to its argument,
+  so default values, rest parameters, optional (`x?`) and `this` parameters —
+  each would give the parameter another value — are rejected, and so are
+  parameter and result annotations with a function type or a React node (no
+  Lean value type: the argument and the result are data).
+* Module initialisation: a module's top-level code runs in source order when it
+  is loaded (after the modules it imports, and re-exports `export … from` are
+  imports: no cycles), and a `const` read before its declaration has run throws a
+  ReferenceError. The Lean definitions are ordered by dependency, so VTS rejects
+  every constant initialiser, `export default x` and module-level `assert(…)` that
+  may read — directly or through the functions it calls, transitively — a
+  constant of the module declared at or below it (TypeScript checks only direct
+  reads; a shorthand property `{ B }` reads `B`); the lambdas of
+  `ensures`/`callbackRequires`, which the running code never calls, do not
+  count. `export default` of an expression (code run at load) is rejected;
+  `export default x` of a name is a binding. A module-level `assert(…)` (a fact
+  about an `@opaque` constant of the same module; one about an imported constant
+  is rejected) is a theorem placed after every declaration it mentions (its
+  constant, other constants, the functions it calls — function declarations are
+  hoisted, so they may be declared below the constant).
+* Per-file compilation: the bundler compiles each file on its own (Vite: esbuild),
+  so it cannot tell that an imported name is a type, and keeps `export { Item }`
+  or `export default Item` of an imported type (and the import): the module then
+  fails to link. TypeScript reports every construct a per-file compiler cannot
+  compile under `isolatedModules` (TS1205, TS1292, …), and VTS always checks with
+  it, whatever the tsconfig says (TypeScript's TS1208 for a file that is not a
+  module is replaced by VTS's own rejection).
 * Names: a VTS identifier that is a Lean token, a root-level Lean name the
   generated code may use unqualified (`max`, `some`, `List`, …) or a fixed name of
   the generated code (`σ`, `props`, `h_pre`, …) is primed (`max'`; fields and
@@ -479,7 +549,9 @@ hook rules hold (static checks). For every function: its body is safe and its
   `b` of `src/a.ts` with an `ensures`: both `VTS.a.b.post`; also the names Lean
   derives from a structure or inductive — fields, constructors, `rec`, … —
   and, below another module's function `f`, `f.post`, `f.post2`, …, `f.eq_1`,
-  …). Namespaces may otherwise nest (`src/ui/Board.tsx` next to a component
+  …), and within a module a function or constant named like a type of the
+  module (TypeScript keeps the two apart; both would be `VTS.m.Limits`).
+  Namespaces may otherwise nest (`src/ui/Board.tsx` next to a component
   `Board` of `src/ui.tsx`). User lemmas `proofs/<path>.lean` are imported by
   that module's `View.lean` and by the `Defs.lean` of every module importing it
   (unless that would close an import cycle); `proofs/Base.lean` by every
@@ -536,6 +608,60 @@ hook rules hold (static checks). For every function: its body is safe and its
   theorems are checked by Lean's kernel like everything else, but the macros,
   syntax and elaborators they declare run while the generated files are
   elaborated; the report trusts them not to forge Lean's output.
+* **The declarations of the libraries.** The program's types come from
+  TypeScript's standard library, installed packages (`node_modules`: React's
+  types, `vreact/spec`, and anything an installed package declares or augments,
+  e.g. a `declare module "react"` adding attributes) and the VTS sources, and the
+  translation trusts the library declarations to describe what runs. The
+  project cannot change them: VTS sources must be modules (a script's
+  declarations are global and its interfaces merge with the libraries'), and
+  `declare …`, `declare global`, `declare module`, namespaces and a project file
+  in the program that is not a VTS source (a `.d.ts` reached by `/// <reference
+  path>`, tsconfig `typeRoots`/`types`/`paths`) are rejected, as is
+  `/// <reference no-default-lib="true"/>`. What JSX means is configured as
+  well: only `"jsx": "react-jsx"` (React 18's automatic runtime) is accepted — no
+  other `jsxImportSource`, no `@jsx…` pragmas (in any comment and any letter
+  case: esbuild and Babel read them anywhere in a file, TypeScript in its leading
+  comments with the name lower-cased), no `tsconfig.json` inside the source
+  directories (the bundler compiles a file with the settings of the tsconfig.json
+  nearest to it). A project without a tsconfig.json is checked with vreact's
+  defaults, and the bundler is trusted to compile it the same way (Vite reads the
+  nearest tsconfig.json above the project, if any).
+* **TypeScript's checker.** VTS relies on the program type-checking without
+  errors (null and undefined, the types of library and React declarations,
+  imports): `@ts-ignore`, `@ts-expect-error` and `@ts-nocheck` are rejected
+  anywhere in a verified file, in any letter case and with any suffix
+  (TypeScript matches the line directives as prefixes — `@ts-ignored` — and
+  lower-cases pragma names — `@TS-NOCHECK`); so is tsconfig `allowUmdGlobalAccess`
+  (a library global used without an import, which a module bundle does not
+  define). Compiler options are a whitelist: every check of the strict family is
+  required (none set to false), `noCheck` (no type checking at all),
+  `resolvePackageJsonExports/Imports: false` and any option vreact does not know
+  are rejected; an invalid tsconfig is an error (an option name the bundled
+  TypeScript does not know is ignored, as TypeScript ignores it). The program is checked with
+  `isolatedModules` (see "Per-file compilation").
+* **The bundler keeps every statement.** Bundler annotations in comments
+  (`@__PURE__`, `#__PURE__`, `@__NO_SIDE_EFFECTS__`, any `@__X__`/`#__X__`) are
+  rejected anywhere in a verified file: a production build (esbuild's minifier,
+  Rollup's tree-shaking) deletes an annotated call whose result is unused, with
+  its effects. The minifier and tree-shaking are trusted to preserve the meaning
+  of code without such annotations, and the build configuration (vite.config:
+  plugins, `esbuild` options such as `jsxImportSource`, `pure` or `drop`,
+  `define`, `resolve.alias`) to be React's default setup, which VTS cannot see.
+* **Module resolution.** TypeScript must read the files that run. The bundler is
+  trusted to resolve a relative specifier like Vite's default resolution
+  (relative to the importing file; without an extension the first of `.mjs`,
+  `.js`, `.mts`, `.ts`, `.jsx`, `.tsx`, `.json`, then a directory's
+  `index.*`; a `.js` path that does not exist as its `.ts`/`.tsx` source) and
+  bare specifiers through `node_modules`, with no aliases (`resolve.alias` in
+  the Vite config is outside the subset). VTS checks every import of a verified
+  file against that: a verified module is imported by a relative path that
+  leads there, by itself, to the file TypeScript read (TypeScript-only settings
+  — tsconfig `paths`, `baseUrl`, `rootDirs`, `moduleSuffixes`, package
+  `imports` — would make them differ, and so would a `b.js` next to `b.ts` for
+  `"./b"`); `react`, `vreact/spec` and the `react/jsx-runtime` of JSX must
+  resolve to the installed packages' declarations, and to the same files
+  without those settings.
 * **The JS runtime model** (`JS.lean`): e.g. that `Array.prototype.slice` behaves
   like `JS.slice`. Definitions follow ECMA-262 directly; where ECMA-262 leaves a
   result implementation-defined (`toSorted` with an inconsistent comparator) the

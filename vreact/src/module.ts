@@ -16,8 +16,8 @@
 import ts from "typescript";
 import fs from "node:fs";
 import path from "node:path";
-import { Program, ModCtx, type Obligation, type FnInfo, type CompInfo, type Global, type ConstInfo, type HoleEnv } from "./ctx.ts";
-import { T, type VType, typeOfNode, typeOfDecl, emitTypeDecl, leanType } from "./types.ts";
+import { Program, ModCtx, SPEC_MODULE, moduleFile, isErasedType, type Obligation, type FnInfo, type CompInfo, type Global, type ConstInfo, type HoleEnv } from "./ctx.ts";
+import { T, type VType, typeOfNode, typeOfDecl, emitTypeDecl, leanType, nonValuePart, checkValueType } from "./types.ts";
 import { VtsError, fail, leanIdent, leanField, leanStr, paren, capitalize, nodeText, clashesWithLean } from "./util.ts";
 import { LEAN_TYPE_AUX, LEAN_ROOT_NAMES } from "./leanNames.ts";
 import { expr, prop, propAll, valueBlock, specFn, symbolOf, bindParam, typeOf, checkParamAnnotation } from "./translate.ts";
@@ -81,8 +81,6 @@ export interface TranslateResult {
   obligations: Obligation[];
 }
 
-const SPEC_RE = /vreact[\\/](spec|lib)|vreact-spec/;
-
 function loadProgram(cfg: Config): { program: ts.Program; diags: string[] } {
   const cfgPath = ts.findConfigFile(cfg.root, ts.sys.fileExists, "tsconfig.json");
   let options: ts.CompilerOptions = {
@@ -97,18 +95,45 @@ function loadProgram(cfg: Config): { program: ts.Program; diags: string[] } {
     noEmit: true,
     allowImportingTsExtensions: true,
   };
+  const diags: string[] = [];
   if (cfgPath && path.dirname(cfgPath) === cfg.root) {
     const raw = ts.readConfigFile(cfgPath, ts.sys.readFile);
     const parsed = ts.parseJsonConfigFileContent(raw.config, ts.sys, path.dirname(cfgPath));
     options = { ...parsed.options, noEmit: true };
+    // (an invalid tsconfig is TypeScript's error too; that its "include" matches no file does
+    // not matter: the sources are vreact.json's; nor does an option this TypeScript does not know
+    // (TS5023, e.g. one of a newer version): it changes nothing in this TypeScript's checks)
+    const host: ts.FormatDiagnosticsHost = { getCanonicalFileName: (f) => f, getCurrentDirectory: () => cfg.root, getNewLine: () => "\n" };
+    for (const d of [...(raw.error ? [raw.error] : []), ...parsed.errors]) {
+      if (d.category === ts.DiagnosticCategory.Error && d.code !== 18003 && d.code !== 5023) diags.push(ts.formatDiagnostic(d, host).trim());
+    }
   }
-  const diags: string[] = [];
+  // A bundler compiles each file on its own (Vite: esbuild, file by file), not knowing what the
+  // names a file imports are: `import { Item } from "./types"; export { Item };` of a type keeps the
+  // export in the JavaScript, and the module fails to load (no export named Item).  TypeScript
+  // reports exactly the constructs a per-file compiler cannot compile under "isolatedModules",
+  // which Vite requires: VTS always checks with it.  (TypeScript's error TS1208 for a file without
+  // imports or exports is replaced by VTS's own, which says why.)
+  const userIsolated = options.isolatedModules;
+  options = { ...options, isolatedModules: true };
   // (strictNullChecks defaults to strict; without it TypeScript types say nothing about null and
   // undefined, which the translation reads to tell them apart)
   if (!(options.strictNullChecks ?? options.strict)) diags.push("tsconfig: VTS requires \"strict\": true, with strictNullChecks (null safety is part of the model)");
   // (without noImplicitAny an unannotated parameter is `any`: TypeScript checks nothing about it,
   // in particular not whether it is null or undefined)
   if (!(options.noImplicitAny ?? options.strict)) diags.push("tsconfig: VTS requires \"strict\": true, with noImplicitAny (TypeScript checks nothing about an implicitly-any value)");
+  // the other checks of the strict family (e.g. without strictFunctionTypes a callback taking
+  // `int` is accepted where one taking `int | null` is expected, and is called with null)
+  for (const k of STRICT_FAMILY) {
+    if (!(options[k] ?? options.strict)) diags.push(`tsconfig: VTS requires "strict": true, with ${k} (each of TypeScript's strict checks is one the translation relies on)`);
+  }
+  diags.push(...optionProblems(options));
+  // what JSX means is configured too: VTS models React 18's automatic runtime (react/jsx-runtime)
+  if (options.jsx !== undefined && options.jsx !== ts.JsxEmit.ReactJSX && options.jsx !== ts.JsxEmit.ReactJSXDev) diags.push("tsconfig: VTS requires \"jsx\": \"react-jsx\" (JSX is modelled as React 18's automatic runtime; other settings make JSX call another factory)");
+  if (options.jsxImportSource !== undefined && options.jsxImportSource !== "react") diags.push(`tsconfig: "jsxImportSource" must be "react" (JSX is modelled as React 18's; "${options.jsxImportSource}" makes JSX another library's)`);
+  // a library's UMD global (`export as namespace React`) used without an import, which TypeScript
+  // otherwise rejects in a module: a module bundle does not define it
+  if (options.allowUmdGlobalAccess) diags.push("tsconfig: \"allowUmdGlobalAccess\" is not supported: it lets a module use a library's global (`React.useState` without importing React), which a module bundle does not define (a ReferenceError when it runs); import what you use");
   const program = ts.createProgram(cfg.files, options, cfg.overrides ? overrideHost(options, cfg.overrides) : undefined);
   const host: ts.FormatDiagnosticsHost = {
     getCanonicalFileName: (f) => f,
@@ -121,10 +146,203 @@ function loadProgram(cfg: Config): { program: ts.Program; diags: string[] } {
       diags.push(`cannot load ${f}`);
       continue;
     }
-    const ds = ts.getPreEmitDiagnostics(program, sf).filter((d) => d.category === ts.DiagnosticCategory.Error);
-    for (const d of ds) diags.push(ts.formatDiagnostic(d, host).trim());
+    const ds = ts.getPreEmitDiagnostics(program, sf).filter((d) => d.category === ts.DiagnosticCategory.Error && !(d.code === 1208 && !userIsolated));
+    for (const d of ds) {
+      const text = ts.formatDiagnostic(d, host).trim();
+      diags.push(!userIsolated && text.includes("isolatedModules") ? `${text} (VTS always checks with "isolatedModules": the bundler compiles each file on its own)` : text);
+    }
   }
   return { program, diags };
+}
+
+/** TypeScript's strict checks besides strictNullChecks and noImplicitAny (each defaults to "strict"). */
+const STRICT_FAMILY = ["strictFunctionTypes", "strictBindCallApply", "strictPropertyInitialization", "strictBuiltinIteratorReturn", "noImplicitThis", "useUnknownInCatchVariables", "alwaysStrict"] as const;
+
+/**
+ * The compiler options VTS accepts, as a whitelist: TypeScript keeps adding options, and some
+ * switch its checks off (5.5's "noCheck" reports no type error at all), so an option VTS does not
+ * know is rejected rather than trusted.  Accepted: the options the translation checks itself
+ * (jsx, jsxImportSource, the strict family, the module resolution options compared with the
+ * bundler's resolution), options that only add checks (noUnused*, noImplicitReturns,
+ * noUncheckedIndexedAccess, exactOptionalPropertyTypes, isolatedModules, …), the language and
+ * library settings (target, lib, module), options about files the program may contain (each
+ * file outside node_modules must be a VTS source: checked separately), and options about emit,
+ * builds and diagnostics output (VTS emits nothing).
+ */
+const ACCEPTED_OPTIONS = new Set<string>([
+  // checked by loadProgram / the translation
+  "strict", "strictNullChecks", "noImplicitAny", ...STRICT_FAMILY, "jsx", "jsxImportSource", "allowUmdGlobalAccess",
+  "paths", "baseUrl", "rootDirs", "moduleSuffixes", "customConditions", "resolvePackageJsonExports", "resolvePackageJsonImports",
+  // language, library, modules
+  "target", "lib", "module", "moduleResolution", "moduleDetection", "types", "typeRoots", "allowImportingTsExtensions",
+  "esModuleInterop", "allowSyntheticDefaultImports", "preserveSymlinks", "resolveJsonModule", "allowArbitraryExtensions",
+  "allowJs", "checkJs", "maxNodeModuleJsDepth", "useDefineForClassFields", "experimentalDecorators", "emitDecoratorMetadata",
+  // more checks
+  "noUnusedLocals", "noUnusedParameters", "noImplicitReturns", "noFallthroughCasesInSwitch", "noUncheckedIndexedAccess",
+  "noImplicitOverride", "noPropertyAccessFromIndexSignature", "exactOptionalPropertyTypes", "noUncheckedSideEffectImports",
+  "isolatedModules", "verbatimModuleSyntax", "isolatedDeclarations", "forceConsistentCasingInFileNames", "allowUnreachableCode",
+  "allowUnusedLabels", "skipLibCheck", "skipDefaultLibCheck", "ignoreDeprecations",
+  // emit, builds, output, editors
+  "noEmit", "noEmitOnError", "noEmitHelpers", "emitDeclarationOnly", "declaration", "declarationMap", "declarationDir",
+  "sourceMap", "inlineSourceMap", "inlineSources", "sourceRoot", "mapRoot", "outDir", "outFile", "rootDir", "removeComments",
+  "importHelpers", "downlevelIteration", "emitBOM", "newLine", "stripInternal", "preserveConstEnums", "incremental", "composite",
+  "tsBuildInfoFile", "disableSourceOfProjectReferenceRedirect", "disableSolutionSearching", "disableReferencedProjectLoad",
+  "assumeChangesOnlyAffectDirectDependencies", "disableSizeLimit", "plugins", "listFiles", "listEmittedFiles", "explainFiles",
+  "traceResolution", "diagnostics", "extendedDiagnostics", "generateCpuProfile", "generateTrace", "pretty", "noErrorTruncation",
+  "preserveWatchOutput", "locale",
+  // set by TypeScript's tsconfig parser
+  "configFilePath", "pathsBasePath",
+]);
+
+/** What is wrong with the compiler options, for VTS (checked besides the strict family). */
+function optionProblems(options: ts.CompilerOptions): string[] {
+  const out: string[] = [];
+  for (const [k, v] of Object.entries(options)) {
+    if (v === undefined) continue;
+    if (k === "noCheck") {
+      if (v) out.push("tsconfig: \"noCheck\" is not supported: it switches TypeScript's type checking off, and VTS relies on TypeScript's checks (null and undefined, argument types, imports)");
+    } else if (k === "resolvePackageJsonExports" || k === "resolvePackageJsonImports") {
+      if (v === false) out.push(`tsconfig: "${k}": false is not supported: the bundler reads package.json "${k === "resolvePackageJsonExports" ? "exports" : "imports"}", so TypeScript would check another file than the one that runs`);
+    } else if (!ACCEPTED_OPTIONS.has(k)) {
+      out.push(`tsconfig: the compiler option "${k}" is not supported by VTS (it is not one VTS knows to leave TypeScript's checks and the meaning of the program unchanged); remove it`);
+    }
+  }
+  return out;
+}
+
+/**
+ * Compiler options that change how TypeScript resolves module specifiers but not how the bundler
+ * (Vite) or Node does: TypeScript's documentation says so of "paths", "baseUrl" and "rootDirs".
+ */
+const TS_ONLY_RESOLUTION = ["paths", "baseUrl", "rootDirs", "moduleSuffixes", "customConditions"] as const;
+
+/**
+ * The file a library specifier (`"react"`, `"vreact/spec"`) resolves to without the TypeScript-only
+ * resolution options (null: none); undefined when the program sets none of them (nothing to compare).
+ */
+function plainResolution(spec: string, sf: ts.SourceFile, lit: ts.StringLiteral | undefined, program: ts.Program): string | null | undefined {
+  const opts = program.getCompilerOptions();
+  if (!TS_ONLY_RESOLUTION.some((k) => opts[k] !== undefined)) return undefined;
+  const plain: ts.CompilerOptions = { ...opts };
+  for (const k of TS_ONLY_RESOLUTION) delete plain[k];
+  delete plain.pathsBasePath;
+  const r = ts.resolveModuleName(spec, sf.fileName, plain, ts.sys, undefined, undefined, lit ? program.getModeForUsageLocation(sf, lit) : ts.ModuleKind.ESNext);
+  return r.resolvedModule?.resolvedFileName ?? null;
+}
+
+function sameFile(a: string, b: string): boolean {
+  if (path.resolve(a) === path.resolve(b)) return true;
+  try {
+    return fs.realpathSync(a) === fs.realpathSync(b);
+  } catch {
+    return false;
+  }
+}
+
+/** Extensions a bundler tries for a specifier without one, in order (Vite's default `resolve.extensions`). */
+const BUNDLER_EXTS = [".mjs", ".js", ".mts", ".ts", ".jsx", ".tsx", ".json"];
+
+function isFile(f: string): boolean {
+  try {
+    return fs.statSync(f).isFile();
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The file a bundler (Vite's default resolution) loads for the relative specifier `spec` of a
+ * TypeScript file in `dir`: the path itself; a `.js`/`.jsx`/`.mjs`/`.cjs` path that does not
+ * exist as its TypeScript source (`.ts`/`.tsx`, `.tsx`, `.mts`, `.cts`); the path with an
+ * extension tried in order; a directory's index file (null when its package.json decides).
+ */
+function bundlerResolve(dir: string, spec: string): string | null {
+  const p = path.resolve(dir, spec);
+  if (isFile(p)) return p;
+  const js = /\.(js|jsx|mjs|cjs)$/.exec(p);
+  if (js) {
+    const base = p.slice(0, -js[0].length);
+    const exts = js[1] === "js" ? [".ts", ".tsx"] : js[1] === "jsx" ? [".tsx"] : [`.${js[1][0]}ts`];
+    return exts.map((e) => base + e).find(isFile) ?? null;
+  }
+  const withExt = BUNDLER_EXTS.map((e) => p + e).find(isFile);
+  if (withExt) return withExt;
+  let dirOk = false;
+  try {
+    dirOk = fs.statSync(p).isDirectory();
+  } catch {
+    dirOk = false;
+  }
+  if (!dirOk || isFile(path.join(p, "package.json"))) return null;
+  return BUNDLER_EXTS.map((e) => path.join(p, "index" + e)).find(isFile) ?? null;
+}
+
+/**
+ * Why the import `spec` of `sf`, which TypeScript resolves to the VTS module `target`, may load
+ * another file at run time (null: it cannot).  VTS modules are imported by a relative path that a
+ * bundler resolves, by itself, to the file TypeScript read: tsconfig "rootDirs", "paths",
+ * "baseUrl", "moduleSuffixes" and package `imports` change only TypeScript's resolution, and an
+ * extensionless path is the file a bundler tries first (`./b` with both `b.js` and `b.ts` is
+ * `b.js` for Vite, `b.ts` for TypeScript).
+ */
+function vtsImportProblem(spec: string, sf: ts.SourceFile, target: ts.SourceFile, rel: (f: string) => string): string | null {
+  if (!/^\.\.?(\/|$)/.test(spec)) {
+    return `VTS modules are imported by their path relative to the importing file ("./model", "../model.ts"): "${spec}" resolves to ${rel(target.fileName)} only through TypeScript's settings (tsconfig "paths"/"baseUrl", package "imports"), which the bundler does not share`;
+  }
+  const runtime = bundlerResolve(path.dirname(sf.fileName), spec);
+  if (runtime && path.resolve(runtime) === path.resolve(target.fileName)) return null;
+  let full = path.relative(path.dirname(sf.fileName), target.fileName).split(path.sep).join("/");
+  if (!full.startsWith("../")) full = "./" + full;
+  const own = /\.tsx?$/.test(spec) ? full : full.replace(/\.tsx?$/, "");
+  const fix = runtime && path.posix.normalize(own) === path.posix.normalize(spec)
+    ? `rename or remove ${rel(runtime)}, or import the file by its full name ("${full}", with tsconfig "allowImportingTsExtensions")`
+    : `import it by its path relative to this file ("${own}")`;
+  return `TypeScript resolves it to ${rel(target.fileName)}, but a bundler, relative to this file, ${runtime ? `loads ${rel(runtime)}` : "finds no such file"} (tsconfig "rootDirs", "paths" and "moduleSuffixes" change only what TypeScript reads, and a path without an extension is the first file a bundler finds: .mjs, .js, .mts, .ts, .jsx, .tsx, .json, then a directory's index): ${fix}`;
+}
+
+/**
+ * Comments that change what a source means, to TypeScript or to the tools that compile and
+ * bundle it, are rejected: the translation models the program TypeScript checked, compiled with
+ * React's automatic JSX runtime, every statement kept.  Each pattern is matched anywhere in the
+ * text (also in a string or JSX text: a superset of the comments the tools read) and without
+ * regard to letter case, so that no spelling a tool accepts gets through:
+ * - `@ts-ignore`, `@ts-expect-error` (TypeScript matches them as prefixes: `@ts-ignored`,
+ *   `@ts-ignore-next-line` silence the next line too) and `@ts-nocheck` (a pragma, whose name
+ *   TypeScript lower-cases: `@TS-NOCHECK` turns off the file's checks) silence TypeScript's
+ *   errors, and the translation relies on TypeScript's checks;
+ * - JSX pragmas (`@jsx`, `@jsxFrag`, `@jsxImportSource`, `@jsxRuntime`): TypeScript reads them,
+ *   case-insensitively, from the comments at the start of the file; esbuild (Vite) and Babel from
+ *   any comment.  They make JSX call another factory or library;
+ * - bundler annotations (`@__PURE__`, `#__PURE__`, `@__NO_SIDE_EFFECTS__`, …): minifiers and
+ *   tree-shaking delete a call so annotated whose result is unused, together with its effects
+ *   (a state update).
+ */
+function commentDirectiveErrors(sf: ts.SourceFile, rel: string): VtsError[] {
+  const errs: VtsError[] = [];
+  const at = (index: number, msg: (where: string) => string) => {
+    const { line, character } = sf.getLineAndCharacterOfPosition(index);
+    const e = new VtsError(sf, msg(`${rel}:${line + 1}`));
+    e.line = line + 1;
+    e.col = character + 1;
+    errs.push(e);
+  };
+  // (`u`: case folding, so that e.g. the Kelvin sign, which lower-cases to `k`, is a `k`)
+  for (const m of sf.text.matchAll(/@ts-(ignore|expect-error|nocheck)/giu)) {
+    at(m.index!, (w) => `${w}: \`${m[0]}\` is not supported: it silences TypeScript's errors, and VTS relies on TypeScript's checks (null and undefined, the types of library and React declarations, imports); fix the error instead`);
+  }
+  for (const m of sf.text.matchAll(/@jsx\w*/giu)) {
+    at(m.index!, (w) => `${w}: \`${m[0]}\`: JSX pragmas (\`@jsx\`, \`@jsxImportSource\`, \`@jsxFrag\`, \`@jsxRuntime\`) are not supported: VTS models JSX as React 18's automatic runtime, and a pragma in any comment (esbuild and Babel read every comment; TypeScript the first ones, in any letter case) makes JSX call another factory or library; remove it (and do not write \`@jsx\` in a string either)`);
+  }
+  for (const m of sf.text.matchAll(/[@#]__[a-z_]+__/giu)) {
+    at(m.index!, (w) => `${w}: the bundler annotation \`${m[0]}\` is not supported: minifiers and tree-shaking (esbuild, Rollup, Terser in a production build) delete a call annotated \`@__PURE__\` or a call of a function annotated \`@__NO_SIDE_EFFECTS__\` when its result is unused, with its effects (a state update), which VTS models as executed; remove the annotation`);
+  }
+  // TypeScript's own reading of the file's pragmas, in case a spelling escaped the patterns above
+  const internal = sf as unknown as { pragmas?: ReadonlyMap<string, unknown>; checkJsDirective?: { enabled: boolean } };
+  const own = [...(internal.pragmas?.keys() ?? [])].filter((k) => /^(jsx|ts-nocheck)/.test(k));
+  if (!errs.length && (own.length || internal.checkJsDirective?.enabled === false)) {
+    errs.push(new VtsError(sf, `${rel}: the comment pragma${own.length ? ` \`@${own[0]}\`` : " `@ts-nocheck`"} is not supported: it changes what TypeScript checks or what JSX means; remove it`));
+  }
+  return errs;
 }
 
 /** The Lean namespace of the module of source file `f` (also used by `vreact synth`, whose type names must match). */
@@ -142,10 +360,18 @@ function sanitizeSeg(s: string): string {
   return clashesWithLean(t) ? t + "_" : t;
 }
 
-function isComponentDecl(fn: ts.FunctionDeclaration): boolean {
+/** Is the type annotation React's node type (`JSX.Element`, `ReactNode`, `ReactElement`, also `… | null`), by its declaration? */
+function isReactNodeType(t: ts.TypeNode, prog: Program): boolean {
+  if (ts.isParenthesizedTypeNode(t)) return isReactNodeType(t.type, prog);
+  if (ts.isUnionTypeNode(t)) return t.types.some((x) => isReactNodeType(x, prog));
+  return ts.isTypeReferenceNode(t) && !!prog.typeEnv.isReactType(t, ["ReactNode", "ReactElement", "Element"]);
+}
+
+/** A component: a capitalised function returning React's node type or containing JSX (also used by `vreact synth`). */
+export function isComponentDecl(fn: ts.FunctionDeclaration, prog: Program): boolean {
   const name = fn.name?.text ?? "";
   if (!/^[A-Z]/.test(name)) return false;
-  if (fn.type && /JSX\.Element|ReactNode|ReactElement/.test(fn.type.getText())) return true;
+  if (fn.type && isReactNodeType(fn.type, prog)) return true;
   let jsx = false;
   const visit = (n: ts.Node) => {
     if (ts.isJsxElement(n) || ts.isJsxSelfClosingElement(n) || ts.isJsxFragment(n)) jsx = true;
@@ -169,9 +395,42 @@ export function translate(cfg: Config): TranslateResult {
   const checker = program.getTypeChecker();
   const fileSet = new Set(cfg.files.map((f) => path.resolve(f)));
   const nsOfFile = (f: string) => moduleNs(cfg.srcDir, f);
-  const prog = new Program(checker, cfg.root, (sf) => nsOfFile(sf.fileName));
-  prog.holeEnvs = cfg.holeEnvs;
   const sfs = cfg.files.map((f) => program.getSourceFile(f)!);
+  const prog = new Program(program, cfg.root, (sf) => nsOfFile(sf.fileName), sfs);
+  prog.holeEnvs = cfg.holeEnvs;
+
+  // ---- the types of the program come from TypeScript's and external libraries (node_modules:
+  // React, vreact/spec) and from the VTS sources, nothing else: a declaration file of the project
+  // (`/// <reference path>`, tsconfig "typeRoots"/"types"/"paths") or a script file's global
+  // declarations could change the types of library declarations (`declare global`, interface
+  // merging with `Array`/`Math`/`String`, ambient `declare const`) that the translation relies
+  // on, without being checked ----
+  for (const f of program.getSourceFiles()) {
+    if (prog.isLibraryFile(f) || fileSet.has(path.resolve(f.fileName))) continue;
+    res.errors.push(new VtsError(f, `${path.relative(cfg.root, f.fileName)} is part of the TypeScript program (through a \`/// <reference>\`, an import or the tsconfig) but is not a VTS source: declarations outside the verified program (\`declare global\`, ambient declarations, interfaces merged with library types) could change what library code means, unchecked; remove it from the program`));
+  }
+  for (const sf of sfs) {
+    const rel = path.relative(cfg.root, sf.fileName);
+    if (!ts.isExternalModule(sf)) {
+      res.errors.push(new VtsError(sf, `${rel} is not a module (it has no import or export): TypeScript makes the declarations of such a file global, and merges its interfaces with the libraries' (\`interface Math { … }\`); add an import or an export`));
+    }
+    res.errors.push(...commentDirectiveErrors(sf, rel));
+    // the bundler compiles a file with the settings of the tsconfig.json nearest to it (Vite's
+    // esbuild reads its jsx, jsxImportSource, verbatimModuleSyntax, …); VTS checks every source
+    // with the project's: a tsconfig.json in a source directory could make JSX another library's,
+    // or keep an import of a type
+    const nearest = ts.findConfigFile(path.dirname(sf.fileName), ts.sys.fileExists, "tsconfig.json");
+    if (nearest && path.dirname(path.resolve(nearest)) !== path.resolve(cfg.root) && !path.relative(cfg.root, nearest).startsWith("..")) {
+      res.errors.push(new VtsError(sf, `${rel}: ${path.relative(cfg.root, nearest)} is not supported: the bundler compiles ${rel} with the settings of the tsconfig.json nearest to it, but VTS checks it with the project's tsconfig.json; put the settings in the project's tsconfig.json and remove ${path.relative(cfg.root, nearest)}`));
+    }
+
+    // (`/// <reference path>` to anything but a VTS source is rejected above; `lib` and `types`
+    // references add TypeScript's and installed libraries)
+    if (sf.hasNoDefaultLib) {
+      res.errors.push(new VtsError(sf, `${rel}: \`/// <reference no-default-lib="true"/>\` is not supported (the program's JavaScript globals must be TypeScript's standard library)`));
+    }
+  }
+  if (res.errors.length) return res;
   const counter = { n: 0 };
 
   // ---- one Lean module per source file: two files whose names map to the same Lean
@@ -215,22 +474,52 @@ export function translate(cfg: Config): TranslateResult {
   if (res.errors.length) return res;
 
   // ---- import graph & topological order ----
+  // (TypeScript resolves a specifier with settings the bundler does not share — tsconfig "paths",
+  // "baseUrl", "rootDirs", "moduleSuffixes" — so every import must name, by itself, the file
+  // TypeScript read: React and vreact/spec are the installed packages, VTS modules are relative
+  // paths that a bundler resolves to the same file)
   const importsOf = new Map<ts.SourceFile, ts.SourceFile[]>();
   for (const sf of sfs) {
     const deps: ts.SourceFile[] = [];
     for (const st of sf.statements) {
-      if (!ts.isImportDeclaration(st)) continue;
+      // imports, and re-exports (`export … from "./m"`), which load (evaluate) their module too
+      if (!ts.isImportDeclaration(st) && !(ts.isExportDeclaration(st) && st.moduleSpecifier)) continue;
       const spec = (st.moduleSpecifier as ts.StringLiteral).text;
-      if (spec === "react" || spec === "react/jsx-runtime") continue;
-      const sym = checker.getSymbolAtLocation(st.moduleSpecifier);
-      const target = sym?.valueDeclaration?.getSourceFile() ?? (sym?.declarations?.[0] as ts.SourceFile | undefined);
-      if (target && SPEC_RE.test(target.fileName)) continue;
-      if (SPEC_RE.test(spec)) continue;
-      if (!target || !fileSet.has(path.resolve(target.fileName))) {
-        res.errors.push(new VtsError(st, `import of "${spec}" is outside the verified program (only react, vreact/spec, and other VTS modules may be imported)`));
+      const target = moduleFile(checker, st.moduleSpecifier!);
+      const what = `${ts.isImportDeclaration(st) ? "import" : "re-export"} of "${spec}"`;
+      const rel = (f: string) => (path.resolve(f).startsWith(cfg.root + path.sep) ? path.relative(cfg.root, f) : f);
+      // React and vreact/spec: by the declaration file the specifier resolves to, which must be
+      // the installed package's (never a project file), also without TypeScript-only settings
+      if (spec === "react" || spec === "react/jsx-runtime" || spec === SPEC_MODULE) {
+        const lib = spec === SPEC_MODULE ? "vreact/spec" : "React";
+        const isLib = (f: ts.SourceFile) => (spec === SPEC_MODULE ? prog.specFiles.has(f) : prog.isReactFile(f));
+        if (!target || !isLib(target)) {
+          res.errors.push(new VtsError(st, `${what}: it resolves to ${target ? rel(target.fileName) : "no declaration file"}, not to the installed ${lib} package's declarations, which are what runs (the bundler loads the package; tsconfig "paths"/"baseUrl" change only what TypeScript reads)`));
+        } else {
+          const plain = plainResolution(spec, sf, st.moduleSpecifier as ts.StringLiteral, program);
+          if (plain !== undefined && (!plain || !sameFile(plain, target.fileName))) {
+            res.errors.push(new VtsError(st, `${what}: TypeScript resolves it to ${rel(target.fileName)} only through tsconfig "paths"/"baseUrl" (without them: ${plain ? rel(plain) : "nothing"}), which the bundler does not use; remove the mapping`));
+          }
+        }
         continue;
       }
-      deps.push(target as ts.SourceFile);
+      if (target && fileSet.has(path.resolve(target.fileName))) {
+        const problem = vtsImportProblem(spec, sf, target, rel);
+        if (problem) res.errors.push(new VtsError(st, `${what}: ${problem}`));
+        deps.push(target);
+        continue;
+      }
+      res.errors.push(new VtsError(st, `${what} is outside the verified program (only react, vreact/spec, and other VTS modules may be imported)`));
+    }
+    // JSX imports React's "react/jsx-runtime" implicitly ("jsx": "react-jsx"): the same rule
+    if (sf.languageVariant === ts.LanguageVariant.JSX) {
+      const plain = plainResolution("react/jsx-runtime", sf, undefined, program);
+      if (plain !== undefined) {
+        const full = ts.resolveModuleName("react/jsx-runtime", sf.fileName, program.getCompilerOptions(), ts.sys, undefined, undefined, ts.ModuleKind.ESNext).resolvedModule?.resolvedFileName;
+        if (!full || !plain || !sameFile(full, plain)) {
+          res.errors.push(new VtsError(sf, `${path.relative(cfg.root, sf.fileName)}: its JSX imports "react/jsx-runtime", which TypeScript resolves to ${full ?? "nothing"} through tsconfig "paths"/"baseUrl", but the bundler (without them) to ${plain ?? "nothing"}; remove the mapping`));
+        }
+      }
     }
     importsOf.set(sf, deps);
   }
@@ -264,6 +553,16 @@ export function translate(cfg: Config): TranslateResult {
         if (e instanceof VtsError) res.errors.push(e);
         else throw e;
       }
+    }
+  }
+  if (res.errors.length) return res;
+  // ---- module initialisation order (temporal dead zone) ----
+  for (const sf of order) {
+    try {
+      checkInitOrder(sf, mods.get(sf)!);
+    } catch (e) {
+      if (e instanceof VtsError) res.errors.push(e);
+      else throw e;
     }
   }
   if (res.errors.length) return res;
@@ -337,6 +636,28 @@ export function translate(cfg: Config): TranslateResult {
       // modules' Defs) can use them through `vreact_contracts`
       const decls = sortDecls(sf, m);
       const usedInDefs = withPosts ? usedByOthers(decls, m) : new Set<ts.Node>();
+      // the facts (module-level asserts) about constants, each emitted as soon as everything
+      // it mentions is (right after its constant, unless it calls a function declared later)
+      const declSet = new Set(decls);
+      const emitted = new Set<ts.Node>();
+      const pendingFacts: { d: ts.VariableDeclaration; info: ConstInfo; k: number; deps: ts.Node[] }[] = [];
+      for (const d of decls) {
+        const g = prog.globals.get(d)!;
+        if (g.k === "const") g.info.facts.forEach((f, k) => pendingFacts.push({ d: d as ts.VariableDeclaration, info: g.info, k, deps: factDeps(f, declSet, m) }));
+      }
+      const flushFacts = () => {
+        for (let i = 0; i < pendingFacts.length; ) {
+          const p = pendingFacts[i];
+          if (!p.deps.every((x) => emitted.has(x)) || !emitted.has(p.d)) {
+            i++;
+            continue;
+          }
+          pendingFacts.splice(i, 1);
+          const { r, obs } = obsOf(() => translateFact(p.d, p.info, p.k, m));
+          defs += r + "\n";
+          modRes.constants.find((c) => c.qname === p.info.qname)!.obs.push(...obs);
+        }
+      };
       for (const d of decls) {
         const g = prog.globals.get(d)!;
         if (g.k === "const") {
@@ -355,7 +676,10 @@ export function translate(cfg: Config): TranslateResult {
           } else if (r.post) defs += r.post + "\n";
           modRes.functions.push({ name: g.info.name, qname: `${ns}.${leanIdent(g.info.name)}`, trusted: g.info.trusted, posts: r.postNames, obs, refs: itemRefs([d], d, m) });
         }
+        emitted.add(d);
+        flushFacts();
       }
+      if (pendingFacts.length) throw new Error(`facts left unemitted: ${pendingFacts.map((p) => p.info.qname).join(", ")}`);
       // components, children first
       for (const c of sortComponents(sf, m)) {
         const g = prog.globals.get(c) as { k: "comp"; info: CompInfo };
@@ -391,8 +715,10 @@ export function translate(cfg: Config): TranslateResult {
     let types = "";
     for (const nt of prog.reg.order) {
       if (nt.module !== ns) continue;
-      // props types with callbacks are represented by the component's Props/Cb structures
-      if (nt.def.k === "rec" && nt.def.fields.some((f) => f.type.k === "fn" || (f.type.k === "opt" && f.type.elem.k === "fn"))) continue;
+      // props types with callbacks are represented by the component's Props/Cb structures; a
+      // type with a function or React node anywhere has no Lean value type (every use of it as
+      // data is rejected: checkValueType)
+      if ((nt.def.k === "rec" || nt.def.k === "union") && nonValuePart({ k: nt.def.k, name: nt.qname }, prog.reg)) continue;
       types += emitTypeDecl(nt, prog.reg) + "\n";
     }
     defs = defs.slice(0, typesAt) + types + defs.slice(typesAt);
@@ -659,33 +985,42 @@ function collect(st: ts.Statement, m: ModCtx, ns: string, res: TranslateResult) 
   }
   if (ts.isFunctionDeclaration(st)) {
     if (!st.name) fail(st, "functions need a name");
+    if (isAmbient(st)) fail(st, AMBIENT_MSG);
+    if (!st.body) fail(st, "function overloads (declarations without a body) are not supported: declare the function once, with its body");
     if (st.asteriskToken || st.modifiers?.some((x) => x.kind === ts.SyntaxKind.AsyncKeyword)) fail(st, "async functions and generators are not supported");
     if (st.typeParameters?.length) fail(st, "generic functions are not supported in VTS yet");
     const trusted = isTrusted(st);
-    if (isComponentDecl(st)) {
+    if (isComponentDecl(st, prog)) {
       const info = compSignature(st, ns, ns, m, trusted);
       prog.globals.set(st, { k: "comp", info });
       return;
     }
     if (/^use[A-Z]/.test(st.name.text)) fail(st, "custom hooks are not supported yet: inline the hook calls into the component");
+    checkValueNameFree(st.name, "function", m);
     const params = st.parameters.map((p) => {
       if (!p.type) fail(p, "parameters need type annotations");
       if (p.initializer || p.dotDotDotToken || p.questionToken) fail(p, "default/rest/optional parameters are not supported");
       if (!ts.isIdentifier(p.name)) fail(p, "destructured parameters are not supported in top-level functions");
-      return { name: p.name.text, type: typeOfNode(p.type, prog.typeEnv, capitalize(st.name!.text) + capitalize(p.name.text)) };
+      const t = typeOfNode(p.type, prog.typeEnv, capitalize(st.name!.text) + capitalize(p.name.text));
+      checkValueType(p.type, t, prog.reg, `parameter ${p.name.text}`);
+      return { name: p.name.text, type: t };
     });
     if (!st.type) fail(st, "functions need a return type annotation");
     const ret = typeOfNode(st.type, prog.typeEnv, capitalize(st.name.text) + "Result");
+    checkValueType(st.type, ret, prog.reg, `the result of ${st.name.text}`);
     const hasPre = !!st.body?.statements.some((s) => isSpecCall(s, m, "requires"));
     const info: FnInfo = { qname: `${ns}.${leanIdent(st.name.text)}`, name: st.name.text, params, ret, hasPre, trusted, opaque: isOpaque(st), decl: st, module: ns };
     prog.globals.set(st, { k: "fn", info });
     return;
   }
   if (ts.isVariableStatement(st)) {
+    if (isAmbient(st)) fail(st, AMBIENT_MSG);
     if (!(st.declarationList.flags & ts.NodeFlags.Const)) fail(st, "top-level variables must be const");
     for (const d of st.declarationList.declarations) {
       if (!ts.isIdentifier(d.name) || !d.initializer) fail(d, "top-level const needs a name and initializer");
+      checkValueNameFree(d.name, "constant", m);
       let t: VType | undefined = d.type ? typeOfNode(d.type, prog.typeEnv, capitalize(d.name.text)) : undefined;
+      if (t) checkValueType(d.type!, t, prog.reg, `constant ${d.name.text}`);
       if (!t) {
         const init = d.initializer;
         if (ts.isNumericLiteral(init)) t = /[.eE]/.test(init.text) ? T.num : T.int;
@@ -698,28 +1033,145 @@ function collect(st: ts.Statement, m: ModCtx, ns: string, res: TranslateResult) 
     }
     return;
   }
-  if (ts.isExportAssignment(st) || ts.isExportDeclaration(st)) return;
+  // `export { a, b as default }`, `export … from "./m"` (an import too: checked with the imports)
+  // only (re-)bind names
+  if (ts.isExportDeclaration(st)) return;
+  if (ts.isExportAssignment(st)) {
+    if (st.isExportEquals) fail(st, "`export =` is not supported: use `export` declarations or `export default x`");
+    // `export default <expression>` evaluates the expression when the module loads: only a name
+    // of the program (its initialisation order is checked: checkInitOrder)
+    let e: ts.Expression = st.expression;
+    while (ts.isParenthesizedExpression(e)) e = e.expression;
+    const d = ts.isIdentifier(e) ? prog.refDecl(e) : undefined;
+    if (!d || prog.isLibraryFile(d.getSourceFile())) {
+      fail(st, "`export default` of an expression is not supported (it would run unchecked when the module loads): declare a constant and export it (`export const x: T = …;` or `const x: T = …; export default x;`), or write `export default function …`");
+    }
+    return;
+  }
   // module-level assert(fact): a proved fact about @opaque constants
   if (ts.isExpressionStatement(st) && ts.isCallExpression(st.expression) && isSpecCall(st, m, "assert")) {
     const fact = st.expression.arguments[0];
     let owner: { info: { facts: ts.Expression[]; opaque: boolean } } | null = null;
+    // (the fact is a theorem of its constant's module, which cannot see this module's
+    // declarations: a constant imported from another module cannot own it)
+    let imported: ts.VariableDeclaration | null = null;
     const visit = (n: ts.Node) => {
-      if (owner) return;
+      if (owner || isErasedType(n)) return;
       if (ts.isIdentifier(n)) {
-        let s = m.checker.getSymbolAtLocation(n);
-        if (s && s.flags & ts.SymbolFlags.Alias) s = m.checker.getAliasedSymbol(s);
-        const g = s?.declarations?.[0] ? prog.globals.get(s.declarations[0]) : undefined;
-        if (g?.k === "const" && g.info.opaque) owner = g as { info: ConstInfo };
+        const d = prog.refDecl(n);
+        const g = d ? prog.globals.get(d) : undefined;
+        if (g?.k === "const" && g.info.opaque) {
+          if (d!.getSourceFile() === m.sf) owner = g as { info: ConstInfo };
+          else imported ??= d as ts.VariableDeclaration;
+        }
       }
       ts.forEachChild(n, visit);
     };
     visit(fact);
+    if (!owner && imported) {
+      const c = imported as ts.VariableDeclaration;
+      fail(st, `a module-level assert(…) about \`${(c.name as ts.Identifier).text}\`, an /** @opaque */ constant of another module (${path.basename(c.getSourceFile().fileName)}), is not supported: a fact is proved in its constant's module; state it there, or about a constant of this module`);
+    }
     if (!owner) fail(st, "a module-level assert(…) states a fact about an /** @opaque */ constant declared above it");
     (owner as { info: { facts: ts.Expression[] } }).info.facts.push(fact);
     return;
   }
   if (ts.isEmptyStatement(st)) return;
+  if (ts.isModuleDeclaration(st)) fail(st, "`declare global`, `declare module` and namespaces are not supported in VTS: they can add to or change the types of library declarations (global augmentation, interface merging), which nothing checks");
+  if (isAmbient(st)) fail(st, AMBIENT_MSG);
   fail(st, `top-level statement not supported in VTS (only imports, types, functions, components and constants)`);
+}
+
+/**
+ * A function or constant must not share its name with a type of the module: TypeScript keeps
+ * types and values apart (`type Limits = …; const Limits: Limits = …`), but both would be the
+ * Lean declaration `VTS.<module>.Limits`.
+ */
+function checkValueNameFree(name: ts.Identifier, what: string, m: ModCtx) {
+  const t = m.sf.statements.find((x) => (ts.isTypeAliasDeclaration(x) || ts.isInterfaceDeclaration(x)) && x.name.text === name.text);
+  if (t) fail(name, `\`${name.text}\` names both a type (line ${m.sf.getLineAndCharacterOfPosition(t.getStart()).line + 1}) and a ${what} of this module: TypeScript keeps types and values apart, but in Lean both would be ${m.ns}.${leanIdent(name.text)}; rename one of them`);
+}
+
+const AMBIENT_MSG = "ambient declarations (`declare …`) are not supported: they state a type without code, which nothing checks (and `declare global` / `declare module` would change the types of library declarations)";
+
+/** A `declare …` statement. */
+function isAmbient(st: ts.Statement): boolean {
+  return ts.canHaveModifiers(st) && !!ts.getModifiers(st)?.some((x) => x.kind === ts.SyntaxKind.DeclareKeyword);
+}
+
+/**
+ * Module initialisation order.  JS runs a module's top-level statements in source order; a
+ * `const` is in its temporal dead zone until its declaration has run, and reading it earlier
+ * throws a ReferenceError — also from inside a function that the initialiser calls, which
+ * TypeScript does not check (it flags direct reads only).  The Lean translation orders
+ * declarations by dependency, so such a constant would get a value although the module throws
+ * when it loads: rejected.  The code that runs at load is every constant's initialiser, a
+ * module-level `assert(…)` and `export default x`; what it may read is every constant of the
+ * module it mentions, directly or through the functions it calls (transitively; the lambdas of
+ * `ensures` and `callbackRequires`, which JS never calls, excepted).  Imported constants are
+ * initialised before the module runs (imports are acyclic).
+ */
+function checkInitOrder(sf: ts.SourceFile, m: ModCtx) {
+  const prog = m.prog;
+  const isConst = (d: ts.Node): d is ts.VariableDeclaration => d.getSourceFile() === sf && prog.globals.get(d)?.k === "const";
+  /** what evaluating `n` may read: constants of this module, each with the chain of calls reaching it */
+  type Reads = Map<ts.VariableDeclaration, string[]>;
+  const memo = new Map<ts.FunctionDeclaration, Reads>();
+  // (recursion is rejected elsewhere; a function met again while its body is scanned adds nothing)
+  const visiting = new Set<ts.Node>();
+  const reads = (n: ts.Node, out: Reads) => {
+    const visit = (x: ts.Node) => {
+      // a contract lambda is created, never called, by the running code
+      if (ts.isCallExpression(x) && ["ensures", "callbackRequires"].includes(prog.specName(x.expression) ?? "")) {
+        for (const a of x.arguments) if (!(ts.isArrowFunction(a) || ts.isFunctionExpression(a))) visit(a);
+        return;
+      }
+      // (types are erased: nothing in them runs)
+      if (isErasedType(x)) return;
+      if (ts.isIdentifier(x)) {
+        // (also the name of a shorthand property `{ B }`, which reads the variable B)
+        const d = prog.refDecl(x);
+        if (d && isConst(d)) {
+          if (!out.has(d)) out.set(d, []);
+        } else if (d && ts.isFunctionDeclaration(d) && d.getSourceFile() === sf && d.body && !visiting.has(d)) {
+          for (const [c, path] of fnReads(d)) if (!out.has(c)) out.set(c, [d.name?.text ?? "?", ...path]);
+        }
+      }
+      ts.forEachChild(x, visit);
+    };
+    visit(n);
+  };
+  const fnReads = (fn: ts.FunctionDeclaration): Reads => {
+    const hit = memo.get(fn);
+    if (hit) return hit;
+    const out: Reads = new Map();
+    visiting.add(fn);
+    reads(fn.body!, out);
+    visiting.delete(fn);
+    memo.set(fn, out);
+    return out;
+  };
+  const check = (at: ts.Node, what: string, code: ts.Node) => {
+    const out: Reads = new Map();
+    reads(code, out);
+    for (const [c, via] of out) {
+      if (c.getStart() < at.getStart()) continue;
+      const name = (c.name as ts.Identifier).text;
+      const how = via.length ? `calls ${via.map((f) => `\`${f}\``).join(", which calls ")}, which reads \`${name}\`` : `reads \`${name}\``;
+      fail(at, `${what} ${how}${c === at ? " (itself)" : `, declared below it`}: JS evaluates a module's top-level code in order, and reading a constant before its declaration has run throws a ReferenceError when the module loads (TypeScript checks only direct reads). Declare \`${name}\` above it`);
+    }
+  };
+  for (const st of sf.statements) {
+    if (ts.isVariableStatement(st)) {
+      for (const d of st.declarationList.declarations) if (d.initializer && isConst(d)) check(d, `the initialiser of \`${(d.name as ts.Identifier).text}\``, d.initializer);
+    } else if (ts.isExpressionStatement(st)) {
+      check(st, "this module-level statement", st.expression);
+    } else if (ts.isExportAssignment(st)) {
+      // (`export default f` of a function reads the hoisted function, it does not call it)
+      const d = prog.refDecl(st.expression);
+      if (!(d && ts.isFunctionDeclaration(d))) check(st, "`export default`", st.expression);
+    }
+  }
 }
 
 function isSpecCall(s: ts.Statement, m: ModCtx, name: string): boolean {
@@ -747,10 +1199,9 @@ function usedByOthers(decls: ts.Node[], m: ModCtx): Set<ts.Node> {
   const set = new Set(decls);
   const out = new Set<ts.Node>();
   const scan = (owner: ts.Node, n: ts.Node) => {
+    if (isErasedType(n)) return;
     if (ts.isIdentifier(n)) {
-      let s = m.checker.getSymbolAtLocation(n);
-      if (s && s.flags & ts.SymbolFlags.Alias) s = m.checker.getAliasedSymbol(s);
-      const dd = s?.declarations?.[0];
+      const dd = m.prog.refDecl(n);
       if (dd && dd !== owner && set.has(dd) && m.prog.globals.get(dd)?.k === "fn") out.add(dd);
     }
     ts.forEachChild(n, (c) => scan(owner, c));
@@ -775,10 +1226,9 @@ function topo(decls: ts.Node[], m: ModCtx, rel: (g: Global) => boolean): ts.Node
   const refs = (d: ts.Node): ts.Node[] => {
     const r: ts.Node[] = [];
     const visit = (n: ts.Node) => {
+      if (isErasedType(n)) return;
       if (ts.isIdentifier(n)) {
-        let s = m.checker.getSymbolAtLocation(n);
-        if (s && s.flags & ts.SymbolFlags.Alias) s = m.checker.getAliasedSymbol(s);
-        const dd = s?.declarations?.[0];
+        const dd = m.prog.refDecl(n);
         if (dd && dd !== d && set.has(dd)) {
           const g = m.prog.globals.get(dd);
           if (g && rel(g)) r.push(dd);
@@ -810,10 +1260,9 @@ function topo(decls: ts.Node[], m: ModCtx, rel: (g: Global) => boolean): ts.Node
 function itemRefs(nodes: ts.Node[], self: ts.Node, m: ModCtx): string[] {
   const out = new Set<string>();
   const visit = (n: ts.Node) => {
+    if (isErasedType(n)) return;
     if (ts.isIdentifier(n)) {
-      let s = m.checker.getSymbolAtLocation(n);
-      if (s && s.flags & ts.SymbolFlags.Alias) s = m.checker.getAliasedSymbol(s);
-      const dd = s?.declarations?.[0];
+      const dd = m.prog.refDecl(n);
       const g = dd && dd !== self ? m.prog.globals.get(dd) : undefined;
       if (g) out.add(g.k === "comp" ? g.info.ns : g.info.qname);
     }
@@ -835,18 +1284,42 @@ function translateConst(d: ts.VariableDeclaration, info: ConstInfo, m: ModCtx): 
   const v = expr(d.initializer!, env, info.type);
   const short = leanIdent((d.name as ts.Identifier).text);
   // transparent constants are unfolded by automation; @opaque ones only through their facts
-  let out = `${info.opaque ? "" : "@[vreact_simp, reducible] "}def ${short} : ${leanType(info.type)} :=\n  ${v.code}\n`;
-  info.facts.forEach((f, k) => {
-    const name = k === 0 ? `${short}.post` : `${short}.post${k + 1}`;
-    out += `\n/-- fact: ${docText(f, 80)} -/\ntheorem ${name} : ${prop(f, env)} := by\n  unfold ${short}\n  exact ${m.ob(f, "fact", `fact about ${short}: ${nodeText(f, 60)}`)}\n`;
-  });
+  return `${info.opaque ? "" : "@[vreact_simp, reducible] "}def ${short} : ${leanType(info.type)} :=\n  ${v.code}\n`;
+}
+
+/** The theorem of the `k`-th module-level assert(…) about the constant `d` (emitted once what it mentions is declared). */
+function translateFact(d: ts.VariableDeclaration, info: ConstInfo, k: number, m: ModCtx): string {
+  const env = baseEnv(m);
+  const short = leanIdent((d.name as ts.Identifier).text);
+  const f = info.facts[k];
+  const name = k === 0 ? `${short}.post` : `${short}.post${k + 1}`;
+  return `/-- fact: ${docText(f, 80)} -/\ntheorem ${name} : ${prop(f, env)} := by\n  unfold ${short}\n  exact ${m.ob(f, "fact", `fact about ${short}: ${nodeText(f, 60)}`)}\n`;
+}
+
+/**
+ * The declarations of `decls` (functions and constants of the module) that the fact `f` mentions:
+ * its theorem must come after all of them.  (A module-level assert runs after the declarations
+ * above it, and function declarations are hoisted: a fact may call a function declared below
+ * the constant it is about.)
+ */
+function factDeps(f: ts.Expression, decls: Set<ts.Node>, m: ModCtx): ts.Node[] {
+  const out: ts.Node[] = [];
+  const visit = (n: ts.Node) => {
+    if (isErasedType(n)) return;
+    if (ts.isIdentifier(n)) {
+      const dd = m.prog.refDecl(n);
+      if (dd && decls.has(dd)) out.push(dd);
+    }
+    ts.forEachChild(n, visit);
+  };
+  visit(f);
   return out;
 }
 
-function hasHole(fn: ts.FunctionDeclaration): boolean {
+function hasHole(fn: ts.FunctionDeclaration, m: ModCtx): boolean {
   let found = false;
   const visit = (n: ts.Node) => {
-    if (ts.isCallExpression(n) && ts.isIdentifier(n.expression) && n.expression.text === "hole") found = true;
+    if (ts.isCallExpression(n) && m.prog.specName(n.expression) === "hole") found = true;
     if (!found) ts.forEachChild(n, visit);
   };
   if (fn.body) visit(fn.body);
@@ -897,7 +1370,8 @@ function translateFunction(fn: ts.FunctionDeclaration, info: FnInfo, m: ModCtx):
     // self-recursion check
     let rec = false;
     const visit = (n: ts.Node) => {
-      if (ts.isCallExpression(n) && ts.isIdentifier(n.expression) && n.expression.text === info.name) rec = true;
+      // (by the declaration the callee resolves to: a local helper spelled like the function is not it)
+      if (ts.isCallExpression(n) && ts.isIdentifier(n.expression) && m.prog.refDecl(n.expression) === fn) rec = true;
       ts.forEachChild(n, visit);
     };
     stmts.forEach(visit);
@@ -929,7 +1403,7 @@ function translateFunction(fn: ts.FunctionDeclaration, info: FnInfo, m: ModCtx):
       // opaque functions are not unfolded by callers: their postconditions are proved by
       // unfolding once here, then used through E-matching on calls (grind_pattern below)
       // a function whose body still contains hole() has no implementation yet: contract pending
-      const pending = hasHole(fn);
+      const pending = hasHole(fn, m);
       const ob = info.trusted || pending ? "" : m.ob(lam, "postcondition", `postcondition of ${info.name}: ${nodeText(body, 70)}`);
       const proof = info.trusted ? "" : pending ? ` :=\n  sorry /- pending: hole() -/` : info.opaque ? ` := by\n  unfold ${short}\n  exact ${ob}` : ` :=\n  ${ob}`;
       let t = `${kw} ${name} ${binders.join(" ")} ${hyps.join(" ")} :\n    ${stmt}${proof}\n`;

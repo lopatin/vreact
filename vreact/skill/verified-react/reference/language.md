@@ -10,14 +10,83 @@ verified modules — no cycles), `type`/`interface` declarations, `const`s,
 functions, and components (capitalised functions returning JSX). Nothing else
 at top level.
 
+* Imports name the file that runs, by themselves: TypeScript-only resolution
+  settings (tsconfig `paths`, `baseUrl`, `rootDirs`, `moduleSuffixes`) do not
+  change what the bundler loads. So a verified module is imported by its path
+  relative to the importing file — `"./model"`, `"../model.ts"`, `"./lib"` (its
+  `index.ts`), `"./model.js"` (for `model.ts`) — and that path must lead a
+  bundler to the same file (`"./b"` next to both `b.js` and `b.ts` is `b.js` for
+  Vite: rejected); `react` and `vreact/spec` (also the `react/jsx-runtime` that
+  JSX imports) must resolve to the installed packages, with or without `paths`.
+  Bare specifiers that reach a project file (`"@/model"` through `paths`,
+  `"model"` through `baseUrl`) are rejected.
+* Exports: `export` on declarations, `export { a, b as c }`, `export default f`
+  / `export default x` (a name; `export default <expression>` is rejected —
+  declare a `const` and export that), re-exports `export … from "./m"` (they load
+  `./m` like an import: same rules, cycles included). The bundler compiles each
+  file on its own, so VTS type-checks with `"isolatedModules"` (whatever the
+  tsconfig says): a type imported from another module is re-exported with
+  `export type { Item }` / `export { type Item } from "./types"`, never
+  `export { Item }` or `export default Item` (the bundler would keep the export of
+  a name the other module does not export: the module would not load).
+* A module's top-level code runs in source order when it loads, and reading a
+  `const` before its declaration has run throws. TypeScript only flags direct
+  reads; VTS also rejects a constant initialiser, `export default x` or
+  module-level `assert(…)` that reaches a constant declared below it through
+  the functions it calls (`function g() { return B; } const A = g(); const B = 2;`),
+  also through a shorthand property (`return { B };` reads `B`).
+  Declare constants before the code that uses them (a function may be declared
+  anywhere; the lambda of `ensures` may mention a later constant).
+* Every source file must be a module (have an import or export). Rejected:
+  `declare …` (ambient declarations), `declare global`, `declare module`,
+  namespaces, interface merging (an interface declared twice), function
+  overloads, and project `.d.ts` files in the program (`/// <reference path>`,
+  tsconfig `typeRoots`/`types`/`paths`): they change the types of library or
+  React declarations unchecked. Installed packages (`node_modules`) are trusted
+  like the TypeScript libraries.
+* Library names are recognised by what they resolve to, not by their spelling:
+  `undefined`, `Math`, `String`, `console`, `localStorage`, `document`, timers,
+  React's hooks (also `React.useState`, `import { useState as useS }`), the
+  `vreact/spec` functions and `int` (also `import { type int as I }`), and the
+  types `ReadonlyArray`/`Array`, `ReactNode`/`JSX.Element`. A local, parameter,
+  import or project declaration spelled like one is that binding (a local
+  `const undefined = 3` is 3; `import * as Math from "./m"` is rejected where
+  `Math` is used: rename it). React's hooks must come from an import of `react`
+  (`import { useState }` or `import * as React`): React's types also declare a
+  global `React`, which a module bundle does not define, so tsconfig
+  `"allowUmdGlobalAccess"` is rejected.
+* TypeScript's checks are part of VTS: `// @ts-ignore`, `@ts-expect-error` and
+  `// @ts-nocheck` are rejected anywhere in a verified file, in any letter case
+  and with any suffix (`@ts-ignored`, `@ts-ignore-next-line`, `@TS-NOCHECK`: all
+  silence TypeScript), also inside a string or another comment.
+* Comments that change what the bundler does are rejected anywhere in a file
+  (also in a string), in any letter case: JSX pragmas (`@jsx`, `@jsxRuntime`,
+  `@jsxImportSource`, `@jsxFrag`: esbuild and Babel read them in any comment, not
+  only at the top) and bundler annotations (`/* @__PURE__ */`, `#__PURE__`,
+  `@__NO_SIDE_EFFECTS__`, …: a production build deletes an annotated call whose
+  result is unused, state updates included).
+
 Each file becomes the Lean module `VTS.<path>`: its path under `src` without
 `.ts`/`.tsx`, characters other than letters, digits and `_` replaced by `_`.
 Two files that map to the same module, or to names differing only in letter
 case, are rejected (`module name clash`): e.g. `limits.ts` + `limits.tsx`,
-`my-x.ts` + `my_x.ts`, `todo.ts` + `Todo.tsx`. Rename one of them.
+`my-x.ts` + `my_x.ts`, `todo.ts` + `Todo.tsx`. Rename one of them. Within a
+module, types and values share Lean's one namespace: a function or constant
+named like a type of its module (`type Limits = …; const Limits: Limits = …`)
+is rejected.
 
-The tsconfig needs `"strict": true` (with `strictNullChecks` and `noImplicitAny`) and `"lib": ["ES2023", "DOM"]` (for
-`toSorted`/`toReversed`/`with`); without a tsconfig, vreact uses these defaults.
+The tsconfig needs `"strict": true` (with every check of the strict family:
+`strictNullChecks`, `noImplicitAny`, `strictFunctionTypes`, … none set to false)
+and `"lib": ["ES2023", "DOM"]` (for `toSorted`/`toReversed`/`with`); without a
+tsconfig, vreact uses these defaults. JSX must be React's automatic runtime:
+`"jsx": "react-jsx"` (no other `jsxImportSource`, no `@jsx…` comment pragmas).
+Compiler options are a whitelist: the usual language, module, strictness, emit
+and output options are accepted; options that switch checks off (`"noCheck"`,
+`"noLib"`, `"noResolve"`, the removed `suppress…` options, `"resolvePackageJson…":
+false`) and any option vreact does not know (`"jsxFactory"`, newer ones) are
+rejected with the option's name. The tsconfig.json read is the one in the project
+root; a `tsconfig.json` inside the source directories is rejected (the bundler
+compiles a file with the nearest one's settings, e.g. its `jsxImportSource`).
 
 ## Types
 
@@ -32,7 +101,18 @@ The tsconfig needs `"strict": true` (with `strictNullChecks` and `noImplicitAny`
 | `(a: A) => void`                        | only as callback **props** |
 
 Not supported: `any`, generics, classes, `Map/Set/Record`, recursive types,
-non-discriminated unions (`string | number`), `ReactNode`/`children` props.
+non-discriminated unions (`string | number`), `ReactNode`/`children` props,
+library types (`Date`, `HTMLElement`, …). Function types and React nodes are not
+data: a parameter, result, constant, state, local, data prop, callback parameter,
+local helper parameter or result, or `hole<T>()` whose type contains one (also in
+an array, option, tuple or record) is rejected; only a direct field of a
+component's props may be a function.
+
+Field names (records, union variants, props): `__proto__` is rejected (in an
+object literal `{ __proto__: v }` sets the prototype and creates no field), and so
+is an *optional* field named like a member of `Object.prototype` (`toString?`,
+`constructor?`, `__lookupGetter__?`, …): when it is absent, reading it gives the
+inherited member, not `undefined`. Such names are fine for required fields.
 
 ## Expressions
 
@@ -104,7 +184,13 @@ non-discriminated unions (`string | number`), `ReactNode`/`children` props.
   are such names get a `_` (`src/end/Sort.tsx` → `VTS.end_.Sort_`, lemmas in
   `proofs/end_/Sort_.lean`).
 * Calls to verified top-level functions (their `requires` become obligations)
-  and to local helper arrows (inlined).
+  and to local helper arrows (inlined). A helper's parameters need annotations;
+  default values, rest (`...xs`), optional (`x?`) and `this` parameters are
+  rejected (each gives the parameter another value than the argument: declare
+  `x: T | undefined` and pass it, take an array). The arguments and the result
+  of an inlined helper are data: a parameter or result annotation with a
+  function type or a React node is rejected (a helper that returns JSX is not
+  supported); a helper used as an event handler takes the event.
 * Narrowing: `x !== null`, `x.kind === "add"`, `switch (x.kind)`, early returns —
   fields of the narrowed variant become available, also inside handlers created there.
   The complement narrows too when one variant is left (`if (s.kind === "a") return …;
@@ -163,7 +249,12 @@ assert(distinct(SEATS, (s) => s.id));            // module-level fact, proved on
 assert(SEATS.every((s) => 0 <= s.row && s.row < 3));
 ```
 
-Module-level `assert`s must mention an `@opaque` constant declared above them.
+Module-level `assert`s must mention an `@opaque` constant declared above them in
+the same module (a fact about an imported constant is stated in its module).
+They may call functions declared anywhere in the module (function declarations
+are hoisted) and mention other constants declared above them; the fact is proved
+once everything it mentions is defined, and declarations after that point can use
+it.
 
 Spec helpers (usable in code and contracts): `forall(lo, hi, i => …)`,
 `exists(lo, hi, i => …)`, `distinct(xs, x => key)`, `implies(a, b)`,

@@ -1,5 +1,5 @@
 // expect: reject onClick on <button> inside a command button <button>
-/// <reference path="./invokers.d.ts" />
+/// <reference types="invokers" />
 // A nested button does not handle its click: in Chromium the enclosing invoker runs its
 // command (request-close fires cancel at the dialog), so onClick and onCancel run in one
 // batch (one programmatic click, n = 2).

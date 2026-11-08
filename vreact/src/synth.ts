@@ -34,9 +34,9 @@ import path from "node:path";
 import { createRequire } from "node:module";
 import { pathToFileURL } from "node:url";
 import { loadConfig } from "./cli.ts";
-import { translate, overrideHost, moduleNs, type Config, type TranslateResult } from "./module.ts";
+import { translate, overrideHost, moduleNs, isComponentDecl, type Config, type TranslateResult } from "./module.ts";
 import { runLake, findMarkers, judge, type Verdict } from "./lean.ts";
-import { Program, ModCtx, type HoleEnv } from "./ctx.ts";
+import { Program, ModCtx, refSymbol, type HoleEnv } from "./ctx.ts";
 import { type VType, type Field, T, typeOfNode, typeOfDecl, showType, sharedFields } from "./types.ts";
 import { specFn, narrowingAt, remainingAt } from "./translate.ts";
 import { baseEnv } from "./component.ts";
@@ -85,20 +85,8 @@ const MAX_TENTATIVE = 3;
 /** candidates sent to Lean untested when no generated input exercises the hole */
 const MAX_UNTESTED = 3;
 const STD_AXIOMS = new Set(["propext", "Classical.choice", "Quot.sound"]);
-const SPEC_RE = /vreact[\\/](spec|lib)|vreact-spec/;
+const SPEC_RE = /^vreact\/spec$/;
 
-/** Same test as the translator (module.ts isComponentDecl). */
-function isComponent(fn: ts.FunctionDeclaration): boolean {
-  if (!/^[A-Z]/.test(fn.name?.text ?? "")) return false;
-  if (fn.type && /JSX\.Element|ReactNode|ReactElement/.test(fn.type.getText())) return true;
-  let jsx = false;
-  const visit = (n: ts.Node) => {
-    if (ts.isJsxElement(n) || ts.isJsxSelfClosingElement(n) || ts.isJsxFragment(n)) jsx = true;
-    if (!jsx) ts.forEachChild(n, visit);
-  };
-  if (fn.body) visit(fn.body);
-  return jsx;
-}
 
 /* ───────────────────────── text edits ───────────────────────── */
 
@@ -421,7 +409,7 @@ function callsItself(fn: ts.FunctionDeclaration, checker: ts.TypeChecker, refs: 
   const visit = (n: ts.Node) => {
     if (found) return;
     if (ts.isIdentifier(n) && n !== fn.name) {
-      let s = checker.getSymbolAtLocation(n);
+      let s = refSymbol(checker, n);
       if (s && s.flags & ts.SymbolFlags.Alias) s = checker.getAliasedSymbol(s);
       if (s?.declarations?.includes(fn)) found = true;
     }
@@ -1182,7 +1170,7 @@ export async function synthCommand(root: string, files: string[], opts: { write?
   const program = ts.createProgram(cfg.files, options, overrideHost(options, new Map([[target, base]])));
   const checker = program.getTypeChecker();
   // (the translator's module names, so that type names agree with the translation's)
-  const prog = new Program(checker, root, (sf) => moduleNs(cfg.srcDir, sf.fileName));
+  const prog = new Program(program, root, (sf) => moduleNs(cfg.srcDir, sf.fileName), cfg.files.map((f) => program.getSourceFile(f)).filter((x) => !!x));
   const sf = program.getSourceFile(target)!;
   const env = baseEnv(new ModCtx(prog, "VTS.Synth", sf, [], { n: 0 }));
   const isTrusted = (n: ts.Node) => ts.getJSDocTags(n).some((t) => t.tagName.text === "trusted");
@@ -1252,7 +1240,7 @@ export async function synthCommand(root: string, files: string[], opts: { write?
     const out = new Set<ts.FunctionDeclaration>();
     const visit = (n: ts.Node) => {
       if (ts.isIdentifier(n)) {
-        let s = checker.getSymbolAtLocation(n);
+        let s = refSymbol(checker, n);
         if (s && s.flags & ts.SymbolFlags.Alias) s = checker.getAliasedSymbol(s);
         const dd = s?.declarations?.[0];
         if (dd && dd !== self && ts.isFunctionDeclaration(dd) && ts.isSourceFile(dd.parent) && !out.has(dd)) {
@@ -1287,7 +1275,7 @@ export async function synthCommand(root: string, files: string[], opts: { write?
     const from = (node: ts.Node, self: ts.FunctionDeclaration | undefined, out = new Set<ts.FunctionDeclaration>()): Set<ts.FunctionDeclaration> => {
       const visit = (n: ts.Node) => {
         if (ts.isIdentifier(n)) {
-          let s = checker.getSymbolAtLocation(n);
+          let s = refSymbol(checker, n);
           if (s && s.flags & ts.SymbolFlags.Alias) s = checker.getAliasedSymbol(s);
           const dd = s?.declarations?.[0];
           if (dd && dd !== self && ts.isFunctionDeclaration(dd) && ts.isSourceFile(dd.parent) && !out.has(dd)) {
@@ -1400,7 +1388,7 @@ export async function synthCommand(root: string, files: string[], opts: { write?
       console.log(`  ✗ ${task.name} is /** @trusted */: Lean checks nothing in its body, so a fill could not be proved. Remove @trusted to synthesize it.`);
       continue;
     }
-    if (isComponent(fd)) {
+    if (isComponentDecl(fd, prog)) {
       console.log(`${holesLabel}`);
       for (const h of task.holes) record(h, null, 0, "skipped", "component");
       console.log(`  ✗ ${task.name} looks like a component: synth fills holes in model functions; move the expression into one`);

@@ -142,6 +142,19 @@ export function ItemList(props: ItemListProps) {
 * Closures read `let`s when they run: do not reassign a `let` after creating a
   handler/helper/updater that reads it (`const xNow = x;` first), and never assign
   an outer `let` inside a callback.
+* Module constants run in source order when the module loads: declare a constant
+  above every constant (or `assert`) whose initialiser uses it, also through a
+  function call. `export default` only a name, never an expression.
+* Names mean what they resolve to: a local `undefined`, an import named `Math`
+  or a project type named `int` is that binding, not the builtin. No `declare`,
+  `declare global`/`module`, namespaces or project `.d.ts` files.
+* Import verified modules by their relative path (`"./model"`, not a tsconfig
+  `paths` alias), and hooks from `"react"`. Re-export imported types with
+  `export type { T }` (VTS checks with `isolatedModules`). No `@ts-ignore`,
+  `@ts-expect-error` or `@ts-nocheck` (any spelling), no `@jsx…` pragmas and no
+  `@__PURE__`-style annotations anywhere in a file: fix the type error instead.
+* tsconfig: `"strict": true` and nothing that weakens it; unknown or
+  check-disabling compiler options (`noCheck`, …) are rejected by name.
 * Invariants must not depend on props that can change (React keeps state across
   prop changes): clamp when rendering instead.
 * Lists need `key={…}` with provably distinct keys (usually from an invariant).

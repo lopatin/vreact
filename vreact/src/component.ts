@@ -8,9 +8,9 @@
  *   useEffect        ↦ VReact.Effect with robust outcomes
  */
 import ts from "typescript";
-import { T, type VType, type Param, type Field, leanType, showType, typeOfNode } from "./types.ts";
-import { type Env, ModCtx, type CompCtx, type CompInfo, type StateVar, type FnInfo, type Binding, bind, freshLocal } from "./ctx.ts";
-import { expr, prop, propAll, block, branch, handlerFn, checkDeps, hookName, specFn, symbolOf, bindParam, type BlockCtx, typeOf, valueBlock, lambda, outcome, checkClosures, topLevelHookDecls, fnParamTsTypes } from "./translate.ts";
+import { T, type VType, type Param, type Field, leanType, showType, typeOfNode, checkValueType } from "./types.ts";
+import { type Env, ModCtx, type CompCtx, type CompInfo, type StateVar, type FnInfo, type Binding, bind, freshLocal, refSymbol } from "./ctx.ts";
+import { expr, prop, propAll, block, branch, handlerFn, checkDeps, hookName, specFn, isGlobal, symbolOf, bindParam, type BlockCtx, typeOf, valueBlock, lambda, outcome, checkClosures, topLevelHookDecls, fnParamTsTypes } from "./translate.ts";
 import { fail, leanField, leanIdent, leanStr, jsStr, paren, nodeText, indent, VtsError } from "./util.ts";
 
 /* ─────────────────────── React 18.3.1 event model ───────────────────────
@@ -148,12 +148,16 @@ export function compSignature(fn: ts.FunctionDeclaration, ns: string, module: st
     for (const f of m.reg.rec(propsType)) {
       if (f.type.k === "fn") {
         if (f.type.ret.k !== "void") fail(p, `callback ${f.name} must return void`);
+        f.type.params.forEach((q) => checkValueType(p, q.type, m.reg, `parameter ${q.name} of callback ${f.name}`));
         callbacks.push({ name: f.name, params: f.type.params });
       } else if (f.type.k === "opt" && f.type.elem.k === "fn") {
         fail(p, `optional callback ${f.name} is not supported: make it required`);
       } else if (f.type.k === "node") {
         fail(p, `${f.name}: ReactNode props (children) are not supported yet`);
-      } else data.push(f);
+      } else {
+        checkValueType(p, f.type, m.reg, `prop ${f.name}`);
+        data.push(f);
+      }
     }
   }
   // the Lean namespace of the component: renamed when the name is a Lean token or Lean name (`Type`, `List`, …)
@@ -307,7 +311,8 @@ function computeDeferred(body: ts.Block, comp: CompCtx, env: Env): StateVar[] {
   const seen = new Set<ts.Node>();
   const writes = (n: ts.Node) => {
     if (ts.isIdentifier(n)) {
-      const sym = checker.getSymbolAtLocation(n);
+      // (a shorthand property `{ f }` refers to the closure f)
+      const sym = refSymbol(checker, n);
       const sv = sym && setters.get(sym);
       if (sv) acc.add(sv);
       const c = sym && closures.get(sym);
@@ -507,6 +512,7 @@ function stateVar(d: ts.VariableDeclaration, h: string, env: Env, m: ModCtx, pp:
   const c = d.initializer as ts.CallExpression;
   if (h === "useState") {
     let t: VType | undefined = c.typeArguments?.[0] ? typeOfNode(c.typeArguments[0], m.prog.typeEnv, name[0].toUpperCase() + name.slice(1)) : undefined;
+    if (t) checkValueType(c.typeArguments![0], t, m.reg, `state \`${name}\``);
     const init = c.arguments[0];
     if (!init) fail(c, "useState needs an initial value");
     let v;
@@ -583,7 +589,7 @@ function effectCode(c: ts.CallExpression, env: Env, info: CompInfo): string {
   const tasks: string[] = [];
   const sync: ts.Statement[] = [];
   const timerCb = (e: ts.Expression): ts.Expression | null => {
-    if (ts.isCallExpression(e) && ts.isIdentifier(e.expression) && ["setInterval", "setTimeout"].includes(e.expression.text)) return e.arguments[0];
+    if (ts.isCallExpression(e) && (isGlobal(env, e.expression, "setInterval") || isGlobal(env, e.expression, "setTimeout"))) return e.arguments[0];
     return null;
   };
   // the path condition of the timers registered so far down the effect body (`timerGuard`)
@@ -718,14 +724,14 @@ function checkCleanupItems(items: readonly ts.Node[], env: Env) {
     while (ts.isParenthesizedExpression(x)) x = x.expression;
     if (ts.isCallExpression(x)) {
       const callee = x.expression;
-      const timerClear = ts.isIdentifier(callee) && ["clearTimeout", "clearInterval"].includes(callee.text) && !env.vars.get(symbolOf(env, callee)!);
-      const external = ts.isPropertyAccessExpression(callee) && ts.isIdentifier(callee.expression) && ["console", "localStorage"].includes(callee.expression.text) && !env.vars.get(symbolOf(env, callee.expression)!);
+      const timerClear = isGlobal(env, callee, "clearTimeout") || isGlobal(env, callee, "clearInterval");
+      const external = ts.isPropertyAccessExpression(callee) && (isGlobal(env, callee.expression, "console") || isGlobal(env, callee.expression, "localStorage"));
       if (timerClear || external) {
         x.arguments.forEach((a) => pureCleanupExpr(a, env));
         continue;
       }
     }
-    if (ts.isBinaryExpression(x) && x.operatorToken.kind === ts.SyntaxKind.EqualsToken && x.left.getText() === "document.title") {
+    if (ts.isBinaryExpression(x) && x.operatorToken.kind === ts.SyntaxKind.EqualsToken && ts.isPropertyAccessExpression(x.left) && x.left.name.text === "title" && isGlobal(env, x.left.expression, "document")) {
       pureCleanupExpr(x.right, env);
       continue;
     }
@@ -755,13 +761,13 @@ function pureCleanupExpr(n: ts.Node, env: Env) {
       if (ts.isIdentifier(callee)) {
         const s = symbolOf(env, callee);
         const d = s && (s.flags & ts.SymbolFlags.Alias ? env.m.checker.getAliasedSymbol(s) : s).declarations?.[0];
-        ok = !env.vars.get(s!) && (callee.text === "String" || !!specFn(env, callee) || (!!d && env.m.prog.globals.get(d)?.k === "fn"));
+        ok = !env.vars.get(s!) && (isGlobal(env, callee, "String") || !!specFn(env, callee) || (!!d && env.m.prog.globals.get(d)?.k === "fn"));
       } else if (ts.isPropertyAccessExpression(callee)) {
         // methods of data values (arrays, strings) and Math.*; not props callbacks or helpers
         const root = callee.expression;
         if (ts.isIdentifier(root)) {
           const b = env.vars.get(symbolOf(env, root)!);
-          ok = root.text === "Math" || b?.k === "val" || (!b && !!globalConst(root, env));
+          ok = isGlobal(env, root, "Math") || b?.k === "val" || (!b && !!globalConst(root, env));
         } else ok = !(ts.isPropertyAccessExpression(root) && updatesState(root, env));
       }
       if (!ok) fail(x, `effect cleanups may not call \`${nodeText(callee, 40)}\` here; ${CLEANUP_RULE}`);
@@ -797,7 +803,7 @@ function jsxConstCtx(comp: CompCtx): NonNullable<BlockCtx["jsxConst"]> {
 export function jsxNode(e0: ts.Expression, env: Env): string {
   const e = ts.isParenthesizedExpression(e0) ? e0.expression : e0;
   if (ts.isParenthesizedExpression(e)) return jsxNode(e.expression, env);
-  if (e.kind === ts.SyntaxKind.NullKeyword || (ts.isIdentifier(e) && e.text === "undefined") || e.kind === ts.SyntaxKind.FalseKeyword) return "VReact.VNode.empty";
+  if (e.kind === ts.SyntaxKind.NullKeyword || isGlobal(env, e, "undefined") || e.kind === ts.SyntaxKind.FalseKeyword) return "VReact.VNode.empty";
   if (ts.isJsxElement(e) || ts.isJsxSelfClosingElement(e)) return element(e, env);
   if (ts.isJsxFragment(e)) return `(VReact.VNode.elem "fragment" [] [] ${children(e.children, env)})`;
   if (ts.isConditionalExpression(e)) return branch(e.condition, env, (e1) => jsxNode(e.whenTrue, e1), (e2) => jsxNode(e.whenFalse, e2));
