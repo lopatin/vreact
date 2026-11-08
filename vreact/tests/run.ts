@@ -24,8 +24,13 @@ const casesDir = path.join(here, "cases");
 const work = path.join(here, ".work");
 const tsconfig = fs.readFileSync(path.join(here, "todo", "tsconfig.json"), "utf8");
 
+// `node tests/run.ts Gx Mx`: only the cases (files and directories) whose names start with one
+// of the given prefixes; the command-line and honesty checks run only on a full run
+const only = process.argv.slice(2);
+const selected = (name: string) => only.length === 0 || only.some((p) => name.startsWith(p));
+
 interface Case { file: string; name: string; expect: string[] }
-const cases: Case[] = fs.readdirSync(casesDir).filter((f) => f.endsWith(".tsx") || f.endsWith(".ts")).sort().map((f) => {
+const cases: Case[] = fs.readdirSync(casesDir).filter((f) => (f.endsWith(".tsx") || f.endsWith(".ts")) && selected(f)).sort().map((f) => {
   const first = fs.readFileSync(path.join(casesDir, f), "utf8").split("\n")[0];
   const m = /^\/\/ expect: (.*)$/.exec(first);
   if (!m) throw new Error(`${f}: missing // expect: header`);
@@ -61,8 +66,10 @@ console.log("semantic cases (Lean)");
 const sem = cases.filter((c) => c.expect[0] !== "reject");
 const dir = path.join(work, "semantic");
 project(dir, sem.map((c) => c.file));
-const r = verify(loadConfig(dir), { json: true });
-if (r.stage !== "lean") {
+const r = sem.length || !only.length ? verify(loadConfig(dir), { json: true }) : null;
+if (r === null) {
+  console.log("  (no semantic case selected)");
+} else if (r.stage !== "lean") {
   bad("semantic batch", r.errors.join("\n"));
 } else {
   for (const err of r.errors) bad("internal", err);
@@ -197,7 +204,7 @@ console.log("message attribution (judge)");
 }
 
 // directory cases: each is its own project
-const dirCases = fs.readdirSync(casesDir).filter((f) => fs.statSync(path.join(casesDir, f)).isDirectory()).sort();
+const dirCases = fs.readdirSync(casesDir).filter((f) => fs.statSync(path.join(casesDir, f)).isDirectory() && selected(f)).sort();
 if (dirCases.length) console.log("multi-file cases (own project each)");
 for (const name of dirCases) {
   const src = path.join(casesDir, name);
@@ -242,7 +249,7 @@ for (const name of dirCases) {
 // the command line: misuse prints the usage (never a stack trace); a report larger than a pipe
 // buffer reaches a pipe complete (the exit code is set, the process is not cut off by exit())
 console.log("command line");
-{
+if (r && !only.length) {
   const bin = path.join(here, "..", "bin", "vreact.js");
   const run = (args: string[], cwd = dir) => spawnSync(process.execPath, [bin, ...args], { cwd, encoding: "utf8", maxBuffer: 256 * 1024 * 1024 });
   const misuse: string[][] = [["synth"], ["synth", "a.tsx", "b.tsx"], ["verify", "--jsn"], ["verify", "--root"], ["verify", "--root="], ["verify", "--root", path.join(work, "no-such-dir")], ["verify", "src/x.ts"], ["frobnicate"], ["verify", "--root", work]];
@@ -270,6 +277,6 @@ console.log("command line");
 
 // the report of doctored Lean output of a verified fixture never says VERIFIED (tests/honesty.ts)
 console.log("report honesty (doctored Lean output)");
-honestyChecks(here, work, ok, bad);
+if (!only.length) honestyChecks(here, work, ok, bad);
 console.log(`\n${failed === 0 ? "✔" : "✗"} ${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);
