@@ -5,9 +5,11 @@
 // and attributes, number state — and what is provable without knowing anything about numbers
 // (congruence, int facts, Bool structure) is still proved.
 import { useState } from "react";
-import { ensures, invariant, type int } from "vreact/spec";
+import { ensures, invariant, requires, type int } from "vreact/spec";
 
+// (a division needs a divisor that is not zero: RlNegZero)
 export function ratio(a: int, b: int): boolean {
+  requires(b !== 0);
   ensures((r: boolean) => r === (a / b < 0.5));
   return a / b < 0.5;
 }

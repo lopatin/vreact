@@ -605,7 +605,15 @@ function expr0(e: ts.Expression, env: Env, expected?: VType): Val {
     case ts.SyntaxKind.NumericLiteral: {
       // literals are always type-ascribed: a bare Lean numeral defaults to Nat (truncated subtraction)
       const text = (e as ts.NumericLiteral).text;
-      if (expected?.k === "num" || /[.eE]/.test(text)) return { code: `(${text} : VReact.JS.Num)`, type: T.num };
+      // (TypeScript normalises a literal beyond the doubles, `1e400`, to "Infinity": that number
+      // is what JS reads it as, the Lean literal 1e400 stands for it)
+      if (!Number.isFinite(Number(text))) return { code: "(1e400 : VReact.JS.Num)", type: T.num };
+      if (expected?.k === "num" || /[.eE]/.test(text)) {
+        // an integer literal as a number is `Num.ofInt n`, the form of an int used as a number
+        // (`x === 0` with `x : number` and a divisor's `x !== 0` obligation are then one term)
+        if (/^\d+$/.test(text)) return { code: `(VReact.JS.Num.ofInt ${leanInt(BigInt(text))})`, type: T.num };
+        return { code: `(${text} : VReact.JS.Num)`, type: T.num };
+      }
       return { code: leanInt(BigInt(text)), type: T.int };
     }
     case ts.SyntaxKind.StringLiteral:
@@ -1001,8 +1009,21 @@ function binary(b: ts.BinaryExpression, env: Env, expected?: VType): Val {
     let r = expr(b.right, env);
     // int / int is a JS number (no integer division); Math.floor(a / b) is handled at the call.
     l = coerce(l, T.num, b, env);
+    // VTS values are JS values up to the sign of zero (an int 0 may be -0: `-x`, `a * b`,
+    // `a % b`, … give -0), which only a division by a zero shows (1 / 0 is Infinity, 1 / -0 is
+    // -Infinity): the divisor must not be zero (VReact/JS.lean, "Division")
+    if (nonzeroLiteral(b.right, env)) {
+      r = coerce(r, T.num, b, env);
+      return { code: `(${paren(l.code)} / ${paren(r.code)})`, type: T.num };
+    }
+    const desc = `divisor ${nodeText(b.right)} is non-zero (1 / 0 is Infinity but 1 / -0 is -Infinity: VTS values do not keep the sign of zero)`;
+    if (r.type.k === "int") {
+      const ob = env.m.ob(b, "nonzero-divisor", desc);
+      return { code: `(VReact.JS.Num.divInt ${paren(l.code)} ${paren(r.code)} ${ob})`, type: T.num };
+    }
     r = coerce(r, T.num, b, env);
-    return { code: `(${paren(l.code)} / ${paren(r.code)})`, type: T.num };
+    const ob = env.m.ob(b, "nonzero-divisor", desc);
+    return { code: `(VReact.JS.Num.divNum ${paren(l.code)} ${paren(r.code)} ${ob})`, type: T.num };
   }
   if (op === K.PercentToken) {
     const l = expr(b.left, env, T.int);
@@ -1099,6 +1120,27 @@ function concatPart(v: Val, e: ts.Expression, node: ts.Node): string {
   }
   if (v.type.k === "opt") fail(node, `\`${nodeText(e, 30)}\` may be null or undefined, which \`+\` would turn into the text "null" / "undefined": narrow it first`);
   return toStr(v, e);
+}
+
+/**
+ * Whether `e` is statically a nonzero number: a numeric literal JS reads as nonzero (`2`, `0.5`,
+ * `1e400`; not `1e-400`, which is 0), possibly negated or parenthesized, or a `const` initialised
+ * with one (followed through imports). Such a divisor needs no obligation.
+ */
+function nonzeroLiteral(e: ts.Expression, env: Env, depth = 0): boolean {
+  e = stripParens(e);
+  if (ts.isNumericLiteral(e)) {
+    const v = Number(e.text.replace(/_/g, ""));
+    return !Number.isNaN(v) && v !== 0;
+  }
+  if (ts.isPrefixUnaryExpression(e) && (e.operator === ts.SyntaxKind.MinusToken || e.operator === ts.SyntaxKind.PlusToken)) return nonzeroLiteral(e.operand, env, depth);
+  if (ts.isIdentifier(e) && depth < 8) {
+    const d = resolved(env, symbolOf(env, e))?.valueDeclaration;
+    if (d && ts.isVariableDeclaration(d) && d.initializer && ts.isVariableDeclarationList(d.parent) && (d.parent.flags & ts.NodeFlags.Const) && ts.isIdentifier(d.name)) {
+      return nonzeroLiteral(d.initializer, env, depth + 1);
+    }
+  }
+  return false;
 }
 
 function arith(op: string, l: Val, r: Val, node: ts.Node, env: Env): Val {
@@ -2387,7 +2429,7 @@ function exprStatement(e: ts.Expression, env: Env, bc: BlockCtx, rest: (e: Env) 
     const op = e.operator === ts.SyntaxKind.PlusPlusToken ? "+" : "-";
     return assignLocal(e.operand, (old) => {
       if (!isNumeric(old.type)) fail(e, `++/-- on ${showType(old.type)}`);
-      const one = old.type.k === "num" ? "(1 : VReact.JS.Num)" : leanInt(1);
+      const one = old.type.k === "num" ? `(VReact.JS.Num.ofInt ${leanInt(1)})` : leanInt(1);
       return { code: `(${old.code} ${op} ${one})`, type: old.type };
     }, env, rest, e);
   }

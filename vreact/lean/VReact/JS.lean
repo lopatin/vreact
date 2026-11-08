@@ -13,6 +13,9 @@ here (or to a core Lean operation with identical semantics).  The guiding rule:
 * Numbers (`number`) are an opaque type `Num` with opaque operations (not Lean's
   `Float`, which the kernel can compute with and whose library differs from JS):
   proofs cannot compute or decide anything about them.
+* Values are JS values up to the sign of zero (`-0` is `0`): the only accepted
+  operation that tells them apart, a division by a zero, carries the obligation
+  that its divisor is not zero (`Num.divInt`, `Num.divNum`).
 * Strings are sequences of Unicode scalar values.  `length` is modelled exactly
   (UTF-16 code units); slicing works on code points, which coincides with JS for
   strings without astral characters (documented abstraction).
@@ -235,6 +238,23 @@ noncomputable instance : Neg Num := ⟨Num.neg⟩
 noncomputable instance : ToJS Num := ⟨Num.toStr⟩
 /-- (Generated records derive `Repr`; a number is not printed.) -/
 instance : Repr Num := ⟨fun _ _ => "«number»"⟩
+
+/-! ### Division: a divisor that is not zero
+
+VTS values are JS values *up to the sign of zero*: an `int` that is 0 may be `-0` in JS (`-x`,
+`a * b`, `a % b`, `Math.trunc(a / b)`, `Math.floor(0 / -5)`, `Math.min(0, -0)` give `-0`), Lean's
+`Int` has one zero, and `Num.ofInt` maps it to one number. Every operation VTS accepts gives
+equal results (up to the sign of zero) for `0` and `-0` — comparisons and `===` (`-0 === 0`),
+`+ - *`, unary `-`, `Math.*`, `String(x)`, indexing — except a division *by* a zero: `1 / 0` is
+`Infinity`, `1 / -0` is `-Infinity`. So a number division carries the obligation that its divisor
+is not zero (as an int: `b ≠ 0`; as a number: `b !== 0`, i.e. neither `0` nor `-0`; a nonzero
+literal divisor needs none), and then the Lean term denotes the JS value. -/
+
+/-- `a / b` with an int divisor `b ≠ 0`. -/
+noncomputable def Num.divInt (a : Num) (b : Int) (_h : b ≠ 0) : Num := a / Num.ofInt b
+/-- `a / b` with a number divisor that is not zero (`b !== 0`: neither `0` nor `-0`; the
+literal `0` as the translation writes it, `Num.ofInt 0`). -/
+noncomputable def Num.divNum (a b : Num) (_h : Num.eq b (Num.ofInt 0) = false) : Num := a / b
 
 /-! ## Arrays (immutable `readonly T[]`, modelled as `List`) -/
 

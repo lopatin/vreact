@@ -108,7 +108,7 @@ export function ItemList(props: ItemListProps) {
 }
 ```
 
-* Use `int` for integers (counts, ids, cents); `number` is a float the prover knows nothing about (opaque: no arithmetic, comparison or `Math.*` facts).
+* Use `int` for integers (counts, ids, cents); `number` is a float the prover knows nothing about (opaque: no arithmetic, comparison or `Math.*` facts). A division `a / b` needs a divisor that is not zero (`requires(b !== 0)` or a guard `b === 0 ? … : a / b`; a nonzero literal divisor needs nothing): `1 / -0` is `-Infinity`, and VTS values do not keep the sign of zero.
 * State is immutable: spread, `filter`, `map`, `toSorted`, `with` — never `push`/`sort`/property assignment.
 * Handlers may call setters, `dispatch`, and **at most one** parent callback per path.
 * `setX(v)` uses the render snapshot; two of them in one handler do not compose — use

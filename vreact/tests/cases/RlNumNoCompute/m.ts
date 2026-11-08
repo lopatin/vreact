@@ -5,14 +5,15 @@
 // big's and small's false ensures were VERIFIED. Numbers are an opaque type with opaque
 // operations now: `decide`, `rfl` and unfolding get nowhere: the lemmas are errors of the user
 // proof (so nothing after them is checked: every item is UNCHECKED, the verdict NOT VERIFIED).
+// (NaN as Infinity - Infinity: `0 / 0` would need a nonzero divisor, see RlNegZero.)
 import { ensures, type int } from "vreact/spec";
 export function big(): number {
   ensures((r: number) => r === 1);
-  return Math.max(1, 0 / 0);
+  return Math.max(1, 1e400 - 1e400);
 }
 export function small(): boolean {
   ensures((r: boolean) => r === true);
-  return Math.min(0 / 0, 1) === 1;
+  return Math.min(1e400 - 1e400, 1) === 1;
 }
 export function sum(): number {
   ensures((r: number) => r === 0.30000000000000004);
