@@ -578,7 +578,9 @@ hook rules hold (static checks). For every function: its body is safe and its
   `declare …`, `declare global`, `declare module`, namespaces and a project file
   in the program that is not a VTS source (a `.d.ts` reached by `/// <reference
   path>`, tsconfig `typeRoots`/`types`/`paths`) are rejected, as is
-  `/// <reference no-default-lib="true"/>`.
+  `/// <reference no-default-lib="true"/>`. What JSX means is configured as
+  well: only `"jsx": "react-jsx"` (React 18's automatic runtime) is accepted — no
+  other `jsxImportSource`, no `@jsx…` pragmas.
 * **The JS runtime model** (`JS.lean`): e.g. that `Array.prototype.slice` behaves
   like `JS.slice`. Definitions follow ECMA-262 directly; where ECMA-262 leaves a
   result implementation-defined (`toSorted` with an inconsistent comparator) the

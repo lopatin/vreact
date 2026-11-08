@@ -106,6 +106,9 @@ function loadProgram(cfg: Config): { program: ts.Program; diags: string[] } {
   // (without noImplicitAny an unannotated parameter is `any`: TypeScript checks nothing about it,
   // in particular not whether it is null or undefined)
   if (!(options.noImplicitAny ?? options.strict)) diags.push("tsconfig: VTS requires \"strict\": true, with noImplicitAny (TypeScript checks nothing about an implicitly-any value)");
+  // what JSX means is configured too: VTS models React 18's automatic runtime (react/jsx-runtime)
+  if (options.jsx !== undefined && options.jsx !== ts.JsxEmit.ReactJSX && options.jsx !== ts.JsxEmit.ReactJSXDev) diags.push("tsconfig: VTS requires \"jsx\": \"react-jsx\" (JSX is modelled as React 18's automatic runtime; other settings make JSX call another factory)");
+  if (options.jsxImportSource !== undefined && options.jsxImportSource !== "react") diags.push(`tsconfig: "jsxImportSource" must be "react" (JSX is modelled as React 18's; "${options.jsxImportSource}" makes JSX another library's)`);
   const program = ts.createProgram(cfg.files, options, cfg.overrides ? overrideHost(options, cfg.overrides) : undefined);
   const host: ts.FormatDiagnosticsHost = {
     getCanonicalFileName: (f) => f,
@@ -190,6 +193,10 @@ export function translate(cfg: Config): TranslateResult {
   }
   for (const sf of sfs) {
     const rel = path.relative(cfg.root, sf.fileName);
+    // (TypeScript reads JSX pragmas from the comments at the start of a file)
+    for (const r of ts.getLeadingCommentRanges(sf.text, 0) ?? []) {
+      if (/@jsx\w*/.test(sf.text.slice(r.pos, r.end))) res.errors.push(new VtsError(sf, `${rel}: JSX pragmas (\`@jsx\`, \`@jsxImportSource\`, \`@jsxFrag\`, \`@jsxRuntime\`) are not supported: VTS models JSX as React 18's automatic runtime`));
+    }
     if (!ts.isExternalModule(sf)) {
       res.errors.push(new VtsError(sf, `${rel} is not a module (it has no import or export): TypeScript makes the declarations of such a file global, and merges its interfaces with the libraries' (\`interface Math { … }\`); add an import or an export`));
     }

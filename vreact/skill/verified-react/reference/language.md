@@ -45,6 +45,8 @@ case, are rejected (`module name clash`): e.g. `limits.ts` + `limits.tsx`,
 
 The tsconfig needs `"strict": true` (with `strictNullChecks` and `noImplicitAny`) and `"lib": ["ES2023", "DOM"]` (for
 `toSorted`/`toReversed`/`with`); without a tsconfig, vreact uses these defaults.
+JSX must be React's automatic runtime: `"jsx": "react-jsx"` (no other
+`jsxImportSource`, no `@jsx…` comment pragmas).
 
 ## Types
 
