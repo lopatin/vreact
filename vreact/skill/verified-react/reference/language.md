@@ -10,6 +10,16 @@ verified modules — no cycles), `type`/`interface` declarations, `const`s,
 functions, and components (capitalised functions returning JSX). Nothing else
 at top level.
 
+* Imports name the file that runs, by themselves: TypeScript-only resolution
+  settings (tsconfig `paths`, `baseUrl`, `rootDirs`, `moduleSuffixes`) do not
+  change what the bundler loads. So a verified module is imported by its path
+  relative to the importing file — `"./model"`, `"../model.ts"`, `"./lib"` (its
+  `index.ts`), `"./model.js"` (for `model.ts`) — and that path must lead a
+  bundler to the same file (`"./b"` next to both `b.js` and `b.ts` is `b.js` for
+  Vite: rejected); `react` and `vreact/spec` (also the `react/jsx-runtime` that
+  JSX imports) must resolve to the installed packages, with or without `paths`.
+  Bare specifiers that reach a project file (`"@/model"` through `paths`,
+  `"model"` through `baseUrl`) are rejected.
 * Exports: `export` on declarations, `export { a, b as c }`, `export default f`
   / `export default x` (a name; `export default <expression>` is rejected —
   declare a `const` and export that), re-exports `export … from "./m"` (they load
@@ -18,7 +28,8 @@ at top level.
   `const` before its declaration has run throws. TypeScript only flags direct
   reads; VTS also rejects a constant initialiser, `export default x` or
   module-level `assert(…)` that reaches a constant declared below it through
-  the functions it calls (`function g() { return B; } const A = g(); const B = 2;`).
+  the functions it calls (`function g() { return B; } const A = g(); const B = 2;`),
+  also through a shorthand property (`return { B };` reads `B`).
   Declare constants before the code that uses them (a function may be declared
   anywhere; the lambda of `ensures` may mention a later constant).
 * Every source file must be a module (have an import or export). Rejected:
@@ -35,13 +46,22 @@ at top level.
   types `ReadonlyArray`/`Array`, `ReactNode`/`JSX.Element`. A local, parameter,
   import or project declaration spelled like one is that binding (a local
   `const undefined = 3` is 3; `import * as Math from "./m"` is rejected where
-  `Math` is used: rename it).
+  `Math` is used: rename it). React's hooks must come from an import of `react`
+  (`import { useState }` or `import * as React`): React's types also declare a
+  global `React`, which a module bundle does not define, so tsconfig
+  `"allowUmdGlobalAccess"` is rejected.
+* TypeScript's checks are part of VTS: `// @ts-ignore`, `@ts-expect-error` and
+  `// @ts-nocheck` are rejected anywhere in a verified file (also inside a
+  string or another comment).
 
 Each file becomes the Lean module `VTS.<path>`: its path under `src` without
 `.ts`/`.tsx`, characters other than letters, digits and `_` replaced by `_`.
 Two files that map to the same module, or to names differing only in letter
 case, are rejected (`module name clash`): e.g. `limits.ts` + `limits.tsx`,
-`my-x.ts` + `my_x.ts`, `todo.ts` + `Todo.tsx`. Rename one of them.
+`my-x.ts` + `my_x.ts`, `todo.ts` + `Todo.tsx`. Rename one of them. Within a
+module, types and values share Lean's one namespace: a function or constant
+named like a type of its module (`type Limits = …; const Limits: Limits = …`)
+is rejected.
 
 The tsconfig needs `"strict": true` (with `strictNullChecks` and `noImplicitAny`) and `"lib": ["ES2023", "DOM"]` (for
 `toSorted`/`toReversed`/`with`); without a tsconfig, vreact uses these defaults.
@@ -63,9 +83,10 @@ JSX must be React's automatic runtime: `"jsx": "react-jsx"` (no other
 Not supported: `any`, generics, classes, `Map/Set/Record`, recursive types,
 non-discriminated unions (`string | number`), `ReactNode`/`children` props,
 library types (`Date`, `HTMLElement`, …). Function types and React nodes are not
-data: a parameter, result, constant, state, local, data prop, callback parameter
-or `hole<T>()` whose type contains one (also in an array, option, tuple or record)
-is rejected; only a direct field of a component's props may be a function.
+data: a parameter, result, constant, state, local, data prop, callback parameter,
+local helper parameter or result, or `hole<T>()` whose type contains one (also in
+an array, option, tuple or record) is rejected; only a direct field of a
+component's props may be a function.
 
 ## Expressions
 
@@ -140,7 +161,10 @@ is rejected; only a direct field of a component's props may be a function.
   and to local helper arrows (inlined). A helper's parameters need annotations;
   default values, rest (`...xs`), optional (`x?`) and `this` parameters are
   rejected (each gives the parameter another value than the argument: declare
-  `x: T | undefined` and pass it, take an array).
+  `x: T | undefined` and pass it, take an array). The arguments and the result
+  of an inlined helper are data: a parameter or result annotation with a
+  function type or a React node is rejected (a helper that returns JSX is not
+  supported); a helper used as an event handler takes the event.
 * Narrowing: `x !== null`, `x.kind === "add"`, `switch (x.kind)`, early returns —
   fields of the narrowed variant become available, also inside handlers created there.
   The complement narrows too when one variant is left (`if (s.kind === "a") return …;

@@ -153,10 +153,19 @@ Every expression maps to a Lean term whose value is the JavaScript value.
   are the standard library's. A local, parameter, import or project declaration
   spelled like one of them is that binding (`const undefined = 3` is 3; a project
   `type int = number` is `number`; `import * as Math from "./m"` is not
-  JavaScript's Math, and a use of it is rejected).
+  JavaScript's Math, and a use of it is rejected). A hook is React's only when
+  its name, or the namespace before the dot, is bound by an import: React's
+  types also declare a UMD global `React`, which a module bundle does not define
+  (tsconfig `allowUmdGlobalAccess`, which lets a module use it, is rejected).
+  Every scan of what code reads (closures, initialisation order, the order of
+  the Lean declarations, dependency cones in the report) resolves the name of a
+  shorthand property `{ x }` to the variable `x` it reads, and skips type
+  annotations (erased).
 * Local helper functions are inlined with each parameter bound to its argument,
   so default values, rest parameters, optional (`x?`) and `this` parameters —
-  each would give the parameter another value — are rejected.
+  each would give the parameter another value — are rejected, and so are
+  parameter and result annotations with a function type or a React node (no
+  Lean value type: the argument and the result are data).
 * Module initialisation: a module's top-level code runs in source order when it
   is loaded (after the modules it imports, and re-exports `export … from` are
   imports: no cycles), and a `const` read before its declaration has run throws a
@@ -164,9 +173,10 @@ Every expression maps to a Lean term whose value is the JavaScript value.
   every constant initialiser, `export default x` and module-level `assert(…)` that
   may read — directly or through the functions it calls, transitively — a
   constant of the module declared at or below it (TypeScript checks only direct
-  reads); the lambdas of `ensures`/`callbackRequires`, which the running code
-  never calls, do not count. `export default` of an expression (code run at load)
-  is rejected; `export default x` of a name is a binding.
+  reads; a shorthand property `{ B }` reads `B`); the lambdas of
+  `ensures`/`callbackRequires`, which the running code never calls, do not
+  count. `export default` of an expression (code run at load) is rejected;
+  `export default x` of a name is a binding.
 * Names: a VTS identifier that is a Lean token, a root-level Lean name the
   generated code may use unqualified (`max`, `some`, `List`, …) or a fixed name of
   the generated code (`σ`, `props`, `h_pre`, …) is primed (`max'`; fields and
@@ -511,7 +521,9 @@ hook rules hold (static checks). For every function: its body is safe and its
   `b` of `src/a.ts` with an `ensures`: both `VTS.a.b.post`; also the names Lean
   derives from a structure or inductive — fields, constructors, `rec`, … —
   and, below another module's function `f`, `f.post`, `f.post2`, …, `f.eq_1`,
-  …). Namespaces may otherwise nest (`src/ui/Board.tsx` next to a component
+  …), and within a module a function or constant named like a type of the
+  module (TypeScript keeps the two apart; both would be `VTS.m.Limits`).
+  Namespaces may otherwise nest (`src/ui/Board.tsx` next to a component
   `Board` of `src/ui.tsx`). User lemmas `proofs/<path>.lean` are imported by
   that module's `View.lean` and by the `Defs.lean` of every module importing it
   (unless that would close an import cycle); `proofs/Base.lean` by every
@@ -581,6 +593,25 @@ hook rules hold (static checks). For every function: its body is safe and its
   `/// <reference no-default-lib="true"/>`. What JSX means is configured as
   well: only `"jsx": "react-jsx"` (React 18's automatic runtime) is accepted — no
   other `jsxImportSource`, no `@jsx…` pragmas.
+* **TypeScript's checker.** VTS relies on the program type-checking without
+  errors (null and undefined, the types of library and React declarations,
+  imports): `@ts-ignore`, `@ts-expect-error` and `@ts-nocheck` are rejected
+  anywhere in a verified file, and so is tsconfig `allowUmdGlobalAccess` (a
+  library global used without an import, which a module bundle does not define).
+* **Module resolution.** TypeScript must read the files that run. The bundler is
+  trusted to resolve a relative specifier like Vite's default resolution
+  (relative to the importing file; without an extension the first of `.mjs`,
+  `.js`, `.mts`, `.ts`, `.jsx`, `.tsx`, `.json`, then a directory's
+  `index.*`; a `.js` path that does not exist as its `.ts`/`.tsx` source) and
+  bare specifiers through `node_modules`, with no aliases (`resolve.alias` in
+  the Vite config is outside the subset). VTS checks every import of a verified
+  file against that: a verified module is imported by a relative path that
+  leads there, by itself, to the file TypeScript read (TypeScript-only settings
+  — tsconfig `paths`, `baseUrl`, `rootDirs`, `moduleSuffixes`, package
+  `imports` — would make them differ, and so would a `b.js` next to `b.ts` for
+  `"./b"`); `react`, `vreact/spec` and the `react/jsx-runtime` of JSX must
+  resolve to the installed packages' declarations, and to the same files
+  without those settings.
 * **The JS runtime model** (`JS.lean`): e.g. that `Array.prototype.slice` behaves
   like `JS.slice`. Definitions follow ECMA-262 directly; where ECMA-262 leaves a
   result implementation-defined (`toSorted` with an inconsistent comparator) the

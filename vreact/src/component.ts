@@ -9,7 +9,7 @@
  */
 import ts from "typescript";
 import { T, type VType, type Param, type Field, leanType, showType, typeOfNode, checkValueType } from "./types.ts";
-import { type Env, ModCtx, type CompCtx, type CompInfo, type StateVar, type FnInfo, type Binding, bind, freshLocal } from "./ctx.ts";
+import { type Env, ModCtx, type CompCtx, type CompInfo, type StateVar, type FnInfo, type Binding, bind, freshLocal, refSymbol } from "./ctx.ts";
 import { expr, prop, propAll, block, branch, handlerFn, checkDeps, hookName, specFn, isGlobal, symbolOf, bindParam, type BlockCtx, typeOf, valueBlock, lambda, outcome, checkClosures, topLevelHookDecls, fnParamTsTypes } from "./translate.ts";
 import { fail, leanField, leanIdent, leanStr, jsStr, paren, nodeText, indent, VtsError } from "./util.ts";
 
@@ -311,7 +311,8 @@ function computeDeferred(body: ts.Block, comp: CompCtx, env: Env): StateVar[] {
   const seen = new Set<ts.Node>();
   const writes = (n: ts.Node) => {
     if (ts.isIdentifier(n)) {
-      const sym = checker.getSymbolAtLocation(n);
+      // (a shorthand property `{ f }` refers to the closure f)
+      const sym = refSymbol(checker, n);
       const sv = sym && setters.get(sym);
       if (sv) acc.add(sv);
       const c = sym && closures.get(sym);

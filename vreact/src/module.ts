@@ -16,7 +16,7 @@
 import ts from "typescript";
 import fs from "node:fs";
 import path from "node:path";
-import { Program, ModCtx, SPEC_MODULE, moduleFile, type Obligation, type FnInfo, type CompInfo, type Global, type ConstInfo, type HoleEnv } from "./ctx.ts";
+import { Program, ModCtx, SPEC_MODULE, moduleFile, isErasedType, type Obligation, type FnInfo, type CompInfo, type Global, type ConstInfo, type HoleEnv } from "./ctx.ts";
 import { T, type VType, typeOfNode, typeOfDecl, emitTypeDecl, leanType, nonValuePart, checkValueType } from "./types.ts";
 import { VtsError, fail, leanIdent, leanField, leanStr, paren, capitalize, nodeText, clashesWithLean } from "./util.ts";
 import { LEAN_TYPE_AUX, LEAN_ROOT_NAMES } from "./leanNames.ts";
@@ -109,6 +109,9 @@ function loadProgram(cfg: Config): { program: ts.Program; diags: string[] } {
   // what JSX means is configured too: VTS models React 18's automatic runtime (react/jsx-runtime)
   if (options.jsx !== undefined && options.jsx !== ts.JsxEmit.ReactJSX && options.jsx !== ts.JsxEmit.ReactJSXDev) diags.push("tsconfig: VTS requires \"jsx\": \"react-jsx\" (JSX is modelled as React 18's automatic runtime; other settings make JSX call another factory)");
   if (options.jsxImportSource !== undefined && options.jsxImportSource !== "react") diags.push(`tsconfig: "jsxImportSource" must be "react" (JSX is modelled as React 18's; "${options.jsxImportSource}" makes JSX another library's)`);
+  // a library's UMD global (`export as namespace React`) used without an import, which TypeScript
+  // otherwise rejects in a module: a module bundle does not define it
+  if (options.allowUmdGlobalAccess) diags.push("tsconfig: \"allowUmdGlobalAccess\" is not supported: it lets a module use a library's global (`React.useState` without importing React), which a module bundle does not define (a ReferenceError when it runs); import what you use");
   const program = ts.createProgram(cfg.files, options, cfg.overrides ? overrideHost(options, cfg.overrides) : undefined);
   const host: ts.FormatDiagnosticsHost = {
     getCanonicalFileName: (f) => f,
@@ -125,6 +128,96 @@ function loadProgram(cfg: Config): { program: ts.Program; diags: string[] } {
     for (const d of ds) diags.push(ts.formatDiagnostic(d, host).trim());
   }
   return { program, diags };
+}
+
+/**
+ * Compiler options that change how TypeScript resolves module specifiers but not how the bundler
+ * (Vite) or Node does: TypeScript's documentation says so of "paths", "baseUrl" and "rootDirs".
+ */
+const TS_ONLY_RESOLUTION = ["paths", "baseUrl", "rootDirs", "moduleSuffixes", "customConditions"] as const;
+
+/**
+ * The file a library specifier (`"react"`, `"vreact/spec"`) resolves to without the TypeScript-only
+ * resolution options (null: none); undefined when the program sets none of them (nothing to compare).
+ */
+function plainResolution(spec: string, sf: ts.SourceFile, lit: ts.StringLiteral | undefined, program: ts.Program): string | null | undefined {
+  const opts = program.getCompilerOptions();
+  if (!TS_ONLY_RESOLUTION.some((k) => opts[k] !== undefined)) return undefined;
+  const plain: ts.CompilerOptions = { ...opts };
+  for (const k of TS_ONLY_RESOLUTION) delete plain[k];
+  delete plain.pathsBasePath;
+  const r = ts.resolveModuleName(spec, sf.fileName, plain, ts.sys, undefined, undefined, lit ? program.getModeForUsageLocation(sf, lit) : ts.ModuleKind.ESNext);
+  return r.resolvedModule?.resolvedFileName ?? null;
+}
+
+function sameFile(a: string, b: string): boolean {
+  if (path.resolve(a) === path.resolve(b)) return true;
+  try {
+    return fs.realpathSync(a) === fs.realpathSync(b);
+  } catch {
+    return false;
+  }
+}
+
+/** Extensions a bundler tries for a specifier without one, in order (Vite's default `resolve.extensions`). */
+const BUNDLER_EXTS = [".mjs", ".js", ".mts", ".ts", ".jsx", ".tsx", ".json"];
+
+function isFile(f: string): boolean {
+  try {
+    return fs.statSync(f).isFile();
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The file a bundler (Vite's default resolution) loads for the relative specifier `spec` of a
+ * TypeScript file in `dir`: the path itself; a `.js`/`.jsx`/`.mjs`/`.cjs` path that does not
+ * exist as its TypeScript source (`.ts`/`.tsx`, `.tsx`, `.mts`, `.cts`); the path with an
+ * extension tried in order; a directory's index file (null when its package.json decides).
+ */
+function bundlerResolve(dir: string, spec: string): string | null {
+  const p = path.resolve(dir, spec);
+  if (isFile(p)) return p;
+  const js = /\.(js|jsx|mjs|cjs)$/.exec(p);
+  if (js) {
+    const base = p.slice(0, -js[0].length);
+    const exts = js[1] === "js" ? [".ts", ".tsx"] : js[1] === "jsx" ? [".tsx"] : [`.${js[1][0]}ts`];
+    return exts.map((e) => base + e).find(isFile) ?? null;
+  }
+  const withExt = BUNDLER_EXTS.map((e) => p + e).find(isFile);
+  if (withExt) return withExt;
+  let dirOk = false;
+  try {
+    dirOk = fs.statSync(p).isDirectory();
+  } catch {
+    dirOk = false;
+  }
+  if (!dirOk || isFile(path.join(p, "package.json"))) return null;
+  return BUNDLER_EXTS.map((e) => path.join(p, "index" + e)).find(isFile) ?? null;
+}
+
+/**
+ * Why the import `spec` of `sf`, which TypeScript resolves to the VTS module `target`, may load
+ * another file at run time (null: it cannot).  VTS modules are imported by a relative path that a
+ * bundler resolves, by itself, to the file TypeScript read: tsconfig "rootDirs", "paths",
+ * "baseUrl", "moduleSuffixes" and package `imports` change only TypeScript's resolution, and an
+ * extensionless path is the file a bundler tries first (`./b` with both `b.js` and `b.ts` is
+ * `b.js` for Vite, `b.ts` for TypeScript).
+ */
+function vtsImportProblem(spec: string, sf: ts.SourceFile, target: ts.SourceFile, rel: (f: string) => string): string | null {
+  if (!/^\.\.?(\/|$)/.test(spec)) {
+    return `VTS modules are imported by their path relative to the importing file ("./model", "../model.ts"): "${spec}" resolves to ${rel(target.fileName)} only through TypeScript's settings (tsconfig "paths"/"baseUrl", package "imports"), which the bundler does not share`;
+  }
+  const runtime = bundlerResolve(path.dirname(sf.fileName), spec);
+  if (runtime && path.resolve(runtime) === path.resolve(target.fileName)) return null;
+  let full = path.relative(path.dirname(sf.fileName), target.fileName).split(path.sep).join("/");
+  if (!full.startsWith("../")) full = "./" + full;
+  const own = /\.tsx?$/.test(spec) ? full : full.replace(/\.tsx?$/, "");
+  const fix = runtime && path.posix.normalize(own) === path.posix.normalize(spec)
+    ? `rename or remove ${rel(runtime)}, or import the file by its full name ("${full}", with tsconfig "allowImportingTsExtensions")`
+    : `import it by its path relative to this file ("${own}")`;
+  return `TypeScript resolves it to ${rel(target.fileName)}, but a bundler, relative to this file, ${runtime ? `loads ${rel(runtime)}` : "finds no such file"} (tsconfig "rootDirs", "paths" and "moduleSuffixes" change only what TypeScript reads, and a path without an extension is the first file a bundler finds: .mjs, .js, .mts, .ts, .jsx, .tsx, .json, then a directory's index): ${fix}`;
 }
 
 /** The Lean namespace of the module of source file `f` (also used by `vreact synth`, whose type names must match). */
@@ -200,6 +293,18 @@ export function translate(cfg: Config): TranslateResult {
     if (!ts.isExternalModule(sf)) {
       res.errors.push(new VtsError(sf, `${rel} is not a module (it has no import or export): TypeScript makes the declarations of such a file global, and merges its interfaces with the libraries' (\`interface Math { … }\`); add an import or an export`));
     }
+    // TypeScript's errors are VTS's: a comment that silences them (`// @ts-ignore` above a line,
+    // `@ts-expect-error`, `// @ts-nocheck` for the file) lets through what the translation relies
+    // on TypeScript to have checked (nullish kinds, a UMD global used without an import, argument
+    // types). (Any occurrence counts, also in a string: TypeScript's own rules for where a
+    // directive takes effect are not reproduced.)
+    for (const m of sf.text.matchAll(/@ts-(ignore|expect-error|nocheck)(?![\w-])/g)) {
+      const { line, character } = sf.getLineAndCharacterOfPosition(m.index!);
+      const e = new VtsError(sf, `${rel}:${line + 1}: \`@ts-${m[1]}\` is not supported: it silences TypeScript's errors, and VTS relies on TypeScript's checks (null and undefined, the types of library and React declarations, imports); fix the error instead`);
+      e.line = line + 1;
+      e.col = character + 1;
+      res.errors.push(e);
+    }
     // (`/// <reference path>` to anything but a VTS source is rejected above; `lib` and `types`
     // references add TypeScript's and installed libraries)
     if (sf.hasNoDefaultLib) {
@@ -250,6 +355,10 @@ export function translate(cfg: Config): TranslateResult {
   if (res.errors.length) return res;
 
   // ---- import graph & topological order ----
+  // (TypeScript resolves a specifier with settings the bundler does not share — tsconfig "paths",
+  // "baseUrl", "rootDirs", "moduleSuffixes" — so every import must name, by itself, the file
+  // TypeScript read: React and vreact/spec are the installed packages, VTS modules are relative
+  // paths that a bundler resolves to the same file)
   const importsOf = new Map<ts.SourceFile, ts.SourceFile[]>();
   for (const sf of sfs) {
     const deps: ts.SourceFile[] = [];
@@ -258,14 +367,40 @@ export function translate(cfg: Config): TranslateResult {
       if (!ts.isImportDeclaration(st) && !(ts.isExportDeclaration(st) && st.moduleSpecifier)) continue;
       const spec = (st.moduleSpecifier as ts.StringLiteral).text;
       const target = moduleFile(checker, st.moduleSpecifier!);
+      const what = `${ts.isImportDeclaration(st) ? "import" : "re-export"} of "${spec}"`;
+      const rel = (f: string) => (path.resolve(f).startsWith(cfg.root + path.sep) ? path.relative(cfg.root, f) : f);
+      // React and vreact/spec: by the declaration file the specifier resolves to, which must be
+      // the installed package's (never a project file), also without TypeScript-only settings
+      if (spec === "react" || spec === "react/jsx-runtime" || spec === SPEC_MODULE) {
+        const lib = spec === SPEC_MODULE ? "vreact/spec" : "React";
+        const isLib = (f: ts.SourceFile) => (spec === SPEC_MODULE ? prog.specFiles.has(f) : prog.isReactFile(f));
+        if (!target || !isLib(target)) {
+          res.errors.push(new VtsError(st, `${what}: it resolves to ${target ? rel(target.fileName) : "no declaration file"}, not to the installed ${lib} package's declarations, which are what runs (the bundler loads the package; tsconfig "paths"/"baseUrl" change only what TypeScript reads)`));
+        } else {
+          const plain = plainResolution(spec, sf, st.moduleSpecifier as ts.StringLiteral, program);
+          if (plain !== undefined && (!plain || !sameFile(plain, target.fileName))) {
+            res.errors.push(new VtsError(st, `${what}: TypeScript resolves it to ${rel(target.fileName)} only through tsconfig "paths"/"baseUrl" (without them: ${plain ? rel(plain) : "nothing"}), which the bundler does not use; remove the mapping`));
+          }
+        }
+        continue;
+      }
       if (target && fileSet.has(path.resolve(target.fileName))) {
+        const problem = vtsImportProblem(spec, sf, target, rel);
+        if (problem) res.errors.push(new VtsError(st, `${what}: ${problem}`));
         deps.push(target);
         continue;
       }
-      // React and vreact/spec: by the declaration file the specifier resolves to
-      if ((spec === "react" || spec === "react/jsx-runtime") && target && prog.isReactFile(target)) continue;
-      if (spec === SPEC_MODULE && target && prog.specFiles.has(target)) continue;
-      res.errors.push(new VtsError(st, `${ts.isImportDeclaration(st) ? "import" : "re-export"} of "${spec}" is outside the verified program (only react, vreact/spec, and other VTS modules may be imported)`));
+      res.errors.push(new VtsError(st, `${what} is outside the verified program (only react, vreact/spec, and other VTS modules may be imported)`));
+    }
+    // JSX imports React's "react/jsx-runtime" implicitly ("jsx": "react-jsx"): the same rule
+    if (sf.languageVariant === ts.LanguageVariant.JSX) {
+      const plain = plainResolution("react/jsx-runtime", sf, undefined, program);
+      if (plain !== undefined) {
+        const full = ts.resolveModuleName("react/jsx-runtime", sf.fileName, program.getCompilerOptions(), ts.sys, undefined, undefined, ts.ModuleKind.ESNext).resolvedModule?.resolvedFileName;
+        if (!full || !plain || !sameFile(full, plain)) {
+          res.errors.push(new VtsError(sf, `${path.relative(cfg.root, sf.fileName)}: its JSX imports "react/jsx-runtime", which TypeScript resolves to ${full ?? "nothing"} through tsconfig "paths"/"baseUrl", but the bundler (without them) to ${plain ?? "nothing"}; remove the mapping`));
+        }
+      }
     }
     importsOf.set(sf, deps);
   }
@@ -727,6 +862,7 @@ function collect(st: ts.Statement, m: ModCtx, ns: string, res: TranslateResult) 
       return;
     }
     if (/^use[A-Z]/.test(st.name.text)) fail(st, "custom hooks are not supported yet: inline the hook calls into the component");
+    checkValueNameFree(st.name, "function", m);
     const params = st.parameters.map((p) => {
       if (!p.type) fail(p, "parameters need type annotations");
       if (p.initializer || p.dotDotDotToken || p.questionToken) fail(p, "default/rest/optional parameters are not supported");
@@ -748,6 +884,7 @@ function collect(st: ts.Statement, m: ModCtx, ns: string, res: TranslateResult) 
     if (!(st.declarationList.flags & ts.NodeFlags.Const)) fail(st, "top-level variables must be const");
     for (const d of st.declarationList.declarations) {
       if (!ts.isIdentifier(d.name) || !d.initializer) fail(d, "top-level const needs a name and initializer");
+      checkValueNameFree(d.name, "constant", m);
       let t: VType | undefined = d.type ? typeOfNode(d.type, prog.typeEnv, capitalize(d.name.text)) : undefined;
       if (t) checkValueType(d.type!, t, prog.reg, `constant ${d.name.text}`);
       if (!t) {
@@ -771,7 +908,7 @@ function collect(st: ts.Statement, m: ModCtx, ns: string, res: TranslateResult) 
     // of the program (its initialisation order is checked: checkInitOrder)
     let e: ts.Expression = st.expression;
     while (ts.isParenthesizedExpression(e)) e = e.expression;
-    const d = ts.isIdentifier(e) ? prog.resolve(m.checker.getSymbolAtLocation(e))?.declarations?.[0] : undefined;
+    const d = ts.isIdentifier(e) ? prog.refDecl(e) : undefined;
     if (!d || prog.isLibraryFile(d.getSourceFile())) {
       fail(st, "`export default` of an expression is not supported (it would run unchecked when the module loads): declare a constant and export it (`export const x: T = …;` or `const x: T = …; export default x;`), or write `export default function …`");
     }
@@ -782,11 +919,10 @@ function collect(st: ts.Statement, m: ModCtx, ns: string, res: TranslateResult) 
     const fact = st.expression.arguments[0];
     let owner: { info: { facts: ts.Expression[]; opaque: boolean } } | null = null;
     const visit = (n: ts.Node) => {
-      if (owner) return;
+      if (owner || isErasedType(n)) return;
       if (ts.isIdentifier(n)) {
-        let s = m.checker.getSymbolAtLocation(n);
-        if (s && s.flags & ts.SymbolFlags.Alias) s = m.checker.getAliasedSymbol(s);
-        const g = s?.declarations?.[0] ? prog.globals.get(s.declarations[0]) : undefined;
+        const d = prog.refDecl(n);
+        const g = d ? prog.globals.get(d) : undefined;
         if (g?.k === "const" && g.info.opaque) owner = g as { info: ConstInfo };
       }
       ts.forEachChild(n, visit);
@@ -800,6 +936,16 @@ function collect(st: ts.Statement, m: ModCtx, ns: string, res: TranslateResult) 
   if (ts.isModuleDeclaration(st)) fail(st, "`declare global`, `declare module` and namespaces are not supported in VTS: they can add to or change the types of library declarations (global augmentation, interface merging), which nothing checks");
   if (isAmbient(st)) fail(st, AMBIENT_MSG);
   fail(st, `top-level statement not supported in VTS (only imports, types, functions, components and constants)`);
+}
+
+/**
+ * A function or constant must not share its name with a type of the module: TypeScript keeps
+ * types and values apart (`type Limits = …; const Limits: Limits = …`), but both would be the
+ * Lean declaration `VTS.<module>.Limits`.
+ */
+function checkValueNameFree(name: ts.Identifier, what: string, m: ModCtx) {
+  const t = m.sf.statements.find((x) => (ts.isTypeAliasDeclaration(x) || ts.isInterfaceDeclaration(x)) && x.name.text === name.text);
+  if (t) fail(name, `\`${name.text}\` names both a type (line ${m.sf.getLineAndCharacterOfPosition(t.getStart()).line + 1}) and a ${what} of this module: TypeScript keeps types and values apart, but in Lean both would be ${m.ns}.${leanIdent(name.text)}; rename one of them`);
 }
 
 const AMBIENT_MSG = "ambient declarations (`declare …`) are not supported: they state a type without code, which nothing checks (and `declare global` / `declare module` would change the types of library declarations)";
@@ -836,9 +982,11 @@ function checkInitOrder(sf: ts.SourceFile, m: ModCtx) {
         for (const a of x.arguments) if (!(ts.isArrowFunction(a) || ts.isFunctionExpression(a))) visit(a);
         return;
       }
+      // (types are erased: nothing in them runs)
+      if (isErasedType(x)) return;
       if (ts.isIdentifier(x)) {
-        const s = prog.resolve(prog.checker.getSymbolAtLocation(x));
-        const d = s?.valueDeclaration ?? s?.declarations?.[0];
+        // (also the name of a shorthand property `{ B }`, which reads the variable B)
+        const d = prog.refDecl(x);
         if (d && isConst(d)) {
           if (!out.has(d)) out.set(d, []);
         } else if (d && ts.isFunctionDeclaration(d) && d.getSourceFile() === sf && d.body && !visiting.has(d)) {
@@ -876,7 +1024,7 @@ function checkInitOrder(sf: ts.SourceFile, m: ModCtx) {
       check(st, "this module-level statement", st.expression);
     } else if (ts.isExportAssignment(st)) {
       // (`export default f` of a function reads the hoisted function, it does not call it)
-      const d = prog.resolve(m.checker.getSymbolAtLocation(st.expression))?.declarations?.[0];
+      const d = prog.refDecl(st.expression);
       if (!(d && ts.isFunctionDeclaration(d))) check(st, "`export default`", st.expression);
     }
   }
@@ -907,10 +1055,9 @@ function usedByOthers(decls: ts.Node[], m: ModCtx): Set<ts.Node> {
   const set = new Set(decls);
   const out = new Set<ts.Node>();
   const scan = (owner: ts.Node, n: ts.Node) => {
+    if (isErasedType(n)) return;
     if (ts.isIdentifier(n)) {
-      let s = m.checker.getSymbolAtLocation(n);
-      if (s && s.flags & ts.SymbolFlags.Alias) s = m.checker.getAliasedSymbol(s);
-      const dd = s?.declarations?.[0];
+      const dd = m.prog.refDecl(n);
       if (dd && dd !== owner && set.has(dd) && m.prog.globals.get(dd)?.k === "fn") out.add(dd);
     }
     ts.forEachChild(n, (c) => scan(owner, c));
@@ -935,10 +1082,9 @@ function topo(decls: ts.Node[], m: ModCtx, rel: (g: Global) => boolean): ts.Node
   const refs = (d: ts.Node): ts.Node[] => {
     const r: ts.Node[] = [];
     const visit = (n: ts.Node) => {
+      if (isErasedType(n)) return;
       if (ts.isIdentifier(n)) {
-        let s = m.checker.getSymbolAtLocation(n);
-        if (s && s.flags & ts.SymbolFlags.Alias) s = m.checker.getAliasedSymbol(s);
-        const dd = s?.declarations?.[0];
+        const dd = m.prog.refDecl(n);
         if (dd && dd !== d && set.has(dd)) {
           const g = m.prog.globals.get(dd);
           if (g && rel(g)) r.push(dd);
@@ -970,10 +1116,9 @@ function topo(decls: ts.Node[], m: ModCtx, rel: (g: Global) => boolean): ts.Node
 function itemRefs(nodes: ts.Node[], self: ts.Node, m: ModCtx): string[] {
   const out = new Set<string>();
   const visit = (n: ts.Node) => {
+    if (isErasedType(n)) return;
     if (ts.isIdentifier(n)) {
-      let s = m.checker.getSymbolAtLocation(n);
-      if (s && s.flags & ts.SymbolFlags.Alias) s = m.checker.getAliasedSymbol(s);
-      const dd = s?.declarations?.[0];
+      const dd = m.prog.refDecl(n);
       const g = dd && dd !== self ? m.prog.globals.get(dd) : undefined;
       if (g) out.add(g.k === "comp" ? g.info.ns : g.info.qname);
     }
@@ -1058,7 +1203,7 @@ function translateFunction(fn: ts.FunctionDeclaration, info: FnInfo, m: ModCtx):
     let rec = false;
     const visit = (n: ts.Node) => {
       // (by the declaration the callee resolves to: a local helper spelled like the function is not it)
-      if (ts.isCallExpression(n) && ts.isIdentifier(n.expression) && m.prog.resolve(m.checker.getSymbolAtLocation(n.expression))?.declarations?.[0] === fn) rec = true;
+      if (ts.isCallExpression(n) && ts.isIdentifier(n.expression) && m.prog.refDecl(n.expression) === fn) rec = true;
       ts.forEachChild(n, visit);
     };
     stmts.forEach(visit);

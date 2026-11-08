@@ -36,7 +36,7 @@ import { pathToFileURL } from "node:url";
 import { loadConfig } from "./cli.ts";
 import { translate, overrideHost, moduleNs, isComponentDecl, type Config, type TranslateResult } from "./module.ts";
 import { runLake, findMarkers, judge, type Verdict } from "./lean.ts";
-import { Program, ModCtx, type HoleEnv } from "./ctx.ts";
+import { Program, ModCtx, refSymbol, type HoleEnv } from "./ctx.ts";
 import { type VType, type Field, T, typeOfNode, typeOfDecl, showType, sharedFields } from "./types.ts";
 import { specFn, narrowingAt, remainingAt } from "./translate.ts";
 import { baseEnv } from "./component.ts";
@@ -409,7 +409,7 @@ function callsItself(fn: ts.FunctionDeclaration, checker: ts.TypeChecker, refs: 
   const visit = (n: ts.Node) => {
     if (found) return;
     if (ts.isIdentifier(n) && n !== fn.name) {
-      let s = checker.getSymbolAtLocation(n);
+      let s = refSymbol(checker, n);
       if (s && s.flags & ts.SymbolFlags.Alias) s = checker.getAliasedSymbol(s);
       if (s?.declarations?.includes(fn)) found = true;
     }
@@ -1240,7 +1240,7 @@ export async function synthCommand(root: string, files: string[], opts: { write?
     const out = new Set<ts.FunctionDeclaration>();
     const visit = (n: ts.Node) => {
       if (ts.isIdentifier(n)) {
-        let s = checker.getSymbolAtLocation(n);
+        let s = refSymbol(checker, n);
         if (s && s.flags & ts.SymbolFlags.Alias) s = checker.getAliasedSymbol(s);
         const dd = s?.declarations?.[0];
         if (dd && dd !== self && ts.isFunctionDeclaration(dd) && ts.isSourceFile(dd.parent) && !out.has(dd)) {
@@ -1275,7 +1275,7 @@ export async function synthCommand(root: string, files: string[], opts: { write?
     const from = (node: ts.Node, self: ts.FunctionDeclaration | undefined, out = new Set<ts.FunctionDeclaration>()): Set<ts.FunctionDeclaration> => {
       const visit = (n: ts.Node) => {
         if (ts.isIdentifier(n)) {
-          let s = checker.getSymbolAtLocation(n);
+          let s = refSymbol(checker, n);
           if (s && s.flags & ts.SymbolFlags.Alias) s = checker.getAliasedSymbol(s);
           const dd = s?.declarations?.[0];
           if (dd && dd !== self && ts.isFunctionDeclaration(dd) && ts.isSourceFile(dd.parent) && !out.has(dd)) {

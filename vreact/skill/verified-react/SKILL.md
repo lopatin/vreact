@@ -128,6 +128,9 @@ export function ItemList(props: ItemListProps) {
 * Names mean what they resolve to: a local `undefined`, an import named `Math`
   or a project type named `int` is that binding, not the builtin. No `declare`,
   `declare global`/`module`, namespaces or project `.d.ts` files.
+* Import verified modules by their relative path (`"./model"`, not a tsconfig
+  `paths` alias), and hooks from `"react"`. No `@ts-ignore`, `@ts-expect-error`
+  or `@ts-nocheck`: fix the type error instead.
 * Invariants must not depend on props that can change (React keeps state across
   prop changes): clamp when rendering instead.
 * Lists need `key={…}` with provably distinct keys (usually from an invariant).

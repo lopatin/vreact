@@ -166,6 +166,27 @@ const OWN_SPEC = (() => {
 /** Declaration files of React (its types package, or the package itself). */
 const REACT_FILE_RE = /[\\/]node_modules[\\/](@types[\\/])?react[\\/]/;
 
+/**
+ * The symbol an identifier refers to as a reference.  For the name of a shorthand property
+ * `{ x }` this is the variable `x` that the property reads (`getSymbolAtLocation` gives the
+ * object literal's property `x`); every scan that collects what code reads (closure checks,
+ * initialisation order, declaration order, dependency cones) goes through this.
+ */
+export function refSymbol(checker: ts.TypeChecker, n: ts.Node): ts.Symbol | undefined {
+  if (ts.isIdentifier(n) && ts.isShorthandPropertyAssignment(n.parent) && n.parent.name === n) return checker.getShorthandAssignmentValueSymbol(n.parent);
+  if (ts.isShorthandPropertyAssignment(n)) return checker.getShorthandAssignmentValueSymbol(n);
+  return checker.getSymbolAtLocation(n);
+}
+
+/**
+ * A type annotation, assertion type or type argument (`x: T`, `e as T`, `f<T>(…)`): erased by
+ * TypeScript, so nothing in it is evaluated (the reference scans skip it: a type named like a
+ * value, `type Limits = …; const Limits: Limits = …`, resolves to the same merged symbol).
+ */
+export function isErasedType(n: ts.Node): boolean {
+  return ts.isTypeNode(n) && !ts.isExpressionWithTypeArguments(n);
+}
+
 /** The source file a module specifier (`"./x"`, `"vreact/spec"`) resolves to, if any. */
 export function moduleFile(checker: ts.TypeChecker, spec: ts.Expression): ts.SourceFile | undefined {
   const sym = checker.getSymbolAtLocation(spec);
@@ -252,7 +273,7 @@ export class Program {
    */
   isGlobal(n: ts.Node, name: string): boolean {
     if (!ts.isIdentifier(n) || n.text !== name) return false;
-    const s = this.checker.getSymbolAtLocation(n);
+    const s = refSymbol(this.checker, n);
     if (!s) return false;
     if (name === "undefined") return this.checker.isUndefinedSymbol(s);
     return !(s.flags & ts.SymbolFlags.Alias) && this.declaredIn(s, (f) => this.isLibraryFile(f));
@@ -260,14 +281,32 @@ export class Program {
   /** The name of the vreact/spec declaration (function or `int`) that `n` refers to, through import aliases. */
   specName(n: ts.Node): string | null {
     if (!ts.isIdentifier(n)) return null;
-    const s = this.resolve(this.checker.getSymbolAtLocation(n));
+    const s = this.resolve(refSymbol(this.checker, n));
     return s && this.declaredIn(s, (f) => this.specFiles.has(f)) ? s.name : null;
   }
   /** The name of the React declaration (hook, type) that `n` refers to, through import aliases. */
   reactName(n: ts.Node): string | null {
     if (!ts.isIdentifier(n)) return null;
-    const s = this.resolve(this.checker.getSymbolAtLocation(n));
+    const s = this.resolve(refSymbol(this.checker, n));
     return s && this.declaredIn(s, (f) => this.isReactFile(f)) ? s.name : null;
+  }
+  /**
+   * Is `id` bound by an import declaration (`import { x }`, `import * as x`, `import x`)?  Not a
+   * UMD global (`export as namespace React` in React's types, usable without an import under
+   * "allowUmdGlobalAccess"), which a module bundle does not define.
+   */
+  isImportBinding(id: ts.Identifier): boolean {
+    const s = refSymbol(this.checker, id);
+    const ds = s && s.flags & ts.SymbolFlags.Alias ? s.declarations : undefined;
+    return !!ds?.length && ds.every((d) => ts.isImportSpecifier(d) || ts.isNamespaceImport(d) || ts.isImportClause(d));
+  }
+  /**
+   * The declaration a reference resolves to (through shorthand properties and import aliases):
+   * what the scans of module.ts, component.ts and synth.ts follow.
+   */
+  refDecl(n: ts.Node): ts.Declaration | undefined {
+    const s = this.resolve(refSymbol(this.checker, n));
+    return s?.valueDeclaration ?? s?.declarations?.[0];
   }
 }
 

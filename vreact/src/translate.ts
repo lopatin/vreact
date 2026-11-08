@@ -12,7 +12,7 @@
  */
 import ts from "typescript";
 import { T, type VType, type Field, type Param, sameType, showType, leanType, sharedFields, type Variant, typeOfNode, kindsOfType, nullShape, checkValueType } from "./types.ts";
-import { type Env, type Val, ModCtx, type Binding, type StateVar, type CompCtx, type HandlerAcc, type FnInfo, type CompInfo, type Global, type Narrowed, bind, extend, freshLocal } from "./ctx.ts";
+import { type Env, type Val, ModCtx, type Binding, type StateVar, type CompCtx, type HandlerAcc, type FnInfo, type CompInfo, type Global, type Narrowed, bind, extend, freshLocal, refSymbol } from "./ctx.ts";
 import { VtsError, fail, leanField, leanAccessor, leanIdent, leanStr, jsStr, leanInt, paren, nodeText, capitalize, relLoc } from "./util.ts";
 
 /* ───────────────────────────── helpers ───────────────────────────── */
@@ -28,9 +28,9 @@ function symId(s: ts.Symbol): number {
   return id;
 }
 
+/** The symbol a reference resolves to (a shorthand property `{ x }`, or its name, to the variable `x`). */
 export function symbolOf(env: Env, node: ts.Node): ts.Symbol | undefined {
-  if (ts.isShorthandPropertyAssignment(node)) return env.m.checker.getShorthandAssignmentValueSymbol(node);
-  return env.m.checker.getSymbolAtLocation(node);
+  return refSymbol(env.m.checker, node);
 }
 
 function resolved(env: Env, s: ts.Symbol | undefined): ts.Symbol | undefined {
@@ -52,11 +52,19 @@ const HOOKS = new Set(["useState", "useReducer", "useEffect", "useMemo", "useCal
 /**
  * Name of the React hook `callee` (`useState`, `React.useState`, an import alias) refers to, by
  * its declaration in React's types; a local or project function spelled like a hook is not one.
+ * The name (or the namespace before the dot) must be bound by an import of the program: React's
+ * types also declare the UMD global `React`, which TypeScript lets a module use without an import
+ * ("allowUmdGlobalAccess") but which a module bundle does not define (a ReferenceError).
  */
 export function hookName(env: Env, callee: ts.Expression): string | null {
   const n = ts.isPropertyAccessExpression(callee) ? callee.name : callee;
   const name = env.m.prog.reactName(n);
-  return name && HOOKS.has(name) ? name : null;
+  if (!name || !HOOKS.has(name)) return null;
+  const root = ts.isPropertyAccessExpression(callee) ? callee.expression : callee;
+  if (!ts.isIdentifier(root) || !env.m.prog.isImportBinding(root)) {
+    fail(callee, `\`${nodeText(callee, 40)}\` is React's ${name} only through ${ts.isIdentifier(root) ? `\`${root.text}\`, which is not imported here (React's global \`React\` is declared by its types, but a module bundle does not define it: a ReferenceError)` : "an expression"}: import the hook (\`import { ${name} } from "react"\`, or \`import * as React from "react"\` and call \`React.${name}\`)`);
+  }
+  return name;
 }
 
 /** Globals the translation gives a meaning (for the message when a binding of the program is spelled like one). */
@@ -86,12 +94,6 @@ function letDecl(s: ts.Symbol | undefined): ts.VariableDeclaration | null {
   const d = s?.valueDeclaration;
   if (d && ts.isVariableDeclaration(d) && ts.isVariableDeclarationList(d.parent) && d.parent.flags & ts.NodeFlags.Let) return d;
   return null;
-}
-
-/** The variable an identifier refers to (shorthand properties `{ x }` resolve to the variable `x`). */
-function varSymbol(checker: ts.TypeChecker, id: ts.Identifier): ts.Symbol | undefined {
-  if (ts.isShorthandPropertyAssignment(id.parent) && id.parent.name === id) return checker.getShorthandAssignmentValueSymbol(id.parent);
-  return checker.getSymbolAtLocation(id);
 }
 
 /** Is `id` the target of an assignment, compound assignment, `++` or `--`? */
@@ -168,7 +170,7 @@ export function checkClosures(body: ts.Node, env: Env) {
       return;
     }
     if (ts.isIdentifier(n) && stack.length) {
-      const s = varSymbol(checker, n);
+      const s = refSymbol(checker, n);
       const d = letDecl(s);
       if (s && d) {
         for (let i = stack.length - 1; i >= 0; i--) {
@@ -1362,6 +1364,18 @@ export function checkHelperParams(fn: ts.ArrowFunction | ts.FunctionExpression) 
   }
 }
 
+/**
+ * The VTS type of a parameter or result annotation of a local helper that is inlined at a call:
+ * the argument (result) is bound as data, so a function or React node type, which has no Lean
+ * value type, is rejected (a helper used as an event handler, whose parameter is the event, is
+ * not inlined this way).
+ */
+function helperValueType(t: ts.TypeNode, env: Env, hint: string, what: string): VType {
+  const vt = typeOfNode(t, env.m.prog.typeEnv, hint);
+  checkValueType(t, vt, env.m.reg, what);
+  return vt;
+}
+
 function inlineClosure(b: Extract<Binding, { k: "closure" }>, c: ts.CallExpression, env: Env, expected?: VType): Val {
   const fn = b.fn;
   checkHelperParams(fn);
@@ -1371,13 +1385,13 @@ function inlineClosure(b: Extract<Binding, { k: "closure" }>, c: ts.CallExpressi
   let e2: Env = { ...b.env, scope: env.scope, narrow: b.env.narrow, curState: env.curState };
   fn.parameters.forEach((p, i) => {
     if (!p.type) fail(p, "helper function parameters need type annotations");
-    const t = typeOfNode(p.type, env.m.prog.typeEnv, "Arg");
+    const t = helperValueType(p.type, env, "Arg", `parameter \`${p.name.getText()}\` of ${nodeText(c.expression, 30)}`);
     const a = expr(c.arguments[i], env, t);
     const r = bindParam(p.name, t, e2, "declared");
     e2 = r.env;
     lets += `let ${r.binder} := ${a.code}; `;
   });
-  const retT = fn.type ? typeOfNode(fn.type, env.m.prog.typeEnv, "Ret") : expected;
+  const retT = fn.type ? helperValueType(fn.type, env, "Ret", `the result of ${nodeText(c.expression, 30)}`) : expected;
   const body = ts.isBlock(fn.body) ? valueBlock(fn.body.statements, e2, retT, fn) : expr(fn.body, e2, retT);
   return { code: lets ? `(${lets}${body.code})` : body.code, type: body.type };
 }
@@ -2465,7 +2479,7 @@ function exprStatement(e: ts.Expression, env: Env, bc: BlockCtx, rest: (e: Env) 
       let lets = "";
       fn.parameters.forEach((p, i) => {
         if (!p.type) fail(p, "helper parameters need type annotations");
-        const t = typeOfNode(p.type, m.prog.typeEnv, "Arg");
+        const t = helperValueType(p.type, env, "Arg", `parameter \`${p.name.getText()}\` of ${callee.text}`);
         const a = expr(e.arguments[i], env, t);
         const r = bindParam(p.name, t, e2, "declared");
         e2 = r.env;
