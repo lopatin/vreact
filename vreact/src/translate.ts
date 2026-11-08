@@ -834,7 +834,7 @@ function eventField(pa: ts.PropertyAccessExpression, code: string, t: VType, env
 }
 
 /**
- * The event object is read while its handler runs: React reuses nothing in React 18, but it
+ * The event object is read while its handler runs: React 18 does not pool events, but it
  * sets `e.currentTarget` to null once the handler returns, and `e.target.value` /
  * `e.target.checked` read the live DOM element.  A function created inside the handler that
  * runs later — a functional update `setX(p => …)` (React calls it when it processes the
