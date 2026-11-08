@@ -46,6 +46,11 @@ then open the **app folder** as the editor's project: `proofs/*.lean` get live c
 `import VTS.<Module>.Defs` resolved against the last `vreact verify` (re-run it after changing
 the TypeScript). From a shell, `lake lean proofs/<Module>.lean` in the app folder checks one
 proof file the same way. The editor is a convenience: `vreact verify` stays the source of truth.
+Let `vreact verify` finish before opening a proof file: when `.vreact/` is newer than its build
+(after `vreact translate`, or a verify that was interrupted), the editor first builds the
+imported `VTS.<Module>.Defs` itself, proving that module's obligations, which can take minutes
+behind a bare progress bar. Do not run `vreact verify` while the editor is doing that (both build
+`.vreact/`). `lake build` in the app folder builds nothing (the app's package has no targets).
 vreact keeps its own `lakefile.toml` (first line `# vreact: Lean editor support`) and
 `lean-toolchain` up to date, and never writes either over a `lakefile.toml` without that line
 or a `lakefile.lean` (the user's own Lean project).
