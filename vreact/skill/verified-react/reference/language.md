@@ -146,7 +146,9 @@ export function f(x: int, xs: readonly int[]): int {
 
 Several `requires` form one precondition, in order: a later one may rely on an
 earlier one (`requires(xs.length > 0); requires(xs[0] >= 0)`); the same holds for
-a component's `requires` and `invariant`s. Inside contracts,
+a component's `requires` and `invariant`s. A reducer's `requires` may mention
+only the action (React may apply a queued action to any state): it becomes a
+`precondition` obligation at every `dispatch(…)`. Inside contracts,
 guards are in scope as JS evaluates them: the right side of `&&` / `||`, the
 branches of `?:`, the consequent of `implies(a, b)`, and quantifier bodies
 (`forall(0, xs.length, (i) => xs[i] >= 0)`, `xs.every((r) => r[0] > 0)`) may index

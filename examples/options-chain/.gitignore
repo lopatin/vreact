@@ -1,1 +1,3 @@
 .vreact/
+.lake/
+lake-manifest.json

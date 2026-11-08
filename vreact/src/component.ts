@@ -477,6 +477,28 @@ function mayReturn(s: ts.Node): boolean {
   return !!ts.forEachChild(s, (c) => (mayReturn(c) ? true : undefined));
 }
 
+/**
+ * A reducer's `requires` may constrain the action only. React keeps the dispatched action in the
+ * hook's queue and passes that same value to every reducer call (rebasing, StrictMode replays),
+ * so a fact about it, proved at the `dispatch(a)` site from the snapshot, holds at each of them.
+ * The state argument is whatever queued state React applies the action to, which the
+ * dispatching handler cannot see: facts about it belong in the component's invariant.
+ */
+function actionOnlyPre(r: FnInfo, env: Env) {
+  const checker = env.m.checker;
+  const stateSym = checker.getSymbolAtLocation(r.decl.parameters[0].name);
+  const visit = (n: ts.Node): void => {
+    const sym = ts.isShorthandPropertyAssignment(n) ? checker.getShorthandAssignmentValueSymbol(n) : ts.isIdentifier(n) ? checker.getSymbolAtLocation(n) : undefined;
+    if (sym && sym === stateSym) {
+      fail(n, `the reducer ${r.name}'s requires(…) may mention only the action, not the state ${r.params[0].name}: React may apply a queued action to any state, so it is checked at each dispatch from the action alone (put facts about the state in the component's invariant)`);
+    }
+    ts.forEachChild(n, visit);
+  };
+  for (const s of r.decl.body?.statements ?? []) {
+    if (ts.isExpressionStatement(s) && ts.isCallExpression(s.expression) && specFn(env, s.expression.expression) === "requires") visit(s.expression);
+  }
+}
+
 function stateVar(d: ts.VariableDeclaration, h: string, env: Env, m: ModCtx, pp: Prepass): StateVar {
   if (!ts.isArrayBindingPattern(d.name) || d.name.elements.length < 1) fail(d, `use const [value, setValue] = ${h}(…)`);
   const a = d.name.elements[0];
@@ -505,7 +527,7 @@ function stateVar(d: ts.VariableDeclaration, h: string, env: Env, m: ModCtx, pp:
   if (!g || g.k !== "fn") fail(rId, "reducer must be a verified top-level function");
   const r = g.info;
   if (r.params.length !== 2) fail(rId, "a reducer takes (state, action)");
-  if (r.hasPre) fail(rId, "reducers must be total (no requires): React may call them on any queued state");
+  if (r.hasPre) actionOnlyPre(r, env);
   const st = r.params[0].type;
   m.deps.add(r.qname);
   let initCode: string;
