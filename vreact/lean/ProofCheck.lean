@@ -32,11 +32,17 @@ file without imports, otherwise `import VReact`; scope commands `open`/`namespac
   and, in `attribute [-…]`, erased; `grind_pattern`;
 * `set_option` of `maxHeartbeats`, `maxRecDepth`, `synthInstance.maxHeartbeats`,
   `synthInstance.maxSize`, `autoImplicit`, `relaxedAutoImplicit`, `diagnostics`,
-  `diagnostics.threshold`, `linter.*`, `pp.*`, `trace.*` (as a command, `… in`, or inside
-  terms and tactics);
+  `diagnostics.threshold`, the registered `linter.*` and `pp.*` options with a Bool or Nat
+  value, and `trace.C` for a registered trace class `C` — not `trace.profiler` and its
+  options, which write files or start a web server and a browser (as a command, `… in`, or
+  inside terms and tactics);
 * inside terms and tactics anything except code execution and trusted evaluation:
-  `run_tac`, `by_elab`, `unsafe`, `include_str`, `native_decide`, `+native`, `bv_decide`,
-  `bv_check`, `idbg`, the library's test tactics, and the `Lean.ofReduceBool` family.
+  `run_tac`, `by_elab`, `unsafe`, `include_str`, `native_decide`, `+native`, a `decide
+  (config := …)` value (it can be `+native`), the `bv_decide` tactics (also of `grind =>` and
+  `sym =>`), `idbg`, the library's test tactics, and the `Lean.ofReduceBool` family;
+* string, character and name literals and names without line breaks or other control
+  characters (Lean prints them in its messages, where such a line could read like a message
+  about another file).
 
 Usage: the files arrive on stdin as a JSON array `[{"name": …, "text": …}]` (`name` is used in
 the messages); the result is a JSON array `[{"file", "line", "col", "msg"}]` on stdout (lines
@@ -47,12 +53,30 @@ open Lean Elab Command Parser
 
 namespace VReactProofCheck
 
-/-- Options a proof file may set: resource limits and output, nothing that changes what is
-checked or how. -/
-def optionAllowed (n : Name) : Bool :=
+/-- Options a proof file may set by their exact names: resource limits and diagnostics. -/
+def exactOptions : List Name :=
   [`maxHeartbeats, `maxRecDepth, `synthInstance.maxHeartbeats, `synthInstance.maxSize,
-   `autoImplicit, `relaxedAutoImplicit, `diagnostics, `diagnostics.threshold].contains n ||
-  [`linter, `pp, `trace].contains n.getRoot
+   `autoImplicit, `relaxedAutoImplicit, `diagnostics, `diagnostics.threshold]
+
+/-- The description `registerTraceClass` gives the option `trace.C` of a trace class `C`. -/
+def traceClassDescr : String := "enable/disable tracing for the given module and submodules"
+
+/-- Options a proof file may set: resource limits and output, nothing that changes what is
+checked or how, and nothing that does more than print messages. Besides `exactOptions`: the
+switch `trace.C` of a registered trace class `C` (not `trace.profiler` and its options: they
+write files — `trace.profiler.output` — or start a web server and a browser —
+`trace.profiler.serve`), and registered `pp.*` / `linter.*` options with a Bool or Nat value. -/
+def optionAllowed (n : Name) : IO Bool := do
+  if exactOptions.contains n then return true
+  let some d := (← getOptionDecls).find? n | return false
+  let boolOrNat := match d.defValue with | .ofBool _ | .ofNat _ => true | _ => false
+  match n.getRoot with
+  | `trace =>
+    -- (two trace switches Lean registers as options of their own)
+    return !(`trace.profiler).isPrefixOf n && d.defValue == .ofBool false &&
+      (d.descr == traceClassDescr || [`trace.Meta.synthInstance, `trace.Meta.isDefEq.printTransparency].contains n)
+  | `pp | `linter => return boolOrNat
+  | _ => return false
 
 private def attrName (s : String) : Name := Name.mkStr (Name.mkStr (Name.mkStr (Name.mkStr .anonymous "Lean") "Parser") "Attr") s
 
@@ -103,13 +127,14 @@ def excerpt (stx : Syntax) : CommandElabM String := do
 def whitelistHint : String :=
   "a proof file may contain only theorem/def/abbrev/example, open, namespace/section/end, variable, " ++
   "universe, include/omit, #check/#print, attribute [simp|vreact_simp|grind …], grind_pattern and " ++
-  "set_option of maxHeartbeats/maxRecDepth/synthInstance.*/linter.*/pp.*/trace.* " ++
+  "set_option of maxHeartbeats/maxRecDepth/synthInstance.*/linter.*/pp.*/trace.<trace class> " ++
   "(see reference/obligations.md, \"Lean lemmas\")"
 
 def optionMsg (n : Name) : String :=
   s!"`set_option {n}` is not allowed in a proof file: only resource limits and output options " ++
-  "(maxHeartbeats, maxRecDepth, synthInstance.maxHeartbeats/maxSize, autoImplicit, linter.*, pp.*, trace.*) " ++
-  "may be set; other options can change what Lean checks (e.g. debug.skipKernelTC skips the kernel)"
+  "(maxHeartbeats, maxRecDepth, synthInstance.maxHeartbeats/maxSize, autoImplicit, diagnostics, the linter.* and pp.* options, " ++
+  "and trace.C for a trace class C) may be set; other options can change what Lean checks (e.g. debug.skipKernelTC skips the kernel) " ++
+  "or do more than print messages (trace.profiler.output writes a file, trace.profiler.serve starts a web server and a browser)"
 
 /-- The message for a command (or declaration) kind that is not whitelisted. -/
 def commandMsg (k : Name) (text : String) : String :=
@@ -145,9 +170,10 @@ def bannedKind? (k : Name) : Option String :=
   else if k == ``Lean.Parser.Term.elabToSyntax then some "this term is internal to Lean's elaborator"
   else if k == `Lean.includeStr then some "`include_str` reads files"
   else if k == ``Lean.Parser.Term.idbg then some "`idbg` runs code"
-  else if k == ``Lean.Parser.Tactic.nativeDecide then some "`native_decide` trusts compiled code instead of the kernel (axiom Lean.ofReduceBool)"
-  else if k == ``Lean.Parser.Tactic.bvDecide || k == ``Lean.Parser.Tactic.bvCheck || k == ``Lean.Parser.Tactic.bvTrace then
-    some "`bv_decide` trusts compiled code instead of the kernel (axiom Lean.ofReduceBool)"
+  else if k == ``Lean.Parser.Tactic.nativeDecide then some "`native_decide` trusts compiled code instead of the kernel (it adds an axiom `…._native.…`)"
+  else if (match k with | .str _ last => ["bvDecide", "bvCheck", "bvTrace", "bvDecidePush", "nativeDecide"].contains last | _ => false) then
+    -- (also the `grind => …` / `sym =>` forms, `Lean.Parser.Tactic.Grind.bvDecide`, …)
+    some "the bv_decide tactics run an external SAT solver and trust compiled code instead of the kernel (an axiom `…._native.…`)"
   else if (s.splitOn "vreact_test").length > 1 || (s.splitOn "Vreact_test").length > 1 || (s.splitOn "Server.Test").length > 1 then
     some "the library's test tactics are not for proofs"
   else none
@@ -155,7 +181,7 @@ def bannedKind? (k : Name) : Option String :=
 def bannedAtom? (a : String) : Option String :=
   if a == "unsafe" then some "`unsafe` code is not checked by the kernel"
   else if a == "partial" then some "`partial` definitions are not allowed (state the function with structural or well-founded recursion)"
-  else if a == "native_decide" then some "`native_decide` trusts compiled code instead of the kernel (axiom Lean.ofReduceBool)"
+  else if a == "native_decide" then some "`native_decide` trusts compiled code instead of the kernel (it adds an axiom `…._native.…`)"
   else if a == "run_tac" || a == "by_elab" then some s!"`{a}` runs arbitrary code"
   else if a == "deriving" || a == "instance" then some "an instance can change the meaning of the generated code (which `==`, `DecidableEq` or string conversion it uses)"
   else none
@@ -177,7 +203,28 @@ partial def atomsOf (stx : Syntax) : Array String :=
 /-- Check a `set_option` node (command, term or tactic): its option name is child 1. -/
 def checkSetOption (stx : Syntax) : M Unit := do
   let n := stx[1].getId
-  unless optionAllowed n do report stx (optionMsg n)
+  unless ← optionAllowed n do report stx (optionMsg n)
+
+/-- Characters that may not occur in a literal or a name of a proof file: line breaks (and the
+other control characters). Lake prints Lean's messages as text, one message starting a line
+`info: <file>:<line>:<col>: …`; a message with a line break in it (`#print "…"`, the `fail`,
+`trace` and `dbg_trace` tactics, a name `«…»` in an error) could print a line that reads like a
+message of another file — e.g. `vreact:ok` at an obligation of a generated file. -/
+def badChar (c : Char) : Bool :=
+  (c.toNat < 0x20 && c != '\t') || c.toNat == 0x7f || c.toNat == 0x85 || c.toNat == 0x2028 || c.toNat == 0x2029
+
+def lineBreakMsg (what : String) : String :=
+  s!"{what} with a line break (or another control character) is not allowed in a proof file: Lean prints it in its " ++
+  "messages, where it could start a line that reads like a message about another file (e.g. a generated one); write it on one line"
+
+/-- `decide (config := c)`: the configuration value may switch on native evaluation
+(`DecideConfig.native`: `⟨false, true, true, false⟩` is `+native`). -/
+partial def configValueItem? (stx : Syntax) : Option Syntax :=
+  match stx with
+  | .node _ k args =>
+    if k == ``Lean.Parser.Tactic.valConfigItem && (args.findSome? fun a => if a.isIdent then some a.getId else none) == some `config then some stx
+    else args.findSome? configValueItem?
+  | _ => none
 
 /-- Every node of `stx`: banned kinds/atoms, attributes, options. -/
 partial def walk (stx : Syntax) : M Unit := do
@@ -199,16 +246,32 @@ partial def walk (stx : Syntax) : M Unit := do
     if k == ``Lean.Parser.Command.eraseAttr then
       unless erasableAttrs.contains stx[1].getId do
         report stx s!"`{← excerpt stx}` is not allowed in a proof file: only simp, vreact_simp and grind attributes may be erased"
+    if k == ``Lean.Parser.Tactic.decide then
+      if let some item := configValueItem? stx then
+        report item s!"`{← excerpt item}` is not allowed in a proof file: a configuration value can switch on native evaluation (`⟨false, true, true, false⟩` is `+native`), which trusts compiled code instead of the kernel; write the options as `+kernel`, `+revert`, `-zetaReduce`"
+    -- literals: no line breaks (see `badChar`)
+    if k == strLitKind || k == charLitKind || k == nameLitKind || k == interpolatedStrLitKind then
+      let raw := (atomsOf stx).foldl (· ++ ·) ""
+      let decoded : Option String :=
+        if k == strLitKind then stx.isStrLit?
+        else if k == charLitKind then stx.isCharLit?.map toString
+        else if k == nameLitKind then stx.isNameLit?.map fun n => ".".intercalate (n.components.map (·.toString (escape := false)))
+        else stx.isInterpolatedStrLit?
+      if raw.any badChar || (decoded.map (·.any badChar)).getD true then
+        report stx (lineBreakMsg "a string, character or name literal")
+      return
     for a in args do walk a
   | .atom _ v =>
     if let some why := bannedAtom? v then
       report stx s!"`{v}` is not allowed in a proof file: {why}"
-  | .ident _ _ n _ =>
+  | .ident _ raw n _ =>
+    if raw.toString.any badChar || n.components.any (fun c => (c.toString (escape := false)).any badChar) then
+      report stx (lineBreakMsg "a name")
     if let .str _ last := n then
       if trustedEval.contains last then
         report stx s!"`{n}` is not allowed in a proof file: it trusts compiled code instead of the kernel"
       if n == `native then
-        report stx "`native` (e.g. `decide +native`) is not allowed in a proof file: it trusts compiled code instead of the kernel (axiom Lean.ofReduceBool)"
+        report stx "`native` (e.g. `decide +native`) is not allowed in a proof file: it trusts compiled code instead of the kernel (it adds an axiom `…._native.…`)"
     -- (`where`/`let rec` names with `_root_` declare at the root: `_root_.VTS.m.f` would be
     -- a generated name; references never need `_root_` for these namespaces)
     if n.getRoot == `_root_ && reservedRoots.contains (n.replacePrefix `_root_ .anonymous).getRoot then

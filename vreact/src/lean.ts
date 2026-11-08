@@ -111,16 +111,56 @@ const HEAD_NOPOS = /^error: (?:(.+?\.lean): )?(.*)$/;
 /** Crashes of the Lean process itself. */
 const PANIC = /^(PANIC|INTERNAL PANIC|uncaught exception|libc\+\+abi|Stack overflow|Segmentation fault)\b/;
 const STOP = /^(error|warning|info|trace|✖|⚠|✔|ℹ|Some required targets|Build completed|- )/;
+/** The line with which lake starts the log of a job: `✔ [4/9] Built VTS.m.Defs (1.2s)`, `ℹ [5/9] Replayed …`, `✖ [6/9] Building Proofs.m`. */
+const JOB = /^[✔✖⚠ℹ] \[\d+\/\d+\] \S+ (\S+)/;
+/** Lake's closing summary (after the last job's log). */
+const SUMMARY = /^(Some required targets logged failures:|Build completed|error: build failed)/;
 
+/** Whether `file` (as Lean names it: relative to the project, or absolute) is module `mod`'s source, `VTS/m/Defs.lean` for `VTS.m.Defs`. */
+const isFileOf = (file: string, mod: string) => {
+  const f = file.split("\\").join("/");
+  const own = mod.split(".").join("/") + ".lean";
+  return f === own || f === "./" + own || (f.startsWith("/") && f.endsWith("/" + own));
+};
+/** A module name as lake prints it, without Lean's `«…»` escapes. */
+const plainModule = (name: string) => name.replace(/[«»]/g, "");
+
+/**
+ * Lean's messages in lake's output. Lake prints the log of each job (a module's elaboration)
+ * after a line `✔ [i/n] Built M` (`Replayed`, `✖ … Building`, …), a message per line `info:
+ * <file>:<line>:<col>: <text>` with any further lines of its text as they are. So a message's
+ * text could contain a line that reads like a message of another file (a user proof printing
+ * "…\ninfo: VTS/m/Posts.lean:14:16: vreact:ok"). The positive evidence the report counts — infos
+ * (`vreact:ok`, the sentinel, axiom reports) — is therefore taken only from the log of the job of
+ * the module whose file it names: an info line naming another file belongs to the text of the
+ * message before it. (Errors and warnings are taken wherever they appear: they can only take
+ * away from the verdict. User proofs may not contain line breaks in literals or names at all,
+ * `ProofCheck.lean`.)
+ */
 export function parseMessages(raw: string): LeanMessage[] {
   const out: LeanMessage[] = [];
   let cur: LeanMessage | null = null;
   let generic: LeanMessage | null = null;
+  /** the module whose job log the current line is in (null: outside any job's log) */
+  let job: string | null = null;
   for (const line of raw.split("\n")) {
+    const j = JOB.exec(line);
+    if (j) {
+      if (cur) out.push(cur);
+      cur = null;
+      job = plainModule(j[1]);
+      continue;
+    }
+    if (SUMMARY.test(line)) job = null;
     const m = HEAD.exec(line);
-    if (m) {
+    if (m && (m[1] !== "info" || (job !== null && isFileOf(m[2], job)))) {
       if (cur) out.push(cur);
       cur = { severity: m[1] as LeanMessage["severity"], file: m[2], line: +m[3], col: +m[4], text: m[5] };
+      continue;
+    }
+    if (m) {
+      // an info line in another module's log (or outside any): text of the message before it
+      if (cur) cur.text += "\n" + line;
       continue;
     }
     const n = HEAD_NOPOS.exec(line) ?? (PANIC.test(line) ? [line, undefined, line] : null);
@@ -327,8 +367,11 @@ export function builtModules(raw: string): Set<string> {
  * `sorryAx` in them is explained by a reported failure or sorry; see `reportFrom`.)
  * Lake errors without a position are kept as `build` errors. Evidence, axiom reports and the
  * sentinel count only when Lean printed them at the generator's marker / `#print axioms X` /
- * sentinel position in a generated file (a user proof cannot fake them by printing the same
- * text); a result at the marker of no known obligation is not an obligation's.
+ * sentinel position in a generated file, as infos `parseMessages` took from the job log of that
+ * generated module: a user proof printing the same text prints it at its own position, and a
+ * line of its message that reads like a generated file's message is text of that message
+ * (proof files may not contain line breaks in literals and names either: `ProofCheck.lean`); a
+ * result at the marker of no known obligation is not an obligation's.
  */
 export function judge(obligations: Obligation[], messages: LeanMessage[], markers: Marker[], outDir: string, _built?: Set<string>): Verdict {
   const decls = findDecls(outDir);

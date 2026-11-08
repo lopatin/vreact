@@ -21,7 +21,7 @@ first one that fails.
 | `callback` | the function you pass as a child's callback keeps **your** invariant, assuming the child's `callbackRequires` | strengthen the child's contract, or guard in your handler |
 | `callback-contract` | this call of a callback prop satisfies its `callbackRequires` | the arguments you pass (e.g. trim/validate first) |
 | `index` | `xs[i]` / `xs.with(i, …)` is in bounds | guard `i < xs.length` (in contracts too: `i < xs.length && xs[i] > 0`, `forall(0, xs.length, (i) => …)`), or carry bounds in an invariant |
-| `nonzero-divisor` | `%`, `idiv`, `Math.floor(a/b)` divisor ≠ 0 | guard (`total === 0 ? 0 : …`) |
+| `nonzero-divisor` | `%`, `idiv`, `Math.floor(a/b)` divisor ≠ 0; a number division `a / b` (unless `b` is a nonzero literal): `b` not 0 (VTS values do not keep the sign of zero, which `1 / -0` would show) | guard (`total === 0 ? 0 : …`), `requires(b !== 0)` |
 | `non-null` | `x!` is not null | narrow with `!== null` instead |
 | `precondition` | a called function's `requires` holds | establish it, or make the callee total |
 | `postcondition` | a function's `ensures` holds | the body; or the ensures is false (too strong) |
@@ -121,9 +121,16 @@ first one that fails.
      the automation is extended (there is no `macro_rules` for `vreact_auto`);
    * `set_option` of `maxHeartbeats`, `maxRecDepth`, `synthInstance.maxHeartbeats`,
      `synthInstance.maxSize`, `autoImplicit`, `relaxedAutoImplicit`,
-     `diagnostics`, `linter.*`, `pp.*`, `trace.*` (also `… in` and in tactics);
+     `diagnostics`, the `linter.*` and `pp.*` options, and `trace.C` for a trace
+     class `C` (`trace.Meta.Tactic.simp`, `trace.grind.ematch`, …; not
+     `trace.profiler…`, which writes files or starts a web server) — also `… in` and
+     in tactics;
    * any term or tactic except `run_tac`, `by_elab`, `unsafe`, `include_str`,
-     `native_decide`/`+native`, `bv_decide` and `Lean.ofReduceBool`.
+     `native_decide`/`+native`, `decide (config := …)` (write `decide +kernel` etc.),
+     the `bv_decide` tactics and `Lean.ofReduceBool`;
+   * strings, characters and names on one line: no line breaks (or other control
+     characters, also as escapes `\n`) in literals and `«…»` names — Lean prints them
+     in messages, where a line could read like a message about a generated file.
 
    Rejected, with the reason: `axiom` (an unproved assumption: use `assume(…)` or
    `@trusted` in the source, which the report shows), `instance` and `deriving`
@@ -134,7 +141,8 @@ first one that fails.
    `export`, other attributes (`implemented_by`, `extern`, `reducible`, `instance`,
    …) and options (`debug.skipKernelTC`, …). A lemma admitted with `sorry` is
    accepted but shows as `sorryAx` in the axioms of everything that uses it
-   (`INCOMPLETE`).
+   (`INCOMPLETE`); an axiom of native evaluation (`…._native.…`,
+   `Lean.ofReduceBool`) wherever it shows makes the result NOT VERIFIED.
 5. **Large constants.** Transparent constants (`@[vreact_simp, reducible]` in
    the generated Lean) are unfolded into every goal that mentions them; a list
    literal of dozens of records turns into long disjunctions. Mark such constants

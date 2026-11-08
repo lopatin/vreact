@@ -162,14 +162,19 @@ console.log("message attribution (judge)");
     `info: ${at(2)}: vreact:ok`,
     "error: VTS/m/View.lean:10:23: Unknown identifier `render`",
     `info: ${at(5)}: vreact:ok`,
-    // ob6: a forged `vreact:ok` next to a failure; ob7: no result of its own, only a forged
-    // `vreact:ok` from a user proof at its position; ob8: proved
+    // ob6: a forged `vreact:ok` next to a failure; ob7: no result of its own, only forged
+    // `vreact:ok`s from a user proof (at its position in the proof file, and as a line of a
+    // message the proof printed: `#print "x\ninfo: <ob7's position>: vreact:ok"`, which lake
+    // prints in the proof's job log); ob8: proved
     `info: ${at(6)}: vreact:ok`,
     `warning: ${at(6)}: vreact: \`grind\` failed`,
     "⊢ False",
     `info: ${at(8)}: vreact:ok`,
-    `info: Proofs/m.lean:${at(7).split(":").slice(1).join(":")}: vreact:ok`,
     "info: VTS/m/View.lean:16:0: \"vreact:checked\"",
+    "✔ [4/9] Built Proofs.m",
+    `info: Proofs/m.lean:${at(7).split(":").slice(1).join(":")}: vreact:ok`,
+    "info: Proofs/m.lean:3:0: x",
+    `info: ${at(7)}: vreact:ok`,
     "error: Proofs/m.lean: bad import 'VTS.mm.Defs'",
     "error: build cycle detected:",
     "  vts/+VTS.m.View:leanArts",
@@ -190,6 +195,13 @@ console.log("message attribution (judge)");
   else bad("judge failure text", JSON.stringify(f6));
   if (causes === "timeout,internal,follow-on,build,build") ok("judge: error causes", causes);
   else bad("judge causes", `expected timeout,internal,follow-on,build,build, got ${causes}`);
+  // (round-1 finding r4-lean-forge-print) an info naming a generated file counts only in the
+  // job log of that file's module: in the proof's log it is a line of the proof's message
+  const [f7, l7, c7] = at(7).split(":");
+  const forged = msgs.filter((x) => x.file === f7 && x.line === +l7 && x.col === +c7);
+  const host = msgs.find((x) => x.file === "Proofs/m.lean" && x.line === 3);
+  if (!forged.length && host?.text === `x\ninfo: ${at(7)}: vreact:ok`) ok("parseMessages: a user proof's message line that reads like a generated file's message stays in the proof's message (RlForgedPrint)");
+  else bad("parseMessages job logs", `forged: ${JSON.stringify(forged)}, proof message: ${JSON.stringify(host?.text)}`);
   if (v.declErrors.has("VTS.m.f.post") && v.declErrors.has("VTS.m.render") && !v.declErrors.has("VTS.m.g.post") && !v.declErrors.has("VTS.m.k.post")) ok("judge: declarations with errors (a `vreact_ob` failure is not one)");
   else bad("judge declErrors", [...v.declErrors.keys()].join(","));
 }

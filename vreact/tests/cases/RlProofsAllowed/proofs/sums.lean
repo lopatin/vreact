@@ -19,6 +19,11 @@ end Sums
 private def double (x : Int) : Int := x + x
 abbrev twiceOf := double
 example : twiceOf 2 = 4 := by decide
+example : twiceOf 3 = 6 := by decide +kernel
+set_option trace.Meta.Tactic.simp false in
+example : twiceOf 1 = 2 := by simp [twiceOf, double]
+set_option pp.proofs true
+#print "a message on one line"
 
 /-- A rewrite rule about `total`: used by the obligations of module sums' components and by the
 function contracts of the modules importing sums. -/

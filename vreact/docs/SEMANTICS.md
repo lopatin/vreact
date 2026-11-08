@@ -121,7 +121,27 @@ Every expression maps to a Lean term whose value is the JavaScript value.
   is `a / b < 0.5`). In particular `===` on `number` is the uninterpreted IEEE test
   `JS.Num.eq` (not reflexive: `NaN !== NaN`), in code and in contracts alike, and
   nothing relates `JS.Num.lt`, `JS.Num.le` and `JS.Num.eq`. Unary `+` is only
-  accepted on numbers (the identity).
+  accepted on numbers (the identity). An integer literal used as a number is
+  `JS.Num.ofInt n`, as an int used as a number is.
+* **The sign of zero.** VTS values are JS values *up to the sign of zero*: an
+  `int` that is 0 may be `-0` in JS (`-x`, `a * b`, `a % b`, `Math.trunc(a / b)`,
+  `Math.floor(0 / -5)`, `idiv`, `Math.min(0, -0)`, the literal `-0`), Lean's `Int`
+  has one zero, and `JS.Num.ofInt` maps it to one number (`JS.Num` stands for the
+  doubles with `0` and `-0` identified). Every accepted operation gives equal
+  results, up to the sign of zero, for `0` and `-0` — `===` and the comparisons
+  (`-0 === 0`), `+ - *`, unary `-`, `%`, `Math.*`, `String(x)` and template literals
+  (`"0"`), indexing and `slice`/`at`/`with` (ToIntegerOrInfinity), `includes`,
+  `distinct` (SameValueZero), keys — except a division *by* a zero: `1 / 0` is
+  `Infinity`, `1 / -0` is `-Infinity`. So `a / b` carries the obligation that the
+  divisor is not zero (`JS.Num.divInt a b (h : b ≠ 0)` for an int divisor,
+  `JS.Num.divNum a b (h : JS.Num.eq b 0 = false)`, i.e. `b !== 0`, for a number),
+  unless the divisor is a nonzero numeric literal (possibly negated, or a `const`
+  initialised with one), in code and contracts alike. (Before, `1 / -x > 0` and
+  `1 / x > 0` were one Lean term for `x = 0`, and an ensures comparing them was
+  VERIFIED although false in JS: `RlNegZero.ts`.) React compares state and effect
+  dependencies with `Object.is`, which tells `-0` from `0`; that decides only
+  whether a component re-renders (with equal output) and whether an effect runs
+  again, and effects are robust (§2.6), so it does not change what is verified.
 * `a + b` with a string operand (by its TypeScript type) is concatenation; an
   `int`, `boolean` or enum operand is converted exactly as in a template literal
   (`-5 + "a"` is `"-5a"`); a `number` or possibly-null operand is rejected.
@@ -529,16 +549,23 @@ hook rules hold (static checks). For every function: its body is safe and its
   a file. Lake errors without a position (imports, build cycles) are shown and
   make the result not verified. An axiom report, the sentinel or `vreact:ok`
   counts only when Lean printed it at the
-  generator's own `#print axioms X` / sentinel line / `vreact_ob` token (a user
-  proof printing the same text is ignored, and `vreact_ob` drops `vreact:`
-  messages that code running inside the obligation logs; several reports for
-  one name are joined). A generated declaration
+  generator's own `#print axioms X` / sentinel line / `vreact_ob` token, in the
+  log lake prints for that generated module's job: lake prints each message as
+  text, so a line of another message (a user proof's `#print "…\ninfo: VTS/…"`)
+  stays text of that message (and `vreact_ob` drops `vreact:` messages that code
+  running inside the obligation logs; several reports for one name are joined).
+  A generated declaration
   with an error makes every obligation of its item unproved; when Lean still
   reports clean axioms for its name, something else (e.g. a declaration of a
   user proof) stands in for it, so every item that uses it, directly or not, is
   `INCOMPLETE` as well. An axiom that is neither Lean's standard ones, nor
   `VReact.assumed`, nor emitted for a `@trusted` declaration (e.g. one declared
-  in a user proof) makes the items that depend on it `TRUSTED`.
+  in a user proof) makes the items that depend on it `TRUSTED` (the verdict
+  says "modulo axioms from outside the translation"), except an axiom of native
+  evaluation — `<decl>._native.<tactic>.ax_…` (`native_decide`, `decide +native`,
+  `bv_decide`), `Lean.ofReduceBool`, `Lean.ofReduceNat`, `Lean.trustCompiler` —
+  which trusts Lean's compiler instead of its kernel: the items that depend on it
+  are `INCOMPLETE` and the result is NOT VERIFIED (`RlNativeAxiom`).
 * **User proofs** (`proofs/**/*.lean`, `proofs/Base.lean`) are imported into
   generated files, so whatever they declare takes effect while the translation is
   checked. Before Lean runs, `vreact` checks every proof file against a whitelist
@@ -556,11 +583,19 @@ hook rules hold (static checks). For every function: its body is safe and its
   `#print`; the attributes `simp`, `vreact_simp`, `grind …` (also `local`, and
   erased with `attribute [-…]`) and `grind_pattern`; `set_option` of
   `maxHeartbeats`, `maxRecDepth`, `synthInstance.maxHeartbeats`/`maxSize`,
-  `autoImplicit`, `relaxedAutoImplicit`, `diagnostics`, `linter.*`, `pp.*`,
-  `trace.*` (as a command, with `in`, and inside terms and tactics); and in terms
-  and tactics anything but `run_tac`, `by_elab`, `unsafe`, `include_str`,
-  `native_decide`, `+native`, `bv_decide`, `idbg`, the library's test tactics and
-  the `Lean.ofReduceBool` family. Everything else — `axiom`, `instance`
+  `autoImplicit`, `relaxedAutoImplicit`, `diagnostics`, the registered `linter.*`
+  and `pp.*` options with a Bool or Nat value, and `trace.C` for a registered
+  trace class `C` (not `trace.profiler` and its options: `trace.profiler.output`
+  writes a file, `trace.profiler.serve` starts a web server and the browser and
+  blocks the build) — as a command, with `in`, and inside terms and tactics; and
+  in terms and tactics anything but `run_tac`, `by_elab`, `unsafe`, `include_str`,
+  `native_decide`, `+native`, a `decide (config := …)` value (`⟨false, true, true,
+  false⟩` is `+native`; write `+kernel`, `+revert`, …), the `bv_decide` tactics
+  (also in `grind =>`/`sym =>`; they run an external SAT solver), `idbg`, the
+  library's test tactics and the `Lean.ofReduceBool` family. String, character
+  and name literals and names may not contain line breaks or other control
+  characters (also as escapes): Lean prints them in its messages, where such a
+  line could read like a message about a generated file. Everything else — `axiom`, `instance`
   (also `deriving`, `@[instance]`), `opaque`, `structure`/`inductive`, `macro`,
   `macro_rules`, `syntax`, `notation`, `elab`, simprocs, `#eval`, `run_cmd`,
   `initialize`, `export`, `mutual`, `partial`, any other attribute
@@ -583,9 +618,9 @@ hook rules hold (static checks). For every function: its body is safe and its
   and `getEventPriority`. Rebasing is covered by the argument of §2.2 (with
   `Runtime.rebase_safe`), not by `dispatch`.
 * **Abstractions:** integers are unbounded, and an `int` is a mathematical
-  integer: JavaScript's `-0` is `0` (the sign of a zero int is observable only
-  through a number division by it: `1 / -0` is `-Infinity`); numbers are opaque
-  to proofs (above); Unicode
+  integer; values are JS values up to the sign of zero, which no accepted
+  operation observes (a division needs a divisor that is not zero, §1.2);
+  numbers are opaque to proofs (above); Unicode
   case mapping is opaque; `localStorage`, `console`, `document.title` writes are
   external effects with no state change; reading external data is not modelled.
 * **Outside the subset:** the entry point (`main.tsx`), React itself, the DOM,

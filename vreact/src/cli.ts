@@ -88,13 +88,26 @@ export type Status = "verified" | "relative" | "trusted" | "assumes" | "incomple
 const ASSUMED = new Set(["VReact.assumed", "assumed"]);
 
 /**
+ * An axiom of native evaluation: Lean admits the result of compiled code as an axiom
+ * `<decl>._native.<tactic>.ax_…` (`native_decide`, `decide +native`, `bv_decide`), or through
+ * `Lean.ofReduceBool` / `Lean.ofReduceNat` / `Lean.trustCompiler`. Such a proof trusts Lean's
+ * compiler (and every `@[implemented_by]`/`@[extern]`) instead of the kernel; user proofs may
+ * not use it (`ProofCheck.lean`), and wherever it shows the item is not verified.
+ */
+export function isNativeAxiom(a: string): boolean {
+  const parts = a.split(".");
+  return parts.includes("_native") || (["ofReduceBool", "ofReduceNat", "trustCompiler"].includes(parts[parts.length - 1]) && (parts.length === 1 || (parts.length === 2 && parts[0] === "Lean")));
+}
+
+/**
  * `trustedAxioms`: the axioms the translator emits for @trusted declarations; any other
  * axiom (outside Lean's standard ones and `VReact.assumed`, e.g. one declared in a user
- * proof, also in a `VTS.` namespace) makes the item TRUSTED, never VERIFIED*.
+ * proof, also in a `VTS.` namespace) makes the item TRUSTED, never VERIFIED* — except one of
+ * native evaluation, which makes it INCOMPLETE (and the verdict NOT VERIFIED, see `reportFrom`).
  */
 function classify(axioms: string[] | undefined, own: string, trustedAxioms: Set<string>): Status {
   if (!axioms) return "unchecked";
-  if (axioms.includes("sorryAx")) return "incomplete";
+  if (axioms.includes("sorryAx") || axioms.some(isNativeAxiom)) return "incomplete";
   const vts = axioms.filter((a) => trustedAxioms.has(a));
   if (vts.some((a) => a === own || a.startsWith(own + "."))) return "trusted";
   if (axioms.some((a) => !STD_AXIOMS.has(a) && !ASSUMED.has(a) && !trustedAxioms.has(a))) return "trusted";
@@ -272,7 +285,7 @@ export const CAUSE_LABEL: Record<ErrorCause, string> = {
 
 function errorWhere(i: LeanMessage): string {
   const pos = i.line ? `:${i.line}:${i.col}` : "";
-  if (i.cause === "proof") return `user proof proofs/${i.file.replace(/^Proofs[\\/]/, "")}${pos}`;
+  if (i.cause === "proof") return i.file ? `user proof proofs/${i.file.replace(/^Proofs[\\/]/, "")}${pos}` : "user proofs";
   return `${CAUSE_LABEL[i.cause ?? "internal"]}${i.file ? " " + i.file + pos : ""}${i.decl ? ` (in ${i.decl})` : ""}`;
 }
 
@@ -327,6 +340,11 @@ export function reportFrom(cfg: Config, tr: TranslateResult, messages: LeanMessa
   };
   const markers = findMarkers(cfg.outDir);
   const v: Verdict = judge(tr.obligations, messages, markers, cfg.outDir);
+  // proofs by native evaluation: not a trusted assumption the report could name, an error
+  const native = [...new Set([...v.axioms.values()].flat())].filter(isNativeAxiom);
+  if (native.length) {
+    v.internal.push({ severity: "error", file: "", line: 0, col: 0, cause: "proof", text: `a proof uses native evaluation (axiom${native.length > 1 ? "s" : ""} ${native.join(", ")}: native_decide, decide +native, bv_decide or Lean.ofReduceBool), which trusts Lean's compiler instead of its kernel; vreact does not accept such proofs` });
+  }
   const its = items(tr, cfg.root);
   const all = [...its.comps, ...its.certs, ...its.fns, ...its.consts];
   const broken = brokenCones(tr, v, all);
@@ -405,6 +423,8 @@ export function reportFrom(cfg: Config, tr: TranslateResult, messages: LeanMessa
     if (own !== undefined) return own;
     const missing = it.axiomNames.find((q) => !v.axioms.has(q));
     if (missing !== undefined) return `Lean reported no axioms for ${missing} (its module was not checked to the end)`;
+    const nat = it.axiomNames.flatMap((q) => v.axioms.get(q) ?? []).find(isNativeAxiom);
+    if (nat !== undefined) return `its proof uses ${nat}, an axiom of native evaluation (native_decide, decide +native, bv_decide): it trusts Lean's compiler instead of its kernel`;
     if (it.axiomNames.some((q) => v.axioms.get(q)?.includes("sorryAx"))) return proofTrouble ? "its proof depends on sorry (sorryAx), e.g. from a user proof that failed or uses sorry" : "its proof depends on sorry (sorryAx)";
     return undefined;
   };
@@ -522,7 +542,7 @@ function printReport(r: Report, tr: TranslateResult, v: Verdict, cfg: Config, ms
       if (!msgs.length) continue;
       console.log(C.r(`\n${title}`));
       for (const i of msgs.slice(0, 8)) {
-        const loc = cause === "proof" ? `proofs/${i.file.replace(/^Proofs[\\/]/, "")}:${i.line}:${i.col}` : i.file ? `${i.file}${i.line ? `:${i.line}:${i.col}` : ""}` : "lake";
+        const loc = cause === "proof" ? (i.file ? `proofs/${i.file.replace(/^Proofs[\\/]/, "")}:${i.line}:${i.col}` : "proofs") : i.file ? `${i.file}${i.line ? `:${i.line}:${i.col}` : ""}` : "lake";
         console.log(`  ${loc}${i.decl ? ` (in ${i.decl})` : ""}: ${i.text.split("\n").slice(0, 10).join("\n    ")}`);
       }
       if (msgs.length > 8) console.log(`  … ${msgs.length - 8} more (--json lists all)`);
@@ -530,9 +550,23 @@ function printReport(r: Report, tr: TranslateResult, v: Verdict, cfg: Config, ms
   }
   const o = r.obligations;
   const items = [...r.components, ...r.functions, ...r.constants];
-  const trusted = items.filter((x) => x.status === "trusted").map((x) => x.name);
+  // TRUSTED items: @trusted ones (contracts assumed), and items whose proofs use an axiom from
+  // outside the translation (e.g. declared in a user proof)
+  const declaredTrusted = new Set(tr.modules.flatMap((mr) => [
+    ...mr.functions.filter((f) => f.trusted).map((f) => `${relp(cfg.root, mr.tsFile)}#${f.name}`),
+    ...mr.components.filter((c) => c.trusted).map((c) => `${relp(cfg.root, mr.tsFile)}:${c.line}#${c.name}`),
+  ]));
+  const trustedItems = items.filter((x) => x.status === "trusted");
+  const trusted = trustedItems.filter((x) => declaredTrusted.has(`${x.file}#${x.name}`)).map((x) => x.name);
+  const trustedByAxiom = trustedItems.filter((x) => !declaredTrusted.has(`${x.file}#${x.name}`)).map((x) => x.name);
   const assumes = items.filter((x) => x.status === "assumes").map((x) => x.name);
-  const modulo = [trusted.length ? "@trusted declarations" : "", assumes.length ? "assume(…) facts" : ""].filter(Boolean).join(" and ") || "@trusted declarations";
+  const trustedAx = trustedAxiomsOf(tr);
+  const foreign = [...new Set([...v.axioms.values()].flat())].filter((a) => !STD_AXIOMS.has(a) && !ASSUMED.has(a) && a !== "sorryAx" && !trustedAx.has(a) && !isNativeAxiom(a));
+  const modulo = [
+    trusted.length || items.some((x) => x.status === "relative") ? "@trusted declarations" : "",
+    trustedByAxiom.length ? "axioms from outside the translation" : "",
+    assumes.length ? "assume(…) facts" : "",
+  ].filter(Boolean).join(" and ") || "@trusted declarations";
   const head =
     r.verdict === "verified" ? C.g("✔ VERIFIED")
     : r.verdict === "verified-modulo-trusted" ? C.y(`✔ VERIFIED modulo ${modulo}`)
@@ -542,10 +576,9 @@ function printReport(r: Report, tr: TranslateResult, v: Verdict, cfg: Config, ms
   // reason shows that reason above)
   const holes = [...r.components, ...r.functions, ...r.constants].filter((x) => x.reason === HOLE).map((x) => x.name);
   if (trusted.length) console.log(C.y(`\ntrusted (not verified, contracts assumed): ${trusted.join(", ")}`));
-  if (assumes.length) console.log(C.y(`${trusted.length ? "" : "\n"}assumes (checked, but relies on unproved assume(…) facts): ${assumes.join(", ")}`));
+  if (trustedByAxiom.length) console.log(C.y(`${trusted.length ? "" : "\n"}trusted (their proofs use axioms from outside the translation, below): ${trustedByAxiom.join(", ")}`));
+  if (assumes.length) console.log(C.y(`${trusted.length || trustedByAxiom.length ? "" : "\n"}assumes (checked, but relies on unproved assume(…) facts): ${assumes.join(", ")}`));
   if (items.some((x) => x.status === "relative")) console.log(C.y(`VERIFIED* = all own obligations proved; relies on the contracts of the trusted declarations above`));
-  const trustedAx = trustedAxiomsOf(tr);
-  const foreign = [...new Set([...v.axioms.values()].flat())].filter((a) => !STD_AXIOMS.has(a) && !ASSUMED.has(a) && a !== "sorryAx" && !trustedAx.has(a));
   if (foreign.length) console.log(C.y(`axioms from outside the translation (TRUSTED wherever used; declared in user proofs?): ${foreign.join(", ")}`));
   if (holes.length && !r.failures.length) console.log(C.y(`pending (hole() / sorry): ${holes.join(", ")}`));
   else if (r.sorries.length && !r.failures.length) console.log(C.y(`pending (sorry in the generated Lean or proofs): ${r.sorries.join(", ")}`));
