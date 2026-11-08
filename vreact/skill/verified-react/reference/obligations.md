@@ -178,7 +178,9 @@ first one that fails.
 
 * Do not add `assume(…)` or `@trusted` to silence a failure; they are reported
   (`ASSUMES` / `TRUSTED`, verdict "VERIFIED modulo assume(…) facts / @trusted
-  declarations") and the app is then not verified.
+  declarations") and the app is then not verified. The same holds for a lemma in
+  `proofs/` proved with `VReact.assumed` (the axiom behind `assume(…)`) or an
+  `axiom`: the items using it are `TRUSTED` and the report names the declaration.
 * Do not weaken an `invariant` until it says nothing; check with `vreact synth`
   or by asking "what would a buggy implementation be allowed to do?".
 * Do not "fix" a `props-stability` failure by removing the prop from the

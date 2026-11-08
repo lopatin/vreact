@@ -1487,11 +1487,17 @@ export async function synthCommand(root: string, files: string[], opts: { write?
       const pending = unfinished(refsOf(t.fn), fills).map((d) => d.name?.text ?? "?");
       return { status: "pending", why: pending.length ? `its proof depends on unfinished code (hole) in ${pending.join(", ")}` : `its proof depends on a sorry (a hole or an unfinished proof it relies on)` };
     }
-    const relative = [...new Set(names.flatMap((q) => v.axioms.get(q)!))].filter((a) => !STD_AXIOMS.has(a));
+    // `VReact.assumed` is an assume(…) of the program only where `#vreact_assumed` found no
+    // user-proof declaration using it directly (see cli.ts `classify`); those are listed too
+    const assumedIn = names.filter((q) => v.axioms.get(q)!.some((a) => a === "VReact.assumed" || a === "assumed"));
+    const noAudit = assumedIn.find((q) => !v.assumedOutside.has(q));
+    if (noAudit !== undefined) return { status: "blocked", why: `Lean printed no \`#vreact_assumed\` report for ${noAudit}, which relies on VReact.assumed: not checked` };
+    const viaProofs = assumedIn.flatMap((q) => v.assumedOutside.get(q)!).map((d) => `${d} (a user proof using VReact.assumed directly)`);
+    const relative = [...new Set([...names.flatMap((q) => v.axioms.get(q)!), ...viaProofs])].filter((a) => !STD_AXIOMS.has(a));
     return { status: "proved", relative };
   };
   const provedStatus = (relative: string[]) => (relative.length ? "proved-relative" : "proved");
-  const relNote = (relative: string[]) => `proved assuming ${relative.join(", ")} (@trusted contracts or assume(…) facts, not proved)`;
+  const relNote = (relative: string[]) => `proved assuming ${relative.join(", ")} (@trusted contracts, assume(…) facts or axioms of user proofs, not proved)`;
 
   for (const task of ordered) {
     const fd = task.fn;

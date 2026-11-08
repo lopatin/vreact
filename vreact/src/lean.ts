@@ -141,7 +141,7 @@ export interface LeanDecl {
 // translated VTS name that is a Lean keyword carries a `'` (`end'`, `open'`, `def'`), and such
 // a name may begin a continuation line of a term at column 0 (`end')`).
 const DECL_KW = /^(?:@\[[^\]]*\]\s*)?(?:(?:private|protected|noncomputable|partial|unsafe|nonrec)\s+)*(def|theorem|lemma|abbrev|axiom|structure|inductive|instance|example|opaque|class)(?=\s|$)\s*([^\s:({[⦃]*)/;
-const CMD_KW = /^(\/--|@\[|#[a-z]+(?=\s|$)|(?:namespace|end|section|noncomputable section|open|set_option|import|attribute|deriving instance|macro_rules|macro|syntax|elab|grind_pattern|universe|variable|mutual)(?=\s|$))/;
+const CMD_KW = /^(\/--|@\[|#[a-z_]+(?=\s|$)|(?:namespace|end|section|noncomputable section|open|set_option|import|attribute|deriving instance|macro_rules|macro|syntax|elab|grind_pattern|universe|variable|mutual)(?=\s|$))/;
 
 /**
  * Split generated Lean text into its top-level commands. The generator writes every
@@ -230,6 +230,12 @@ export interface Verdict {
   /** errors not attributable to a single obligation (each with its `cause`) */
   internal: LeanMessage[];
   axioms: Map<string, string[]>;
+  /**
+   * `#vreact_assumed X`: the declarations outside the generated code (user proofs) in `X`'s
+   * cone that use `VReact.assumed` directly (empty: every use is an `assume(…)` of the
+   * program); missing when Lean printed no such report for `X`
+   */
+  assumedOutside: Map<string, string[]>;
   /** why an obligation in `unchecked` was not established */
   reasons: Map<number, string>;
   /** generated declarations that did not elaborate cleanly: name → first error */
@@ -250,6 +256,8 @@ export interface Verdict {
 
 /** `#print axioms X` (the generator writes one per line) */
 const PRINT_AXIOMS = /^#print axioms (\S+)\s*$/;
+/** `#vreact_assumed X` (VReact/Assumed.lean; the generator writes one after each `#print axioms X`) */
+const ASSUMED_AUDIT = /^#vreact_assumed (\S+)\s*$/;
 const SENTINEL_CMD = '#eval "vreact:checked"';
 
 /** Modules lake reports as built (✔ Built/Replayed) or attempted (✖ Building). */
@@ -282,8 +290,9 @@ export function builtModules(raw: string): Set<string> {
  * `sorryAx` in them is explained by a reported failure or sorry; see `reportFrom`.)
  * Lake errors without a position are kept as `build` errors. Evidence, axiom reports and the
  * sentinel count only when Lean printed them at the generator's marker / `#print axioms X` /
- * sentinel position in a generated file (a user proof cannot fake them by printing the same
- * text); a result at the marker of no known obligation is not an obligation's.
+ * `#vreact_assumed X` / sentinel position in a generated file (a user proof cannot fake them
+ * by printing the same text); a result at the marker of no known obligation is not an
+ * obligation's.
  */
 export function judge(obligations: Obligation[], messages: LeanMessage[], markers: Marker[], outDir: string, _built?: Set<string>): Verdict {
   const decls = findDecls(outDir);
@@ -296,6 +305,7 @@ export function judge(obligations: Obligation[], messages: LeanMessage[], marker
   const failedDecls = new Set<LeanDecl>();
   const internal: LeanMessage[] = [];
   const axioms = new Map<string, string[]>();
+  const assumedOutside = new Map<string, string[]>();
   const checkedFiles = new Set<string>();
   const sorries: LeanMessage[] = [];
   const declErrors = new Map<string, string>();
@@ -347,6 +357,12 @@ export function judge(obligations: Obligation[], messages: LeanMessage[], marker
         const am = /^'(.+?)' depends on axioms: \[([^\]]*)\]/.exec(msg.text);
         const got = am ? am[2].split(",").map((s) => s.trim()).filter(Boolean) : /^'(.+?)' does not depend on any axioms/.test(msg.text) ? [] : null;
         if (got) axioms.set(pa[1], [...new Set([...(axioms.get(pa[1]) ?? []), ...got])]);
+      }
+      const aa = cmd ? ASSUMED_AUDIT.exec(cmd) : null;
+      if (aa) {
+        // (likewise keyed by the generator's name and joined: a further report can only add)
+        const am = /^'(.+?)' uses VReact\.assumed outside the generated code: \[([^\]]*)\]/.exec(msg.text);
+        if (am) assumedOutside.set(aa[1], [...new Set([...(assumedOutside.get(aa[1]) ?? []), ...am[2].split(",").map((s) => s.trim()).filter(Boolean)])]);
       }
       if (cmd === SENTINEL_CMD && SENTINEL.test(msg.text.trim()) && lines!.slice(msg.line).every((l) => !l.trim())) checkedFiles.add(rel);
       continue;
@@ -476,7 +492,7 @@ export function judge(obligations: Obligation[], messages: LeanMessage[], marker
     const d = s.line ? declAt(decls.get(s.file), s.line) : undefined;
     return !!d && failedDecls.has(d);
   };
-  return { proved, failed, unchecked, internal, axioms, reasons, declErrors, brokenDecls, sorries: sorries.filter((s) => !admitted(s)), checkedFiles, blocked: blockedObs };
+  return { proved, failed, unchecked, internal, axioms, assumedOutside, reasons, declErrors, brokenDecls, sorries: sorries.filter((s) => !admitted(s)), checkedFiles, blocked: blockedObs };
 }
 
 /** Keep the informative part of a Lean failure (the goal). */

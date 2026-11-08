@@ -138,6 +138,12 @@ export interface Env {
   handler?: HandlerAcc;
   /** inside a functional update `setX(prev => …)` / reducer argument: current-state access */
   curState?: string;
+  /**
+   * Set inside a body that Lean checks for more values than JS gives it (a `for…of` body: any
+   * accumulator and element; an array-method callback: any element; a functional update: any
+   * state), naming it: `assume(…)` is rejected there (its fact would be a theorem for all of them).
+   */
+  generalized?: string;
   /** Lean hypotheses in scope that justify obligations (names only, for documentation). */
   fnName?: string;
   /** the key function of a keyed `.map`: its JSX consts are translated by the node function */

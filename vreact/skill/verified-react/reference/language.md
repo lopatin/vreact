@@ -126,6 +126,16 @@ assign outer `let`s; no `return`/`continue` inside, `break` only to end a `switc
 case), `throw` (must be provably
 unreachable), `assert(c)`, `assume(c)`. No `while`, `try`, `var`, recursion.
 
+`assume(c)` is a trusted fact (reported `ASSUMES`): that `c` holds whenever control
+reaches it, for every input the enclosing function's `requires` (a component's
+precondition and invariant) allow — not only the inputs the program passes. Lean
+keeps it in exactly that form (the precondition and the path to it as hypotheses;
+a user proof may use it). Not in generic functions (see Generics), nor inside a
+`for…of` body, an array-method callback or a functional update `setX((p) => …)`:
+Lean checks those for every value of the loop's variables, the element or the
+state, so the fact would be assumed for all of them — use `assert(…)`, or
+`requires(…)` of a helper function that takes the values as parameters.
+
 Closures and `let`: JS closures read a variable when they run. So a function
 that runs later (helper arrow, handler, callback prop, `setX(prev => …)`, effect,
 timer, cleanup, `useCallback`) may not read a `let` that is reassigned after the
@@ -180,7 +190,12 @@ Top-level functions may have type parameters (exported or not, also `@opaque`;
 not `@trusted`: Lean would assume a trusted generic function's type and
 contracts for every type, also empty ones and ones with values JS never passes —
 stronger than its JS meaning, and possibly contradictory; verify it, or write one
-`@trusted` function per concrete type). A type parameter may appear in parameter and return types,
+`@trusted` function per concrete type). For the same reason a generic function's
+body may not `assume(…)` (Lean keeps an assumed fact as a theorem about the
+function's parameters, here for every type: `assume(a === b || b === c || a === c)`
+under `K extends boolean` would be false at `Int`): state the fact as `requires(…)`,
+which each caller proves (or assumes) at its own types, or prove it with
+`assert(…)`. A type parameter may appear in parameter and return types,
 local annotations (also of helper arrows and callback parameters), `hole<T>()`,
 arrays, `T | null` and tuples — not inside object types (`{ readonly v: T }`:
 pass the value as its own parameter). At most one constraint per parameter:
@@ -231,7 +246,7 @@ at whatever type they call it (also at their own type parameters).
 
 Rejected: generic type aliases and interfaces, generic components, generic
 reducers (`useReducer`), generic arrow functions, function expressions and
-function types, `@trusted` generic functions, default type arguments (`<T =
+function types, `@trusted` generic functions, `assume(…)` in a generic function, default type arguments (`<T =
 int>`), `const` type parameters, other constraints (`unknown`, `any`, `object`,
 `keyof`, unions of object types, intersections, constraints mentioning a type
 parameter), recursion.

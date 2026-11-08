@@ -116,7 +116,12 @@ rejected: its axioms would quantify over every Lean type (`decode<T>(s): T` woul
 inhabit `Empty`; a contract true for the booleans `K extends boolean` admits, like
 "two of three are equal", is false at `K := Int`; an accessor parameter need not
 be a field read), which is stronger than its JS meaning, where it only runs at
-instantiations TypeScript allows. Verified generic functions are sound for the
+instantiations TypeScript allows. `assume(…)` in a generic body is rejected for the
+same reason: Lean keeps the assumed fact as a theorem about the function's
+parameters (§1.3), here for every Lean type (`assume(a === b || b === c || a === c)`
+under `K extends boolean` would be a theorem at `K := Int`, from which a user proof
+derives `False`); `requires(…)` states such a fact for each caller to establish at its
+own types. Verified generic functions are sound for the
 same reason the other way round: proving the body and contracts for every Lean
 type is stronger than needed.
 
@@ -234,7 +239,7 @@ Every expression maps to a Lean term whose value is the JavaScript value.
 | `requires(c)` in a component      | the props precondition `pre`; every `<C …/>` must prove it (several are conjoined in order, as in functions) |
 | `invariant(c)` in a component     | the state invariant `inv` (after the hooks; several are conjoined in order) |
 | `callbackRequires(cb, (…) => c)`  | the contract of a callback prop (§2.4) |
-| `assert(c)` / `assume(c)`         | obligation + fact / trusted fact (reported) |
+| `assert(c)` / `assume(c)`         | obligation + fact / trusted fact (reported): `c` whenever control reaches it, for every input the declaration's contracts allow; not in a generic function, a `for…of` body, an array-method callback or a functional update |
 | `forall exists distinct implies`  | bounded quantifiers, key uniqueness (`List.Nodup`), implication |
 | `/** @opaque */` on a function    | callers see only its `ensures` (modular verification) |
 | `/** @trusted */`                 | body not verified; contract assumed (reported, appears as a Lean axiom); not on a generic function |
@@ -256,6 +261,29 @@ any length), `x !== null && y !== null && x + y > 0`, `!(x === null || y === nul
 every earlier operand failed (held), each test becoming a `match`. Such a compound
 guard is decomposed only when a later operand needs its narrowing; otherwise it
 stays one condition (the normal forms above).
+
+What `assume(c)` trusts is that `c` holds whenever control reaches it, for every
+input the enclosing declaration's contracts allow — a function's `requires`, a
+component's precondition and invariant (every state the invariant admits, not
+only the reachable ones), a callback's `callbackRequires` — not only for the inputs
+the program happens to pass. Its proof is `(by vreact_assume)` (VReact/Assumed.lean):
+`VReact.assumed` at `∀ hyps, c`, applied to the hypotheses in scope without a value
+(`h_pre`, `hpre`/`hinv`, the conditions of the `if`/`match` branches leading to it,
+callback-contract and membership hypotheses; proved `have`s follow from them). Lean
+keeps that proof as an auxiliary theorem (`f._proof_N`, which a user proof can name),
+so its statement must be the fact as stated: `∀ args, h_pre → path → c`. With
+`VReact.assumed` at `c` alone it would close over `c`'s variables only — `if (flag)
+assume(flag)` would become `∀ flag, flag = true`, from which a user proof derives
+`False` without naming the axiom. For the same reason `assume(…)` is rejected where
+the translation checks a body for more values than JS gives it: a `for…of` body
+(a fold step, for any accumulator and element — as its obligations are), an
+array-method callback (a function of any element: the membership `x ∈ xs` is added
+only for obligations), a functional update (a function of any state), also through a
+helper arrow inlined there — `assume(s >= 0)` on a counter would be `∀ s, s ≥ 0`;
+and in a generic function (§1.1), whose theorem would hold for every Lean type. A
+handler, effect, timer callback, callback passed to a child or keyed-list item has
+the program's context (the snapshot with the invariant, the callback contract, the
+item's membership).
 
 `assert(c)` / `assume(c)` bind the hypothesis `c` for everything after them. In an
 event handler, effect, timer callback or callback passed to a child, whose
@@ -543,7 +571,8 @@ hook rules hold (static checks). For every function: its body is safe and its
   a parameter with optional parts has the nullish value its declared type names.
   No `@trusted` declaration is generic (§1.1): its axioms are about the closed VTS
   types of its signature, all of them inhabited, so what they assume is its type
-  and contracts at those types — what the reviewer of the declaration checks.
+  and contracts at those types — what the reviewer of the declaration checks. Nor
+  does a generic body `assume(…)` (its fact would be a theorem for every Lean type).
 * **The report.** Every obligation runs under `vreact_ob` (`VReact/Budget.lean`),
   with its own heartbeat budget (per obligation also under parallel elaboration:
   Lean's heartbeat counter is per thread, and an obligation runs on one thread; the
@@ -579,7 +608,7 @@ hook rules hold (static checks). For every function: its body is safe and its
   a file. Lake errors without a position (imports, build cycles) are shown and
   make the result not verified. An axiom report, the sentinel or `vreact:ok`
   counts only when Lean printed it at the
-  generator's own `#print axioms X` / sentinel line / `vreact_ob` token (a user
+  generator's own `#print axioms X` / `#vreact_assumed X` / sentinel line / `vreact_ob` token (a user
   proof printing the same text is ignored, and `vreact_ob` drops `vreact:`
   messages that code running inside the obligation logs; several reports for
   one name are joined). A generated declaration
@@ -588,7 +617,19 @@ hook rules hold (static checks). For every function: its body is safe and its
   user proof) stands in for it, so every item that uses it, directly or not, is
   `INCOMPLETE` as well. An axiom that is neither Lean's standard ones, nor
   `VReact.assumed`, nor emitted for a `@trusted` declaration (e.g. one declared
-  in a user proof) makes the items that depend on it `TRUSTED`.
+  in a user proof) makes the items that depend on it `TRUSTED`. `VReact.assumed`
+  proves anything, so it stands for the program's `assume(…)` facts (`ASSUMES`)
+  only where `#vreact_assumed X` (VReact/Assumed.lean), written after each
+  `#print axioms X`, finds in `X`'s dependency cone (in the kernel's terms) no
+  declaration outside the generated code — a user proof's, under whatever spelling:
+  the axiom's name, a renaming `open`, a wrapper definition, a tactic — whose own
+  type or value uses the axiom: such a declaration states an unproved fact of the
+  proof file, i.e. it is an axiom of its own, and the items that rely on it are
+  `TRUSTED`, with the declaration named (`assumedByProofs` in `--json`). An item
+  whose axioms include `VReact.assumed` without that report (printed at the
+  generator's `#vreact_assumed X` line) is `UNCHECKED`. A user proof that uses the
+  theorem Lean keeps of an `assume(…)` (`f._proof_N`, §1.3) uses the program's fact
+  as stated: `ASSUMES`.
 * **User proofs** (`proofs/*.lean`) are imported into generated files. Their
   theorems are checked by Lean's kernel like everything else, but the macros,
   syntax and elaborators they declare run while the generated files are
@@ -677,8 +718,8 @@ hook rules hold (static checks). For every function: its body is safe and its
   never discrete.
 
 Lean's kernel checks every proof; `sorry`, `@trusted` and `assume(…)`
-(`VReact.assumed`, reported `ASSUMES`) show up in the axiom report, so nothing
-unverified can be mistaken for verified.
+(`VReact.assumed`, reported `ASSUMES`; used by a user proof itself, `TRUSTED`) show
+up in the axiom report, so nothing unverified can be mistaken for verified.
 
 `vreact synth` is not part of the trusted base: its random tests only prune
 candidates. It reports "proved by Lean" (and `--write` writes a fill) only when
@@ -687,7 +728,8 @@ function's obligations failed, and their axioms contain no `sorryAx` — so a
 function with several holes is proved once all are filled, a `@trusted`
 function is refused, and a failure elsewhere that keeps the function from being
 checked is reported as "not proved". The written text is the text Lean checked.
-A proof whose axioms include @trusted declarations or `assume(…)` facts is
+A proof whose axioms include @trusted declarations, `assume(…)` facts or axioms of
+user proofs (also user-proof declarations that use `VReact.assumed`) is
 reported relative to them (`--json`: `"status": "proved-relative"` and
 `relative_to`). A generic function is tested at `int`/`string` instantiations (a
 witness record with the constrained fields for a field constraint; an optional

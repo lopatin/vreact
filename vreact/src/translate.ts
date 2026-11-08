@@ -1318,7 +1318,8 @@ export function lambda(
   paramTs?: readonly (ts.Type | null | undefined)[],
 ): { binders: string[]; typed: string[]; body: Val; obligations: boolean; env: Env } {
   if (!ts.isArrowFunction(fn) && !ts.isFunctionExpression(fn)) fail(fn, "expected an inline arrow function `(x) => …`");
-  let e2 = env;
+  // (Lean checks the callback for any value of its parameters: `generalized`)
+  let e2: Env = { ...env, generalized: "an array-method callback: Lean checks it for every value of its parameters, not only the array's elements (and the program's accumulators or indexes)" };
   const binders: string[] = [];
   const typed: string[] = [];
   fn.parameters.forEach((p, i) => {
@@ -1751,7 +1752,7 @@ function inlineClosure(b: Extract<Binding, { k: "closure" }>, c: ts.CallExpressi
   if (fn.parameters.length !== c.arguments.length) fail(c, "arity mismatch");
   // Evaluate the arguments in the caller env, bind them in the closure's env.
   let lets = "";
-  let e2: Env = { ...b.env, scope: env.scope, narrow: b.env.narrow, curState: env.curState };
+  let e2: Env = { ...b.env, scope: env.scope, narrow: b.env.narrow, curState: env.curState, generalized: env.generalized ?? b.env.generalized };
   fn.parameters.forEach((p, i) => {
     if (!p.type) fail(p, "helper function parameters need type annotations");
     const t = typeOfNode(p.type, env.m.prog.typeEnv, "Arg");
@@ -2757,6 +2758,35 @@ function assignLocal(target: ts.Expression, newVal: (old: Val, declared: VType) 
   return `(let ${ln}${letType(b.type)} := ${c.code};\n${next(bind(e1, s!, { k: "val", code: ln, type: b.type }))})`;
 }
 
+/** The generic top-level function whose body contains `node` (also inside a nested arrow), if any. */
+function genericFunctionOf(node: ts.Node): ts.FunctionDeclaration | undefined {
+  let n: ts.Node = node;
+  while (n.parent && !ts.isSourceFile(n.parent)) n = n.parent;
+  return ts.isFunctionDeclaration(n) && n.name && n.typeParameters?.length ? n : undefined;
+}
+
+/**
+ * `assume(c)` is `have h : c := (by vreact_assume)`, and Lean keeps that proof as a theorem of
+ * its own about the enclosing declaration's parameters (an auxiliary `f._proof_N`, which user
+ * proofs can name): `∀ args, requires → path → c`, what the program's reviewer vouches for. In
+ * a generic function that theorem is also `∀ {T : Type}` with the constraint's binders — every
+ * Lean type, also ones with values JS never passes (`T extends boolean` at `Int`, where "two of
+ * three values are equal" is false), so a fact true at every instantiation TypeScript allows
+ * becomes a contradictory one (as for @trusted generics, `TRUSTED_GENERIC_MSG`). Rejected.
+ */
+const ASSUME_GENERIC_MSG = (name: string, tps: string[]) =>
+  `assume(…) is not supported in a generic function (${name}<${tps.join(", ")}>): Lean keeps an assumed fact as a theorem about the function's parameters, and in a generic function for every type ${tps.join(", ")} (with the constraint's binders) — also for types with values JS never passes, where a fact true at every instantiation TypeScript allows can be false and contradictory; state the fact as requires(…) (each caller proves it, or assumes it, at its own types) or prove it with assert(…)`;
+
+/**
+ * Likewise where Lean checks a body for more values than JS gives it (`Env.generalized`): a
+ * `for…of` body is a fold step over any accumulator and element (no membership), an
+ * array-method callback a function of any element, a functional update one of any state, so
+ * the theorem would be `∀ acc x, c` where JS only reaches the loop's own values
+ * (`assume(s >= 0)` on a sum of non-negatives would be `∀ s, s ≥ 0`). Rejected.
+ */
+const ASSUME_GENERALIZED_MSG = (where: string) =>
+  `assume(…) is not supported in ${where}; Lean keeps an assumed fact as a theorem about the values in scope, so it would be assumed for all of them — a stronger statement than the program's, possibly false; prove it with assert(…), or state what you need where the values come from (e.g. requires(…) of a helper function that takes them as parameters)`;
+
 /**
  * The code after `assert(c)` / `assume(c)` (whose fact is the hypothesis `h`).  In a
  * handler, effect or timer body the outcome's own obligations (invariant
@@ -2815,9 +2845,14 @@ function exprStatement(e: ts.Expression, env: Env, bc: BlockCtx, rest: (e: Env) 
         return `(have ${h} : ${p} := ${ob};\n${withFact(h, env, bc, rest)})`;
       }
       case "assume": {
+        const gen = genericFunctionOf(e);
+        if (gen) fail(e, ASSUME_GENERIC_MSG(gen.name!.text, gen.typeParameters!.map((t) => t.name.text)));
+        if (env.generalized) fail(e, ASSUME_GENERALIZED_MSG(env.generalized));
         const p = prop(e.arguments[0], env);
         const h = m.fresh("hassume");
-        return `(have ${h} : ${p} := VReact.assumed;\n${withFact(h, env, bc, rest)})`;
+        // (`VReact.assumed` under the hypotheses in scope: the auxiliary theorem Lean makes of
+        // this proof is the fact under the precondition and the path to it, VReact/Assumed.lean)
+        return `(have ${h} : ${p} := (by vreact_assume);\n${withFact(h, env, bc, rest)})`;
       }
       case "requires":
       case "ensures":
@@ -2855,7 +2890,7 @@ function exprStatement(e: ts.Expression, env: Env, bc: BlockCtx, rest: (e: Env) 
     const b = s ? env.vars.get(s) : undefined;
     if (b?.k === "closure" && bc.kind === "handler") {
       const fn = b.fn;
-      let e2: Env = { ...b.env, handler: env.handler, scope: env.scope, curState: undefined };
+      let e2: Env = { ...b.env, handler: env.handler, scope: env.scope, curState: undefined, generalized: env.generalized ?? b.env.generalized };
       let lets = "";
       fn.parameters.forEach((p, i) => {
         if (!p.type) fail(p, "helper parameters need type annotations");
@@ -2921,7 +2956,7 @@ function handlerEffect(t: UpdTarget, c: ts.CallExpression, env: Env, rest: (e: E
       if (a.parameters.length !== 1) fail(a, "functional updates take one parameter");
       const tau = "τ";
       const r = bindParam(a.parameters[0].name, sv.type, { ...env, curState: tau });
-      const e2 = { ...r.env, curState: tau };
+      const e2: Env = { ...r.env, curState: tau, generalized: "a functional update: Lean checks it for every value of its parameter (any state), not only the states React passes" };
       const body = ts.isBlock(a.body) ? valueBlock(a.body.statements, e2, sv.type, a) : expr(a.body, e2, sv.type);
       upd = `(fun ${tau} => { ${tau} with ${leanField(sv.field)} := (let ${r.binder} := ${tau}.${leanField(sv.field)}; ${body.code}) })`;
     } else {
@@ -3183,6 +3218,7 @@ function forOf(s: ts.ForOfStatement, env: Env, bc: BlockCtx, rest: (e: Env) => s
     e1 = dropNarrowing(bind(e1, sym, { k: "val", code: r.name, type: (env.vars.get(sym) as { type: VType }).type }), sym);
   }
   const decl = s.initializer.declarations[0];
+  e1 = { ...e1, generalized: "a for…of loop body: Lean checks it for every value of the element and of the variables the loop assigns (as its obligations), not only those the loop reaches" };
   const pr = bindParam(decl.name, xs.type.elem, e1);
   const tuple = (names: string[]) => (names.length === 1 ? names[0] : `(${names.join(", ")})`);
   const bodyBc: BlockCtx = { kind: "value", fnNode: s, onReturn: () => fail(s, "return inside loop") };

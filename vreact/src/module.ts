@@ -11,7 +11,8 @@
  * User lemmas in `proofs/<Mod>.lean` sit after Defs (they may mention the definitions and are
  * available to the postconditions in Posts, to every obligation of the views, and to the Defs
  * of every module importing <Mod>); `proofs/Base.lean` is imported by every Defs. Each file
- * ends with `#print axioms` for every declaration it reports and the `vreact:checked` sentinel.
+ * ends with `#print axioms` and `#vreact_assumed` for every declaration it reports and the
+ * `vreact:checked` sentinel.
  */
 import ts from "typescript";
 import fs from "node:fs";
@@ -400,19 +401,19 @@ export function translate(cfg: Config): TranslateResult {
     // every declaration's axioms are reported, in the file that declares it (so a failure in
     // a function body still leaves the other functions of the module with a real status)
     defs += `\nend ${ns}\n\n`;
-    for (const c of modRes.constants) for (const q of [c.qname, ...c.facts]) defs += `#print axioms ${q}\n`;
-    for (const f of modRes.functions) for (const q of [f.qname, ...(deferred.has(f.qname) ? [] : f.posts)]) defs += `#print axioms ${q}\n`;
+    for (const c of modRes.constants) for (const q of [c.qname, ...c.facts]) defs += axiomReport(q);
+    for (const f of modRes.functions) for (const q of [f.qname, ...(deferred.has(f.qname) ? [] : f.posts)]) defs += axiomReport(q);
     defs += `#eval "vreact:checked"\n`;
     if (deferred.size) {
       withPostsFile.add(ns);
       posts += `\nend ${ns}\n\n`;
-      for (const f of modRes.functions) if (deferred.has(f.qname)) for (const q of f.posts) posts += `#print axioms ${q}\n`;
+      for (const f of modRes.functions) if (deferred.has(f.qname)) for (const q of f.posts) posts += axiomReport(q);
       posts = header([`${ns}.Defs`, proofMod]) + posts + `#eval "vreact:checked"\n`;
     } else posts = "";
     view = header([deferred.size ? `${ns}.Posts` : `${ns}.Defs`, ...deps.map((d) => `${d}.View`), ...(proofModules.has(proofMod) ? [proofMod] : [])]) + view;
     view += `\nend ${ns}\n\n`;
-    for (const c of modRes.components) view += `#print axioms ${c.ns}.component\n`;
-    for (const c of modRes.certificates) view += `#print axioms ${c.qname}\n`;
+    for (const c of modRes.components) view += axiomReport(`${c.ns}.component`);
+    for (const c of modRes.certificates) view += axiomReport(c.qname);
     view += `#eval "vreact:checked"\n`;
     leanFiles.push({ rel: path.join(rel, "Defs.lean"), text: withBudget(defs, cfg.heartbeats) });
     if (posts) leanFiles.push({ rel: path.join(rel, "Posts.lean"), text: withBudget(posts, cfg.heartbeats) });
@@ -464,6 +465,16 @@ export function translate(cfg: Config): TranslateResult {
   }
   res.ok = true;
   return res;
+}
+
+/**
+ * The axiom report of a reported declaration: `#print axioms` (Lean's own), and
+ * `#vreact_assumed` (VReact/Assumed.lean), which names the declarations outside the generated
+ * code that use `VReact.assumed` — the axiom behind `assume(…)` — in its cone: the report
+ * counts `VReact.assumed` as the program's `assume(…)` facts only where that list is empty.
+ */
+function axiomReport(q: string): string {
+  return `#print axioms ${q}\n#vreact_assumed ${q}\n`;
 }
 
 /** The Lean names a module's generated files declare (see `nameClashes`). */

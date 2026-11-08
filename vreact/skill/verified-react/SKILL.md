@@ -145,7 +145,9 @@ export function ItemList(props: ItemListProps) {
 
 `vreact verify` reports, per component/function (and per constant, when not
 `VERIFIED`): `VERIFIED`, `VERIFIED*` (own obligations proved, relies on
-`@trusted` contracts), `TRUSTED`, `ASSUMES` (relies on `assume(…)` facts),
+`@trusted` contracts), `TRUSTED` (also: relies on an axiom of a user proof, or a
+user-proof declaration that uses `VReact.assumed` itself — the `↳` line names it),
+`ASSUMES` (relies on the program's `assume(…)` facts),
 `INCOMPLETE` (a failed or unchecked obligation, `hole()`/`sorry`, a declaration
 Lean could not finish, or it relies on an item that is not verified — the line
 under it names the reason, e.g. `↳ it uses clamp (src/lib.ts), which is not

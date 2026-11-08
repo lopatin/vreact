@@ -91,14 +91,21 @@ const ASSUMED = new Set(["VReact.assumed", "assumed"]);
  * `trustedAxioms`: the axioms the translator emits for @trusted declarations; any other
  * axiom (outside Lean's standard ones and `VReact.assumed`, e.g. one declared in a user
  * proof, also in a `VTS.` namespace) makes the item TRUSTED, never VERIFIED*.
+ * `VReact.assumed` stands for the program's `assume(…)` facts (ASSUMES) only where
+ * `#vreact_assumed` (`outside`) found no declaration outside the generated code that uses it
+ * directly: a user proof that does is an axiom of its own (TRUSTED), and without that report
+ * the item is not checked.
  */
-function classify(axioms: string[] | undefined, own: string, trustedAxioms: Set<string>): Status {
+function classify(axioms: string[] | undefined, own: string, trustedAxioms: Set<string>, outside: string[] | undefined): Status {
   if (!axioms) return "unchecked";
   if (axioms.includes("sorryAx")) return "incomplete";
+  const assumed = axioms.some((a) => ASSUMED.has(a));
+  if (assumed && outside === undefined) return "unchecked";
   const vts = axioms.filter((a) => trustedAxioms.has(a));
   if (vts.some((a) => a === own || a.startsWith(own + "."))) return "trusted";
   if (axioms.some((a) => !STD_AXIOMS.has(a) && !ASSUMED.has(a) && !trustedAxioms.has(a))) return "trusted";
-  if (axioms.some((a) => ASSUMED.has(a))) return "assumes";
+  if (assumed && outside!.length) return "trusted";
+  if (assumed) return "assumes";
   // only trusted *dependencies* (not the declaration's own namespace): verified relative to them
   if (vts.length) return "relative";
   return "verified";
@@ -119,7 +126,7 @@ function itemStatus(v: Verdict, it: Item, trustedAxioms: Set<string>, broken: bo
   if (v.failed.some((f) => ids.has(f.ob.id))) return "incomplete";
   const decl = [...v.declErrors.keys()].some(it.owns) || v.sorries.some((s) => !!s.decl && it.owns(s.decl));
   if (decl || broken) return "incomplete";
-  const sts = it.axiomNames.map((q) => classify(v.axioms.get(q), it.own, trustedAxioms));
+  const sts = it.axiomNames.map((q) => classify(v.axioms.get(q), it.own, trustedAxioms, v.assumedOutside.get(q)));
   // obligations Lean did not finish although their file was elaborated
   if (v.unchecked.some((u) => ids.has(u.id)) && !sts.includes("unchecked")) return "incomplete";
   return worst(sts);
@@ -246,7 +253,11 @@ export interface Report {
   verdict: "verified" | "verified-modulo-trusted" | "incomplete" | "not-verified";
   stage: "typescript" | "translation" | "lean";
   obligations: { total: number; proved: number; failed: number; unchecked: number };
-  /** `reason`: why an INCOMPLETE / UNCHECKED item is not verified (its own failure, or which dependency failed) */
+  /**
+   * `reason`: why an INCOMPLETE / UNCHECKED item is not verified (its own failure, or which
+   * dependency failed), and what a TRUSTED item that is not @trusted itself relies on (axioms
+   * of user proofs)
+   */
   components: { name: string; file: string; status: Status; axioms: string[]; reason?: string }[];
   functions: { name: string; file: string; status: Status; reason?: string }[];
   constants: { name: string; file: string; status: Status; reason?: string }[];
@@ -256,6 +267,11 @@ export interface Report {
   notChecked: { where: string; kind: string; desc: string; reason: string }[];
   /** `sorry` left in generated Lean or user proofs (`hole()`, pending contracts, …) */
   sorries: string[];
+  /**
+   * declarations outside the generated code (user proofs) that use `VReact.assumed`, the axiom
+   * behind `assume(…)`, directly and that a reported item relies on (each such item is TRUSTED)
+   */
+  assumedByProofs: string[];
   errors: string[];
 }
 
@@ -291,6 +307,7 @@ export function verify(cfg: Config, opts: { json?: boolean; quiet?: boolean; ful
     failures: [],
     notChecked: [],
     sorries: [],
+    assumedByProofs: [],
     errors: [],
   };
   if (!tr.ok) {
@@ -323,6 +340,7 @@ export function reportFrom(cfg: Config, tr: TranslateResult, messages: LeanMessa
     failures: [],
     notChecked: [],
     sorries: [],
+    assumedByProofs: [],
     errors: [],
   };
   const markers = findMarkers(cfg.outDir);
@@ -392,6 +410,7 @@ export function reportFrom(cfg: Config, tr: TranslateResult, messages: LeanMessa
   }
   /** why an INCOMPLETE or UNCHECKED item is not verified: its own trouble first, then the closest troubled item it uses */
   const reasonOf = (it: Item, st: Status): string | undefined => {
+    if (st === "trusted") return trustReason(it);
     if (st !== "incomplete" && st !== "unchecked") return undefined;
     const own = ownTrouble(it);
     const dep = cone(it).slice(1).find((x) => ownTrouble(x) !== undefined);
@@ -405,8 +424,25 @@ export function reportFrom(cfg: Config, tr: TranslateResult, messages: LeanMessa
     if (own !== undefined) return own;
     const missing = it.axiomNames.find((q) => !v.axioms.has(q));
     if (missing !== undefined) return `Lean reported no axioms for ${missing} (its module was not checked to the end)`;
+    const noAudit = it.axiomNames.find((q) => v.axioms.get(q)?.some((a) => ASSUMED.has(a)) && !v.assumedOutside.has(q));
+    if (noAudit !== undefined) return `${noAudit} relies on VReact.assumed, but Lean printed no \`#vreact_assumed\` report for it: whether that is only the program's assume(…) facts was not checked`;
     if (it.axiomNames.some((q) => v.axioms.get(q)?.includes("sorryAx"))) return proofTrouble ? "its proof depends on sorry (sorryAx), e.g. from a user proof that failed or uses sorry" : "its proof depends on sorry (sorryAx)";
     return undefined;
+  };
+  /**
+   * What a TRUSTED item that is not @trusted itself relies on: user-proof declarations that use
+   * `VReact.assumed` directly, and axioms declared outside the translation.
+   */
+  const trustReason = (it: Item): string | undefined => {
+    const axs = it.axiomNames.flatMap((q) => v.axioms.get(q) ?? []);
+    // (an @trusted declaration is TRUSTED for its own sake)
+    if (axs.some((a) => trustedAxioms.has(a) && (a === it.own || a.startsWith(it.own + ".")))) return undefined;
+    const foreign = [...new Set(axs.filter((a) => !STD_AXIOMS.has(a) && !ASSUMED.has(a) && a !== "sorryAx" && !trustedAxioms.has(a)))];
+    const viaProofs = [...new Set(it.axiomNames.flatMap((q) => (v.axioms.get(q)?.some((a) => ASSUMED.has(a)) ? (v.assumedOutside.get(q) ?? []) : [])))];
+    const parts: string[] = [];
+    if (viaProofs.length) parts.push(`it relies on ${viaProofs.join(", ")} (outside the generated code: a user proof), which ${viaProofs.length === 1 ? "uses" : "use"} VReact.assumed — the axiom behind assume(…) — directly: an unproved fact, i.e. an axiom of the proof file, not an assume(…) of the program`);
+    if (foreign.length) parts.push(`it relies on the ${foreign.length === 1 ? "axiom" : "axioms"} ${foreign.join(", ")}, declared outside the translation (in a user proof)`);
+    return parts.length ? parts.join("; ") : undefined;
   };
   const withReason = (it: Item, st: Status) => {
     const r = reasonOf(it, st);
@@ -418,6 +454,7 @@ export function reportFrom(cfg: Config, tr: TranslateResult, messages: LeanMessa
   for (const u of v.unchecked) report.notChecked.push({ where: u.where, kind: u.kind, desc: u.desc, reason: v.reasons.get(u.id) ?? "not checked" });
   for (const i of v.internal) report.errors.push(`${errorWhere(i)}: ${i.text.split("\n").slice(0, 12).join("\n")}`);
   for (const s of v.sorries) report.sorries.push(`${s.file}:${s.line}:${s.col}${s.decl ? ` (${s.decl})` : ""}`);
+  report.assumedByProofs = [...new Set(all.flatMap((it) => it.axiomNames.flatMap((q) => (v.axioms.get(q)?.some((a) => ASSUMED.has(a)) ? (v.assumedOutside.get(q) ?? []) : []))))].sort();
   const status = (it: Item) => itemStatus(v, it, trustedAxioms, broken.has(it.key));
   const k = { comp: 0, cert: 0, fn: 0, cst: 0 };
   for (const mr of tr.modules) {
@@ -530,9 +567,12 @@ function printReport(r: Report, tr: TranslateResult, v: Verdict, cfg: Config, ms
   }
   const o = r.obligations;
   const items = [...r.components, ...r.functions, ...r.constants];
-  const trusted = items.filter((x) => x.status === "trusted").map((x) => x.name);
+  // (TRUSTED with a reason: not @trusted itself, but relying on axioms of user proofs)
+  const trusted = items.filter((x) => x.status === "trusted" && !x.reason).map((x) => x.name);
+  const userAx = items.filter((x) => x.status === "trusted" && x.reason).map((x) => x.name);
   const assumes = items.filter((x) => x.status === "assumes").map((x) => x.name);
-  const modulo = [trusted.length ? "@trusted declarations" : "", assumes.length ? "assume(…) facts" : ""].filter(Boolean).join(" and ") || "@trusted declarations";
+  const relative = items.some((x) => x.status === "relative");
+  const modulo = [trusted.length || relative ? "@trusted declarations" : "", userAx.length ? "axioms of user proofs" : "", assumes.length ? "assume(…) facts" : ""].filter(Boolean).join(" and ") || "@trusted declarations";
   const head =
     r.verdict === "verified" ? C.g("✔ VERIFIED")
     : r.verdict === "verified-modulo-trusted" ? C.y(`✔ VERIFIED modulo ${modulo}`)
@@ -542,11 +582,13 @@ function printReport(r: Report, tr: TranslateResult, v: Verdict, cfg: Config, ms
   // reason shows that reason above)
   const holes = [...r.components, ...r.functions, ...r.constants].filter((x) => x.reason === HOLE).map((x) => x.name);
   if (trusted.length) console.log(C.y(`\ntrusted (not verified, contracts assumed): ${trusted.join(", ")}`));
-  if (assumes.length) console.log(C.y(`${trusted.length ? "" : "\n"}assumes (checked, but relies on unproved assume(…) facts): ${assumes.join(", ")}`));
+  if (userAx.length) console.log(C.y(`${trusted.length ? "" : "\n"}trusted (relies on unproved facts of user proofs, see ↳ above): ${userAx.join(", ")}`));
+  if (assumes.length) console.log(C.y(`${trusted.length || userAx.length ? "" : "\n"}assumes (checked, but relies on unproved assume(…) facts): ${assumes.join(", ")}`));
   if (items.some((x) => x.status === "relative")) console.log(C.y(`VERIFIED* = all own obligations proved; relies on the contracts of the trusted declarations above`));
   const trustedAx = trustedAxiomsOf(tr);
   const foreign = [...new Set([...v.axioms.values()].flat())].filter((a) => !STD_AXIOMS.has(a) && !ASSUMED.has(a) && a !== "sorryAx" && !trustedAx.has(a));
   if (foreign.length) console.log(C.y(`axioms from outside the translation (TRUSTED wherever used; declared in user proofs?): ${foreign.join(", ")}`));
+  if (r.assumedByProofs.length) console.log(C.y(`user-proof declarations that use VReact.assumed (the axiom behind assume(…)) directly — unproved facts, TRUSTED wherever used (prove them, or state the fact with assume(…) in the program): ${r.assumedByProofs.join(", ")}`));
   if (holes.length && !r.failures.length) console.log(C.y(`pending (hole() / sorry): ${holes.join(", ")}`));
   else if (r.sorries.length && !r.failures.length) console.log(C.y(`pending (sorry in the generated Lean or proofs): ${r.sorries.join(", ")}`));
   console.log(
