@@ -222,6 +222,22 @@ function isFreshCollection(e: ts.Expression, ck: ts.TypeChecker, tenv: TypeEnv):
   return false;
 }
 
+/** The text of a method receiver for a message, parenthesised unless it is a primary expression (`(s as Map<int, int>).set(…)`). */
+function recvText(e: ts.Expression, max: number): string {
+  const t = nodeText(e, max);
+  const primary = ts.isIdentifier(e) || ts.isPropertyAccessExpression(e) || ts.isElementAccessExpression(e) || ts.isCallExpression(e) || ts.isParenthesizedExpression(e) || ts.isNonNullExpression(e) || (ts.isNewExpression(e) && !!e.arguments) || e.kind === ts.SyntaxKind.ThisKeyword;
+  return primary ? t : `(${t})`;
+}
+
+/** A mutating method (`set`/`add`/`delete`/`clear`) of the library's Map, Set, WeakMap or WeakSet. */
+function isCollectionMutator(sym: ts.Symbol | undefined, tenv: TypeEnv): boolean {
+  if (!sym || !isLibSymbol(sym, tenv)) return false;
+  return (sym.declarations ?? []).some((d) => {
+    const owner = d.parent;
+    return (ts.isInterfaceDeclaration(owner) || ts.isClassDeclaration(owner)) && !!owner.name && ["Map", "Set", "WeakMap", "WeakSet"].includes(owner.name.text);
+  });
+}
+
 /** `Array.from` of the library. */
 function isArrayFrom(callee: ts.Expression, ck: ts.TypeChecker, tenv: TypeEnv): boolean {
   if (!ts.isPropertyAccessExpression(callee) || callee.name.text !== "from" || !ts.isIdentifier(callee.expression) || callee.expression.text !== "Array") return false;
@@ -278,13 +294,25 @@ function checkCollectionMutation(body: ts.Node, env: Env) {
   const kindOf = (x: ts.Expression) => collectionKind(ck.getNonNullableType(ck.getTypeAtLocation(x)), tenv);
   const muts = new Map<ts.Symbol, ts.CallExpression[]>();
   const collect = (n: ts.Node) => {
+    // a Map/Set mutator reached other than as the callee of `x.m(…)` (the only form checked
+    // below): `x["clear"]()`, `Map.prototype.set.call(x, …)`, `Reflect.apply(Set.prototype.add, x, …)`,
+    // `x.set.bind(x)`, `(x.set)(k, v)`, `const f = x.delete` — wherever it is written, also in
+    // arguments that are not otherwise translated (console.log(…)'s, an effect cleanup's)
+    if (ts.isPropertyAccessExpression(n) && MUTATORS.has(n.name.text) && isCollectionMutator(ck.getSymbolAtLocation(n.name), tenv)) {
+      if (!(ts.isCallExpression(n.parent) && n.parent.expression === n)) {
+        fail(n, `${nodeText(n, 40)} is used without calling it directly (as in x.${n.name.text}(…)): VTS checks a Map/Set mutation only in that form; write const next = new Map(…) / new Set(…); next.${n.name.text}(…); on a fresh local copy`);
+      }
+    }
+    if (ts.isElementAccessExpression(n) && kindOf(n.expression)) {
+      fail(n, `${nodeText(n, 40)}: a Map or Set has no indexed elements (and x["set"] would reach its methods): use m.get(k), m.has(k), or index a spread copy ([...m.values()][i])`);
+    }
     if (ts.isCallExpression(n) && ts.isPropertyAccessExpression(n.expression) && MUTATORS.has(n.expression.name.text)) {
       const recv = stripParens(n.expression.expression);
       const kind = kindOf(recv);
       if (kind) {
         const name = n.expression.name.text;
         const Name = kind === "map" ? "Map" : "Set";
-        const what = nodeText(recv, 30);
+        const what = recvText(recv, 30);
         let st: ts.Node = n;
         while (ts.isParenthesizedExpression(st.parent)) st = st.parent;
         if (ts.isExpressionStatement(st.parent)) {
@@ -324,11 +352,15 @@ function checkCollectionMutation(body: ts.Node, env: Env) {
         fail(w, `\`${nm}\` is declared outside this function: mutating it from inside a function or callback is not supported (the translation would lose the mutation, and the function may run later); build the ${Name} where it is used, or with for…of instead of a callback`);
       }
     }
-    /** `x` is in a `return` of F (crossing no function): nothing of F runs after it. */
+    /**
+     * `x` is in a `return` statement of F itself (crossing no function): nothing of F runs after
+     * it.  A `return` of a nested function (an array callback's `{ return n; }`, a `useMemo`
+     * callback) only hands `n` back to F, which goes on running (and mutating).
+     */
     const inReturn = (x: ts.Node): boolean => {
       for (let a = x.parent; a && a !== F; a = a.parent) {
-        if (ts.isArrowFunction(a) || ts.isFunctionExpression(a) || ts.isFunctionDeclaration(a)) return false;
-        if (ts.isReturnStatement(a)) return true;
+        if (ts.isFunctionLike(a)) return false;
+        if (ts.isReturnStatement(a)) return fnOf(a) === F;
       }
       return false;
     };
@@ -1564,7 +1596,7 @@ function collectionMethod(name: string, c: Val, recvE: ts.Expression, call: ts.C
   const Name = isMap ? "Map" : "Set";
   const J = isMap ? "JSMap" : "JSSet";
   const key = t.k === "map" ? t.key : t.elem;
-  const what = nodeText(recvE, 30);
+  const what = recvText(recvE, 30);
   switch (name) {
     case "get":
       if (t.k !== "map") break;
@@ -1615,7 +1647,7 @@ function mutateLocal(c: ts.CallExpression, callee: ts.PropertyAccessExpression, 
   const s = ts.isIdentifier(recv) ? symbolOf(env, recv) : undefined;
   const b = s ? env.vars.get(s) : undefined;
   if (!ts.isIdentifier(recv) || !s?.valueDeclaration || !freshMutable.has(s.valueDeclaration) || b?.k !== "val" || b.type.k !== kind) {
-    const what = nodeText(recv, 30);
+    const what = recvText(recv, 30);
     fail(c, `${what}.${name}(…) mutates ${what}: only a local const initialised with new ${Name}(…) in this function (a fresh copy nothing else refers to) may be mutated; copy first: const n = new ${Name}(${what}); n.${name}(…);`);
   }
   const t = b.type;
@@ -2837,7 +2869,10 @@ function exprStatement(e: ts.Expression, env: Env, bc: BlockCtx, rest: (e: Env) 
   if (ts.isBinaryExpression(e)) {
     const k = e.operatorToken.kind;
     if (k === ts.SyntaxKind.EqualsToken) {
-      if (ts.isPropertyAccessExpression(e.left) && e.left.getText() === "document.title") return rest(env); // external effect
+      if (ts.isPropertyAccessExpression(e.left) && e.left.getText() === "document.title") {
+        checkExternalArgs([e.right], env); // external effect
+        return rest(env);
+      }
       return assignLocal(e.left, (_old, declared) => (declared.k === "opt" ? exprPreferElem(e.right, env, declared) : expr(e.right, env, declared)), env, rest, e);
     }
     if (k === ts.SyntaxKind.PlusEqualsToken || k === ts.SyntaxKind.MinusEqualsToken) {
@@ -2889,8 +2924,10 @@ function exprStatement(e: ts.Expression, env: Env, bc: BlockCtx, rest: (e: Env) 
   // console.*, e.preventDefault(), localStorage writes: external, no effect on component state
   if (ts.isPropertyAccessExpression(callee)) {
     const objText = callee.expression.getText();
-    if (objText === "console") return rest(env);
-    if (objText === "localStorage" && callee.name.text === "setItem") return rest(env);
+    if (objText === "console" || (objText === "localStorage" && callee.name.text === "setItem")) {
+      checkExternalArgs(e.arguments, env);
+      return rest(env);
+    }
     if (["preventDefault", "stopPropagation"].includes(callee.name.text) && ts.isIdentifier(callee.expression)) {
       const s = symbolOf(env, callee.expression);
       if (s && env.vars.get(s)?.k === "event") return rest(env);
@@ -2934,7 +2971,7 @@ function exprStatement(e: ts.Expression, env: Env, bc: BlockCtx, rest: (e: Env) 
   // `n.set(k, v)` / `n.add(x)` / `n.delete(k)` / `n.clear()` on a fresh local Map / Set
   if (ts.isPropertyAccessExpression(callee) && (MUTATORS.has(callee.name.text) || callee.name.text === "forEach")) {
     const kind = collectionKind(m.checker.getNonNullableType(m.checker.getTypeAtLocation(callee.expression)), m.prog.typeEnv);
-    if (kind && callee.name.text === "forEach") fail(e, `${kind === "map" ? "Map" : "Set"}.forEach is not supported: write for (const ${kind === "map" ? "[k, v]" : "x"} of ${nodeText(callee.expression, 30)}) { … }`);
+    if (kind && callee.name.text === "forEach") fail(e, `${kind === "map" ? "Map" : "Set"}.forEach is not supported: write for (const ${kind === "map" ? "[k, v]" : "x"} of ${recvText(callee.expression, 30)}) { … }`);
     if (kind) return mutateLocal(e, callee, kind, env, rest);
   }
   if (ts.isPropertyAccessExpression(callee) && ["push", "pop", "shift", "unshift", "splice", "sort", "reverse", "fill", "copyWithin", "set", "delete", "add", "clear"].includes(callee.name.text)) {
@@ -2942,6 +2979,33 @@ function exprStatement(e: ts.Expression, env: Env, bc: BlockCtx, rest: (e: Env) 
   }
   if (ts.isCallExpression(e) && hookName(env, callee)) fail(e, "hooks must be called at the top level of a component, unconditionally (Rules of Hooks)");
   fail(e, `this call has no modelled effect: ${nodeText(e)}`);
+}
+
+/**
+ * The arguments of an external write (`console.*(…)`, `localStorage.setItem(…)`, the value of
+ * `document.title = …`).  Their values are not modelled, but JS evaluates them, so they must be
+ * VTS expressions like any other: they are translated here for the checks only (the term and
+ * its obligations are discarded), which rejects whatever VTS cannot model in them — a cast
+ * (`(m as any).clear()`), `eval`, `arguments`, a method reached by an index (`m["clear"]()`) —
+ * instead of leaving it unseen.  `JSON.stringify(v)` (also `(v, null, indent)`) reads `v`;
+ * `null` / `undefined` need no check.
+ */
+function checkExternalArgs(args: readonly ts.Expression[], env: Env) {
+  env.m.dryRun(() => {
+    for (const a0 of args) {
+      if (ts.isSpreadElement(a0)) fail(a0, "spread arguments are not supported here: pass the values one by one");
+      let a = stripParens(a0);
+      if (ts.isCallExpression(a) && ts.isPropertyAccessExpression(a.expression) && a.expression.name.text === "stringify" && ts.isIdentifier(a.expression.expression) && a.expression.expression.text === "JSON") {
+        const jsonSym = symbolOf(env, a.expression.expression);
+        const [v, replacer, indent] = a.arguments;
+        if (isLibSymbol(jsonSym, env.m.prog.typeEnv) && !env.vars.get(jsonSym!) && v && !ts.isSpreadElement(v) && a.arguments.length <= 3 && (!replacer || replacer.kind === ts.SyntaxKind.NullKeyword) && (!indent || ts.isNumericLiteral(indent) || ts.isStringLiteral(indent))) {
+          a = stripParens(v);
+        }
+      }
+      if (isNullLit(a)) continue;
+      expr(a, env);
+    }
+  });
 }
 
 type UpdTarget =

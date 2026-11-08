@@ -338,6 +338,74 @@ theorem mem_entries_set (m : JSMap K V) (k : K) (v : V) (p : K × V) :
       · right; rfl
       · left; exact hp
 
+/-- `m.get(k)` returns the value of `k`'s entry: `(k, v)` is an entry (so an invariant over the
+entries, `[...m.entries()].every(([k, v]) => k === v.id)`, applies to the value read). -/
+theorem mem_entries_of_get {m : JSMap K V} {k : K} {v : V} (h : m.get k = some v) : (k, v) ∈ m.entries :=
+  (get_eq_some_iff m k v).mp h
+
+theorem delete_empty (k : K) : (empty : JSMap K V).delete k = empty := rfl
+
+omit [DecidableEq K] in
+/-- `[...m].length === m.size` -/
+theorem length_entries (m : JSMap K V) : (m.entries.length : Int) = m.size := rfl
+omit [DecidableEq K] in
+/-- `[...m.values()].length === m.size` -/
+theorem length_values (m : JSMap K V) : (m.values.length : Int) = m.size := by simp [values, size]
+
+/-- An entry of `new Map(pairs)` (of a `for…of` loop of `set`s) is an entry of the start or one of the pairs. -/
+theorem mem_entries_setAll {m : JSMap K V} {xs : List (K × V)} {p : K × V} (h : p ∈ (m.setAll xs).entries) :
+    p ∈ m.entries ∨ p ∈ xs := by
+  induction xs generalizing m with
+  | nil => exact Or.inl h
+  | cons q rest ih =>
+    rw [setAll_cons] at h
+    rcases ih h with h' | h'
+    · rw [mem_entries_set] at h'
+      rcases h' with rfl | ⟨h', _⟩
+      · exact Or.inr (List.mem_cons_self ..)
+      · exact Or.inl h'
+    · exact Or.inr (List.mem_cons_of_mem _ h')
+
+theorem mem_values_setAll {m : JSMap K V} {xs : List (K × V)} {v : V} (h : v ∈ (m.setAll xs).values) :
+    v ∈ m.values ∨ v ∈ xs.map Prod.snd := by
+  simp only [values, List.mem_map] at h ⊢
+  obtain ⟨p, hp, rfl⟩ := h
+  rcases mem_entries_setAll hp with h | h
+  · exact Or.inl ⟨p, h, rfl⟩
+  · exact Or.inr ⟨p, h, rfl⟩
+
+theorem size_setAll_le (m : JSMap K V) (xs : List (K × V)) : (m.setAll xs).size ≤ m.size + xs.length := by
+  induction xs generalizing m with
+  | nil => simp [setAll]
+  | cons q rest ih =>
+    rw [setAll_cons]
+    have := ih (m.set q.1 q.2)
+    have := size_set m q.1 q.2
+    split at this <;> simp at * <;> omega
+
+theorem entries_setAll_of_nodup (m : JSMap K V) (xs : List (K × V))
+    (h : ((m.entries ++ xs).map Prod.fst).Nodup) : (m.setAll xs).entries = m.entries ++ xs := by
+  induction xs generalizing m with
+  | nil => simp [setAll]
+  | cons q rest ih =>
+    rw [setAll_cons]
+    have hq : q.1 ∉ m.keys := by
+      simp only [List.map_append, List.map_cons, List.nodup_append, List.nodup_cons] at h
+      intro hk; exact h.2.2 _ hk _ (List.mem_cons_self ..) rfl
+    have he : (m.set q.1 q.2).entries = m.entries ++ [q] := by
+      rw [entries_set]; simp [hq]
+    rw [ih, he]; · simp
+    rw [he]; simpa using h
+
+/-- `new Map(pairs)` with distinct keys has exactly the pairs as entries, in order. -/
+theorem entries_ofList_of_nodup (xs : List (K × V)) (h : (xs.map Prod.fst).Nodup) :
+    (empty.setAll xs).entries = xs := by
+  rw [entries_setAll_of_nodup] <;> simp_all [entries_empty]
+
+theorem size_ofList_of_nodup (xs : List (K × V)) (h : (xs.map Prod.fst).Nodup) :
+    (empty.setAll xs).size = xs.length := by
+  rw [← length_entries, entries_ofList_of_nodup xs h]
+
 omit [DecidableEq K] in
 /-- A Map keyed by a function of its values (`ReadonlyMap<int, Item>` with `k === it.id` for every
 entry) has distinct `f`-images of its values: `[...m.values()].map((it) => <li key={it.id}>…)`. -/
@@ -410,6 +478,32 @@ theorem mem_elems_addAll (s : JSSet T) (xs : List T) (y : T) : y ∈ (s.addAll x
   induction xs generalizing s with
   | nil => simp [addAll]
   | cons x rest ih => rw [addAll_cons, ih, mem_add]; simp; grind
+theorem mem_delete (s : JSSet T) (x y : T) : y ∈ (s.delete x).elems ↔ ¬ y = x ∧ y ∈ s.elems := by
+  simp [elems_delete, JS.eq]; exact and_comm
+/-- `new Set(xs).size <= xs.length` -/
+theorem length_addAll_le (s : JSSet T) (xs : List T) : (s.addAll xs).elems.length ≤ s.elems.length + xs.length := by
+  induction xs generalizing s with
+  | nil => simp [addAll]
+  | cons q rest ih =>
+    rw [addAll_cons]
+    have := ih (s.add q)
+    rw [elems_add] at this
+    split at this <;> simp at * <;> omega
+theorem elems_addAll_of_nodup (s : JSSet T) (xs : List T) (h : (s.elems ++ xs).Nodup) :
+    (s.addAll xs).elems = s.elems ++ xs := by
+  induction xs generalizing s with
+  | nil => simp [addAll]
+  | cons q rest ih =>
+    rw [addAll_cons]
+    have hq : q ∉ s.elems := by
+      simp only [List.nodup_append, List.nodup_cons] at h
+      intro hk; exact h.2.2 _ hk _ (List.mem_cons_self ..) rfl
+    have he : (s.add q).elems = s.elems ++ [q] := by rw [elems_add]; simp [hq]
+    rw [ih, he]; · simp
+    rw [he]; simpa using h
+/-- `new Set(xs)` of distinct elements has exactly them, in order (`distinct(xs)` → `new Set(xs).size === xs.length`). -/
+theorem elems_ofList_of_nodup (xs : List T) (h : xs.Nodup) : (empty.addAll xs).elems = xs := by
+  rw [elems_addAll_of_nodup] <;> simp_all [elems_empty]
 /-- A `for (const x of xs) n.add(f(x))` loop (from `n`) is `new Set` of the images. -/
 theorem foldl_add {α} (s : JSSet T) (xs : List α) (f : α → T) :
     xs.foldl (fun acc x => acc.add (f x)) s = s.addAll (xs.map f) := by
@@ -437,19 +531,28 @@ attribute [grind =] JSMap.get_set JSMap.get_delete JSMap.get_empty JSMap.mem_key
   JSMap.get_ofList_of_nodup JSMap.keys_set JSMap.keys_delete JSMap.keys_empty JSMap.length_keys_set
   JSMap.mem_entries_set
 attribute [grind →] JSMap.get_of_mem_entries JSMap.mem_values_of_mem_delete JSMap.mem_values_of_get
-  JSMap.mem_keys_of_get
+  JSMap.mem_keys_of_get JSMap.mem_entries_of_get JSMap.mem_entries_setAll JSMap.mem_values_setAll
+attribute [vreact_simp] JSMap.delete_empty
+attribute [grind =] JSMap.delete_empty JSMap.values_empty JSMap.entries_empty
 grind_pattern JSMap.keys_nodup => m.keys
 grind_pattern JSMap.size_nonneg => m.size
 grind_pattern JSMap.size_eq_length_keys => m.size
 grind_pattern JSMap.get_eq_none_iff => m.get k
 grind_pattern JSMap.nodup_entries_fst => m.entries
 grind_pattern JSMap.nodup_map_values_of_key => (List.map f (JSMap.values m)).Nodup
+grind_pattern JSMap.length_entries => m.entries.length
+grind_pattern JSMap.length_values => m.values.length
+grind_pattern JSMap.size_setAll_le => (m.setAll xs).size
+grind_pattern JSMap.entries_ofList_of_nodup => (JSMap.empty.setAll xs).entries
+grind_pattern JSMap.size_ofList_of_nodup => (JSMap.empty.setAll xs).size
 
 attribute [vreact_simp] JSSet.has_def JSSet.elems_add JSSet.elems_delete
   JSSet.size_eq JSSet.elems_empty JSSet.addAll_nil JSSet.addAll_cons JSSet.ofList_eq
   JSSet.mem_elems_addAll JSSet.foldl_add
-attribute [grind =] JSSet.mem_elems_addAll
+attribute [grind =] JSSet.mem_elems_addAll JSSet.mem_add JSSet.mem_delete JSSet.elems_empty
 grind_pattern JSSet.nodup_elems => s.elems
+grind_pattern JSSet.length_addAll_le => (s.addAll xs).elems.length
+grind_pattern JSSet.elems_ofList_of_nodup => (JSSet.empty.addAll xs).elems
 
 /-- Distinct keys as a contract: `vreact_contracts` adds it as a hypothesis wherever `m.keys`
 occurs (`vreact_subperm` moves `Nodup` facts from hypotheses through list chains). -/

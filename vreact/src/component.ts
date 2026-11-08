@@ -745,9 +745,17 @@ function pureCleanupExpr(n: ts.Node, env: Env) {
       if (!ok) fail(x, `effect cleanups may not call \`${nodeText(callee, 40)}\` here; ${CLEANUP_RULE}`);
     }
     if (ts.isNewExpression(x) || ts.isAwaitExpression(x) || ts.isDeleteExpression(x)) fail(x, CLEANUP_RULE);
+    // the cleanup is not translated, so its static types are all that stands for what it can
+    // reach: no cast (`(m as any).clear()`), no `arguments`, nothing typed `any`
+    if ((ts.isAsExpression(x) && x.type.getText() !== "const") || ts.isTypeAssertionExpression(x)) fail(x, `type assertions are not allowed in VTS (they are unchecked casts); ${CLEANUP_RULE}`);
+    if (ts.isIdentifier(x) && x.text === "arguments" && !(ts.isPropertyAccessExpression(x.parent) && x.parent.name === x)) fail(x, `\`arguments\` is not allowed in VTS; ${CLEANUP_RULE}`);
     if (ts.isBinaryExpression(x) && x.operatorToken.kind >= ts.SyntaxKind.FirstAssignment && x.operatorToken.kind <= ts.SyntaxKind.LastAssignment) fail(x, CLEANUP_RULE);
     if ((ts.isPrefixUnaryExpression(x) || ts.isPostfixUnaryExpression(x)) && (x.operator === ts.SyntaxKind.PlusPlusToken || x.operator === ts.SyntaxKind.MinusMinusToken)) fail(x, CLEANUP_RULE);
     ts.forEachChild(x, visit);
+    // (after the parts, so that a cast is reported as one)
+    if (ts.isExpression(x) && !(ts.isIdentifier(x) && ts.isPropertyAccessExpression(x.parent) && x.parent.name === x) && env.m.checker.getTypeAtLocation(x).flags & (ts.TypeFlags.Any | ts.TypeFlags.Unknown)) {
+      fail(x, `\`${nodeText(x, 40)}\` has type any or unknown here, so VTS cannot tell what it does; ${CLEANUP_RULE}`);
+    }
   };
   visit(n);
 }

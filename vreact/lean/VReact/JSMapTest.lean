@@ -166,3 +166,46 @@ example (m : JSMap Int Int) (k : Int) (hk : m.has k = true) (h : m.values.all (f
 example (m : JSMap Int Int) (k : Int) (h : m.values.all (fun x => JS.le 0 x) = true) :
     (match h₂ : m.get k with | some v => JS.le 0 v | none => true) = true := by vreact_ob vreact_auto
 end VReact.JSMapTest.T11
+namespace VReact.JSMapTest.T12
+/-! Round-1 audit shapes: a value read with `get` is its key's entry; values of literal Maps and of
+`new Map(pairs)` / filtered Maps; lengths of spreads; Sets inside Maps; `new Set(xs)` sizes. -/
+open VReact VReact.JS
+structure Item where
+  id : Int
+  title : JS.Str
+  done : Bool
+deriving DecidableEq
+-- get ↦ entry (the key/id invariant)
+example (s : JSMap Int Item) (id' : Int) (h_pre : ∀ tup ∈ s.entries, tup.1 = tup.2.id) (it : Item) (h : s.get id' = some it) :
+    ∀ tup ∈ (s.set id' { it with done := !it.done }).entries, tup.1 = tup.2.id := by vreact_ob vreact_auto
+example (s : JSMap Int Item) (id' : Int) (h_pre : (∀ tup ∈ s.entries, tup.1 = tup.2.id) ∧ id' ∈ s.keys) (hh) :
+    (Option.get (s.get id') hh).id = id' := by vreact_ob vreact_auto
+-- values of literal Maps and of a set on an empty Map
+example : ∀ v ∈ (JSMap.ofList [((JS.Str.ofString "apple"), (1 : Int))]).values, v ≥ 0 := by vreact_ob vreact_auto
+example : ∀ v ∈ (JSMap.ofList [((JS.Str.ofString "apple"), (1 : Int)), (JS.Str.ofString "pear", 2)]).values, v ≥ 0 := by vreact_ob vreact_auto
+example (k : JS.Str) : ∀ v ∈ ((JSMap.empty : JSMap JS.Str Int).set k 1).values, v ≥ 0 := by vreact_ob vreact_auto
+-- lengths of [...m], [...m.values()]
+example (m : JSMap JS.Str Int) (h : m.size > 0) : 0 < m.entries.length := by vreact_ob vreact_auto
+example (m : JSMap JS.Str Int) (h : m.size > 0) : 0 < m.values.length := by vreact_ob vreact_auto
+example (m : JSMap Int Item) : (m.values.length : Int) = m.size ∧ (m.entries.length : Int) = m.size := by vreact_ob vreact_auto
+-- index by id (new Map(pairs), the for…of loop of sets), filtered Maps, sizes
+example (xs : List Item) : ∀ tup ∈ (JSMap.ofList (xs.map (fun x => (x.id, x)))).entries, tup.1 = tup.2.id := by vreact_ob vreact_auto
+example (xs : List Item) : ∀ tup ∈ (xs.foldl (fun acc x => acc.set x.id x) (JSMap.empty : JSMap Int Item)).entries, tup.1 = tup.2.id := by vreact_ob vreact_auto
+example (m : JSMap Int Item) : ∀ v ∈ (JSMap.ofList (m.entries.filter (fun p => !p.2.done))).values, v.done = false := by vreact_ob vreact_auto
+example (m : JSMap Int Item) : (JSMap.ofList (m.entries.filter (fun p => !p.2.done))).size ≤ m.size := by vreact_ob vreact_auto
+example (xs : List Item) (h : (xs.map (fun x => x.id)).Nodup) : (JSMap.ofList (xs.map (fun x => (x.id, x)))).size = xs.length := by vreact_ob vreact_auto
+example (xs : List Int) (h : xs.Nodup) : (JSSet.ofList xs).size = xs.length := by vreact_ob vreact_auto
+example (xs : List Int) : (JSSet.ofList xs).size ≤ xs.length := by vreact_ob vreact_auto
+-- Sets inside a Map (group membership)
+example (g : JSMap JS.Str (JSSet Int)) (k : JS.Str) (x : Int) (hh) :
+    (g.set k (((g.get k).getD JSSet.empty).add x)).has k = true ∧ ((g.set k (((g.get k).getD JSSet.empty).add x)).get k |>.get hh).has x = true := by vreact_ob vreact_auto
+example (g : JSMap JS.Str (JSSet Int)) (k : JS.Str) (x : Int) (cur : JSSet Int) (hh) :
+    (g.set k (cur.delete x)).has k = false ∨ ((g.set k (cur.delete x)).get k |>.get hh).has x = false := by vreact_ob vreact_auto
+-- still false: the size of new Set(xs) without distinct elements, a value the filter drops,
+-- the size of new Map(pairs) without distinct keys
+example : True := by
+  vreact_fails_showing_goal (∀ (xs : List Int), (JSSet.ofList xs).size = xs.length)
+  vreact_fails_showing_goal (∀ (m : JSMap Int Item), ∀ v ∈ (JSMap.ofList (m.entries.filter (fun p => !p.2.done))).values, v.done = true)
+  vreact_fails_showing_goal (∀ (xs : List Item), (JSMap.ofList (xs.map (fun x => (x.id, x)))).size = xs.length)
+  trivial
+end VReact.JSMapTest.T12
