@@ -13,7 +13,7 @@
 import ts from "typescript";
 import { T, type VType, type Field, type Param, sameType, showType, leanType, sharedFields, type Variant, typeOfNode, kindsOfType, nullShape } from "./types.ts";
 import { type Env, type Val, ModCtx, type Binding, type StateVar, type CompCtx, type HandlerAcc, type FnInfo, type CompInfo, type Global, type Narrowed, bind, extend, freshLocal } from "./ctx.ts";
-import { VtsError, fail, leanField, leanAccessor, leanIdent, leanStr, jsStr, leanInt, paren, nodeText, capitalize } from "./util.ts";
+import { VtsError, fail, leanField, leanAccessor, leanIdent, leanStr, jsStr, leanInt, paren, nodeText, capitalize, decodeJsxEntities } from "./util.ts";
 
 /* ───────────────────────────── helpers ───────────────────────────── */
 
@@ -230,7 +230,7 @@ function isNullLit(e: ts.Expression): boolean {
   return e.kind === ts.SyntaxKind.NullKeyword || (ts.isIdentifier(e) && e.text === "undefined");
 }
 
-function stripParens(e: ts.Expression): ts.Expression {
+export function stripParens(e: ts.Expression): ts.Expression {
   while (ts.isParenthesizedExpression(e) || ts.isAsExpression(e) && e.type.getText() === "const") e = ts.isParenthesizedExpression(e) ? e.expression : (e as ts.AsExpression).expression;
   return e;
 }
@@ -545,7 +545,7 @@ function arity(c: ts.CallExpression, what: string, min: number, max: number, hin
 function isIntLike(t: VType) {
   return t.k === "int";
 }
-function isNumeric(t: VType) {
+export function isNumeric(t: VType) {
   return t.k === "int" || t.k === "num";
 }
 
@@ -610,7 +610,7 @@ function expr0(e: ts.Expression, env: Env, expected?: VType): Val {
     }
     case ts.SyntaxKind.StringLiteral:
     case ts.SyntaxKind.NoSubstitutionTemplateLiteral: {
-      const text = (e as ts.StringLiteral).text;
+      const text = jsxAttrText(e as ts.StringLiteral);
       if (expected?.k === "enum") {
         const lits = m.reg.enumLits(expected);
         if (!lits.includes(text)) fail(e, `"${text}" is not a member of ${showType(expected)}`);
@@ -694,6 +694,14 @@ function expr0(e: ts.Expression, env: Env, expected?: VType): Val {
     default:
       fail(e, `expression not supported in VTS: ${nodeText(e)}`);
   }
+}
+
+/**
+ * The JS value of a string literal: the text TypeScript gives, except for a JSX attribute
+ * string (`title="a &amp; b"`), whose character references JS decodes.
+ */
+export function jsxAttrText(e: ts.StringLiteralLike): string {
+  return e.parent && ts.isJsxAttribute(e.parent) ? decodeJsxEntities(e.text, e) : e.text;
 }
 
 /** Conversion to string (template literals, JSX text, string concatenation). */
@@ -784,25 +792,71 @@ function propertyAccess(pa: ts.PropertyAccessExpression, env: Env): Val {
 
 function eventBase(pa: ts.PropertyAccessExpression, env: Env): Val | null {
   // e.key
-  const root = (x: ts.Expression): Binding | undefined => {
+  const root = (x: ts.Expression): Extract<Binding, { k: "event" }> | undefined => {
     if (!ts.isIdentifier(x)) return undefined;
     const s = symbolOf(env, x);
-    return s ? env.vars.get(s) : undefined;
+    const b = s ? env.vars.get(s) : undefined;
+    return b?.k === "event" ? b : undefined;
   };
   const b1 = root(pa.expression);
-  if (b1?.k === "event") {
-    if (pa.name.text === "key") return { code: `${b1.leanVar}.key`, type: T.str };
+  if (b1) {
+    checkEventUse(pa, b1, env);
+    if (pa.name.text === "key") return eventField(pa, `${b1.leanVar}.key`, T.str, env);
     fail(pa, `unsupported event property e.${pa.name.text} (supported: e.key, e.target.value, e.target.checked)`);
   }
   if (ts.isPropertyAccessExpression(pa.expression)) {
     const b2 = root(pa.expression.expression);
-    if (b2?.k === "event" && ["target", "currentTarget"].includes(pa.expression.name.text)) {
-      if (pa.name.text === "value") return { code: `${b2.leanVar}.value`, type: T.str };
-      if (pa.name.text === "checked") return { code: `${b2.leanVar}.checked`, type: T.bool };
+    if (b2 && ["target", "currentTarget"].includes(pa.expression.name.text)) {
+      checkEventUse(pa, b2, env);
+      if (pa.name.text === "value") return eventField(pa, `${b2.leanVar}.value`, T.str, env);
+      if (pa.name.text === "checked") return eventField(pa, `${b2.leanVar}.checked`, T.bool, env);
       fail(pa, `unsupported event property (supported: e.target.value, e.target.checked)`);
     }
   }
   return null;
+}
+
+/**
+ * An event field, whose model (`DomEvent.value : JS.Str`, `.checked : Bool`, `.key : JS.Str`)
+ * covers it only when JS reads a string (a boolean) there: `e.currentTarget.value` of an
+ * `<li>`, `<progress>` or `<meter>` is a number.
+ */
+function eventField(pa: ts.PropertyAccessExpression, code: string, t: VType, env: Env): Val {
+  const tt = env.m.checker.getTypeAtLocation(pa);
+  const flag = t.k === "bool" ? ts.TypeFlags.BooleanLike : ts.TypeFlags.StringLike;
+  const ok = tt.isUnion() ? tt.types.every((x) => x.flags & flag) : !!(tt.flags & flag);
+  if (!ok) fail(pa, `\`${nodeText(pa)}\` is a ${env.m.checker.typeToString(tt)} here, not a ${t.k === "bool" ? "boolean" : "string"}: only an input's, select's or textarea's value (a string), a checkbox's checked and a key event's key are modelled`);
+  return { code, type: t };
+}
+
+/**
+ * The event object is read while its handler runs: React reuses nothing in React 18, but it
+ * sets `e.currentTarget` to null once the handler returns, and `e.target.value` /
+ * `e.target.checked` read the live DOM element.  A function created inside the handler that
+ * runs later — a functional update `setX(p => …)` (React calls it when it processes the
+ * update, and again when it rebases it), a local helper — would read them then, not the
+ * values the model gives the handler.  Only callbacks that run in place (array methods,
+ * spec predicates) may read the event.
+ */
+function checkEventUse(node: ts.Node, b: Extract<Binding, { k: "event" }>, env: Env) {
+  for (let n = node.parent; n && n !== b.fn; n = n.parent) {
+    if ((ts.isArrowFunction(n) || ts.isFunctionExpression(n)) && !isImmediateFn(n, env)) {
+      fail(node, `\`${nodeText(node, 40)}\` is read inside ${laterWhat(n, env)}, which may run after React has dispatched the event: e.currentTarget is null then, and e.target.value / e.target.checked read the element's value at that time, not the one of this event. Read the event in the handler's own statements and use the copy: \`const v = ${nodeText(node, 40)};\` before the function`);
+    }
+  }
+}
+
+/** What kind of function created in a handler `fn` is, for messages. */
+function laterWhat(fn: ts.ArrowFunction | ts.FunctionExpression, env: Env): string {
+  let child: ts.Node = fn;
+  while (ts.isParenthesizedExpression(child.parent)) child = child.parent;
+  const p = child.parent;
+  if (ts.isCallExpression(p) && ts.isIdentifier(p.expression)) {
+    const s = symbolOf(env, p.expression);
+    const b = s ? env.vars.get(s) : undefined;
+    if (b?.k === "setter") return "a functional update (React calls it when it processes the update, and again when it rebases it onto other updates)";
+  }
+  return "a function created in the handler";
 }
 
 function fieldOf(base: Val, name: string, node: ts.Node, env: Env): Val {
@@ -2105,6 +2159,10 @@ export interface BlockCtx {
   onDone?: (env: Env) => string;
   /** render: translate a JSX const at its declaration (`code`), of Lean type `type` */
   jsxConst?: { code: (e: ts.Expression, env: Env) => string; type: string };
+  /** an effect body: `return cleanup` (the cleanup's evaluation, then the outcome) */
+  onCleanup?: (e: ts.Expression, env: Env) => string;
+  /** an effect body: statements it translates itself (timer registrations), or null */
+  onStmt?: (s: ts.Statement, env: Env, rest: (e: Env) => string) => string | null;
   fnNode: ts.Node;
 }
 
@@ -2133,6 +2191,8 @@ export function block(stmts: readonly ts.Statement[], i: number, env: Env, bc: B
   const s = stmts[i];
   const rest = (e2: Env) => block(stmts, i + 1, e2, bc, k);
   const m = env.m;
+  const own = bc.onStmt?.(s, env, rest);
+  if (own != null) return own;
   if (ts.isVariableStatement(s)) {
     const isConst = (s.declarationList.flags & ts.NodeFlags.Const) !== 0;
     const isLet = (s.declarationList.flags & ts.NodeFlags.Let) !== 0;
@@ -2156,6 +2216,7 @@ export function block(stmts: readonly ts.Statement[], i: number, env: Env, bc: B
       fail(stmts[i + 1], "unreachable code after return");
     }
     if (bc.kind === "handler") {
+      if (s.expression && bc.onCleanup) return bc.onCleanup(s.expression, env);
       if (s.expression) fail(s, "event handlers return nothing");
       return bc.onDone!(env);
     }
@@ -2347,7 +2408,7 @@ function exprStatement(e: ts.Expression, env: Env, bc: BlockCtx, rest: (e: Env) 
   if (ts.isBinaryExpression(e)) {
     const k = e.operatorToken.kind;
     if (k === ts.SyntaxKind.EqualsToken) {
-      if (ts.isPropertyAccessExpression(e.left) && e.left.getText() === "document.title") return rest(env); // external effect
+      if (isDocumentTitle(e.left, env)) return evalArgs([e.right], env, rest); // external effect: only the value is evaluated
       return assignLocal(e.left, (_old, declared) => (declared.k === "opt" ? exprPreferElem(e.right, env, declared) : expr(e.right, env, declared)), env, rest, e);
     }
     if (k === ts.SyntaxKind.PlusEqualsToken || k === ts.SyntaxKind.MinusEqualsToken) {
@@ -2396,14 +2457,19 @@ function exprStatement(e: ts.Expression, env: Env, bc: BlockCtx, rest: (e: Env) 
         fail(e, `${sf}(…) has no effect as a statement`);
     }
   }
-  // console.*, e.preventDefault(), localStorage writes: external, no effect on component state
+  // console.*, e.preventDefault(), localStorage writes: external, no effect on component state;
+  // JS evaluates their arguments (which may throw, or call a function outside its
+  // precondition), so the arguments are translated with their obligations
   if (ts.isPropertyAccessExpression(callee)) {
-    const objText = callee.expression.getText();
-    if (objText === "console") return rest(env);
-    if (objText === "localStorage" && callee.name.text === "setItem") return rest(env);
+    if (externalWrite(e, env)) return evalArgs(e.arguments, env, rest);
     if (["preventDefault", "stopPropagation"].includes(callee.name.text) && ts.isIdentifier(callee.expression)) {
       const s = symbolOf(env, callee.expression);
-      if (s && env.vars.get(s)?.k === "event") return rest(env);
+      const b = s ? env.vars.get(s) : undefined;
+      if (b?.k === "event") {
+        checkEventUse(callee.expression, b, env);
+        if (e.arguments.length) fail(e, `${callee.name.text}() takes no arguments`);
+        return rest(env);
+      }
     }
   }
   // state updates / callbacks: only in handlers
@@ -2437,7 +2503,8 @@ function exprStatement(e: ts.Expression, env: Env, bc: BlockCtx, rest: (e: Env) 
         // expression-bodied: treat as a single statement
         return lets + exprStatement(fn.body, e2, bc, (e3) => rest({ ...env, handler: e3.handler, scope: e3.scope }));
       }
-      const inner: BlockCtx = { ...bc, onDone: (e3) => rest({ ...env, handler: e3.handler, scope: e3.scope }) };
+      // (a `return` in the helper ends the helper: its value is not an effect's cleanup)
+      const inner: BlockCtx = { ...bc, onCleanup: undefined, onStmt: undefined, onDone: (e3) => rest({ ...env, handler: e3.handler, scope: e3.scope }) };
       return `(${lets}${block(stmts, 0, e2, inner, (e3) => rest({ ...env, handler: e3.handler, scope: e3.scope }))})`;
     }
   }
@@ -2446,6 +2513,53 @@ function exprStatement(e: ts.Expression, env: Env, bc: BlockCtx, rest: (e: Env) 
   }
   if (ts.isCallExpression(e) && hookName(env, callee)) fail(e, "hooks must be called at the top level of a component, unconditionally (Rules of Hooks)");
   fail(e, `this call has no modelled effect: ${nodeText(e)}`);
+}
+
+/**
+ * `name` is the browser global of that name (`console`, `localStorage`, `document`), not a
+ * local, parameter, import or user declaration: declared only by the default libraries or
+ * typings under node_modules.
+ */
+export function isLibGlobal(x: ts.Expression, name: string, env: Env): boolean {
+  if (!ts.isIdentifier(x) || x.text !== name) return false;
+  const s = symbolOf(env, x);
+  if (!s || env.vars.get(s)) return false;
+  const ds = s.declarations ?? [];
+  return ds.length > 0 && ds.every((d) => {
+    const sf = d.getSourceFile();
+    return sf.hasNoDefaultLib || /[\\/]node_modules[\\/]/.test(sf.fileName);
+  });
+}
+
+/** `console.*(…)` / `localStorage.setItem(…)`: an external write, with no modelled effect. */
+export function externalWrite(c: ts.CallExpression, env: Env): boolean {
+  const callee = c.expression;
+  if (!ts.isPropertyAccessExpression(callee)) return false;
+  return isLibGlobal(callee.expression, "console", env) || (callee.name.text === "setItem" && isLibGlobal(callee.expression, "localStorage", env));
+}
+
+/** `document.title` (as an assignment target). */
+export function isDocumentTitle(x: ts.Expression, env: Env): boolean {
+  return ts.isPropertyAccessExpression(x) && x.name.text === "title" && isLibGlobal(x.expression, "document", env);
+}
+
+/**
+ * Evaluate the arguments of an external write, then `rest`: the values are not used, but JS
+ * computes them, so they are translated (as unused `let`s) with their obligations — an index
+ * `xs[9].name` or `x!.f` that would throw, a `%`/`idiv` divisor, the precondition of a called
+ * function.  `null` / `undefined` need no evaluation.
+ */
+export function evalArgs(args: readonly ts.Expression[], env: Env, rest: (e: Env) => string): string {
+  let lets = "";
+  for (const a0 of args) {
+    if (ts.isSpreadElement(a0)) fail(a0, "spread arguments are not supported here: pass the values one by one");
+    const a = stripParens(a0);
+    if (a.kind === ts.SyntaxKind.NullKeyword || (ts.isIdentifier(a) && a.text === "undefined" && !symbolOf(env, a)?.valueDeclaration)) continue;
+    if (ts.isStringLiteralLike(a) || ts.isNumericLiteral(a) || a.kind === ts.SyntaxKind.TrueKeyword || a.kind === ts.SyntaxKind.FalseKeyword) continue;
+    const v = expr(a, env);
+    lets += `let _${letType(v.type)} := ${v.code};\n`;
+  }
+  return lets ? `(${lets}${rest(env)})` : rest(env);
 }
 
 type UpdTarget =
@@ -2810,7 +2924,7 @@ export function handlerFn(fnExpr: ts.Expression, env: Env, kind: "discrete" | "r
     if (p) {
       if (!ts.isIdentifier(p.name)) fail(p, "destructuring the event object is not supported");
       const r = freshLocal(e1, leanIdent(p.name.text));
-      e1 = bind(r.env, symbolOf(env, p.name)!, { k: "event", leanVar: r.name });
+      e1 = bind(r.env, symbolOf(env, p.name)!, { k: "event", leanVar: r.name, fn: fnExpr });
       params.push(r.name);
     } else {
       const r = freshLocal(e1, "ev");

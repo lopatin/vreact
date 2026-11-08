@@ -162,7 +162,34 @@ Every expression maps to a Lean term whose value is the JavaScript value.
   a switch on an int, string, boolean or number are compared with `===`, and may be
   literals, negated literals or constants — a non-integer label on an int is
   rejected, it can never match), `throw`
-  ↦ an obligation that the point is unreachable.
+  ↦ an obligation that the point is unreachable. Statements after a `return` in
+  the same block never run and are rejected (in function bodies, component
+  bodies, handlers, effects and timer callbacks alike), so the translation never
+  gives them a meaning. Async functions and generators are rejected anywhere in
+  verified code: an async function returns a promise (always truthy, e.g. as a
+  `filter` predicate) and runs what follows an `await` later; calling a
+  generator does not run its body.
+* Expressions JS evaluates for their effect only — the arguments of `console.*`
+  and `localStorage.setItem`, the value of `document.title = …`, a timer's delay,
+  the conditions and arguments of an effect cleanup — are translated as unused
+  `let`s at the point where JS evaluates them, so their obligations (index,
+  non-null, divisor, preconditions of called functions) are checked; their values
+  have no modelled effect.
+* JSX tags: an identifier starting with a lower-case letter is the HTML element of
+  that name (also when a variable of that name is in scope: the JSX transform
+  never reads it), a capitalised one the verified component it resolves to.
+  Member-expression tags (`<props.as>`: a dynamic element type), namespaced tags
+  and custom elements (`<my-el>`, whose behaviour is defined by script outside the
+  program) are rejected. JSX text and attribute strings have the value TypeScript's
+  JSX transform gives them: text lines are trimmed at line breaks and joined with
+  a space (`fixupWhitespaceAndDecodeEntities`), and the character references
+  `&#DDD;`, `&#xHHH;` and the HTML 4 entities `&name;` are decoded, also for the
+  event-layout checks of §5 (`type="&#115;ubmit"` is a submit button, which the
+  TypeScript AST spells raw). References that JSX compilers decode differently
+  (names outside HTML 4, `&#X41;`, `&#+65;`, code points above U+10FFFF) are
+  rejected.
+* `key` and `ref` are not props in React 18 (the component never receives them):
+  a props type with a field named `key` or `ref` is rejected, and so is `ref={…}`.
 * A JSX const (`const row = <p>{e}</p>;`) is translated where it is declared —
   JS evaluates the element's attributes and `{…}` children there, whether or not
   (and wherever) it is rendered — so its obligations are checked at the
@@ -178,6 +205,17 @@ Every expression maps to a Lean term whose value is the JavaScript value.
   including immediately-run array callbacks — may assign a `let` declared
   outside it. Array-method callbacks, spec predicates and the `useMemo` factory
   run in place and read the current values.
+* A DOM handler's event parameter is `DomEvent` (`e.target.value`,
+  `e.currentTarget.value`, `e.target.checked`, `e.key`: arbitrary values, fixed for
+  the run of the handler). This describes JS only while the handler's own
+  statements run: React sets `e.currentTarget` to null after the dispatch, and
+  `e.target.value` reads the element's current value. So the event may be read only
+  in the handler's statements and in callbacks that run in place there; inside any
+  other function created in the handler — a functional update, which React calls
+  when it processes the update and again when it rebases it, or a local helper —
+  reading it (also `e.preventDefault()`) is rejected: copy the field into a `const`
+  first. A field is accepted only where TypeScript types it `string` (`boolean` for
+  `checked`): an `<li>`'s or `<progress>`'s `value` is a number.
 
 ### 1.3 Contracts (`vreact/spec`)
 
@@ -357,11 +395,21 @@ returned cleanup is restricted statically: it must be an inline function that
 only calls `clearTimeout` / `clearInterval` and makes external writes
 (`console.*`, `localStorage.*`, `document.title = …`) with pure arguments,
 possibly under `if`/`else` with pure conditions —
-no setters, `dispatch`, parent callbacks or local helpers.
+no setters, `dispatch`, parent callbacks or local helpers. JS still evaluates
+its conditions and arguments when it runs, with the values it captured: those
+at the effect's `return` (a captured `let` is never reassigned after the cleanup
+is created, §1.2, and nothing in the effect follows its `return`). So the cleanup
+is translated there, as an unused `Unit` term inside the effect's setup outcome:
+its obligations are checked under the facts that hold at that `return` (the
+effect's early returns and branches). A condition on a timer handle (`id !==
+null`, `id`) is decided statically: browsers return a positive integer. The
+cleanup may be returned at the end of the effect body or of a branch of it;
+statements after a `return` are rejected (JS never runs them).
 Running a robust effect any number of times (StrictMode) is safe.
 
 A timer is registered only by a statement at the top level of the effect body
-(`setTimeout(…)` / `const id = setInterval(…)`). Its callback is checked under the
+(`setTimeout(…)` / `const id = setInterval(…)`, with at most a delay argument,
+which is evaluated — checked — at that statement). Its callback is checked under the
 path condition of that registration. That condition is made of the top-level
 early returns `if (c) return;` (no `else`) and the `assert(c)` / `assume(c)`
 statements before it. The callback captures the same snapshot as the effect: an
@@ -454,7 +502,9 @@ survives prop changes; every handler (discrete: from the snapshot, or
 rebase-safe when the component has deferred updates; continuous,
 default-priority, focus/blur/invalid, effects, timers: from any state) preserves it; rendering never
 fails (indices, divisions, non-null assertions, preconditions of called
-functions — also in keys and boolean children); keys are
+functions — also in keys and boolean children), and neither do handlers, effects,
+timers and cleanups (also the arguments of external writes and timer delays,
+whose values are not used); keys are
 distinct; child preconditions hold; callback contracts hold in both directions;
 hook rules hold (static checks). For every function: its body is safe and its
 `ensures` hold.
@@ -544,7 +594,16 @@ hook rules hold (static checks). For every function: its body is safe and its
   `Runtime.rebase_safe`), not by `dispatch`.
 * **Abstractions:** integers are unbounded; floats are opaque to proofs; Unicode
   case mapping is opaque; `localStorage`, `console`, `document.title` writes are
-  external effects with no state change; reading external data is not modelled.
+  external effects with no state change (their arguments are evaluated and
+  checked; the writes themselves are assumed not to throw — a full storage quota
+  or a `SecurityError` from `localStorage` would abort the handler); reading
+  external data is not modelled. A DOM event is an arbitrary `DomEvent`: the model
+  assumes nothing about the values the user enters.
+* **The JSX transform:** the meaning of JSX is TypeScript's `react-jsx` transform
+  (tag names, whitespace of JSX text, character references); references on which
+  the common compilers (TypeScript, Babel, esbuild) disagree are rejected. Babel
+  also turns a tab inside a line of JSX text into a space; the text of rendered
+  nodes is not used by any proof.
 * **Outside the subset:** the entry point (`main.tsx`), React itself, the DOM,
   CSS.
 * **Event bubbling, multi-handler events and activation behaviour** are handled

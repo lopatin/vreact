@@ -106,7 +106,8 @@ export type Binding =
   | { k: "closure"; fn: ts.ArrowFunction | ts.FunctionExpression; env: Env }
   | { k: "callback"; cb: CallbackInfo }
   | { k: "props" }
-  | { k: "event"; leanVar: string }
+  /** the event parameter of the DOM handler `fn` (its fields are read from the event while `fn` runs) */
+  | { k: "event"; leanVar: string; fn: ts.Node }
   /** a JSX const: translated (obligations checked) at its declaration, bound to the Lean local `code` */
   | { k: "jsx"; node: ts.Expression; env: Env; code: string };
 

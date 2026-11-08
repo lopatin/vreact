@@ -124,6 +124,10 @@ on an int is rejected; on an enum or `x.kind`: string literals), `for (const x o
 assign outer `let`s; no `return`/`continue` inside, `break` only to end a `switch`
 case), `throw` (must be provably
 unreachable), `assert(c)`, `assume(c)`. No `while`, `try`, `var`, recursion.
+Code after a `return` in the same block never runs and is rejected (in functions,
+components, handlers, effects, timer callbacks). Async functions and generators
+are rejected everywhere (an async predicate returns a promise, which is always
+truthy; calling a generator does not run its body).
 
 Closures and `let`: JS closures read a variable when they run. So a function
 that runs later (helper arrow, handler, callback prop, `setX(prev => …)`, effect,
@@ -186,10 +190,21 @@ Order inside the body:
 
 Props: a single parameter `props: P` (or destructured `{ a, b }: P`) where `P`
 is a record whose function-typed fields are callbacks (`=> void`, required).
+`key` and `ref` are not props: React never passes them to the component
+(`props.key` is undefined), so `P` may not have fields named `key` or `ref`, and
+`ref={…}` is rejected (refs are not modelled).
 
 Handlers (`onClick`, `onChange`, `onSubmit`, `onKeyDown`, …): arrow functions or
 local closures; the event parameter supports `e.target.value`,
-`e.target.checked`, `e.key`, `e.preventDefault()`. Setters, `dispatch`, at most
+`e.target.checked`, `e.key`, `e.preventDefault()` (also `e.currentTarget.…`;
+`value` must be a string there — an input's, select's or textarea's — not the
+number an `<li>` or `<progress>` has). Read the event in the handler's own
+statements (array callbacks there may too): a function created in the handler —
+a functional update `setX(p => …)`, which React calls when it processes the
+update and again when it rebases it, or a local helper — may run after the
+event's dispatch, when `e.currentTarget` is null and `e.target.value` is the
+element's value at that time. Copy it first: `const v = e.target.value;
+setX((p) => … v …)`. Setters, `dispatch`, at most
 one parent callback per path. Only React's discrete events (`onClick`,
 `onChange`, `onInput`, `onKeyDown`, `onSubmit`, …) are
 checked from the render snapshot; continuous (`onMouseMove`, `onScroll`,
@@ -206,13 +221,20 @@ names, `onSelect`, capture-phase handlers (`onClickCapture`).
 Effects: setters and timers (`setTimeout`/`setInterval` callbacks become tasks;
 register them at the top level of the effect body; a timer's callback may use the
 early returns `if (c) return;` and the `assert`/`assume` before it, as in
-`if (left <= 0) return; setTimeout(() => setLeft(left - 1), 1000)`),
+`if (left <= 0) return; setTimeout(() => setLeft(left - 1), 1000)`; the delay is
+checked where the timer is registered; no further `setTimeout` arguments),
 external writes (`localStorage.setItem`, `document.title = …`, `console.*`) are
-allowed and have no modelled effect; no async. A cleanup is an inline
-`() => { … }` that only calls `clearTimeout`/`clearInterval` and makes those
-external writes, possibly under `if`/`else` (`if (id !== null) clearInterval(id)`;
-no setters, `dispatch`, parent callbacks or local helpers: it runs later with a
-stale render's values and is not verified).
+allowed and have no modelled effect, but JS evaluates their arguments, so these
+are checked like any expression (here and in handlers, timers, cleanups, render
+and functions: `console.log(xs[i].name)` needs `i` in bounds); no async. A cleanup
+is an inline `() => { … }`, returned at the end of the effect body or of a branch
+of it, that only calls `clearTimeout`/`clearInterval` and makes those external
+writes, possibly under `if`/`else` (`if (id !== null) clearInterval(id)`: a timer
+handle is never null); no setters, `dispatch`, parent callbacks or local helpers:
+it runs later with the values it captured. Its conditions and arguments are
+checked where the effect returns it, under the facts that hold there (the
+effect's early returns, its `if`s). Statements after the effect's `return` are
+rejected (they never run).
 
 JSX: intrinsic elements with string/int/bool/enum attributes (`className`,
 `value`, `checked`, `disabled`, `placeholder`, `type`, …; no `style`, `ref`,
@@ -223,6 +245,15 @@ lists is checked too (JS evaluates it). A JSX const (`const row = <p>{e}</p>;`)
 is checked where it is declared, even if it is rendered only under a condition or
 not at all (JS evaluates it there); JSX only appears in a component's render.
 `children` props are not supported yet.
+Tags are plain names: a lower-case one is always the HTML element (`<p>` even
+where a variable `p` exists), a capitalised one a verified component. Rejected:
+member-expression tags (`<props.as>`, `<ui.Button>`: a dynamic element type),
+namespaced tags (`<svg:rect>`) and custom elements (`<my-el>`). Character
+references in JSX text and attribute strings are decoded as JSX does (`&amp;`,
+`&#65;`, `&#x41;`, the HTML 4 entities), also for the layout checks below:
+`type="&#115;ubmit"` is a submit button. References that JSX compilers read
+differently (`&check;` and other names outside HTML 4, `&#X41;`, `&#+65;`, code
+points above U+10FFFF) are rejected: write the character, or `{"…"}`.
 One native event may reach at most one discrete handler: an element may not
 combine handlers fired by the same native event (a checkbox's `onClick` +
 `onChange` both run on click; `onInput` + a text input's `onChange` both run on

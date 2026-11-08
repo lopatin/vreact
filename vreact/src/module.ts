@@ -671,6 +671,7 @@ function collect(st: ts.Statement, m: ModCtx, ns: string, res: TranslateResult) 
     if (st.asteriskToken || st.modifiers?.some((x) => x.kind === ts.SyntaxKind.AsyncKeyword)) fail(st, "async functions and generators are not supported");
     if (st.typeParameters?.length) fail(st, "generic functions are not supported in VTS yet");
     const trusted = isTrusted(st);
+    if (!trusted && st.body) rejectAsyncFunctions(st.body);
     if (isComponentDecl(st)) {
       const info = compSignature(st, ns, ns, m, trusted);
       prog.globals.set(st, { k: "comp", info });
@@ -694,6 +695,7 @@ function collect(st: ts.Statement, m: ModCtx, ns: string, res: TranslateResult) 
     if (!(st.declarationList.flags & ts.NodeFlags.Const)) fail(st, "top-level variables must be const");
     for (const d of st.declarationList.declarations) {
       if (!ts.isIdentifier(d.name) || !d.initializer) fail(d, "top-level const needs a name and initializer");
+      rejectAsyncFunctions(d.initializer);
       let t: VType | undefined = d.type ? typeOfNode(d.type, prog.typeEnv, capitalize(d.name.text)) : undefined;
       if (!t) {
         const init = d.initializer;
@@ -729,6 +731,22 @@ function collect(st: ts.Statement, m: ModCtx, ns: string, res: TranslateResult) 
   }
   if (ts.isEmptyStatement(st)) return;
   fail(st, `top-level statement not supported in VTS (only imports, types, functions, components and constants)`);
+}
+
+/**
+ * Async functions and generators inside verified code: the translation gives a function the
+ * meaning of its body run to completion, but an async function returns a promise (always
+ * truthy: `xs.filter(async (x) => x > 3)` keeps every element) and runs what follows an
+ * `await` later, and calling a generator does not run its body at all.
+ */
+function rejectAsyncFunctions(n: ts.Node) {
+  const visit = (x: ts.Node) => {
+    if ((ts.isArrowFunction(x) || ts.isFunctionExpression(x) || ts.isMethodDeclaration(x)) && (x.asteriskToken || x.modifiers?.some((k) => k.kind === ts.SyntaxKind.AsyncKeyword))) {
+      fail(x, "async functions and generators are not supported in VTS: an async function returns a promise (always truthy, e.g. as a filter or some/every predicate) and runs the code after an `await` later, when e.g. an event's fields have changed; calling a generator does not run its body. Use a plain function");
+    }
+    ts.forEachChild(x, visit);
+  };
+  visit(n);
 }
 
 function isSpecCall(s: ts.Statement, m: ModCtx, name: string): boolean {

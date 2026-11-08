@@ -10,8 +10,8 @@
 import ts from "typescript";
 import { T, type VType, type Param, type Field, leanType, showType, typeOfNode } from "./types.ts";
 import { type Env, ModCtx, type CompCtx, type CompInfo, type StateVar, type FnInfo, type Binding, bind, freshLocal } from "./ctx.ts";
-import { expr, prop, propAll, block, branch, handlerFn, checkDeps, hookName, specFn, symbolOf, bindParam, type BlockCtx, typeOf, valueBlock, lambda, outcome, checkClosures, topLevelHookDecls, fnParamTsTypes } from "./translate.ts";
-import { fail, leanField, leanIdent, leanStr, jsStr, paren, nodeText, indent, VtsError } from "./util.ts";
+import { expr, prop, propAll, block, branch, handlerFn, checkDeps, hookName, specFn, symbolOf, bindParam, type BlockCtx, typeOf, valueBlock, lambda, outcome, checkClosures, topLevelHookDecls, fnParamTsTypes, stripParens, isNumeric, evalArgs, isLibGlobal, isDocumentTitle, jsxAttrText } from "./translate.ts";
+import { fail, leanField, leanIdent, leanStr, jsStr, paren, nodeText, indent, VtsError, jsxTextValue } from "./util.ts";
 
 /* ─────────────────────── React 18.3.1 event model ───────────────────────
  * Native DOM events → React handler props, and their priorities, as in
@@ -69,7 +69,7 @@ function staticAttr(e: ts.JsxElement | ts.JsxSelfClosingElement, name: string): 
   if (as.length > 1) return undefined;
   const a = as[0];
   const v = a.initializer && ts.isJsxExpression(a.initializer) ? a.initializer.expression : a.initializer;
-  return v && ts.isStringLiteralLike(v) ? v.text : undefined;
+  return v && ts.isStringLiteralLike(v) ? jsxAttrText(v) : undefined;
 }
 
 /** ChangeEventPlugin: the native events that dispatch `onChange` on `<tag>` (also bubbled from descendants). */
@@ -146,6 +146,9 @@ export function compSignature(fn: ts.FunctionDeclaration, ns: string, module: st
     propsType = typeOfNode(p.type, m.prog.typeEnv, name + "Props");
     if (propsType.k !== "rec") fail(p, "props must be an object type");
     for (const f of m.reg.rec(propsType)) {
+      // React 18 takes `key` and `ref` out of the props: the component never receives them
+      if (f.name === "key") fail(p, `a prop named key: React uses key={…} to match list items and never passes it to the component (props.key is undefined); rename the prop (e.g. id)`);
+      if (f.name === "ref") fail(p, `a prop named ref: React 18 does not pass ref={…} to a function component (props.ref is undefined), and refs are not modelled; rename the prop`);
       if (f.type.k === "fn") {
         if (f.type.ret.k !== "void") fail(p, `callback ${f.name} must return void`);
         callbacks.push({ name: f.name, params: f.type.params });
@@ -376,6 +379,7 @@ function renderBlock(stmts: ts.Statement[], env: Env, bc: BlockCtx): string {
       onEffect(s.expression, e);
       return run(i + 1, e);
     }
+    if (ts.isReturnStatement(s) && i < stmts.length - 1) fail(stmts[i + 1], "unreachable code after return (it never runs)");
     // translate this statement with a continuation that resumes the scan
     return block([s], 0, e, bc, (e2) => run(i + 1, e2));
   };
@@ -553,56 +557,88 @@ function effectCode(c: ts.CallExpression, env: Env, info: CompInfo): string {
   let stmts = ts.isBlock(fn.body) ? [...fn.body.statements] : [ts.factory.createExpressionStatement(fn.body)];
   let bodyE: ts.Node = fn.body;
   while (ts.isParenthesizedExpression(bodyE)) bodyE = bodyE.expression;
-  if (ts.isArrowFunction(bodyE) || ts.isFunctionExpression(bodyE)) {
-    // useEffect(() => () => cleanup)
-    checkCleanup(bodyE, env);
-    stmts = [];
+  /** useEffect(() => () => cleanup): the cleanup is created at once */
+  const cleanupOnly = ts.isArrowFunction(bodyE) || ts.isFunctionExpression(bodyE) ? bodyE : null;
+  if (cleanupOnly) stmts = [];
+  // an expression body is the effect's return value, which React keeps as the cleanup and
+  // calls (unless it is undefined) before the next run and on unmount: a timer id or an
+  // assigned value there would throw a TypeError then
+  else if (!ts.isBlock(fn.body) && !returnsUndefined(fn.body, env)) {
+    fail(fn.body, `the value of \`${nodeText(fn.body, 40)}\` is the effect's return value, which React calls as its cleanup (a TypeError when it is not a function); write the effect body in braces: useEffect(() => { ${nodeText(fn.body, 30)}; }, …)`);
   }
   const tasks: string[] = [];
-  const sync: ts.Statement[] = [];
-  const timerCb = (e: ts.Expression): ts.Expression | null => {
-    if (ts.isCallExpression(e) && ts.isIdentifier(e.expression) && ["setInterval", "setTimeout"].includes(e.expression.text)) return e.arguments[0];
+  /** the registration `setTimeout(cb, delay)` of each timer statement */
+  const timerCalls = new Map<ts.Statement, ts.CallExpression>();
+  const timerCall = (e: ts.Expression): ts.CallExpression | null => {
+    e = stripParens(e);
+    if (ts.isCallExpression(e) && ts.isIdentifier(e.expression) && ["setInterval", "setTimeout"].includes(e.expression.text) && isLibGlobal(e.expression, e.expression.text, env)) return e;
     return null;
   };
   // the path condition of the timers registered so far down the effect body (`timerGuard`)
   const guards: TimerGuard[] = [];
-  for (const s of stmts) {
-    if (ts.isReturnStatement(s)) {
-      // cleanup: not translated, so it may not touch any component's state
-      if (s.expression) checkCleanup(s.expression, env);
-      continue;
-    }
-    let cb: ts.Expression | null = null;
-    if (ts.isExpressionStatement(s)) cb = timerCb(s.expression);
+  stmts.forEach((s, i) => {
+    // JS does not run what follows a top-level `return` (the model must not either)
+    if (ts.isReturnStatement(s) && i < stmts.length - 1) fail(stmts[i + 1], "unreachable code after return (it never runs)");
+    let call: ts.CallExpression | null = null;
+    if (ts.isExpressionStatement(s)) call = timerCall(s.expression);
     if (ts.isVariableStatement(s) && s.declarationList.declarations.length === 1 && s.declarationList.declarations[0].initializer) {
-      cb = timerCb(s.declarationList.declarations[0].initializer!);
+      call = timerCall(s.declarationList.declarations[0].initializer!);
     }
-    if (cb) {
-      const timer = cb;
+    if (call) {
+      if (!call.arguments.length) fail(call, `${nodeText(call.expression)} needs a callback`);
+      if (call.arguments.length > 2) fail(call.arguments[2], `extra arguments of ${nodeText(call.expression)} are passed to its callback: not supported (use them in the callback directly)`);
+      const timer = call.arguments[0];
       tasks.push(`(fun _ => ${guardedTimer(guards, 0, env, (e) => handlerFn(timer, e, "robust", []).code)})`);
-      continue;
+      timerCalls.set(s, call);
+      return;
     }
     const g = timerGuard(s, env);
     if (g) guards.push(g);
-    sync.push(s);
-  }
-  // translate the synchronous part as a robust handler body
-  const fake = ts.factory.createArrowFunction(undefined, undefined, [], undefined, undefined, ts.factory.createBlock(sync));
-  let setup: string;
-  if (sync.length === 0) setup = `(VReact.Outcome.mk (S := ${info.ns}.State) (E := E) [] none)`;
-  else {
-    // translate statements directly (synthetic nodes have no positions; use the original statements)
-    const acc = { kind: "robust" as const, updates: [], emit: null, eventVar: null };
-    const e1: Env = { ...env, handler: acc, curState: undefined };
-    const done = (e3: Env) => outcome(e3.handler!, env.comp!);
-    setup = block(sync, 0, e1, { kind: "handler", fnNode: fn, onDone: done }, done);
-  }
-  void fake;
+  });
+  // the synchronous part, translated as a robust handler body; a timer registration evaluates
+  // its delay there (its callback is a task), and `return cleanup` the cleanup's arguments
+  const acc = { kind: "robust" as const, updates: [], emit: null, eventVar: null };
+  const e1: Env = { ...env, handler: acc, curState: undefined };
+  const done = (e3: Env) => outcome(e3.handler!, env.comp!);
+  const onStmt = (s: ts.Statement, e: Env, rest: (e: Env) => string): string | null => {
+    const call = timerCalls.get(s);
+    if (!call) return null;
+    const delay = call.arguments[1];
+    if (delay && !isNumeric(typeOf(delay, e))) fail(delay, "the delay of a timer must be a number");
+    return evalArgs(delay ? [delay] : [], e, rest);
+  };
+  const onCleanup = (c: ts.Expression, e: Env): string => `(let _ : Unit := ${cleanupCode(c, e)};\n${done(e)})`;
+  const setup = cleanupOnly ? onCleanup(cleanupOnly, e1) : block(stmts, 0, e1, { kind: "handler", fnNode: fn, onDone: done, onCleanup, onStmt }, done);
   const okSetup = m.ob(c, "effect-robust", `effect at ${nodeText(c, 40)} preserves the invariant of ${info.name} from any state (effects may run with stale snapshots)`);
   const okTasks = tasks.length
     ? m.ob(c, "effect-robust", `timer callbacks of the effect preserve the invariant of ${info.name} from any state`)
     : `(/-⟦gen⟧-/ by simp)`;
   return `(VReact.Effect.mk (S := ${info.ns}.State) (E := E) (inv := ${info.ns}.inv props) (${deps}) ${paren(setup)} ${okSetup}\n     (/-⟦gen⟧-/ by vreact_noemit)\n     [${tasks.join(", ")}] ${okTasks})`;
+}
+
+/**
+ * Does the expression statement `e` certainly evaluate to undefined?  Calls of setters and
+ * dispatch, external writes (`console.*`, `localStorage.setItem`), and local helpers whose
+ * body returns no value.
+ */
+function returnsUndefined(e0: ts.Expression, env: Env): boolean {
+  const e = stripParens(e0);
+  if (!ts.isCallExpression(e)) return false;
+  if (ts.isPropertyAccessExpression(e.expression)) return isLibGlobal(e.expression.expression, "console", env) || (e.expression.name.text === "setItem" && isLibGlobal(e.expression.expression, "localStorage", env));
+  if (!ts.isIdentifier(e.expression)) return false;
+  const s = symbolOf(env, e.expression);
+  const b = s ? env.vars.get(s) : undefined;
+  if (b?.k === "setter" || b?.k === "dispatch") return true;
+  if (b?.k !== "closure") return false;
+  const body = b.fn.body;
+  if (!ts.isBlock(body)) return returnsUndefined(body, b.env);
+  let value = false;
+  const visit = (n: ts.Node) => {
+    if (ts.isReturnStatement(n) && n.expression) value = true;
+    if (!ts.isFunctionLike(n)) ts.forEachChild(n, visit);
+  };
+  body.statements.forEach(visit);
+  return !value;
 }
 
 /**
@@ -665,18 +701,85 @@ function guardedTimer(guards: TimerGuard[], i: number, env: Env, body: (e: Env) 
 const CLEANUP_RULE = "effect cleanups may only clear timers (clearTimeout/clearInterval) and make external writes (console.*, localStorage.*, document.title = …), possibly under if/else: React runs a cleanup later, with the props and state of the render that created it, and the cleanup is not verified";
 
 /**
- * An effect cleanup is not translated (the model has no cleanup step), so it must not be
- * able to affect any component state: only timer clearing and the documented external
- * writes, whose arguments are pure expressions, possibly under `if`/`else` with a pure
- * condition.  Setters, dispatch, parent callbacks and local helpers (which may reach
- * them) are rejected, directly or nested.
+ * An effect cleanup.  The model has no cleanup step, so a cleanup must not be able to affect
+ * any component state: only timer clearing and the documented external writes, whose
+ * arguments are pure expressions, possibly under `if`/`else` with a pure condition.
+ * Setters, dispatch, parent callbacks and local helpers (which may reach them) are rejected,
+ * directly or nested.  JS still evaluates its conditions and arguments when it runs, which
+ * may throw (`xs[9].name`, `x!.f`) or call a function outside its precondition; it runs with
+ * the values it captured — those at the effect's `return` (`env`): a captured `let` is never
+ * reassigned after the cleanup is created (`checkClosures`), and the effect's own statements
+ * end with the `return`.  So they are translated here, with their obligations, into a `Unit`
+ * term evaluated at the `return`.
  */
-function checkCleanup(e0: ts.Expression, env: Env) {
-  let e: ts.Expression = e0;
-  while (ts.isParenthesizedExpression(e)) e = e.expression;
+function cleanupCode(e0: ts.Expression, env: Env): string {
+  const e = stripParens(e0);
   if (!ts.isArrowFunction(e) && !ts.isFunctionExpression(e)) fail(e0, `an effect cleanup must be an inline function \`() => { … }\`; ${CLEANUP_RULE}`);
   if (e.parameters.length) fail(e, "effect cleanups take no parameters");
-  checkCleanupItems(ts.isBlock(e.body) ? [...e.body.statements] : [e.body], env);
+  if (e.asteriskToken || e.modifiers?.some((x) => x.kind === ts.SyntaxKind.AsyncKeyword)) fail(e, `an effect cleanup must be a plain function (not async or a generator); ${CLEANUP_RULE}`);
+  const items = ts.isBlock(e.body) ? [...e.body.statements] : [e.body];
+  checkCleanupItems(items, env);
+  return cleanupItems(items, 0, env, () => "()");
+}
+
+/** The evaluation of cleanup statements (already checked by `checkCleanupItems`), then `k`. */
+function cleanupItems(items: readonly ts.Node[], i: number, env: Env, k: (e: Env) => string): string {
+  if (i >= items.length) return k(env);
+  const it = items[i];
+  const next = (e: Env) => cleanupItems(items, i + 1, e, k);
+  if (ts.isEmptyStatement(it)) return next(env);
+  if (ts.isBlock(it)) return cleanupItems(it.statements, 0, env, next);
+  if (ts.isIfStatement(it)) {
+    const els = it.elseStatement;
+    const onTrue = (e: Env) => cleanupItems([it.thenStatement], 0, e, next);
+    const onFalse = (e: Env) => (els ? cleanupItems([els], 0, e, next) : next(e));
+    const known = timerHandleTest(it.expression, env);
+    if (known !== null) return known ? onTrue(env) : onFalse(env);
+    return branch(it.expression, env, onTrue, onFalse);
+  }
+  const x = stripParens(ts.isExpressionStatement(it) ? it.expression : (it as ts.Expression));
+  if (ts.isCallExpression(x)) {
+    // clearTimeout(id) of a timer the effect registered: reading the handle cannot fail
+    if (ts.isIdentifier(x.expression) && x.arguments.length === 1 && timerHandle(x.arguments[0], env)) return next(env);
+    return evalArgs(x.arguments, env, next);
+  }
+  if (ts.isBinaryExpression(x)) return evalArgs([x.right], env, next); // document.title = …
+  fail(it, CLEANUP_RULE);
+}
+
+/**
+ * `id`: a timer handle, the `const` an effect binds to `setTimeout(…)` / `setInterval(…)` (not
+ * a VTS value): a positive integer in browsers, never null, undefined or 0.
+ */
+function timerHandle(x0: ts.Expression, env: Env): boolean {
+  const x = stripParens(x0);
+  if (!ts.isIdentifier(x)) return false;
+  const s = symbolOf(env, x);
+  if (!s || env.vars.get(s)) return false;
+  const d = s.valueDeclaration;
+  if (!d || !ts.isVariableDeclaration(d) || !(d.parent.flags & ts.NodeFlags.Const) || !d.initializer) return false;
+  const init = stripParens(d.initializer);
+  return ts.isCallExpression(init) && ts.isIdentifier(init.expression) && ["setTimeout", "setInterval"].includes(init.expression.text) && isLibGlobal(init.expression, init.expression.text, env);
+}
+
+/** The value of a condition on a timer handle (`id !== null`, `id`, `!id`), or null if it is not one. */
+function timerHandleTest(c0: ts.Expression, env: Env): boolean | null {
+  const c = stripParens(c0);
+  if (ts.isPrefixUnaryExpression(c) && c.operator === ts.SyntaxKind.ExclamationToken) {
+    const v = timerHandleTest(c.operand, env);
+    return v === null ? null : !v;
+  }
+  if (timerHandle(c, env)) return true;
+  if (!ts.isBinaryExpression(c)) return null;
+  const op = c.operatorToken.kind;
+  const ops = [ts.SyntaxKind.EqualsEqualsEqualsToken, ts.SyntaxKind.EqualsEqualsToken, ts.SyntaxKind.ExclamationEqualsEqualsToken, ts.SyntaxKind.ExclamationEqualsToken];
+  if (!ops.includes(op)) return null;
+  const nullish = (e: ts.Expression) => {
+    const x = stripParens(e);
+    return x.kind === ts.SyntaxKind.NullKeyword || (ts.isIdentifier(x) && x.text === "undefined" && !symbolOf(env, x)?.valueDeclaration);
+  };
+  if (!((timerHandle(c.left, env) && nullish(c.right)) || (timerHandle(c.right, env) && nullish(c.left)))) return null;
+  return op === ts.SyntaxKind.ExclamationEqualsEqualsToken || op === ts.SyntaxKind.ExclamationEqualsToken;
 }
 
 function checkCleanupItems(items: readonly ts.Node[], env: Env) {
@@ -696,14 +799,14 @@ function checkCleanupItems(items: readonly ts.Node[], env: Env) {
     while (ts.isParenthesizedExpression(x)) x = x.expression;
     if (ts.isCallExpression(x)) {
       const callee = x.expression;
-      const timerClear = ts.isIdentifier(callee) && ["clearTimeout", "clearInterval"].includes(callee.text) && !env.vars.get(symbolOf(env, callee)!);
-      const external = ts.isPropertyAccessExpression(callee) && ts.isIdentifier(callee.expression) && ["console", "localStorage"].includes(callee.expression.text) && !env.vars.get(symbolOf(env, callee.expression)!);
+      const timerClear = ts.isIdentifier(callee) && ["clearTimeout", "clearInterval"].includes(callee.text) && isLibGlobal(callee, callee.text, env);
+      const external = ts.isPropertyAccessExpression(callee) && (isLibGlobal(callee.expression, "console", env) || isLibGlobal(callee.expression, "localStorage", env));
       if (timerClear || external) {
         x.arguments.forEach((a) => pureCleanupExpr(a, env));
         continue;
       }
     }
-    if (ts.isBinaryExpression(x) && x.operatorToken.kind === ts.SyntaxKind.EqualsToken && x.left.getText() === "document.title") {
+    if (ts.isBinaryExpression(x) && x.operatorToken.kind === ts.SyntaxKind.EqualsToken && isDocumentTitle(x.left, env)) {
       pureCleanupExpr(x.right, env);
       continue;
     }
@@ -818,7 +921,7 @@ function children(cs: ts.NodeArray<ts.JsxChild>, env: Env): string {
   const items: string[] = [];
   for (const c of cs) {
     if (ts.isJsxText(c)) {
-      const t = jsxText(c.text);
+      const t = jsxTextValue(c.text, c);
       if (t) items.push(`(VReact.VNode.text ${jsStr(t)})`);
       continue;
     }
@@ -833,28 +936,27 @@ function children(cs: ts.NodeArray<ts.JsxChild>, env: Env): string {
   return items.length ? `(VReact.VList.ofList [\n    ${items.map((i) => indent(i, 2).trimStart()).join(",\n    ")}])` : "VReact.VList.nil";
 }
 
-/** React's JSX whitespace rules. */
-function jsxText(raw: string): string {
-  const lines = raw.split(/\r\n|\n|\r/);
-  if (lines.length === 1) return raw;
-  const parts: string[] = [];
-  lines.forEach((l, i) => {
-    let t = l;
-    if (i !== 0) t = t.replace(/^[ \t]+/, "");
-    if (i !== lines.length - 1) t = t.replace(/[ \t]+$/, "");
-    if (t) parts.push(t);
-  });
-  return parts.join(" ");
-}
-
 function attrs(e: ts.JsxElement | ts.JsxSelfClosingElement): ts.NodeArray<ts.JsxAttributeLike> {
   return ts.isJsxElement(e) ? e.openingElement.attributes.properties : e.attributes.properties;
 }
 
+/**
+ * The element a JSX tag creates, as the JSX transform decides (TypeScript's
+ * `isIntrinsicJsxName`, Babel's `isCompatTag`): a plain name starting with a lower-case
+ * letter is the HTML element of that name — never a variable of that name —, a capitalised
+ * name is the value of that identifier (a component).  Any other tag is rejected: a member
+ * expression `<props.as>` / `<ui.Button>` is the value it evaluates to (a dynamic element
+ * type: whatever tag name or component it holds), a namespaced `<a:b>` is an XML name, and
+ * a name with a dash `<my-el>` is a custom element, whose behaviour (events, activation,
+ * form association) is defined by script outside the program.
+ */
 function element(e: ts.JsxElement | ts.JsxSelfClosingElement, env: Env): string {
   const tagNode = ts.isJsxElement(e) ? e.openingElement.tagName : e.tagName;
   const tag = tagNode.getText();
   const kids = ts.isJsxElement(e) ? e.children : undefined;
+  if (ts.isJsxNamespacedName(tagNode)) fail(tagNode, `namespaced JSX tags (<${tag}>) are not supported: use an HTML element (<div>, <button>, …) or a verified component`);
+  if (!ts.isIdentifier(tagNode)) fail(tagNode, `<${tag}> is a dynamic element type: JSX renders whatever \`${tag}\` holds (an HTML tag name or a component), which VTS does not model. Write the element (<button>) or the component (<Row>, imported by name) directly, e.g. under a condition`);
+  if (tag.includes("-")) fail(tagNode, `<${tag}> is a custom element: its behaviour (events, activation, form submission) is defined by script outside the verified program; use HTML elements and verified components`);
   if (/^[a-z]/.test(tag)) return intrinsic(tag, e, kids, env);
   return componentElement(tagNode, e, kids, env);
 }
@@ -1120,7 +1222,7 @@ function intrinsic(tag: string, e: ts.JsxElement | ts.JsxSelfClosingElement, kid
       continue;
     }
     if (ts.isStringLiteral(val)) {
-      as.push(`⟨${leanStr(name)}, VReact.AttrVal.str ${jsStr(val.text)}⟩`);
+      as.push(`⟨${leanStr(name)}, VReact.AttrVal.str ${jsStr(jsxAttrText(val))}⟩`);
       continue;
     }
     const v = expr(val, env);
@@ -1181,10 +1283,12 @@ function componentElement(tagNode: ts.JsxTagNameExpression, e: ts.JsxElement | t
   const g = sym?.declarations?.[0] ? m.prog.globals.get(sym.declarations[0]) : undefined;
   if (!g || g.k !== "comp") fail(tagNode, `<${tagNode.getText()}> is not a verified component (declare it in a VTS module, or mark it @trusted)`);
   const info = g.info;
-  if (kids && kids.some((k) => !(ts.isJsxText(k) && !jsxText(k.text)))) fail(e, "children of user components are not supported yet");
+  if (kids && kids.some((k) => !(ts.isJsxText(k) && !jsxTextValue(k.text, k)))) fail(e, "children of user components are not supported yet");
   const given = new Map<string, ts.JsxAttribute>();
   for (const a of attrs(e)) {
     if (ts.isJsxSpreadAttribute(a)) fail(a, "spread props are not supported");
+    if (a.name.getText() === "ref") fail(a, "ref is not supported in VTS (refs are not modelled; React 18 does not pass them to function components)");
+    if (given.has(a.name.getText())) fail(a, `${a.name.getText()} is given twice`);
     given.set(a.name.getText(), a);
   }
   for (const k of given.keys()) {

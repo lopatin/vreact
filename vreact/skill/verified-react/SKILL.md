@@ -117,11 +117,15 @@ export function ItemList(props: ItemListProps) {
   `onScroll`, `onTransitionEnd`, `onLoad`, …) must preserve the invariant from
   **any** state (stale closures): prefer functional updates there; effect deps
   must be exhaustive. Cleanups only clear timers (and log / write `localStorage` /
-  `document.title`). In such a component, clicks etc. must also be safe on top
+  `document.title`; the arguments of such writes are checked everywhere, like any
+  expression). In such a component, clicks etc. must also be safe on top
   of their pending updates (React rebases): guard inside `setX(p => …)`.
 * Closures read `let`s when they run: do not reassign a `let` after creating a
   handler/helper/updater that reads it (`const xNow = x;` first), and never assign
   an outer `let` inside a callback.
+* Read event fields in the handler itself: `const v = e.target.value;
+  setX((p) => … v …)` — a functional update runs after the event's dispatch
+  (`e.currentTarget` is null then), so reading `e.…` inside it is rejected.
 * Invariants must not depend on props that can change (React keeps state across
   prop changes): clamp when rendering instead.
 * Lists need `key={…}` with provably distinct keys (usually from an invariant).
