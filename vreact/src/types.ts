@@ -554,6 +554,21 @@ function checkFieldName(m: ts.PropertySignature): void {
   }
 }
 
+/**
+ * The name of an object type's property, as JS has it: `a`, `"a"`, `'a'`, `["a"]` and `\u0061`
+ * all name the property `a` (not their source text, which would make `"key": int` a field other
+ * than `key`, and `r.a` miss the field `"a"`).  A computed name other than a string literal is
+ * rejected.
+ */
+export function propertyName(n: ts.PropertyName): string {
+  if (ts.isComputedPropertyName(n) && !ts.isStringLiteralLike(n.expression)) {
+    fail(n, `computed property names ([${n.expression.getText()}]) are not supported in VTS object types: write the name`);
+  }
+  const name = propertyNameText(n);
+  if (name === undefined) fail(n, `unsupported property name ${n.getText()}`);
+  return name;
+}
+
 function recordFromMembers(
   members: ts.NodeArray<ts.TypeElement>,
   env: TypeEnv,
@@ -571,7 +586,7 @@ function recordFromMembers(
     if (!ts.isPropertySignature(m)) fail(m, "only property signatures are allowed in VTS object types (no methods/index signatures)");
     if (!m.type) fail(m, "properties need type annotations");
     checkFieldName(m);
-    const fname = m.name.getText();
+    const fname = propertyName(m.name);
     let ft = typeOfNode(m.type, env, name + capitalize(fname));
     if (m.questionToken && ft.k !== "opt") ft = T.opt(ft);
     fields.push({ name: fname, type: ft });
@@ -707,9 +722,9 @@ function unionOf(
   // find the discriminant: a property present in every member with a string literal type
   const candidates = objs[0].members
     .filter((p): p is ts.PropertySignature => ts.isPropertySignature(p) && !!p.type && ts.isLiteralTypeNode(p.type) && ts.isStringLiteral(p.type.literal))
-    .map((p) => p.name.getText());
+    .map((p) => propertyName(p.name));
   const tag = candidates.find((c) =>
-    objs.every((o) => o.members.some((p) => ts.isPropertySignature(p) && p.name.getText() === c && p.type && ts.isLiteralTypeNode(p.type) && ts.isStringLiteral(p.type.literal))),
+    objs.every((o) => o.members.some((p) => ts.isPropertySignature(p) && propertyName(p.name) === c && p.type && ts.isLiteralTypeNode(p.type) && ts.isStringLiteral(p.type.literal))),
   );
   if (!tag) fail(node, `union of object types needs a common string-literal discriminant property (e.g. kind: "add")`);
   const short = decl ? declTypeIdent(name, decl) : leanIdent(INSTANCE_NAME_RE.test(name) ? capitalize(name) : name);
@@ -719,14 +734,14 @@ function unionOf(
   if (existing) return { k: "union", name: existing.qname };
   const variants: Variant[] = [];
   for (const o of objs) {
-    const tagProp = o.members.find((p) => ts.isPropertySignature(p) && p.name.getText() === tag) as ts.PropertySignature;
+    const tagProp = o.members.find((p) => ts.isPropertySignature(p) && propertyName(p.name) === tag) as ts.PropertySignature;
     const lit = ((tagProp.type as ts.LiteralTypeNode).literal as ts.StringLiteral).text;
     if (variants.some((v) => v.lit === lit)) fail(o.at, `duplicate discriminant "${lit}"`);
     const fields: Field[] = [];
     for (const p of o.members) {
       if (!ts.isPropertySignature(p) || !p.type) fail(p, "only annotated property signatures allowed");
       checkFieldName(p);
-      const fname = p.name.getText();
+      const fname = propertyName(p.name);
       if (fname === tag) continue;
       let ft = typeOfNode(p.type, env, name + capitalize(lit) + capitalize(fname));
       if (p.questionToken && ft.k !== "opt") ft = T.opt(ft);

@@ -30,6 +30,14 @@ first one that fails.
 | `assert` | an `assert(c)` holds | — |
 | `fact` | a module-level `assert(c)` about an `@opaque` constant holds | the data; it is checked by evaluation (it runs when the module loads: it, like a constant's initialiser, may not reach a constant declared below it, also through calls — rejected before any obligation). It is proved after every declaration it mentions (it may call a function declared below its constant); declarations before that point cannot use it |
 
+`index`, `non-null`, `nonzero-divisor` and `precondition` come from every
+expression JS evaluates, also where its value is not used: the arguments of
+`console.*`, `localStorage.setItem` and `document.title = …` (in handlers,
+effects, timers, render and functions), a timer's delay, and the conditions and
+arguments of an effect's cleanup — checked where the effect returns it, under
+the effect's early returns and branches. Guard them as usual (`if (i <
+xs.length) console.log(xs[i].name)`).
+
 ## When the code and spec are right but the proof fails
 
 1. **Make the knowledge available.** The prover only knows: props `requires`,

@@ -1,4 +1,4 @@
-// expect: reject optional parameter `step?` is not supported
+// expect: reject optional parameter `step?` of the local function bump is not supported
 // An optional parameter of a useCallback helper (it receives `int | undefined`, while the
 // translation typed it `int`).
 import { useCallback, useState } from "react";

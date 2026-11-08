@@ -20,7 +20,7 @@ import { Program, ModCtx, SPEC_MODULE, moduleFile, isErasedType, type Obligation
 import { T, type VType, typeOfNode, typeOfDecl, emitTypeDecl, leanType, nonValuePart, checkValueType } from "./types.ts";
 import { VtsError, fail, leanIdent, leanField, leanStr, paren, capitalize, nodeText, clashesWithLean } from "./util.ts";
 import { LEAN_TYPE_AUX, LEAN_ROOT_NAMES } from "./leanNames.ts";
-import { expr, prop, propAll, valueBlock, specFn, symbolOf, bindParam, typeOf, checkParamAnnotation } from "./translate.ts";
+import { expr, prop, propAll, valueBlock, specFn, symbolOf, bindParam, typeOf, checkParamAnnotation, checkNotThisParam } from "./translate.ts";
 import { translateComponent, compSignature, baseEnv } from "./component.ts";
 import { leanDecls } from "./lean.ts";
 import { manifestMatches } from "./ide.ts";
@@ -129,8 +129,7 @@ function loadProgram(cfg: Config): { program: ts.Program; diags: string[] } {
   }
   diags.push(...optionProblems(options));
   // what JSX means is configured too: VTS models React 18's automatic runtime (react/jsx-runtime)
-  if (options.jsx !== undefined && options.jsx !== ts.JsxEmit.ReactJSX && options.jsx !== ts.JsxEmit.ReactJSXDev) diags.push("tsconfig: VTS requires \"jsx\": \"react-jsx\" (JSX is modelled as React 18's automatic runtime; other settings make JSX call another factory)");
-  if (options.jsxImportSource !== undefined && options.jsxImportSource !== "react") diags.push(`tsconfig: "jsxImportSource" must be "react" (JSX is modelled as React 18's; "${options.jsxImportSource}" makes JSX another library's)`);
+  diags.push(...jsxConfigProblems(options));
   // a library's UMD global (`export as namespace React`) used without an import, which TypeScript
   // otherwise rejects in a module: a module bundle does not define it
   if (options.allowUmdGlobalAccess) diags.push("tsconfig: \"allowUmdGlobalAccess\" is not supported: it lets a module use a library's global (`React.useState` without importing React), which a module bundle does not define (a ReferenceError when it runs); import what you use");
@@ -146,6 +145,8 @@ function loadProgram(cfg: Config): { program: ts.Program; diags: string[] } {
       diags.push(`cannot load ${f}`);
       continue;
     }
+    const rt = jsxRuntimeProblem(sf, program, cfg.root);
+    if (rt) diags.push(rt);
     const ds = ts.getPreEmitDiagnostics(program, sf).filter((d) => d.category === ts.DiagnosticCategory.Error && !(d.code === 1208 && !userIsolated));
     for (const d of ds) {
       const text = ts.formatDiagnostic(d, host).trim();
@@ -171,7 +172,9 @@ const STRICT_FAMILY = ["strictFunctionTypes", "strictBindCallApply", "strictProp
  */
 const ACCEPTED_OPTIONS = new Set<string>([
   // checked by loadProgram / the translation
-  "strict", "strictNullChecks", "noImplicitAny", ...STRICT_FAMILY, "jsx", "jsxImportSource", "allowUmdGlobalAccess",
+  "strict", "strictNullChecks", "noImplicitAny", ...STRICT_FAMILY, "allowUmdGlobalAccess",
+  // (rejected, or accepted with one value, with their own message: jsxConfigProblems)
+  "jsx", "jsxImportSource", "jsxFactory", "jsxFragmentFactory", "reactNamespace",
   "paths", "baseUrl", "rootDirs", "moduleSuffixes", "customConditions", "resolvePackageJsonExports", "resolvePackageJsonImports",
   // language, library, modules
   "target", "lib", "module", "moduleResolution", "moduleDetection", "types", "typeRoots", "allowImportingTsExtensions",
@@ -309,7 +312,8 @@ function vtsImportProblem(spec: string, sf: ts.SourceFile, target: ts.SourceFile
  * - `@ts-ignore`, `@ts-expect-error` (TypeScript matches them as prefixes: `@ts-ignored`,
  *   `@ts-ignore-next-line` silence the next line too) and `@ts-nocheck` (a pragma, whose name
  *   TypeScript lower-cases: `@TS-NOCHECK` turns off the file's checks) silence TypeScript's
- *   errors, and the translation relies on TypeScript's checks;
+ *   errors, and the translation relies on TypeScript's checks (e.g. an unknown element `<bUTTON>`,
+ *   a <button> once the HTML document lower-cases it);
  * - JSX pragmas (`@jsx`, `@jsxFrag`, `@jsxImportSource`, `@jsxRuntime`): TypeScript reads them,
  *   case-insensitively, from the comments at the start of the file; esbuild (Vite) and Babel from
  *   any comment.  They make JSX call another factory or library;
@@ -328,7 +332,7 @@ function commentDirectiveErrors(sf: ts.SourceFile, rel: string): VtsError[] {
   };
   // (`u`: case folding, so that e.g. the Kelvin sign, which lower-cases to `k`, is a `k`)
   for (const m of sf.text.matchAll(/@ts-(ignore|expect-error|nocheck)/giu)) {
-    at(m.index!, (w) => `${w}: \`${m[0]}\` is not supported: it silences TypeScript's errors, and VTS relies on TypeScript's checks (null and undefined, the types of library and React declarations, imports); fix the error instead`);
+    at(m.index!, (w) => `${w}: \`${m[0]}\` is not supported: it silences TypeScript's errors, and VTS relies on TypeScript's checks (null and undefined, argument and prop types, element and attribute names, the types of library and React declarations, imports); fix the error instead`);
   }
   for (const m of sf.text.matchAll(/@jsx\w*/giu)) {
     at(m.index!, (w) => `${w}: \`${m[0]}\`: JSX pragmas (\`@jsx\`, \`@jsxImportSource\`, \`@jsxFrag\`, \`@jsxRuntime\`) are not supported: VTS models JSX as React 18's automatic runtime, and a pragma in any comment (esbuild and Babel read every comment; TypeScript the first ones, in any letter case) makes JSX call another factory or library; remove it (and do not write \`@jsx\` in a string either)`);
@@ -343,6 +347,57 @@ function commentDirectiveErrors(sf: ts.SourceFile, rel: string): VtsError[] {
     errs.push(new VtsError(sf, `${rel}: the comment pragma${own.length ? ` \`@${own[0]}\`` : " `@ts-nocheck`"} is not supported: it changes what TypeScript checks or what JSX means; remove it`));
   }
   return errs;
+}
+
+/**
+ * What JSX means is configured: VTS models JSX as TypeScript's `react-jsx` transform, which
+ * compiles `<p>…</p>` to a call of `jsx` from React 18's automatic runtime `react/jsx-runtime`
+ * (or `jsxDEV` from `react/jsx-dev-runtime` under `react-jsxdev`).  Another `jsx` mode
+ * (`preserve`: the bundler decides; `react`: the classic `React.createElement` factory or a
+ * `jsxFactory`), another `jsxImportSource` (`preact`, a local `../rt`, whose `jsx` may do
+ * anything with the element, e.g. call a button's onClick twice) would make each element mean
+ * another function's result.  esbuild and Babel read these options from the tsconfig too.
+ */
+function jsxConfigProblems(options: ts.CompilerOptions): string[] {
+  const out: string[] = [];
+  if (options.jsx !== undefined && options.jsx !== ts.JsxEmit.ReactJSX && options.jsx !== ts.JsxEmit.ReactJSXDev) {
+    out.push(`tsconfig: VTS requires "jsx": "react-jsx" (JSX is modelled as React 18's automatic runtime, react/jsx-runtime; "${ts.JsxEmit[options.jsx]}" makes JSX call another factory, or leaves it to the bundler)`);
+  }
+  if (options.jsxImportSource !== undefined && options.jsxImportSource !== "react") {
+    out.push(`tsconfig: "jsxImportSource" must be "react" or absent (JSX is modelled as React 18's react/jsx-runtime; "${options.jsxImportSource}" makes every element the result of that library's jsx function)`);
+  }
+  for (const k of ["jsxFactory", "jsxFragmentFactory", "reactNamespace"] as const) {
+    if (options[k] !== undefined) out.push(`tsconfig: the compiler option "${k}" is not supported by VTS: JSX is modelled as React 18's automatic runtime (react/jsx-runtime), not a factory; remove it`);
+  }
+  return out;
+}
+
+/**
+ * The module the JSX of `sf` calls (`react/jsx-runtime`, or `react/jsx-dev-runtime` under
+ * `react-jsxdev`; imported implicitly by the transform) must be React's, the one that runs:
+ * TypeScript must resolve it into the installed react / @types/react package, and to the same
+ * file without the TypeScript-only resolution options ("paths", "baseUrl", "rootDirs", …, which
+ * could map it to a file of the project or to another library: the bundler loads React's).
+ * (TypeScript reports a missing runtime itself.)
+ */
+function jsxRuntimeProblem(sf: ts.SourceFile, program: ts.Program, root: string): string | null {
+  if (sf.languageVariant !== ts.LanguageVariant.JSX) return null;
+  const options = program.getCompilerOptions();
+  const spec = `react/${options.jsx === ts.JsxEmit.ReactJSXDev ? "jsx-dev-runtime" : "jsx-runtime"}`;
+  const full = ts.resolveModuleName(spec, sf.fileName, options, ts.sys, undefined, undefined, ts.ModuleKind.ESNext).resolvedModule?.resolvedFileName;
+  const plain = plainResolution(spec, sf, undefined, program);
+  let real = full;
+  try {
+    if (full) real = fs.realpathSync(full);
+  } catch {
+    // keep the resolved name
+  }
+  const notReact = !!real && !/[\\/]node_modules[\\/](@types[\\/])?react[\\/][^\\/]+$/.test(real);
+  const differs = plain !== undefined && (!full || !plain || !sameFile(full, plain));
+  if (!notReact && !differs) return null;
+  const rel = (f: string) => path.relative(root, f);
+  const how = differs ? ` (through tsconfig "paths"/"baseUrl"/"rootDirs"; without them, as the bundler resolves it: ${plain ? rel(plain) : "nothing"})` : ` (tsconfig "paths" or another setting redirects it)`;
+  return `${rel(sf.fileName)}: its JSX imports "${spec}", which TypeScript resolves to ${real ? rel(real) : "nothing"}${notReact ? ", not to React's" : ""}${how}: VTS models JSX as React 18's automatic runtime, the one the bundler loads; remove the mapping`;
 }
 
 /** The Lean namespace of the module of source file `f` (also used by `vreact synth`, whose type names must match). */
@@ -511,16 +566,7 @@ export function translate(cfg: Config): TranslateResult {
       }
       res.errors.push(new VtsError(st, `${what} is outside the verified program (only react, vreact/spec, and other VTS modules may be imported)`));
     }
-    // JSX imports React's "react/jsx-runtime" implicitly ("jsx": "react-jsx"): the same rule
-    if (sf.languageVariant === ts.LanguageVariant.JSX) {
-      const plain = plainResolution("react/jsx-runtime", sf, undefined, program);
-      if (plain !== undefined) {
-        const full = ts.resolveModuleName("react/jsx-runtime", sf.fileName, program.getCompilerOptions(), ts.sys, undefined, undefined, ts.ModuleKind.ESNext).resolvedModule?.resolvedFileName;
-        if (!full || !plain || !sameFile(full, plain)) {
-          res.errors.push(new VtsError(sf, `${path.relative(cfg.root, sf.fileName)}: its JSX imports "react/jsx-runtime", which TypeScript resolves to ${full ?? "nothing"} through tsconfig "paths"/"baseUrl", but the bundler (without them) to ${plain ?? "nothing"}; remove the mapping`));
-        }
-      }
-    }
+    // (the implicit import of React's "react/jsx-runtime" by JSX: the same rule, jsxRuntimeProblem)
     importsOf.set(sf, deps);
   }
   const order: ts.SourceFile[] = [];
@@ -990,6 +1036,7 @@ function collect(st: ts.Statement, m: ModCtx, ns: string, res: TranslateResult) 
     if (st.asteriskToken || st.modifiers?.some((x) => x.kind === ts.SyntaxKind.AsyncKeyword)) fail(st, "async functions and generators are not supported");
     if (st.typeParameters?.length) fail(st, "generic functions are not supported in VTS yet");
     const trusted = isTrusted(st);
+    if (!trusted && st.body) rejectAsyncFunctions(st.body);
     if (isComponentDecl(st, prog)) {
       const info = compSignature(st, ns, ns, m, trusted);
       prog.globals.set(st, { k: "comp", info });
@@ -998,6 +1045,7 @@ function collect(st: ts.Statement, m: ModCtx, ns: string, res: TranslateResult) 
     if (/^use[A-Z]/.test(st.name.text)) fail(st, "custom hooks are not supported yet: inline the hook calls into the component");
     checkValueNameFree(st.name, "function", m);
     const params = st.parameters.map((p) => {
+      checkNotThisParam(p);
       if (!p.type) fail(p, "parameters need type annotations");
       if (p.initializer || p.dotDotDotToken || p.questionToken) fail(p, "default/rest/optional parameters are not supported");
       if (!ts.isIdentifier(p.name)) fail(p, "destructured parameters are not supported in top-level functions");
@@ -1019,6 +1067,7 @@ function collect(st: ts.Statement, m: ModCtx, ns: string, res: TranslateResult) 
     for (const d of st.declarationList.declarations) {
       if (!ts.isIdentifier(d.name) || !d.initializer) fail(d, "top-level const needs a name and initializer");
       checkValueNameFree(d.name, "constant", m);
+      rejectAsyncFunctions(d.initializer);
       let t: VType | undefined = d.type ? typeOfNode(d.type, prog.typeEnv, capitalize(d.name.text)) : undefined;
       if (t) checkValueType(d.type!, t, prog.reg, `constant ${d.name.text}`);
       if (!t) {
@@ -1172,6 +1221,22 @@ function checkInitOrder(sf: ts.SourceFile, m: ModCtx) {
       if (!(d && ts.isFunctionDeclaration(d))) check(st, "`export default`", st.expression);
     }
   }
+}
+
+/**
+ * Async functions and generators inside verified code: the translation gives a function the
+ * meaning of its body run to completion, but an async function returns a promise (always
+ * truthy: `xs.filter(async (x) => x > 3)` keeps every element) and runs what follows an
+ * `await` later, and calling a generator does not run its body at all.
+ */
+function rejectAsyncFunctions(n: ts.Node) {
+  const visit = (x: ts.Node) => {
+    if ((ts.isArrowFunction(x) || ts.isFunctionExpression(x) || ts.isMethodDeclaration(x)) && (x.asteriskToken || x.modifiers?.some((k) => k.kind === ts.SyntaxKind.AsyncKeyword))) {
+      fail(x, "async functions and generators are not supported in VTS: an async function returns a promise (always truthy, e.g. as a filter or some/every predicate) and runs the code after an `await` later, when e.g. an event's fields have changed; calling a generator does not run its body. Use a plain function");
+    }
+    ts.forEachChild(x, visit);
+  };
+  visit(n);
 }
 
 function isSpecCall(s: ts.Statement, m: ModCtx, name: string): boolean {

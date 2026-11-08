@@ -34,7 +34,8 @@ bash <skill>/scripts/setup.sh /path/to/app    # also: npm i the tool into the ap
 
 Installing Lean (elan, ~400 MB) changes the user's machine: ask first if it is
 missing. All the app needs from npm is that `vreact` (and `react`, `@types/react`)
-resolve from its folder — `npm i <tool>` or a symlinked `node_modules` both work. The app needs `"strict": true` and `"lib": ["ES2023", "DOM"]` in tsconfig and `vreact.json`
+resolve from its folder — `npm i <tool>` or a symlinked `node_modules` both work. The app needs `"strict": true`, `"jsx": "react-jsx"` and `"lib": ["ES2023", "DOM"]` in tsconfig (no other
+`jsxImportSource`, no JSX pragmas, no `@ts-ignore`/`@ts-expect-error`/`@ts-nocheck` in verified files) and `vreact.json`
 (`{"src":"src","exclude":["main.tsx"],"proofs":"proofs","out":".vreact"}`).
 Keep `main.tsx` (createRoot) outside the verified program.
 
@@ -137,7 +138,8 @@ export function ItemList(props: ItemListProps) {
   `onScroll`, `onTransitionEnd`, `onLoad`, …) must preserve the invariant from
   **any** state (stale closures): prefer functional updates there; effect deps
   must be exhaustive. Cleanups only clear timers (and log / write `localStorage` /
-  `document.title`). In such a component, clicks etc. must also be safe on top
+  `document.title`; the arguments of such writes are checked everywhere, like any
+  expression). In such a component, clicks etc. must also be safe on top
   of their pending updates (React rebases): guard inside `setX(p => …)`.
 * Closures read `let`s when they run: do not reassign a `let` after creating a
   handler/helper/updater that reads it (`const xNow = x;` first), and never assign
@@ -155,6 +157,12 @@ export function ItemList(props: ItemListProps) {
   `@__PURE__`-style annotations anywhere in a file: fix the type error instead.
 * tsconfig: `"strict": true` and nothing that weakens it; unknown or
   check-disabling compiler options (`noCheck`, …) are rejected by name.
+* Read event fields in the handler itself: `const v = e.target.value;
+  setX((p) => … v …)` — a functional update runs after the event's dispatch
+  (`e.currentTarget` is null then), so reading `e.…` inside it is rejected.
+  Put the handler on the control whose field it reads (`<input onChange>`:
+  `e.target.value`; `e.key` in `onKeyDown`): fields are checked against the element
+  and handler prop, not against the type annotation of `e`.
 * Invariants must not depend on props that can change (React keeps state across
   prop changes): clamp when rendering instead.
 * Lists need `key={…}` with provably distinct keys (usually from an invariant).

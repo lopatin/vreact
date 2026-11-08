@@ -40,6 +40,17 @@ export interface CallbackInfo {
   params: Param[];
 }
 
+/**
+ * Where a DOM event handler is attached: the prop `prop` (`onClick`) of the element `<tag>`, an
+ * HTML element when `html` (else an SVG or MathML element of that name: inside `<svg>`, an
+ * `<input>` has no value).
+ */
+export interface DomSite {
+  tag: string;
+  prop: string;
+  html: boolean;
+}
+
 /** What a parent needs to know about a child component. */
 export interface CompInfo {
   name: string;
@@ -109,9 +120,20 @@ export type Binding =
   | { k: "closure"; fn: ts.ArrowFunction | ts.FunctionExpression; env: Env }
   | { k: "callback"; cb: CallbackInfo }
   | { k: "props" }
-  | { k: "event"; leanVar: string }
+  /**
+   * the event parameter of the DOM handler `fn`, attached at `site` (its fields are read from the
+   * event while `fn` runs; which fields exist depends on the element and the handler prop, not on
+   * the parameter's TypeScript type)
+   */
+  | { k: "event"; leanVar: string; fn: ts.Node; site: DomSite }
   /** a JSX const: translated (obligations checked) at its declaration, bound to the Lean local `code` */
-  | { k: "jsx"; node: ts.Expression; env: Env; code: string };
+  | { k: "jsx"; node: ts.Expression; env: Env; code: string }
+  /**
+   * the handle `id` of `const id = setTimeout(…)` / `setInterval(…)` in an effect body, bound once
+   * that statement has run (before, `id` is in its temporal dead zone): not a VTS value, only
+   * cleared in the effect's cleanup
+   */
+  | { k: "timer" };
 
 export interface Narrowed {
   /** narrowed value (Option payload / variant) */

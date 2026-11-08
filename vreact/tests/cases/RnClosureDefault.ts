@@ -1,4 +1,4 @@
-// expect: reject a default value for parameter `x` is not supported
+// expect: reject a default value for parameter `x` of the local function h is not supported
 // JS uses a default value when the argument is undefined: h(undefined) is 5, not undefined
 // (the default was ignored).
 import { type int, ensures } from "vreact/spec";

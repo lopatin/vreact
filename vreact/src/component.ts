@@ -8,10 +8,10 @@
  *   useEffect        ↦ VReact.Effect with robust outcomes
  */
 import ts from "typescript";
-import { T, type VType, type Param, type Field, leanType, showType, typeOfNode, checkValueType } from "./types.ts";
+import { T, type VType, type Param, type Field, leanType, showType, typeOfNode, checkValueType, propertyName } from "./types.ts";
 import { type Env, ModCtx, type CompCtx, type CompInfo, type StateVar, type FnInfo, type Binding, bind, freshLocal, refSymbol } from "./ctx.ts";
-import { expr, prop, propAll, block, branch, handlerFn, checkDeps, hookName, specFn, isGlobal, symbolOf, bindParam, type BlockCtx, typeOf, valueBlock, lambda, outcome, checkClosures, topLevelHookDecls, fnParamTsTypes } from "./translate.ts";
-import { fail, leanField, leanIdent, leanStr, jsStr, paren, nodeText, indent, VtsError } from "./util.ts";
+import { expr, prop, propAll, block, branch, handlerFn, checkDeps, hookName, specFn, isGlobal, symbolOf, bindParam, type BlockCtx, typeOf, valueBlock, lambda, outcome, checkClosures, topLevelHookDecls, fnParamTsTypes, stripParens, isNumeric, evalArgs, isDocumentTitle, jsxAttrText, checkPlainParams, isNullLit } from "./translate.ts";
+import { fail, leanField, leanIdent, leanStr, jsStr, paren, nodeText, indent, VtsError, jsxTextValue, asciiLower } from "./util.ts";
 
 /* ─────────────────────── React 18.3.1 event model ───────────────────────
  * Native DOM events → React handler props, and their priorities, as in
@@ -57,9 +57,44 @@ const REACT_EVENTS: Record<string, string[]> = {
 const TEXT_INPUT_TYPES = new Set(["color", "date", "datetime", "datetime-local", "email", "month", "number", "password", "range", "search", "tel", "text", "time", "url", "week"]);
 const EVENT_RENAME: Record<string, string> = { doubleclick: "dblclick" };
 
-/** The attributes of `e` named `name` up to letter case (React sets unknown props as attributes, which HTML lower-cases). */
+/** The attributes of `e` named `name` up to ASCII letter case (React sets unknown props as attributes, whose names HTML ASCII-lower-cases). */
 function attrsNamed(e: ts.JsxElement | ts.JsxSelfClosingElement, name: string): ts.JsxAttribute[] {
-  return attrs(e).filter((x): x is ts.JsxAttribute => ts.isJsxAttribute(x) && x.name.getText().toLowerCase() === name);
+  return attrs(e).filter((x): x is ts.JsxAttribute => ts.isJsxAttribute(x) && asciiLower(x.name.getText()) === name);
+}
+
+/**
+ * The values attribute `name` of `e` may have, ASCII-lower-cased (HTML matches the keywords of
+ * enumerated attributes such as `type` ASCII-case-insensitively): `[]` when it is absent; one
+ * value for a string; both branches of a conditional `c ? "text" : "password"`; the members of
+ * an enum-typed expression.  Undefined when unknown (another expression, or the attribute given
+ * twice up to case).
+ */
+function attrValues(e: ts.JsxElement | ts.JsxSelfClosingElement, name: string, env: Env): string[] | undefined {
+  const as = attrsNamed(e, name);
+  if (as.length === 0) return [];
+  if (as.length > 1) return undefined;
+  const a = as[0];
+  if (!a.initializer) return [""];
+  if (ts.isStringLiteral(a.initializer)) return [asciiLower(jsxAttrText(a.initializer))];
+  if (!ts.isJsxExpression(a.initializer) || !a.initializer.expression) return undefined;
+  const of = (x0: ts.Expression): string[] | undefined => {
+    const x = stripParens(x0);
+    if (ts.isStringLiteralLike(x)) return [asciiLower(x.text)];
+    if (ts.isConditionalExpression(x)) {
+      const l = of(x.whenTrue);
+      const r = of(x.whenFalse);
+      return l && r ? [...l, ...r] : undefined;
+    }
+    let t: VType;
+    try {
+      t = typeOf(x, env);
+    } catch (err) {
+      if (err instanceof VtsError) return undefined; // translated (and rejected, if so) as the attribute
+      throw err;
+    }
+    return t.k === "enum" ? env.m.reg.enumLits(t).map(asciiLower) : undefined;
+  };
+  return of(a.initializer.expression);
 }
 
 /** A static string value of attribute `name` on element `e` (`"x"` or `{"x"}`); null if absent, undefined if not static (or given twice). */
@@ -69,18 +104,24 @@ function staticAttr(e: ts.JsxElement | ts.JsxSelfClosingElement, name: string): 
   if (as.length > 1) return undefined;
   const a = as[0];
   const v = a.initializer && ts.isJsxExpression(a.initializer) ? a.initializer.expression : a.initializer;
-  return v && ts.isStringLiteralLike(v) ? v.text : undefined;
+  return v && ts.isStringLiteralLike(v) ? jsxAttrText(v) : undefined;
 }
 
-/** ChangeEventPlugin: the native events that dispatch `onChange` on `<tag>` (also bubbled from descendants). */
-function changeNatives(tag: string, e: ts.JsxElement | ts.JsxSelfClosingElement): string[] {
+/**
+ * ChangeEventPlugin: the native events that dispatch `onChange` on `<tag>` (also bubbled from
+ * descendants).  `html`: whether the element is an HTML element; inside `<svg>` / `<math>` an
+ * `<input>` is an SVG (MathML) element, which has no `type` and none of an input's events of
+ * its own: only changes bubbling from HTML controls inside a `<foreignObject>` reach it.
+ */
+function changeNatives(tag: string, e: ts.JsxElement | ts.JsxSelfClosingElement, html: boolean): string[] {
   const any = ["click", "input", "change"];
+  if (!html) return any;
   if (tag === "select") return ["change"];
   if (tag === "textarea") return ["input", "change"];
   if (tag !== "input") return any; // a change of any form control inside bubbles here
   const t = staticAttr(e, "type");
   if (t === undefined) return any; // dynamic type: checkbox/radio (click) or text-like (input)
-  const ty = (t ?? "text").toLowerCase();
+  const ty = asciiLower(t ?? "text");
   if (ty === "checkbox" || ty === "radio") return ["click"]; // shouldUseClickEvent
   if (ty === "file") return ["change"];
   // isTextInputElement (an unknown type is "text"); hidden/button/submit/reset/image: conservatively any
@@ -99,10 +140,10 @@ interface EventInfo {
 }
 
 /** Classify the handler prop `name` (`onX`) on the intrinsic element `<tag>`; rejects what React would not dispatch faithfully. */
-function eventInfo(name: string, tag: string, e: ts.JsxElement | ts.JsxSelfClosingElement, at: ts.Node): EventInfo {
+function eventInfo(name: string, tag: string, e: ts.JsxElement | ts.JsxSelfClosingElement, at: ts.Node, html: boolean): EventInfo {
   const x = name.slice(2);
   if (x === "Select") fail(at, `onSelect is not supported in VTS: React dispatches it to the focused element from mouseup/keydown/keyup/selectionchange, alongside other handlers`);
-  const natives = x === "Change" ? changeNatives(tag, e) : REACT_EVENTS[x];
+  const natives = x === "Change" ? changeNatives(tag, e, html) : REACT_EVENTS[x];
   if (!natives) {
     const base = x.endsWith("Capture") ? x.slice(0, -7) : "";
     if (base && (REACT_EVENTS[base] || base === "Change" || base === "Select")) fail(at, `capture-phase handlers (${name}) are not supported in VTS: use on${base}`);
@@ -129,6 +170,15 @@ function isDiscreteProp(name: string): boolean {
 
 const RESERVED = ["E", "σ", "τ", "κ", "hpre", "hinv", "props", "ev", "acc"];
 
+/**
+ * The JSX attribute names React 18.3.1 keeps out of an element's props besides `key` and `ref`
+ * (`RESERVED_PROPS` of `React.createElement` and `react/jsx-runtime`): the development JSX
+ * transforms pass the source location and `this` under these names.  A component never
+ * receives them, and an HTML element never gets them as attributes.
+ */
+const RESERVED_PROPS = ["__self", "__source"];
+const RESERVED_WHY = (name: string) => `React 18 removes ${name} from the props of every element, like key and ref (the development JSX transform passes ${name === "__source" ? "the source location" : "`this`"} under that name): a component never receives it (props.${name} is undefined), an HTML element never gets it as an attribute`;
+
 export function baseEnv(m: ModCtx): Env {
   return { m, vars: new Map(), narrow: new Map(), scope: new Set(RESERVED), mode: "code" };
 }
@@ -136,6 +186,7 @@ export function baseEnv(m: ModCtx): Env {
 /** Collect the signature of a component (props split into data and callbacks). */
 export function compSignature(fn: ts.FunctionDeclaration, ns: string, module: string, m: ModCtx, trusted: boolean): CompInfo {
   const name = fn.name!.text;
+  checkPlainParams(fn.parameters, `the component ${name}`);
   const p = fn.parameters[0];
   if (fn.parameters.length > 1) fail(fn.parameters[1], "components take a single props parameter");
   let data: Field[] = [];
@@ -145,6 +196,15 @@ export function compSignature(fn: ts.FunctionDeclaration, ns: string, module: st
     if (!p.type) fail(p, "annotate the props parameter type");
     propsType = typeOfNode(p.type, m.prog.typeEnv, name + "Props");
     if (propsType.k !== "rec") fail(p, "props must be an object type");
+    // React 18 takes `key`, `ref`, `__self` and `__source` out of the props: the component never
+    // receives them.  The names are the properties' own (as the checker has them), however the
+    // type spells them: `key`, `"key"`, `["key"]`, `k\u0065y`
+    for (const s of m.checker.getPropertiesOfType(m.checker.getTypeFromTypeNode(p.type))) {
+      const fname = s.getName();
+      if (fname === "key") fail(p, `a prop named key: React uses key={…} to match list items and never passes it to the component (props.key is undefined); rename the prop (e.g. id)`);
+      if (fname === "ref") fail(p, `a prop named ref: React 18 does not pass ref={…} to a function component (props.ref is undefined), and refs are not modelled; rename the prop`);
+      if (RESERVED_PROPS.includes(fname)) fail(p, `a prop named ${fname}: ${RESERVED_WHY(fname)}; rename the prop`);
+    }
     for (const f of m.reg.rec(propsType)) {
       if (f.type.k === "fn") {
         if (f.type.ret.k !== "void") fail(p, `callback ${f.name} must return void`);
@@ -187,7 +247,7 @@ export function translateComponent(fn: ts.FunctionDeclaration, info: CompInfo, m
     else if (ts.isObjectBindingPattern(p.name)) {
       for (const el of p.name.elements) {
         if (el.dotDotDotToken || el.initializer || !ts.isIdentifier(el.name)) fail(el, "only simple props destructuring { a, b } is supported");
-        const fname = el.propertyName ? el.propertyName.getText() : el.name.text;
+        const fname = el.propertyName ? propertyName(el.propertyName) : el.name.text;
         const d = info.data.find((f) => f.name === fname);
         const cb = info.callbacks.find((c) => c.name === fname);
         const sym = symbolOf(env, el.name)!;
@@ -381,6 +441,7 @@ function renderBlock(stmts: ts.Statement[], env: Env, bc: BlockCtx): string {
       onEffect(s.expression, e);
       return run(i + 1, e);
     }
+    if (ts.isReturnStatement(s) && i < stmts.length - 1) fail(stmts[i + 1], "unreachable code after return (it never runs)");
     // translate this statement with a continuation that resumes the scan
     return block([s], 0, e, bc, (e2) => run(i + 1, e2));
   };
@@ -581,56 +642,97 @@ function effectCode(c: ts.CallExpression, env: Env, info: CompInfo): string {
   let stmts = ts.isBlock(fn.body) ? [...fn.body.statements] : [ts.factory.createExpressionStatement(fn.body)];
   let bodyE: ts.Node = fn.body;
   while (ts.isParenthesizedExpression(bodyE)) bodyE = bodyE.expression;
-  if (ts.isArrowFunction(bodyE) || ts.isFunctionExpression(bodyE)) {
-    // useEffect(() => () => cleanup)
-    checkCleanup(bodyE, env);
-    stmts = [];
+  /** useEffect(() => () => cleanup): the cleanup is created at once */
+  const cleanupOnly = ts.isArrowFunction(bodyE) || ts.isFunctionExpression(bodyE) ? bodyE : null;
+  if (cleanupOnly) stmts = [];
+  // an expression body is the effect's return value, which React keeps as the cleanup and
+  // calls (unless it is undefined) before the next run and on unmount: a timer id or an
+  // assigned value there would throw a TypeError then
+  else if (!ts.isBlock(fn.body) && !returnsUndefined(fn.body, env)) {
+    fail(fn.body, `the value of \`${nodeText(fn.body, 40)}\` is the effect's return value, which React calls as its cleanup (a TypeError when it is not a function); write the effect body in braces: useEffect(() => { ${nodeText(fn.body, 30)}; }, …)`);
   }
   const tasks: string[] = [];
-  const sync: ts.Statement[] = [];
-  const timerCb = (e: ts.Expression): ts.Expression | null => {
-    if (ts.isCallExpression(e) && (isGlobal(env, e.expression, "setInterval") || isGlobal(env, e.expression, "setTimeout"))) return e.arguments[0];
+  /** the registration `setTimeout(cb, delay)` of each timer statement */
+  const timerCalls = new Map<ts.Statement, ts.CallExpression>();
+  const timerCall = (e: ts.Expression): ts.CallExpression | null => {
+    e = stripParens(e);
+    if (ts.isCallExpression(e) && (isGlobal(env, e.expression, "setInterval") || isGlobal(env, e.expression, "setTimeout"))) return e;
     return null;
   };
   // the path condition of the timers registered so far down the effect body (`timerGuard`)
   const guards: TimerGuard[] = [];
-  for (const s of stmts) {
-    if (ts.isReturnStatement(s)) {
-      // cleanup: not translated, so it may not touch any component's state
-      if (s.expression) checkCleanup(s.expression, env);
-      continue;
-    }
-    let cb: ts.Expression | null = null;
-    if (ts.isExpressionStatement(s)) cb = timerCb(s.expression);
+  stmts.forEach((s, i) => {
+    // JS does not run what follows a top-level `return` (the model must not either)
+    if (ts.isReturnStatement(s) && i < stmts.length - 1) fail(stmts[i + 1], "unreachable code after return (it never runs)");
+    let call: ts.CallExpression | null = null;
+    if (ts.isExpressionStatement(s)) call = timerCall(s.expression);
     if (ts.isVariableStatement(s) && s.declarationList.declarations.length === 1 && s.declarationList.declarations[0].initializer) {
-      cb = timerCb(s.declarationList.declarations[0].initializer!);
+      call = timerCall(s.declarationList.declarations[0].initializer!);
     }
-    if (cb) {
-      const timer = cb;
+    if (call) {
+      if (!call.arguments.length) fail(call, `${nodeText(call.expression)} needs a callback`);
+      if (call.arguments.length > 2) fail(call.arguments[2], `extra arguments of ${nodeText(call.expression)} are passed to its callback: not supported (use them in the callback directly)`);
+      const timer = call.arguments[0];
       tasks.push(`(fun _ => ${guardedTimer(guards, 0, env, (e) => handlerFn(timer, e, "robust", []).code)})`);
-      continue;
+      timerCalls.set(s, call);
+      return;
     }
     const g = timerGuard(s, env);
     if (g) guards.push(g);
-    sync.push(s);
-  }
-  // translate the synchronous part as a robust handler body
-  const fake = ts.factory.createArrowFunction(undefined, undefined, [], undefined, undefined, ts.factory.createBlock(sync));
-  let setup: string;
-  if (sync.length === 0) setup = `(VReact.Outcome.mk (S := ${info.ns}.State) (E := E) [] none)`;
-  else {
-    // translate statements directly (synthetic nodes have no positions; use the original statements)
-    const acc = { kind: "robust" as const, updates: [], emit: null, eventVar: null };
-    const e1: Env = { ...env, handler: acc, curState: undefined };
-    const done = (e3: Env) => outcome(e3.handler!, env.comp!);
-    setup = block(sync, 0, e1, { kind: "handler", fnNode: fn, onDone: done }, done);
-  }
-  void fake;
+  });
+  // the synchronous part, translated as a robust handler body; a timer registration evaluates
+  // its delay there (its callback is a task), and `return cleanup` the cleanup's arguments
+  const acc = { kind: "robust" as const, updates: [], emit: null, eventVar: null };
+  const e1: Env = { ...env, handler: acc, curState: undefined };
+  const done = (e3: Env) => outcome(e3.handler!, env.comp!);
+  const onStmt = (s: ts.Statement, e: Env, rest: (e: Env) => string): string | null => {
+    const call = timerCalls.get(s);
+    if (!call) return null;
+    const delay = call.arguments[1];
+    if (delay && !isNumeric(typeOf(delay, e))) fail(delay, "the delay of a timer must be a number");
+    // `const id = setTimeout(…)`: the handle exists from here on (before, it is in its temporal
+    // dead zone, also for a cleanup returned earlier on another path)
+    const handle = (e2: Env): Env => {
+      if (!ts.isVariableStatement(s)) return e2;
+      const d = s.declarationList.declarations[0];
+      if (!(s.declarationList.flags & ts.NodeFlags.Const)) fail(s, `declare the timer handle with const: const ${nodeText(d.name)} = ${nodeText(call.expression)}(…)`);
+      if (!ts.isIdentifier(d.name)) fail(d.name, "a timer handle is bound to a name: const id = setTimeout(…)");
+      return bind(e2, symbolOf(e2, d.name)!, { k: "timer" });
+    };
+    return evalArgs(delay ? [delay] : [], e, (e2) => rest(handle(e2)));
+  };
+  const onCleanup = (c: ts.Expression, e: Env): string => `(let _ : Unit := ${cleanupCode(c, e)};\n${done(e)})`;
+  const setup = cleanupOnly ? onCleanup(cleanupOnly, e1) : block(stmts, 0, e1, { kind: "handler", fnNode: fn, onDone: done, onCleanup, onStmt }, done);
   const okSetup = m.ob(c, "effect-robust", `effect at ${nodeText(c, 40)} preserves the invariant of ${info.name} from any state (effects may run with stale snapshots)`);
   const okTasks = tasks.length
     ? m.ob(c, "effect-robust", `timer callbacks of the effect preserve the invariant of ${info.name} from any state`)
     : `(/-⟦gen⟧-/ by simp)`;
   return `(VReact.Effect.mk (S := ${info.ns}.State) (E := E) (inv := ${info.ns}.inv props) (${deps}) ${paren(setup)} ${okSetup}\n     (/-⟦gen⟧-/ by vreact_noemit)\n     [${tasks.join(", ")}] ${okTasks})`;
+}
+
+/**
+ * Does the expression statement `e` certainly evaluate to undefined?  Calls of setters and
+ * dispatch, external writes (`console.*`, `localStorage.setItem`), and local helpers whose
+ * body returns no value.
+ */
+function returnsUndefined(e0: ts.Expression, env: Env): boolean {
+  const e = stripParens(e0);
+  if (!ts.isCallExpression(e)) return false;
+  if (ts.isPropertyAccessExpression(e.expression)) return isGlobal(env, e.expression.expression, "console") || (e.expression.name.text === "setItem" && isGlobal(env, e.expression.expression, "localStorage"));
+  if (!ts.isIdentifier(e.expression)) return false;
+  const s = symbolOf(env, e.expression);
+  const b = s ? env.vars.get(s) : undefined;
+  if (b?.k === "setter" || b?.k === "dispatch") return true;
+  if (b?.k !== "closure") return false;
+  const body = b.fn.body;
+  if (!ts.isBlock(body)) return returnsUndefined(body, b.env);
+  let value = false;
+  const visit = (n: ts.Node) => {
+    if (ts.isReturnStatement(n) && n.expression) value = true;
+    if (!ts.isFunctionLike(n)) ts.forEachChild(n, visit);
+  };
+  body.statements.forEach(visit);
+  return !value;
 }
 
 /**
@@ -693,18 +795,92 @@ function guardedTimer(guards: TimerGuard[], i: number, env: Env, body: (e: Env) 
 const CLEANUP_RULE = "effect cleanups may only clear timers (clearTimeout/clearInterval) and make external writes (console.*, localStorage.*, document.title = …), possibly under if/else: React runs a cleanup later, with the props and state of the render that created it, and the cleanup is not verified";
 
 /**
- * An effect cleanup is not translated (the model has no cleanup step), so it must not be
- * able to affect any component state: only timer clearing and the documented external
- * writes, whose arguments are pure expressions, possibly under `if`/`else` with a pure
- * condition.  Setters, dispatch, parent callbacks and local helpers (which may reach
- * them) are rejected, directly or nested.
+ * An effect cleanup.  The model has no cleanup step, so a cleanup must not be able to affect
+ * any component state: only timer clearing and the documented external writes, whose
+ * arguments are pure expressions, possibly under `if`/`else` with a pure condition.
+ * Setters, dispatch, parent callbacks and local helpers (which may reach them) are rejected,
+ * directly or nested.  JS still evaluates its conditions and arguments when it runs, which
+ * may throw (`xs[9].name`, `x!.f`) or call a function outside its precondition; it runs with
+ * the values it captured — those at the effect's `return` (`env`): a captured `let` is never
+ * reassigned after the cleanup is created (`checkClosures`), and the effect's own statements
+ * end with the `return`.  So they are translated here, with their obligations, into a `Unit`
+ * term evaluated at the `return`.
  */
-function checkCleanup(e0: ts.Expression, env: Env) {
-  let e: ts.Expression = e0;
-  while (ts.isParenthesizedExpression(e)) e = e.expression;
+function cleanupCode(e0: ts.Expression, env: Env): string {
+  const e = stripParens(e0);
   if (!ts.isArrowFunction(e) && !ts.isFunctionExpression(e)) fail(e0, `an effect cleanup must be an inline function \`() => { … }\`; ${CLEANUP_RULE}`);
   if (e.parameters.length) fail(e, "effect cleanups take no parameters");
-  checkCleanupItems(ts.isBlock(e.body) ? [...e.body.statements] : [e.body], env);
+  if (e.asteriskToken || e.modifiers?.some((x) => x.kind === ts.SyntaxKind.AsyncKeyword)) fail(e, `an effect cleanup must be a plain function (not async or a generator); ${CLEANUP_RULE}`);
+  const items = ts.isBlock(e.body) ? [...e.body.statements] : [e.body];
+  checkCleanupItems(items, env);
+  return cleanupItems(items, 0, env, () => "()");
+}
+
+/** The evaluation of cleanup statements (already checked by `checkCleanupItems`), then `k`. */
+function cleanupItems(items: readonly ts.Node[], i: number, env: Env, k: (e: Env) => string): string {
+  if (i >= items.length) return k(env);
+  const it = items[i];
+  const next = (e: Env) => cleanupItems(items, i + 1, e, k);
+  if (ts.isEmptyStatement(it)) return next(env);
+  if (ts.isBlock(it)) return cleanupItems(it.statements, 0, env, next);
+  if (ts.isIfStatement(it)) {
+    const els = it.elseStatement;
+    const onTrue = (e: Env) => cleanupItems([it.thenStatement], 0, e, next);
+    const onFalse = (e: Env) => (els ? cleanupItems([els], 0, e, next) : next(e));
+    const known = timerHandleTest(it.expression, env);
+    if (known !== null) return known ? onTrue(env) : onFalse(env);
+    return branch(it.expression, env, onTrue, onFalse);
+  }
+  const x = stripParens(ts.isExpressionStatement(it) ? it.expression : (it as ts.Expression));
+  if (ts.isCallExpression(x)) {
+    // clearTimeout(id) of a timer the effect registered: reading the handle cannot fail
+    if (ts.isIdentifier(x.expression) && x.arguments.length === 1 && timerHandle(x.arguments[0], env)) return next(env);
+    return evalArgs(x.arguments, env, next);
+  }
+  if (ts.isBinaryExpression(x)) return evalArgs([x.right], env, next); // document.title = …
+  fail(it, CLEANUP_RULE);
+}
+
+/**
+ * `id`: a timer handle, the `const` an effect binds to `setTimeout(…)` / `setInterval(…)` (not
+ * a VTS value): a positive integer in browsers, never null, undefined or 0.  It exists only once
+ * the registration has run on the path to the cleanup's `return` (`env` binds it then, as
+ * `{ k: "timer" }`); a cleanup returned earlier — from a branch before `const id = …` — reads
+ * it in its temporal dead zone when React calls it, which throws a ReferenceError.
+ */
+function timerHandle(x0: ts.Expression, env: Env): boolean {
+  const x = stripParens(x0);
+  if (!ts.isIdentifier(x)) return false;
+  const s = symbolOf(env, x);
+  if (!s) return false;
+  const b = env.vars.get(s);
+  if (b) return b.k === "timer";
+  const d = s.valueDeclaration;
+  if (!d || !ts.isVariableDeclaration(d) || !d.initializer) return false;
+  const init = stripParens(d.initializer);
+  const reg = ts.isCallExpression(init) && ts.isIdentifier(init.expression) && ["setTimeout", "setInterval"].includes(init.expression.text) && isGlobal(env, init.expression, init.expression.text);
+  if (reg) fail(x, `the cleanup reads \`${x.text}\` before \`const ${x.text} = ${init.expression.text}(…)\` has run on this path: when React calls the cleanup, \`${x.text}\` is still in its temporal dead zone and reading it throws a ReferenceError. Return this cleanup only after registering the timer, or do not clear it on this path`);
+  return false;
+}
+
+/** The value of a condition on a timer handle (`id !== null`, `id`, `!id`), or null if it is not one. */
+function timerHandleTest(c0: ts.Expression, env: Env): boolean | null {
+  const c = stripParens(c0);
+  if (ts.isPrefixUnaryExpression(c) && c.operator === ts.SyntaxKind.ExclamationToken) {
+    const v = timerHandleTest(c.operand, env);
+    return v === null ? null : !v;
+  }
+  if (timerHandle(c, env)) return true;
+  if (!ts.isBinaryExpression(c)) return null;
+  const op = c.operatorToken.kind;
+  const ops = [ts.SyntaxKind.EqualsEqualsEqualsToken, ts.SyntaxKind.EqualsEqualsToken, ts.SyntaxKind.ExclamationEqualsEqualsToken, ts.SyntaxKind.ExclamationEqualsToken];
+  if (!ops.includes(op)) return null;
+  const nullish = (e: ts.Expression) => {
+    const x = stripParens(e);
+    return isNullLit(x, env);
+  };
+  if (!((timerHandle(c.left, env) && nullish(c.right)) || (timerHandle(c.right, env) && nullish(c.left)))) return null;
+  return op === ts.SyntaxKind.ExclamationEqualsEqualsToken || op === ts.SyntaxKind.ExclamationEqualsToken;
 }
 
 function checkCleanupItems(items: readonly ts.Node[], env: Env) {
@@ -731,7 +907,7 @@ function checkCleanupItems(items: readonly ts.Node[], env: Env) {
         continue;
       }
     }
-    if (ts.isBinaryExpression(x) && x.operatorToken.kind === ts.SyntaxKind.EqualsToken && ts.isPropertyAccessExpression(x.left) && x.left.name.text === "title" && isGlobal(env, x.left.expression, "document")) {
+    if (ts.isBinaryExpression(x) && x.operatorToken.kind === ts.SyntaxKind.EqualsToken && isDocumentTitle(x.left, env)) {
       pureCleanupExpr(x.right, env);
       continue;
     }
@@ -767,7 +943,7 @@ function pureCleanupExpr(n: ts.Node, env: Env) {
         const root = callee.expression;
         if (ts.isIdentifier(root)) {
           const b = env.vars.get(symbolOf(env, root)!);
-          ok = isGlobal(env, root, "Math") || b?.k === "val" || (!b && !!globalConst(root, env));
+          ok = isGlobal(env, root, "Math") || b?.k === "val" || (!b && !!globalConst(root, env)) || (callee.name.text === "stringify" && isGlobal(env, root, "JSON"));
         } else ok = !(ts.isPropertyAccessExpression(root) && updatesState(root, env));
       }
       if (!ok) fail(x, `effect cleanups may not call \`${nodeText(callee, 40)}\` here; ${CLEANUP_RULE}`);
@@ -796,7 +972,7 @@ function isJsx(e: ts.Node): boolean {
 
 /** How render blocks translate a JSX const at its declaration: a VNode of this render. */
 function jsxConstCtx(comp: CompCtx): NonNullable<BlockCtx["jsxConst"]> {
-  return { code: (e, env) => jsxNode(e, env), type: `VReact.VNode ${comp.stateType} E (${comp.invName} ${comp.propsVar}) ${comp.snap}` };
+  return { code: (e, env) => withBubble({ ...bubble, ns: "deferred" }, () => jsxNode(e, env)), type: `VReact.VNode ${comp.stateType} E (${comp.invName} ${comp.propsVar}) ${comp.snap}` };
 }
 
 /** A VNode term for a JSX-valued expression. */
@@ -846,7 +1022,7 @@ function children(cs: ts.NodeArray<ts.JsxChild>, env: Env): string {
   const items: string[] = [];
   for (const c of cs) {
     if (ts.isJsxText(c)) {
-      const t = jsxText(c.text);
+      const t = jsxTextValue(c.text, c);
       if (t) items.push(`(VReact.VNode.text ${jsStr(t)})`);
       continue;
     }
@@ -861,28 +1037,28 @@ function children(cs: ts.NodeArray<ts.JsxChild>, env: Env): string {
   return items.length ? `(VReact.VList.ofList [\n    ${items.map((i) => indent(i, 2).trimStart()).join(",\n    ")}])` : "VReact.VList.nil";
 }
 
-/** React's JSX whitespace rules. */
-function jsxText(raw: string): string {
-  const lines = raw.split(/\r\n|\n|\r/);
-  if (lines.length === 1) return raw;
-  const parts: string[] = [];
-  lines.forEach((l, i) => {
-    let t = l;
-    if (i !== 0) t = t.replace(/^[ \t]+/, "");
-    if (i !== lines.length - 1) t = t.replace(/[ \t]+$/, "");
-    if (t) parts.push(t);
-  });
-  return parts.join(" ");
-}
-
 function attrs(e: ts.JsxElement | ts.JsxSelfClosingElement): ts.NodeArray<ts.JsxAttributeLike> {
   return ts.isJsxElement(e) ? e.openingElement.attributes.properties : e.attributes.properties;
 }
 
+/**
+ * The element a JSX tag creates, as the JSX transform decides (TypeScript's
+ * `isIntrinsicJsxName`, Babel's `isCompatTag`): a plain name starting with a lower-case
+ * letter is the HTML element of that name — never a variable of that name —, a capitalised
+ * name is the value of that identifier (a component).  Any other tag is rejected: a member
+ * expression `<props.as>` / `<ui.Button>` is the value it evaluates to (a dynamic element
+ * type: whatever tag name or component it holds), a namespaced `<a:b>` is an XML name, and
+ * a name with a dash `<my-el>` is a custom element, whose behaviour (events, activation,
+ * form association) is defined by script outside the program.
+ */
 function element(e: ts.JsxElement | ts.JsxSelfClosingElement, env: Env): string {
   const tagNode = ts.isJsxElement(e) ? e.openingElement.tagName : e.tagName;
   const tag = tagNode.getText();
   const kids = ts.isJsxElement(e) ? e.children : undefined;
+  if (ts.isJsxNamespacedName(tagNode)) fail(tagNode, `namespaced JSX tags (<${tag}>) are not supported: use an HTML element (<div>, <button>, …) or a verified component`);
+  if (!ts.isIdentifier(tagNode)) fail(tagNode, `<${tag}> is a dynamic element type: JSX renders whatever \`${tag}\` holds (an HTML tag name or a component), which VTS does not model. Write the element (<button>) or the component (<Row>, imported by name) directly, e.g. under a condition`);
+  if (tagNode.text !== tag) fail(tagNode, `<${tag}>: write the tag name without escapes`);
+  if (tag.includes("-")) fail(tagNode, `<${tag}> is a custom element: its behaviour (events, activation, form submission) is defined by script outside the verified program; use HTML elements and verified components`);
   if (/^[a-z]/.test(tag)) return intrinsic(tag, e, kids, env);
   return componentElement(tagNode, e, kids, env);
 }
@@ -959,13 +1135,27 @@ interface Bubble {
   form: { submit: string | null; reset: string | null } | null;
   /** the nearest enclosing element whose activation by a click inside it dispatches another event that reaches a handler */
   act: Activation | null;
+  /** the namespace React creates the elements at this position in (`Namespace`) */
+  ns: Namespace;
 }
 interface Activation {
   /** `a <label>`, `a submit button <button> of a form with onSubmit on <form>` */
   what: string;
   label: boolean;
 }
-const NO_BUBBLE: Bubble = { natives: new Map(), handlers: [], onClick: null, form: null, act: null };
+/**
+ * The namespace of an element, as react-dom 18.3.1 decides (`getIntrinsicNamespace`,
+ * `getChildNamespace`): below an HTML element, `<svg>` is an SVG element and `<math>` a MathML
+ * element, anything else HTML; below an SVG or MathML element, every element is in that
+ * namespace — an `<input>` inside `<svg>` is an SVG element named input, with no value, type
+ * or activation behaviour — except the children of an SVG `<foreignObject>`, which are HTML.
+ * A component's root is HTML (VTS rejects user components in another namespace).
+ * `deferred`: the JSX of a JSX const where it is declared, whose namespace is that of the
+ * position where it is rendered, checked there (`jsxNode` translates it again at each use);
+ * the declaration is translated as HTML without the namespace's rejections.
+ */
+type Namespace = "html" | "svg" | "math" | "deferred";
+const NO_BUBBLE: Bubble = { natives: new Map(), handlers: [], onClick: null, form: null, act: null, ns: "html" };
 let bubble: Bubble = NO_BUBBLE;
 
 function withBubble<T>(b: Bubble, f: () => T): T {
@@ -978,16 +1168,19 @@ function withBubble<T>(b: Bubble, f: () => T): T {
   }
 }
 
-/** `<button>` / `<input>`: may a click on it submit / reset its form owner?  A dynamic `type` may do either. */
-function formActivation(tag: string, e: ts.JsxElement | ts.JsxSelfClosingElement): { submit: boolean; reset: boolean } {
+/**
+ * `<button>` / `<input>`: may a click on it submit / reset its form owner?  A dynamic `type` may
+ * do either.  An SVG or MathML element (`html` false) named so is not a form control.
+ */
+function formActivation(tag: string, e: ts.JsxElement | ts.JsxSelfClosingElement, html: boolean): { submit: boolean; reset: boolean } {
+  if (!html || (tag !== "button" && tag !== "input")) return { submit: false, reset: false };
   const t = staticAttr(e, "type");
-  if (tag !== "button" && tag !== "input") return { submit: false, reset: false };
   if (t === undefined) return { submit: true, reset: true };
   if (tag === "button") {
-    const ty = (t ?? "").toLowerCase(); // missing or invalid: the submit button state
+    const ty = asciiLower(t ?? ""); // missing or invalid: the submit button state
     return { submit: ty !== "button" && ty !== "reset", reset: ty === "reset" };
   }
-  const ty = (t ?? "text").toLowerCase();
+  const ty = asciiLower(t ?? "text");
   return { submit: ty === "submit" || ty === "image", reset: ty === "reset" };
 }
 
@@ -997,14 +1190,16 @@ function formActivation(tag: string, e: ts.JsxElement | ts.JsxSelfClosingElement
  * `IsInInteractiveContent`, which walks from the click's target up to the label.)
  * A `<summary>` is not: outside a `<details>` it is plain content to Chromium, and a
  * details' own summary lies inside the `<details>`, which is.  Unsure cases (a dynamic
- * `type` or `href`) do not stop the label.
+ * `type` or `href`) do not stop the label, nor does an SVG or MathML element (`html` false: not
+ * HTML interactive content, also an SVG `<a href>`).
  */
-function stopsLabelActivation(tag: string, e: ts.JsxElement | ts.JsxSelfClosingElement): boolean {
+function stopsLabelActivation(tag: string, e: ts.JsxElement | ts.JsxSelfClosingElement, html: boolean): boolean {
+  if (!html) return false;
   if (["button", "label", "select", "textarea", "details"].includes(tag)) return true;
   if (tag === "a") return typeof staticAttr(e, "href") === "string";
   if (tag === "input") {
     const t = staticAttr(e, "type");
-    return t !== undefined && (t ?? "text").toLowerCase() !== "hidden";
+    return t !== undefined && asciiLower(t ?? "text") !== "hidden";
   }
   return false;
 }
@@ -1021,19 +1216,25 @@ function stopsLabelActivation(tag: string, e: ts.JsxElement | ts.JsxSelfClosingE
  * `<textarea>`, `<summary>`, `<details>`, `<img>` and the content of a link do not
  * (Chromium 152, react-dom 18.3.1).  It covers this element only, never its
  * descendants: a click on a span inside a link inside the button submits.  Unsure
- * cases (a dynamic `type` or `href`) do not stop the button.
+ * cases (a dynamic `type` or `href`) do not stop the button, nor does an SVG or MathML element
+ * (`html` false: an `<input type="checkbox">` inside `<svg>` is no checkbox).
  */
-function stopsButtonActivation(tag: string, e: ts.JsxElement | ts.JsxSelfClosingElement): boolean {
+function stopsButtonActivation(tag: string, e: ts.JsxElement | ts.JsxSelfClosingElement, html: boolean): boolean {
+  if (!html) return false;
   if (tag === "a") return typeof staticAttr(e, "href") === "string";
   if (tag === "input") {
     const t = staticAttr(e, "type");
-    return typeof t === "string" && ["checkbox", "radio"].includes(t.toLowerCase());
+    return typeof t === "string" && ["checkbox", "radio"].includes(asciiLower(t));
   }
   return false;
 }
 
-/** Check the handler props of `<tag>` against each other and the enclosing elements; returns the context for its children. */
-function checkEvents(tag: string, e: ts.JsxElement | ts.JsxSelfClosingElement, handlers: ts.JsxAttribute[], infos: Map<ts.JsxAttribute, EventInfo>): Bubble {
+/**
+ * Check the handler props of `<tag>` against each other and the enclosing elements; returns the
+ * context for its children.  `ns`: the element's namespace; `childNs`: its children's.
+ */
+function checkEvents(tag: string, e: ts.JsxElement | ts.JsxSelfClosingElement, handlers: ts.JsxAttribute[], infos: Map<ts.JsxAttribute, EventInfo>, ns: Namespace, childNs: Namespace): Bubble {
+  const html = ns === "html" || ns === "deferred";
   const own = new Map<string, string>();
   for (const a of handlers) {
     const name = a.name.getText();
@@ -1057,11 +1258,11 @@ function checkEvents(tag: string, e: ts.JsxElement | ts.JsxSelfClosingElement, h
   // its content; a checkbox, radio or link stops a button for itself only.
   let enclosing = bubble.act;
   let passOn = bubble.act;
-  if (bubble.act?.label && stopsLabelActivation(tag, e)) enclosing = passOn = null;
-  else if (bubble.act && !bubble.act.label && stopsButtonActivation(tag, e)) enclosing = null;
+  if (bubble.act?.label && stopsLabelActivation(tag, e, html)) enclosing = passOn = null;
+  else if (bubble.act && !bubble.act.label && stopsButtonActivation(tag, e, html)) enclosing = null;
   let mine: Activation | null = null;
-  const fa = formActivation(tag, e);
-  if (tag === "label") {
+  const fa = formActivation(tag, e, html);
+  if (html && tag === "label") {
     mine = { what: "a <label>", label: true };
     const why = "a click on a label (or on non-interactive content inside it) is dispatched again to its control (the element htmlFor names, or the first form control inside it)";
     if (onClick) fail(e, `onClick on <label>: ${why}, so one click would run this handler twice, or with the control's handlers, ${SCRIPTED} (put the handler on the control, or on an element outside the label)`);
@@ -1081,7 +1282,7 @@ function checkEvents(tag: string, e: ts.JsxElement | ts.JsxSelfClosingElement, h
   }
   // an invoker button (commandfor / command) runs a command on an element anywhere:
   // `request-close` fires `cancel` at a dialog synchronously (its onCancel, in Chromium)
-  if (!mine && tag === "button" && (attrsNamed(e, "commandfor").length || attrsNamed(e, "command").length)) {
+  if (!mine && html && tag === "button" && (attrsNamed(e, "commandfor").length || attrsNamed(e, "command").length)) {
     mine = { what: "a command button <button> (commandfor/command: the element it controls, anywhere, may run a handler — request-close fires cancel at a dialog)", label: false };
     if (onClick) fail(e, `onClick on ${mine.what}: one click runs both handlers, ${SCRIPTED} (put the logic in the target's handler)`);
     if (bubble.onClick) fail(e, `${mine.what} is nested inside an element with ${bubble.onClick}: one click runs both handlers, ${SCRIPTED} (move the handler)`);
@@ -1100,17 +1301,68 @@ function checkEvents(tag: string, e: ts.JsxElement | ts.JsxSelfClosingElement, h
     natives,
     handlers: [...bubble.handlers, ...names],
     onClick: onClick ? `onClick on <${tag}>` : bubble.onClick,
-    form: tag === "form" ? { submit: handlerOf("onSubmit") ?? bubble.natives.get("submit") ?? null, reset: handlerOf("onReset") ?? bubble.natives.get("reset") ?? null } : bubble.form,
+    form: html && tag === "form" ? { submit: handlerOf("onSubmit") ?? bubble.natives.get("submit") ?? null, reset: handlerOf("onReset") ?? bubble.natives.get("reset") ?? null } : bubble.form,
     act: mine ?? passOn,
+    ns: childNs,
   };
+}
+
+/**
+ * React 18.3.1's `voidElementTags`: `assertValidProps` throws while rendering one of these
+ * (whatever its namespace: React decides by the tag name) when it has children, also given as
+ * a `children` attribute.
+ */
+const VOID_TAGS = new Set(["area", "base", "br", "col", "embed", "hr", "img", "input", "keygen", "link", "meta", "param", "source", "track", "wbr", "menuitem"]);
+
+/**
+ * Tags that react-dom (its input/select/textarea/option wrappers, by tag name) or VTS's event
+ * and activation checks treat as HTML form controls, labels, forms and the like.  Inside `<svg>`
+ * or `<math>` such an element is an SVG (MathML) element of that name, with none of that
+ * behaviour (and React's wrappers misbehave on it: a `<select value>` there throws on mount).
+ */
+const HTML_ONLY_TAGS = new Set(["input", "select", "textarea", "option", "optgroup", "button", "label", "form", "fieldset", "output", "data", "details", "summary", "dialog", "datalist", "meter", "progress"]);
+
+/** The children JSX passes to an element: not whitespace that JSX drops, nor `{}` / `{/* comment *\/}`. */
+function passedChildren(kids: ts.NodeArray<ts.JsxChild> | undefined): ts.JsxChild[] {
+  return (kids ?? []).filter((c) => !(ts.isJsxText(c) && !jsxTextValue(c.text, c)) && !(ts.isJsxExpression(c) && !c.expression));
+}
+
+/**
+ * The namespace of the element `<tag>` at the current position, and that of its children (see
+ * `Namespace`); rejects tag names the document would read otherwise than VTS's checks.
+ */
+function namespaces(tag: string, tagNode: ts.Node): { ns: Namespace; childNs: Namespace } {
+  const ns: Namespace = bubble.ns === "html" || bubble.ns === "deferred" ? (tag === "svg" ? "svg" : tag === "math" ? "math" : bubble.ns) : bubble.ns;
+  // React creates an SVG <script> with createElementNS, and it runs when React inserts it (an
+  // HTML one, created through innerHTML, never runs): either way, script outside the program
+  if (tag === "script") fail(tagNode, `<script> is not supported: its code is outside the verified program (inside <svg> React inserts a script that runs)`);
+  if (ns === "html") {
+    // document.createElement lower-cases the name in an HTML document: <bUTTON> is a <button>
+    if (/[A-Z]/.test(tag) && /^[A-Za-z][A-Za-z0-9]*$/.test(tag)) fail(tagNode, `<${tag}>: outside <svg> and <math> this is an HTML element, and an HTML document lower-cases element names, so it is a <${asciiLower(tag)}> (with that element's behaviour); write <${asciiLower(tag)}>, or put an SVG element inside <svg>`);
+    if (!/^[a-z][a-z0-9]*$/.test(tag)) fail(tagNode, `<${tag}> is not an HTML element name (letters a-z and digits)`);
+  } else if (ns !== "deferred") {
+    if (!/^[a-z][A-Za-z0-9]*$/.test(tag)) fail(tagNode, `<${tag}> is not an ${ns === "svg" ? "SVG" : "MathML"} element name (ASCII letters and digits)`);
+    if (HTML_ONLY_TAGS.has(tag)) {
+      fail(tagNode, `<${tag}> inside <${ns}> is an ${ns === "svg" ? "SVG" : "MathML"} element named ${tag}, not an HTML one: React creates the elements inside <${ns}>${ns === "svg" ? " (except inside <foreignObject>)" : ""} in the ${ns === "svg" ? "SVG" : "MathML"} namespace, where it has no value, type, form or activation behaviour; put it outside the <${ns}>${ns === "svg" ? ", or inside a <foreignObject>" : ""}`);
+    }
+  }
+  return { ns, childNs: ns === "svg" && tag === "foreignObject" ? "html" : ns };
 }
 
 function intrinsic(tag: string, e: ts.JsxElement | ts.JsxSelfClosingElement, kids: ts.NodeArray<ts.JsxChild> | undefined, env: Env): string {
   const m = env.m;
   const comp = env.comp!;
+  const tagNode = ts.isJsxElement(e) ? e.openingElement.tagName : e.tagName;
+  const { ns, childNs } = namespaces(tag, tagNode);
+  const html = ns === "html" || ns === "deferred";
   const handlerAttrs = attrs(e).filter(ts.isJsxAttribute).filter((a) => /^on[A-Z]/.test(a.name.getText()));
-  const infos = new Map(handlerAttrs.map((a) => [a, eventInfo(a.name.getText(), tag, e, a)] as const));
-  const inner = checkEvents(tag, e, handlerAttrs, infos);
+  const infos = new Map(handlerAttrs.map((a) => [a, eventInfo(a.name.getText(), tag, e, a, html)] as const));
+  const inner = checkEvents(tag, e, handlerAttrs, infos, ns, childNs);
+  // react-dom throws while rendering a void element with children, and a <textarea> with
+  // children and a defaultValue (or several children); a textarea's children are its value
+  const passed = passedChildren(kids);
+  if (VOID_TAGS.has(tag) && passed.length) fail(passed[0], `<${tag}> is a void element: React throws while rendering it with children ("${tag} is a void element tag and must neither have \`children\` …"); put the content next to it`);
+  if (tag === "textarea" && passed.length) fail(passed[0], `children of a <textarea> are its initial value to React, not elements (React throws when it also has a defaultValue, or more than one child): use value={…} with onChange, or defaultValue={…}`);
   const as: string[] = [];
   const hs: string[] = [];
   let key: string | null = null;
@@ -1122,12 +1374,14 @@ function intrinsic(tag: string, e: ts.JsxElement | ts.JsxSelfClosingElement, kid
       continue;
     }
     if (name === "ref" || name === "dangerouslySetInnerHTML") fail(a, `${name} is not supported in VTS`);
+    if (RESERVED_PROPS.includes(name)) fail(a, `${name} is not an attribute: ${RESERVED_WHY(name)}`);
+    checkAttribute(a, asciiLower(name), tag, e, env);
     const val = attrValue(a);
     if (/^on[A-Z]/.test(name)) {
       if (!val) fail(a, "handler attribute needs a value");
       const info = infos.get(a)!;
       const ev = info.model;
-      const h = handlerFn(val, env, info.discrete ? "discrete" : "robust", "event");
+      const h = handlerFn(val, env, info.discrete ? "discrete" : "robust", { tag, prop: name, html });
       const run = `(fun ${h.params[0] ?? "_"} => ${h.code})`;
       if (!info.discrete) {
         const ok = m.ob(a, "handler-robust", `${name} handler on <${tag}> (${info.why}) preserves the invariant of ${comp.info.name} from any state`);
@@ -1148,7 +1402,7 @@ function intrinsic(tag: string, e: ts.JsxElement | ts.JsxSelfClosingElement, kid
       continue;
     }
     if (ts.isStringLiteral(val)) {
-      as.push(`⟨${leanStr(name)}, VReact.AttrVal.str ${jsStr(val.text)}⟩`);
+      as.push(`⟨${leanStr(name)}, VReact.AttrVal.str ${jsStr(jsxAttrText(val))}⟩`);
       continue;
     }
     const v = expr(val, env);
@@ -1184,6 +1438,56 @@ function intrinsic(tag: string, e: ts.JsxElement | ts.JsxSelfClosingElement, kid
   return withKey(key, `(VReact.VNode.elem ${leanStr(tag)} [${as.join(", ")}]\n  [${hs.join(",\n   ")}]\n  ${ch})`);
 }
 
+/** Attributes whose value is a URL the browser may navigate to or load as a document (ASCII-lower-cased names). */
+const URL_ATTRS = new Set(["href", "xlink:href", "xlinkhref", "src", "action", "formaction", "data"]);
+
+/** The value of a JSX attribute given as a string (`"x"`, decoded, or `{"x"}`); null otherwise. */
+function literalAttr(a: ts.JsxAttribute): string | null {
+  const v = attrValue(a);
+  if (!v) return null;
+  if (ts.isStringLiteral(v)) return jsxAttrText(v);
+  const x = stripParens(v);
+  return ts.isStringLiteralLike(x) ? x.text : null;
+}
+
+/**
+ * Attributes (props of an HTML/SVG element) with an effect the model does not have, rejected:
+ *  - `children`: React renders it as the element's children (on a void element it throws);
+ *  - `contentEditable`: the user can then edit the element's content, deleting nodes React
+ *    rendered — React's next commit throws (`removeChild` of a node that is no longer there);
+ *    `suppressContentEditableWarning` only serves it;
+ *  - `is`: a customized built-in element (`<button is="x-btn">`), whose behaviour is defined by
+ *    script outside the verified program, like a custom element's;
+ *  - a `javascript:` URL written in a URL attribute: its code runs in the page when the link is
+ *    followed (React 18 only warns); `srcDoc`, a document whose scripts run with this page's
+ *    origin (they can reach `parent.document`);
+ *  - `value` / `defaultValue` on an `<input>` that may be `type="file"`, other than "": React
+ *    sets the input's value when it mounts or updates it, which throws an InvalidStateError on
+ *    a file input.
+ * `lname` is the ASCII-lower-cased name: React sets an unknown prop (`contenteditable`) as an
+ * attribute, whose name HTML lower-cases.
+ */
+function checkAttribute(a: ts.JsxAttribute, lname: string, tag: string, e: ts.JsxElement | ts.JsxSelfClosingElement, env: Env) {
+  const name = a.name.getText();
+  if (lname === "children") fail(a, `${name}={…} is not an attribute: React renders it as the element's children (on a void element such as <input> it throws); write the children between the tags`);
+  if (lname === "contenteditable" || lname === "suppresscontenteditablewarning") {
+    fail(a, `contentEditable is not supported: the user could then edit the element's content, deleting nodes React rendered, and React's next update throws (removeChild of a node that is gone); use an <input> or a <textarea> for editable text`);
+  }
+  if (lname === "is") fail(a, `is=… makes a customized built-in element, whose behaviour is defined by script outside the verified program; use a plain HTML element`);
+  if (lname === "srcdoc") fail(a, `srcDoc is a document whose scripts run with access to this page (the frame has its origin): code outside the verified program`);
+  const lit = literalAttr(a);
+  // the URL parser drops leading C0 controls and spaces, and tabs and line breaks anywhere
+  if (lit !== null && URL_ATTRS.has(lname) && asciiLower(lit.replace(/^[\x00-\x20]+/, "").replace(/[\t\n\r]/g, "")).startsWith("javascript:")) {
+    fail(a, `a javascript: URL runs its code in the page when it is followed: code outside the verified program; use a handler (onClick) instead`);
+  }
+  if (tag === "input" && (lname === "value" || lname === "defaultvalue")) {
+    const types = attrValues(e, "type", env);
+    if ((types === undefined || types.includes("file")) && lit !== "") {
+      fail(a, `${name} on an <input> that ${types === undefined ? "may be" : "is"} type="file": React sets the input's value when it renders it, which throws on a file input (its value can only be set to ""); ${types === undefined ? "give the input a type that is not \"file\" (a string, or a choice between strings)" : "remove it"}`);
+    }
+  }
+}
+
 /** Elements returned by `xs.map(…)`, whose key is translated (as the key function) by `keyedMap`. */
 const keyedByMap = new WeakSet<ts.Node>();
 
@@ -1202,6 +1506,9 @@ function withKey(key: string | null, node: string): string {
 
 function componentElement(tagNode: ts.JsxTagNameExpression, e: ts.JsxElement | ts.JsxSelfClosingElement, kids: ts.NodeArray<ts.JsxChild> | undefined, env: Env): string {
   const m = env.m;
+  // its elements would be created in the enclosing <svg>'s (<math>'s) namespace, while it is
+  // checked as the root of an HTML tree
+  if (bubble.ns === "svg" || bubble.ns === "math") fail(e, `<${tagNode.getText()}> inside <${bubble.ns}>: React would create its elements in the ${bubble.ns === "svg" ? "SVG" : "MathML"} namespace (an <input> there is no HTML control), while it is verified as HTML; render the component outside the <${bubble.ns}>${bubble.ns === "svg" ? ", or inside a <foreignObject>" : ""}`);
   if (bubble.handlers.length) fail(e, `<${tagNode.getText()}> is nested inside an element with ${bubble.handlers.join("/")}: its events would bubble into a second handler (move the handler, or the component, out)`);
   if (bubble.act) fail(e, `<${tagNode.getText()}> is nested inside ${bubble.act.what}: a click inside it would run its handlers and, through the activation of the enclosing element, another one, in one batch when a script dispatches the click (move the component out${bubble.act.label ? "; a label can name a control inside it with htmlFor" : ""})`);
   let sym = m.checker.getSymbolAtLocation(tagNode);
@@ -1209,10 +1516,13 @@ function componentElement(tagNode: ts.JsxTagNameExpression, e: ts.JsxElement | t
   const g = sym?.declarations?.[0] ? m.prog.globals.get(sym.declarations[0]) : undefined;
   if (!g || g.k !== "comp") fail(tagNode, `<${tagNode.getText()}> is not a verified component (declare it in a VTS module, or mark it @trusted)`);
   const info = g.info;
-  if (kids && kids.some((k) => !(ts.isJsxText(k) && !jsxText(k.text)))) fail(e, "children of user components are not supported yet");
+  if (kids && kids.some((k) => !(ts.isJsxText(k) && !jsxTextValue(k.text, k)))) fail(e, "children of user components are not supported yet");
   const given = new Map<string, ts.JsxAttribute>();
   for (const a of attrs(e)) {
     if (ts.isJsxSpreadAttribute(a)) fail(a, "spread props are not supported");
+    if (a.name.getText() === "ref") fail(a, "ref is not supported in VTS (refs are not modelled; React 18 does not pass them to function components)");
+    if (RESERVED_PROPS.includes(a.name.getText())) fail(a, `${a.name.getText()} cannot be passed as a prop: ${RESERVED_WHY(a.name.getText())}`);
+    if (given.has(a.name.getText())) fail(a, `${a.name.getText()} is given twice`);
     given.set(a.name.getText(), a);
   }
   for (const k of given.keys()) {

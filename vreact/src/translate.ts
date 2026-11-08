@@ -11,9 +11,9 @@
  * duplicate the continuation; `for…of` loops become folds.
  */
 import ts from "typescript";
-import { T, type VType, type Field, type Param, sameType, showType, leanType, sharedFields, type Variant, typeOfNode, kindsOfType, nullShape, checkValueType, propertyNameText } from "./types.ts";
-import { type Env, type Val, ModCtx, type Binding, type StateVar, type CompCtx, type HandlerAcc, type FnInfo, type CompInfo, type Global, type Narrowed, bind, extend, freshLocal, refSymbol } from "./ctx.ts";
-import { VtsError, fail, leanField, leanAccessor, leanIdent, leanStr, jsStr, leanInt, paren, nodeText, capitalize, relLoc } from "./util.ts";
+import { T, type VType, type Field, type Param, sameType, showType, leanType, sharedFields, type Variant, typeOfNode, kindsOfType, nullShape, checkValueType, propertyNameText, propertyName } from "./types.ts";
+import { type Env, type Val, ModCtx, type Binding, type StateVar, type CompCtx, type HandlerAcc, type FnInfo, type CompInfo, type Global, type Narrowed, type DomSite, bind, extend, freshLocal, refSymbol } from "./ctx.ts";
+import { VtsError, fail, leanField, leanAccessor, leanIdent, leanStr, jsStr, leanInt, paren, nodeText, capitalize, relLoc, decodeJsxEntities } from "./util.ts";
 
 /* ───────────────────────────── helpers ───────────────────────────── */
 
@@ -235,11 +235,11 @@ function narrowedSome(env: Env, e: ts.Expression): boolean {
 }
 
 /** `null`, or the global `undefined` (not a binding spelled `undefined`). */
-function isNullLit(e: ts.Expression, env: Env): boolean {
+export function isNullLit(e: ts.Expression, env: Env): boolean {
   return e.kind === ts.SyntaxKind.NullKeyword || isGlobal(env, e, "undefined");
 }
 
-function stripParens(e: ts.Expression): ts.Expression {
+export function stripParens(e: ts.Expression): ts.Expression {
   while (ts.isParenthesizedExpression(e) || ts.isAsExpression(e) && e.type.getText() === "const") e = ts.isParenthesizedExpression(e) ? e.expression : (e as ts.AsExpression).expression;
   return e;
 }
@@ -502,6 +502,7 @@ function showWithKinds(vt: VType, t: ts.Type | null, env: Env): string {
  */
 export function checkParamAnnotation(p: ts.ParameterDeclaration, real: VType, realTs: ts.Type | null, env: Env) {
   const pname = p.name.getText();
+  checkNotThisParam(p);
   if (p.dotDotDotToken) fail(p, `rest parameters are not supported`);
   if (p.initializer) fail(p.initializer, `a default value for parameter \`${pname}\` is not supported (JS uses it when the argument is undefined)`);
   if (p.questionToken) fail(p, `optional parameter \`${pname}?\` is not supported`);
@@ -523,6 +524,34 @@ export function checkParamAnnotation(p: ts.ParameterDeclaration, real: VType, re
   const a = nullShape(ck.getTypeFromTypeNode(p.type), real, ck);
   const b = nullShape(realTs, real, ck);
   if (a === null || b === null || a !== b) reject();
+}
+
+/**
+ * TypeScript's `this` parameter (`function (this: T, x) {…}`) is not a parameter: it types the
+ * receiver, and the arguments go to the parameters after it.  VTS binds parameters to arguments
+ * by position, so it would give `x` the second argument where JS gives it the first.
+ */
+export function checkNotThisParam(p: ts.ParameterDeclaration) {
+  if (ts.isIdentifier(p.name) && p.name.text === "this") {
+    fail(p, "a `this` parameter is not supported: it is not a parameter (it types the receiver, and JS passes the arguments to the parameters after it); remove it");
+  }
+}
+
+/**
+ * The parameters of a function VTS binds to the arguments by position (a local helper inlined
+ * at its calls, a callback, an event handler, a component): a `this` parameter (not a
+ * parameter), a rest parameter (an array of the remaining arguments), a default value (used
+ * when the argument is undefined) and an optional parameter (`x?: T` receives `T | undefined`)
+ * would each give a parameter another value than the argument at its position.
+ */
+export function checkPlainParams(ps: readonly ts.ParameterDeclaration[], what: string) {
+  for (const p of ps) {
+    checkNotThisParam(p);
+    const pname = p.name.getText();
+    if (p.dotDotDotToken) fail(p, `a rest parameter \`...${pname}\` of ${what} is not supported (JS collects the remaining arguments into an array): take an array parameter instead`);
+    if (p.initializer) fail(p.initializer, `a default value for parameter \`${pname}\` of ${what} is not supported (JS uses it when the argument is undefined): pass the value at every call`);
+    if (p.questionToken) fail(p, `optional parameter \`${pname}?\` of ${what} is not supported: declare it \`${pname}: T | undefined\` and pass it at every call`);
+  }
 }
 
 /**
@@ -554,7 +583,7 @@ function arity(c: ts.CallExpression, what: string, min: number, max: number, hin
 function isIntLike(t: VType) {
   return t.k === "int";
 }
-function isNumeric(t: VType) {
+export function isNumeric(t: VType) {
   return t.k === "int" || t.k === "num";
 }
 
@@ -619,7 +648,7 @@ function expr0(e: ts.Expression, env: Env, expected?: VType): Val {
     }
     case ts.SyntaxKind.StringLiteral:
     case ts.SyntaxKind.NoSubstitutionTemplateLiteral: {
-      const text = (e as ts.StringLiteral).text;
+      const text = jsxAttrText(e as ts.StringLiteral);
       if (expected?.k === "enum") {
         const lits = m.reg.enumLits(expected);
         if (!lits.includes(text)) fail(e, `"${text}" is not a member of ${showType(expected)}`);
@@ -705,6 +734,24 @@ function expr0(e: ts.Expression, env: Env, expected?: VType): Val {
   }
 }
 
+/**
+ * The JS value of a string literal: the text TypeScript gives, except for a JSX attribute
+ * string (`title="a &amp; b"`), whose character references JS decodes.
+ */
+export function jsxAttrText(e: ts.StringLiteralLike): string {
+  if (!e.parent || !ts.isJsxAttribute(e.parent)) return e.text;
+  // Babel's JSX transform replaces a line break and the whitespace after it by one space
+  // (`/\n\s+/g`, on the value with its character references decoded), TypeScript's keeps the
+  // text: the value would depend on the compiler.  So a line break is rejected, whether
+  // written as one or as a reference (`&#10;`, `&#xA;`, `&#13;`)
+  const hasBreak = (s: string) => [...s].some((c) => ts.isLineBreak(c.charCodeAt(0)));
+  const why = "JSX compilers do not agree on its value (Babel replaces a line break and the whitespace after it with one space, TypeScript keeps them)";
+  if (hasBreak(e.text)) fail(e, `a line break inside a JSX attribute string: ${why}; write the string on one line, or as an expression {"…"}`);
+  const value = decodeJsxEntities(e.text, e);
+  if (hasBreak(value)) fail(e, `a character reference to a line break inside a JSX attribute string: ${why}; write the string as an expression with an escape, e.g. {${JSON.stringify(value)}}`);
+  return value;
+}
+
 /** Conversion to string (template literals, JSX text, string concatenation). */
 function toStr(v: Val, node: ts.Node): string {
   switch (v.type.k) {
@@ -739,6 +786,7 @@ function identifier(id: ts.Identifier, env: Env, expected?: VType, symOverride?:
     if (b.k === "closure") fail(id, "a function value can only be called, or used as an event handler / callback");
     if (b.k === "event") fail(id, "the event object can only be used through e.target.value / e.target.checked / e.key");
     if (b.k === "jsx") fail(id, "JSX values can only appear inside JSX");
+    if (b.k === "timer") fail(id, `\`${id.text}\` is a timer handle: it can only be cleared, with clearTimeout(${id.text}) / clearInterval(${id.text}) in the effect's cleanup`);
   }
   const g = s && symOverride ? (() => { const d = resolved(env, s)?.declarations?.[0]; return d ? env.m.prog.globals.get(d) : undefined; })() : globalOf(env, id);
   if (g?.k === "const") {
@@ -796,25 +844,112 @@ function propertyAccess(pa: ts.PropertyAccessExpression, env: Env): Val {
 
 function eventBase(pa: ts.PropertyAccessExpression, env: Env): Val | null {
   // e.key
-  const root = (x: ts.Expression): Binding | undefined => {
+  const root = (x: ts.Expression): Extract<Binding, { k: "event" }> | undefined => {
     if (!ts.isIdentifier(x)) return undefined;
     const s = symbolOf(env, x);
-    return s ? env.vars.get(s) : undefined;
+    const b = s ? env.vars.get(s) : undefined;
+    return b?.k === "event" ? b : undefined;
   };
   const b1 = root(pa.expression);
-  if (b1?.k === "event") {
-    if (pa.name.text === "key") return { code: `${b1.leanVar}.key`, type: T.str };
+  if (b1) {
+    checkEventUse(pa, b1, env);
+    if (pa.name.text === "key") return eventField(pa, `${b1.leanVar}.key`, T.str, env, b1.site, null);
     fail(pa, `unsupported event property e.${pa.name.text} (supported: e.key, e.target.value, e.target.checked)`);
   }
   if (ts.isPropertyAccessExpression(pa.expression)) {
     const b2 = root(pa.expression.expression);
-    if (b2?.k === "event" && ["target", "currentTarget"].includes(pa.expression.name.text)) {
-      if (pa.name.text === "value") return { code: `${b2.leanVar}.value`, type: T.str };
-      if (pa.name.text === "checked") return { code: `${b2.leanVar}.checked`, type: T.bool };
+    const which = pa.expression.name.text;
+    if (b2 && (which === "target" || which === "currentTarget")) {
+      checkEventUse(pa, b2, env);
+      if (pa.name.text === "value") return eventField(pa, `${b2.leanVar}.value`, T.str, env, b2.site, which);
+      if (pa.name.text === "checked") return eventField(pa, `${b2.leanVar}.checked`, T.bool, env, b2.site, which);
       fail(pa, `unsupported event property (supported: e.target.value, e.target.checked)`);
     }
   }
   return null;
+}
+
+/** HTML elements whose `value` is a string (the IDL attribute; an `<li>`'s, `<meter>`'s or `<progress>`'s is a number). */
+const STRING_VALUE_TAGS = ["input", "select", "textarea", "button", "option", "output", "data"];
+/** The handler props React 18 dispatches a `SyntheticKeyboardEvent` to, whose `key` is always a string (`getEventKey`). */
+const KEY_HANDLERS = ["onKeyDown", "onKeyUp", "onKeyPress"];
+
+/**
+ * Does JS read a string (`value`, `key`) or a boolean (`checked`) at this event field, as the
+ * model's `DomEvent` says?  That depends on where the handler is attached, `site` — not on the
+ * TypeScript type of the event parameter: React's handler types are bivariant
+ * (`bivarianceHack`), so a handler annotated `(e: ChangeEvent<HTMLInputElement>)` is accepted
+ * on a `<div>`, whose `value` is undefined, and `(e: KeyboardEvent<…>)` as an onChange, whose
+ * event has no `key` (also for a handler passed by name).  `e.currentTarget` is the element
+ * the handler is on; `e.target` is the element where the event happened, which is that element
+ * only when nothing inside it can be an event target: an `<input>` (a void element), a
+ * `<textarea>` (text only, and React reports a text node's event at its parent), and a
+ * `<select>`'s onChange / onInput (`change` and `input` fire at the select; a click may be on
+ * one of its options).
+ */
+function checkEventSite(pa: ts.PropertyAccessExpression, site: DomSite, which: "target" | "currentTarget" | null, field: string) {
+  const on = `${site.prop} on <${site.tag}>`;
+  if (field === "key") {
+    if (!KEY_HANDLERS.includes(site.prop)) fail(pa, `\`${nodeText(pa)}\` is undefined in ${on}: only keyboard events (onKeyDown, onKeyUp, onKeyPress) have a key (React's handler types are bivariant, so TypeScript accepts a keyboard handler for any event)`);
+    return;
+  }
+  if (!site.html) fail(pa, `\`${nodeText(pa)}\` in ${on}: this <${site.tag}> is inside an <svg> or <math> element, so React creates it as an SVG (MathML) element, which has no ${field}`);
+  const self = site.tag === "input" || site.tag === "textarea" || (site.tag === "select" && (site.prop === "onChange" || site.prop === "onInput"));
+  if (which === "target" && !self) {
+    fail(pa, `\`${nodeText(pa)}\` in ${on}: e.target is the element where the event happened, which may be another element inside <${site.tag}> (with another ${field}, or none); put the handler on the control itself and read e.currentTarget.${field} there`);
+  }
+  if (field === "value" && !STRING_VALUE_TAGS.includes(site.tag)) {
+    fail(pa, `\`${nodeText(pa)}\` is not a string in ${on}: only ${STRING_VALUE_TAGS.map((t) => `<${t}>`).join(", ")} have a string value (it is undefined on a <${site.tag}>${["li", "meter", "progress"].includes(site.tag) ? ", or a number" : ""}; React's handler types are bivariant, so TypeScript accepts a handler typed for another element)`);
+  }
+  if (field === "checked" && site.tag !== "input") {
+    fail(pa, `\`${nodeText(pa)}\` is undefined in ${on}: only an <input> has checked (React's handler types are bivariant, so TypeScript accepts a handler typed for another element)`);
+  }
+}
+
+/**
+ * An event field, whose model (`DomEvent.value : JS.Str`, `.checked : Bool`, `.key : JS.Str`)
+ * covers it only when JS reads a string (a boolean) there: TypeScript's type of the field must
+ * say so (an `<li>`'s `value` is a number; a parameter annotated `any`), and so must the
+ * element and the handler prop it is attached to (`checkEventSite`), which TypeScript's
+ * bivariant handler types do not guarantee.
+ */
+function eventField(pa: ts.PropertyAccessExpression, code: string, t: VType, env: Env, site: DomSite, which: "target" | "currentTarget" | null): Val {
+  const tt = env.m.checker.getTypeAtLocation(pa);
+  const flag = t.k === "bool" ? ts.TypeFlags.BooleanLike : ts.TypeFlags.StringLike;
+  const ok = tt.isUnion() ? tt.types.every((x) => x.flags & flag) : !!(tt.flags & flag);
+  if (!ok) fail(pa, `\`${nodeText(pa)}\` is a ${env.m.checker.typeToString(tt)} here, not a ${t.k === "bool" ? "boolean" : "string"}: only an input's, select's or textarea's value (a string), a checkbox's checked and a key event's key are modelled`);
+  checkEventSite(pa, site, which, pa.name.text);
+  return { code, type: t };
+}
+
+/**
+ * The event object is read while its handler runs: React 18 does not pool events, but it
+ * sets `e.currentTarget` to null once the handler returns, and `e.target.value` /
+ * `e.target.checked` read the live DOM element.  A function created inside the handler that
+ * runs later — a functional update `setX(p => …)` (React calls it when it processes the
+ * update, and again when it rebases it), a local helper — would read them then, not the
+ * values the model gives the handler.  Only callbacks that run in place (array methods,
+ * spec predicates) may read the event.
+ */
+function checkEventUse(node: ts.Node, b: Extract<Binding, { k: "event" }>, env: Env) {
+  for (let n = node.parent; n && n !== b.fn; n = n.parent) {
+    if ((ts.isArrowFunction(n) || ts.isFunctionExpression(n)) && !isImmediateFn(n, env)) {
+      fail(node, `\`${nodeText(node, 40)}\` is read inside ${laterWhat(n, env)}, which may run after React has dispatched the event: e.currentTarget is null then, and e.target.value / e.target.checked read the element's value at that time, not the one of this event. Read the event in the handler's own statements and use the copy: \`const v = ${nodeText(node, 40)};\` before the function`);
+    }
+  }
+}
+
+/** What kind of function created in a handler `fn` is, for messages. */
+function laterWhat(fn: ts.ArrowFunction | ts.FunctionExpression, env: Env): string {
+  let child: ts.Node = fn;
+  while (ts.isParenthesizedExpression(child.parent)) child = child.parent;
+  const p = child.parent;
+  if (ts.isCallExpression(p) && ts.isIdentifier(p.expression)) {
+    const s = symbolOf(env, p.expression);
+    const b = s ? env.vars.get(s) : undefined;
+    if (b?.k === "setter") return "a functional update (React calls it when it processes the update, and again when it rebases it onto other updates)";
+  }
+  return "a function created in the handler";
 }
 
 function fieldOf(base: Val, name: string, node: ts.Node, env: Env): Val {
@@ -1127,7 +1262,11 @@ function objectLiteral(o: ts.ObjectLiteralExpression, env: Env, expected?: VType
   for (const p of o.properties) {
     // (`{ __proto__: v }` sets the prototype, it creates no property: ECMA-262 B.3.1)
     if ((ts.isPropertyAssignment(p) || ts.isShorthandPropertyAssignment(p)) && propertyNameText(p.name) === "__proto__") fail(p, "a property `__proto__` is not supported in an object literal: `{ __proto__: v }` sets the object's prototype instead of creating a property");
-    if (ts.isPropertyAssignment(p)) props.set(p.name.getText().replace(/^["']|["']$/g, ""), p.initializer);
+    if (ts.isPropertyAssignment(p)) {
+      if (ts.isComputedPropertyName(p.name) && !ts.isStringLiteralLike(p.name.expression)) fail(p.name, "computed property names are not supported in object literals: write the field name");
+      if (props.has(propertyName(p.name))) fail(p.name, `${propertyName(p.name)} is given twice (JS keeps the last value)`);
+      props.set(propertyName(p.name), p.initializer);
+    }
     else if (ts.isShorthandPropertyAssignment(p)) props.set(p.name.text, p);
     else if (ts.isSpreadAssignment(p)) {
       if (spread || props.size) fail(p, "a spread must come first in an object literal ({ ...x, f: v })");
@@ -1244,6 +1383,7 @@ export function lambda(
   const typed: string[] = [];
   fn.parameters.forEach((p, i) => {
     const t = paramTypes[i];
+    checkNotThisParam(p);
     if (!t) fail(p, "unexpected extra lambda parameter");
     if (p.dotDotDotToken || p.initializer || p.questionToken) fail(p, "rest, default and optional lambda parameters are not supported");
     const r = bindParam(p.name, t, e2, paramTs?.[i]);
@@ -1270,9 +1410,7 @@ export function lambda(
  */
 export function bindParam(name: ts.BindingName, t: VType, env: Env, realTs?: ts.Type | null | "declared"): { env: Env; binder: string } {
   const p = name.parent;
-  // TypeScript's `this` parameter is not a parameter (it types the receiver): the arguments go
-  // to the parameters after it
-  if (ts.isIdentifier(name) && name.text === "this" && ts.isParameter(p)) fail(p, "a `this` parameter is not supported (it is not a parameter: JS passes the receiver, and VTS has no `this`)");
+  if (ts.isParameter(p)) checkNotThisParam(p);
   if (realTs !== "declared" && ts.isParameter(p) && (ts.isArrowFunction(p.parent) || ts.isFunctionExpression(p.parent))) {
     const fn = p.parent;
     const real = realTs !== undefined ? realTs : (contextualParamTsTypes(fn, env)?.[fn.parameters.indexOf(p)] ?? null);
@@ -1292,7 +1430,7 @@ export function bindParam(name: ts.BindingName, t: VType, env: Env, realTs?: ts.
     const fields = env.m.reg.rec(t);
     for (const el of name.elements) {
       if (el.dotDotDotToken || el.initializer || !ts.isIdentifier(el.name)) fail(el, "only simple destructuring { a, b } is supported");
-      const fname = el.propertyName ? el.propertyName.getText() : el.name.text;
+      const fname = el.propertyName ? propertyName(el.propertyName) : el.name.text;
       const f = fields.find((f) => f.name === fname);
       if (!f) fail(el, `no field ${fname}`);
       e2 = bind(e2, symbolOf(env, el.name)!, { k: "val", code: `${ln}.${leanField(fname)}`, type: f.type });
@@ -1350,23 +1488,6 @@ function call(c: ts.CallExpression, env: Env, expected?: VType): Val {
 }
 
 /**
- * The parameters of a local helper function (`const h = (x: T) => …`, `useCallback`), which is
- * inlined at its calls with each parameter bound to its argument: a default value (used by JS
- * when the argument is undefined), a rest parameter (an array of the remaining arguments), an
- * optional parameter (`x?: T` receives `T | undefined`) and a `this` parameter (not a parameter)
- * would each give the parameter another value.
- */
-export function checkHelperParams(fn: ts.ArrowFunction | ts.FunctionExpression) {
-  for (const p of fn.parameters) {
-    const pname = p.name.getText();
-    if (pname === "this") fail(p, "a `this` parameter is not supported (it is not a parameter: JS passes the receiver, and VTS has no `this`)");
-    if (p.dotDotDotToken) fail(p, `rest parameter \`...${pname}\` is not supported (JS collects the remaining arguments into an array): take an array parameter instead`);
-    if (p.initializer) fail(p.initializer, `a default value for parameter \`${pname}\` is not supported (JS uses it when the argument is undefined): pass the value at every call`);
-    if (p.questionToken) fail(p, `optional parameter \`${pname}?\` is not supported: declare it \`${pname}: T | undefined\` and pass it at every call`);
-  }
-}
-
-/**
  * The VTS type of a parameter or result annotation of a local helper that is inlined at a call:
  * the argument (result) is bound as data, so a function or React node type, which has no Lean
  * value type, is rejected (a helper used as an event handler, whose parameter is the event, is
@@ -1380,7 +1501,7 @@ function helperValueType(t: ts.TypeNode, env: Env, hint: string, what: string): 
 
 function inlineClosure(b: Extract<Binding, { k: "closure" }>, c: ts.CallExpression, env: Env, expected?: VType): Val {
   const fn = b.fn;
-  checkHelperParams(fn);
+  checkPlainParams(fn.parameters, `the local function ${nodeText(c.expression, 30)}`);
   if (fn.parameters.length !== c.arguments.length) fail(c, "arity mismatch");
   // Evaluate the arguments in the caller env, bind them in the closure's env.
   let lets = "";
@@ -2153,6 +2274,10 @@ export interface BlockCtx {
   onDone?: (env: Env) => string;
   /** render: translate a JSX const at its declaration (`code`), of Lean type `type` */
   jsxConst?: { code: (e: ts.Expression, env: Env) => string; type: string };
+  /** an effect body: `return cleanup` (the cleanup's evaluation, then the outcome) */
+  onCleanup?: (e: ts.Expression, env: Env) => string;
+  /** an effect body: statements it translates itself (timer registrations), or null */
+  onStmt?: (s: ts.Statement, env: Env, rest: (e: Env) => string) => string | null;
   fnNode: ts.Node;
 }
 
@@ -2181,6 +2306,8 @@ export function block(stmts: readonly ts.Statement[], i: number, env: Env, bc: B
   const s = stmts[i];
   const rest = (e2: Env) => block(stmts, i + 1, e2, bc, k);
   const m = env.m;
+  const own = bc.onStmt?.(s, env, rest);
+  if (own != null) return own;
   if (ts.isVariableStatement(s)) {
     const isConst = (s.declarationList.flags & ts.NodeFlags.Const) !== 0;
     const isLet = (s.declarationList.flags & ts.NodeFlags.Let) !== 0;
@@ -2204,6 +2331,7 @@ export function block(stmts: readonly ts.Statement[], i: number, env: Env, bc: B
       fail(stmts[i + 1], "unreachable code after return");
     }
     if (bc.kind === "handler") {
+      if (s.expression && bc.onCleanup) return bc.onCleanup(s.expression, env);
       if (s.expression) fail(s, "event handlers return nothing");
       return bc.onDone!(env);
     }
@@ -2243,7 +2371,7 @@ function varDecls(decls: ts.NodeArray<ts.VariableDeclaration>, j: number, env: E
   const declT = d.type ? typeOfNode(d.type, env.m.prog.typeEnv, ts.isIdentifier(d.name) ? capitalize(d.name.text) : "Local") : undefined;
   // local arrow function: a closure (inlined at use sites)
   if ((ts.isArrowFunction(init) || ts.isFunctionExpression(init)) && ts.isIdentifier(d.name)) {
-    checkHelperParams(init);
+    checkPlainParams(init.parameters, `the local function ${d.name.text}`);
     return next(bind(env, symbolOf(env, d.name)!, { k: "closure", fn: init, env }));
   }
   // a data value (not a JSX element, nor a function: above, and useCallback below)
@@ -2260,7 +2388,7 @@ function varDecls(decls: ts.NodeArray<ts.VariableDeclaration>, j: number, env: E
   if (ts.isCallExpression(init) && hookName(env, init.expression) === "useCallback" && ts.isIdentifier(d.name)) {
     const fn = init.arguments[0];
     if (!fn || !(ts.isArrowFunction(fn) || ts.isFunctionExpression(fn))) fail(init, "useCallback needs an inline function");
-    checkHelperParams(fn);
+    checkPlainParams(fn.parameters, `the local function ${d.name.text}`);
     checkDeps(fn, init.arguments[1], env, "useCallback");
     return next(bind(env, symbolOf(env, d.name)!, { k: "closure", fn, env }));
   }
@@ -2401,7 +2529,7 @@ function exprStatement(e: ts.Expression, env: Env, bc: BlockCtx, rest: (e: Env) 
   if (ts.isBinaryExpression(e)) {
     const k = e.operatorToken.kind;
     if (k === ts.SyntaxKind.EqualsToken) {
-      if (ts.isPropertyAccessExpression(e.left) && e.left.name.text === "title" && isGlobal(env, e.left.expression, "document")) return rest(env); // external effect
+      if (isDocumentTitle(e.left, env)) return evalArgs([e.right], env, rest); // external effect: only the value is evaluated
       return assignLocal(e.left, (_old, declared) => (declared.k === "opt" ? exprPreferElem(e.right, env, declared) : expr(e.right, env, declared)), env, rest, e);
     }
     if (k === ts.SyntaxKind.PlusEqualsToken || k === ts.SyntaxKind.MinusEqualsToken) {
@@ -2450,13 +2578,19 @@ function exprStatement(e: ts.Expression, env: Env, bc: BlockCtx, rest: (e: Env) 
         fail(e, `${sf}(…) has no effect as a statement`);
     }
   }
-  // console.*, e.preventDefault(), localStorage writes: external, no effect on component state
+  // console.*, e.preventDefault(), localStorage writes: external, no effect on component state;
+  // JS evaluates their arguments (which may throw, or call a function outside its
+  // precondition), so the arguments are translated with their obligations
   if (ts.isPropertyAccessExpression(callee)) {
-    if (isGlobal(env, callee.expression, "console")) return rest(env);
-    if (isGlobal(env, callee.expression, "localStorage") && callee.name.text === "setItem") return rest(env);
+    if (externalWrite(e, env)) return evalArgs(e.arguments, env, rest);
     if (["preventDefault", "stopPropagation"].includes(callee.name.text) && ts.isIdentifier(callee.expression)) {
       const s = symbolOf(env, callee.expression);
-      if (s && env.vars.get(s)?.k === "event") return rest(env);
+      const b = s ? env.vars.get(s) : undefined;
+      if (b?.k === "event") {
+        checkEventUse(callee.expression, b, env);
+        if (e.arguments.length) fail(e, `${callee.name.text}() takes no arguments`);
+        return rest(env);
+      }
     }
   }
   // state updates / callbacks: only in handlers
@@ -2475,7 +2609,7 @@ function exprStatement(e: ts.Expression, env: Env, bc: BlockCtx, rest: (e: Env) 
     const b = s ? env.vars.get(s) : undefined;
     if (b?.k === "closure" && bc.kind === "handler") {
       const fn = b.fn;
-      checkHelperParams(fn);
+      checkPlainParams(fn.parameters, `the local function ${callee.text}`);
       if (fn.parameters.length !== e.arguments.length) fail(e, `${callee.text} takes ${fn.parameters.length} argument(s), not ${e.arguments.length}`);
       let e2: Env = { ...b.env, handler: env.handler, scope: env.scope, curState: undefined };
       let lets = "";
@@ -2492,7 +2626,8 @@ function exprStatement(e: ts.Expression, env: Env, bc: BlockCtx, rest: (e: Env) 
         // expression-bodied: treat as a single statement
         return lets + exprStatement(fn.body, e2, bc, (e3) => rest({ ...env, handler: e3.handler, scope: e3.scope }));
       }
-      const inner: BlockCtx = { ...bc, onDone: (e3) => rest({ ...env, handler: e3.handler, scope: e3.scope }) };
+      // (a `return` in the helper ends the helper: its value is not an effect's cleanup)
+      const inner: BlockCtx = { ...bc, onCleanup: undefined, onStmt: undefined, onDone: (e3) => rest({ ...env, handler: e3.handler, scope: e3.scope }) };
       return `(${lets}${block(stmts, 0, e2, inner, (e3) => rest({ ...env, handler: e3.handler, scope: e3.scope }))})`;
     }
   }
@@ -2501,6 +2636,54 @@ function exprStatement(e: ts.Expression, env: Env, bc: BlockCtx, rest: (e: Env) 
   }
   if (ts.isCallExpression(e) && hookName(env, callee)) fail(e, "hooks must be called at the top level of a component, unconditionally (Rules of Hooks)");
   fail(e, `this call has no modelled effect: ${nodeText(e)}`);
+}
+
+// (`console`, `localStorage`, `document`, `JSON` and the timer functions are recognised as the
+// browser's by their declaration: `isGlobal`)
+
+/** `console.*(…)` / `localStorage.setItem(…)`: an external write, with no modelled effect. */
+export function externalWrite(c: ts.CallExpression, env: Env): boolean {
+  const callee = c.expression;
+  if (!ts.isPropertyAccessExpression(callee)) return false;
+  return isGlobal(env, callee.expression, "console") || (callee.name.text === "setItem" && isGlobal(env, callee.expression, "localStorage"));
+}
+
+/** `document.title` (as an assignment target). */
+export function isDocumentTitle(x: ts.Expression, env: Env): boolean {
+  return ts.isPropertyAccessExpression(x) && x.name.text === "title" && isGlobal(env, x.expression, "document");
+}
+
+/**
+ * Evaluate the arguments of an external write, then `rest`: the values are not used, but JS
+ * computes them, so they are translated (as unused `let`s) with their obligations — an index
+ * `xs[9].name` or `x!.f` that would throw, a `%`/`idiv` divisor, the precondition of a called
+ * function.  `null` / `undefined` need no evaluation.
+ */
+export function evalArgs(args: readonly ts.Expression[], env: Env, rest: (e: Env) => string): string {
+  let lets = "";
+  for (const a0 of args) {
+    if (ts.isSpreadElement(a0)) fail(a0, "spread arguments are not supported here: pass the values one by one");
+    let a = stripParens(a0);
+    // JSON.stringify(v) (also (v, null, indent)) of a VTS value cannot throw (no cycles, BigInts
+    // or toJSON methods; NaN becomes null): evaluating it is evaluating v
+    const json = jsonStringifyArg(a, env);
+    if (json) a = json;
+    if (isNullLit(a, env)) continue;
+    if (ts.isStringLiteralLike(a) || ts.isNumericLiteral(a) || a.kind === ts.SyntaxKind.TrueKeyword || a.kind === ts.SyntaxKind.FalseKeyword) continue;
+    const v = expr(a, env);
+    lets += `let _${letType(v.type)} := ${v.code};\n`;
+  }
+  return lets ? `(${lets}${rest(env)})` : rest(env);
+}
+
+/** `JSON.stringify(v)` / `JSON.stringify(v, null, indent)` (indent a literal): `v`. */
+function jsonStringifyArg(a: ts.Expression, env: Env): ts.Expression | null {
+  if (!ts.isCallExpression(a) || !ts.isPropertyAccessExpression(a.expression) || a.expression.name.text !== "stringify" || !isGlobal(env, a.expression.expression, "JSON")) return null;
+  const [v, replacer, indent] = a.arguments;
+  if (!v || ts.isSpreadElement(v) || a.arguments.length > 3) fail(a, "JSON.stringify(value) or JSON.stringify(value, null, indent)");
+  if (replacer && replacer.kind !== ts.SyntaxKind.NullKeyword) fail(replacer, "a JSON.stringify replacer is not supported (pass null)");
+  if (indent && !ts.isNumericLiteral(indent) && !ts.isStringLiteral(indent)) fail(indent, "the indent of JSON.stringify must be a literal");
+  return v;
 }
 
 type UpdTarget =
@@ -2830,15 +3013,17 @@ function forOf(s: ts.ForOfStatement, env: Env, bc: BlockCtx, rest: (e: Env) => s
 /* ─────────────────────────── handlers ─────────────────────────── */
 
 /**
- * Translate a function used as an event handler into `fun ev => outcome`.  `paramTs`: the
- * TypeScript types of the arguments (by default, those the context of `fnExpr` gives them, e.g.
- * the child's callback prop type for a JSX attribute), against which annotations are checked.
+ * Translate a function used as an event handler into `fun ev => outcome`.  `argTypes`: the
+ * VTS types of the arguments of a callback, or the site of a DOM handler (its one parameter is
+ * the event).  `paramTs`: the TypeScript types of the arguments (by default, those the context
+ * of `fnExpr` gives them, e.g. the child's callback prop type for a JSX attribute), against
+ * which annotations are checked.
  */
-export function handlerFn(fnExpr: ts.Expression, env: Env, kind: "discrete" | "robust", argTypes: Param[] | "event", hyps?: string, paramTs?: ts.Type[] | null): { code: string; params: string[] } {
+export function handlerFn(fnExpr: ts.Expression, env: Env, kind: "discrete" | "robust", argTypes: Param[] | DomSite, hyps?: string, paramTs?: ts.Type[] | null): { code: string; params: string[] } {
   const m = env.m;
   const comp = env.comp!;
   fnExpr = stripParens(fnExpr);
-  if (paramTs === undefined) paramTs = argTypes === "event" ? null : contextualParamTsTypes(fnExpr, env);
+  if (paramTs === undefined) paramTs = !Array.isArray(argTypes) ? null : contextualParamTsTypes(fnExpr, env);
   // passing a closure by name
   if (ts.isIdentifier(fnExpr)) {
     const s = symbolOf(env, fnExpr);
@@ -2863,14 +3048,21 @@ export function handlerFn(fnExpr: ts.Expression, env: Env, kind: "discrete" | "r
   const acc: HandlerAcc = { kind, updates: [], emit: null, eventVar: null };
   let e1: Env = { ...env, handler: acc, curState: undefined };
   const params: string[] = [];
-  if (argTypes === "event") {
+  if (!Array.isArray(argTypes)) {
     if (fnExpr.parameters.length > 1) fail(fnExpr, "DOM event handlers take at most one parameter (the event)");
     const p = fnExpr.parameters[0];
     if (p) {
+      // React calls the handler with the event as its one argument: only a plain parameter is it
+      // (`(...e) => e.key` reads the key of the array [event]: undefined)
+      checkNotThisParam(p);
+      const pname = p.name.getText();
+      if (p.dotDotDotToken) fail(p, `a rest parameter \`...${pname}\` is the array of the handler's arguments ([event]), not the event (\`${pname}.key\` is undefined in JS): write (${pname}) => …`);
+      if (p.initializer) fail(p.initializer, `a default value for the event parameter \`${pname}\` is not supported (React always passes the event): write (${pname}) => …`);
+      if (p.questionToken) fail(p, `the event parameter \`${pname}?\` is not optional (React always passes the event): write (${pname}) => …`);
       if (!ts.isIdentifier(p.name)) fail(p, "destructuring the event object is not supported");
       if (p.name.text === "this" || p.dotDotDotToken) fail(p, "an event handler's parameter is the event: a plain parameter `(e) => …` (not `this` or a rest parameter)");
       const r = freshLocal(e1, leanIdent(p.name.text));
-      e1 = bind(r.env, symbolOf(env, p.name)!, { k: "event", leanVar: r.name });
+      e1 = bind(r.env, symbolOf(env, p.name)!, { k: "event", leanVar: r.name, fn: fnExpr, site: argTypes });
       params.push(r.name);
     } else {
       const r = freshLocal(e1, "ev");
@@ -2899,12 +3091,12 @@ export function outcome(h: HandlerAcc, comp: CompCtx): string {
   return `(VReact.Outcome.mk (S := ${comp.stateType}) (E := E) ${upd} ${emit})`;
 }
 
-function forwardCallback(cb: { name: string; params: Param[] }, node: ts.Node, env: Env, kind: "discrete" | "robust", argTypes: Param[] | "event"): { code: string; params: string[] } {
+function forwardCallback(cb: { name: string; params: Param[] }, node: ts.Node, env: Env, kind: "discrete" | "robust", argTypes: Param[] | DomSite): { code: string; params: string[] } {
   const comp = env.comp!;
   if (kind === "robust") fail(node, "parent callbacks cannot be invoked from effects, timers, continuous/default-priority events or onFocus/onBlur/onInvalid (robust handlers)");
-  const ps = argTypes === "event" ? [] : argTypes;
-  if (argTypes === "event" && cb.params.length) fail(node, `${cb.name} needs arguments; wrap it: () => ${cb.name}(…)`);
-  if (argTypes !== "event" && ps.length !== cb.params.length) fail(node, `callback arity mismatch forwarding ${cb.name}`);
+  const ps = !Array.isArray(argTypes) ? [] : argTypes;
+  if (!Array.isArray(argTypes) && cb.params.length) fail(node, `${cb.name} needs arguments; wrap it: () => ${cb.name}(…)`);
+  if (Array.isArray(argTypes) && ps.length !== cb.params.length) fail(node, `callback arity mismatch forwarding ${cb.name}`);
   let e1 = env;
   const names: string[] = [];
   for (const p of ps) {
@@ -2914,7 +3106,7 @@ function forwardCallback(cb: { name: string; params: Param[] }, node: ts.Node, e
   }
   const ob = env.m.ob(node, "callback-contract", `contract of forwarded callback ${cb.name}`);
   const emit = `(${comp.cbVar}.${leanField(cb.name)}${names.map((n) => " " + n).join("")} ${ob})`;
-  return { code: `(VReact.Outcome.mk (S := ${comp.stateType}) (E := E) [] (some ${emit}))`, params: argTypes === "event" ? ["_"] : names };
+  return { code: `(VReact.Outcome.mk (S := ${comp.stateType}) (E := E) [] (some ${emit}))`, params: !Array.isArray(argTypes) ? ["_"] : names };
 }
 
 /** React hook dependency check (exhaustive deps). */

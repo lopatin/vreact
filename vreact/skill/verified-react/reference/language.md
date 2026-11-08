@@ -78,13 +78,17 @@ is rejected.
 The tsconfig needs `"strict": true` (with every check of the strict family:
 `strictNullChecks`, `noImplicitAny`, `strictFunctionTypes`, … none set to false)
 and `"lib": ["ES2023", "DOM"]` (for `toSorted`/`toReversed`/`with`); without a
-tsconfig, vreact uses these defaults. JSX must be React's automatic runtime:
-`"jsx": "react-jsx"` (no other `jsxImportSource`, no `@jsx…` comment pragmas).
+tsconfig, vreact uses these defaults. JSX is React's automatic runtime:
+`"jsx": "react-jsx"` (or `"react-jsxdev"`), no `jsxImportSource` other than
+`"react"`, no `jsxFactory`/`jsxFragmentFactory`/`reactNamespace`,
+`react/jsx-runtime` resolving to React's installed package (not redirected by
+`"paths"`/`"baseUrl"`), and no JSX pragmas (`@jsx`, `@jsxImportSource`,
+`@jsxFrag`, `@jsxRuntime`, in any comment and any letter case) in a verified file.
 Compiler options are a whitelist: the usual language, module, strictness, emit
 and output options are accepted; options that switch checks off (`"noCheck"`,
 `"noLib"`, `"noResolve"`, the removed `suppress…` options, `"resolvePackageJson…":
-false`) and any option vreact does not know (`"jsxFactory"`, newer ones) are
-rejected with the option's name. The tsconfig.json read is the one in the project
+false`) and any option vreact does not know (newer ones) are rejected with the
+option's name. The tsconfig.json read is the one in the project
 root; a `tsconfig.json` inside the source directories is rejected (the bundler
 compiles a file with the nearest one's settings, e.g. its `jsxImportSource`).
 
@@ -210,6 +214,10 @@ on an int is rejected; on an enum or `x.kind`: string literals), `for (const x o
 assign outer `let`s; no `return`/`continue` inside, `break` only to end a `switch`
 case), `throw` (must be provably
 unreachable), `assert(c)`, `assume(c)`. No `while`, `try`, `var`, recursion.
+Code after a `return` in the same block never runs and is rejected (in functions,
+components, handlers, effects, timer callbacks). Async functions and generators
+are rejected everywhere (an async predicate returns a promise, which is always
+truthy; calling a generator does not run its body).
 
 Closures and `let`: JS closures read a variable when they run. So a function
 that runs later (helper arrow, handler, callback prop, `setX(prev => …)`, effect,
@@ -279,10 +287,41 @@ Order inside the body:
 
 Props: a single parameter `props: P` (or destructured `{ a, b }: P`) where `P`
 is a record whose function-typed fields are callbacks (`=> void`, required).
+`key`, `ref`, `__self` and `__source` are not props: React 18 never passes them
+to the component (`props.key` is undefined; the development JSX transform uses
+`__self` and `__source`), so `P` may not have fields with these names (however
+spelled: `key`, `"key"`, `["key"]`), `ref={…}` is rejected (refs are not
+modelled), and so are `__self=…` / `__source=…`. In any record type, a field
+written as a string or a computed string (`"b": int`, `["c"]: int`) is the
+property `b` (`c`) everywhere:
+`r.b`, `{ b: 1 }`, `{ "b": z } = r`; other computed names are rejected.
+
+Parameters are bound to arguments by position, so functions VTS translates
+(components, callbacks, handlers, array callbacks, local helpers, top-level
+functions) may not have a `this` parameter (`function (this: T, x) …`: it types the
+receiver, `x` is the first argument), a rest parameter, a default value or an
+optional parameter. A DOM handler's one parameter is the event: `(e) => …`, never
+`(...e) => …` (`e` would be the array `[event]`, `e.key` undefined).
 
 Handlers (`onClick`, `onChange`, `onSubmit`, `onKeyDown`, …): arrow functions or
 local closures; the event parameter supports `e.target.value`,
-`e.target.checked`, `e.key`, `e.preventDefault()`. Setters, `dispatch`, at most
+`e.target.checked`, `e.key`, `e.preventDefault()` (also `e.currentTarget.…`).
+Which fields exist depends on the element and the handler prop the handler is
+attached to, not on the type annotation of `e` (React's handler types are
+bivariant: TypeScript accepts `(e: ChangeEvent<HTMLInputElement>) => …` on a
+`<div>`): `e.currentTarget` is the element the handler is on, and its `value`
+is a string only on `<input>`, `<select>`, `<textarea>`, `<button>`, `<option>`,
+`<output>`, `<data>` (undefined on a `<div>`, a number on an `<li>` or
+`<progress>`; HTML elements only, never inside `<svg>`), its `checked` only on `<input>`; `e.target` may be any element
+inside the one the handler is on, so `e.target.…` is accepted only on an
+`<input>`, a `<textarea>` and a `<select>`'s `onChange`/`onInput`; `e.key` only
+in `onKeyDown`/`onKeyUp`/`onKeyPress`. Read the event in the handler's own
+statements (array callbacks there may too): a function created in the handler —
+a functional update `setX(p => …)`, which React calls when it processes the
+update and again when it rebases it, or a local helper — may run after the
+event's dispatch, when `e.currentTarget` is null and `e.target.value` is the
+element's value at that time. Copy it first: `const v = e.target.value;
+setX((p) => … v …)`. Setters, `dispatch`, at most
 one parent callback per path. Only React's discrete events (`onClick`,
 `onChange`, `onInput`, `onKeyDown`, `onSubmit`, …) are
 checked from the render snapshot; continuous (`onMouseMove`, `onScroll`,
@@ -299,13 +338,25 @@ names, `onSelect`, capture-phase handlers (`onClickCapture`).
 Effects: setters and timers (`setTimeout`/`setInterval` callbacks become tasks;
 register them at the top level of the effect body; a timer's callback may use the
 early returns `if (c) return;` and the `assert`/`assume` before it, as in
-`if (left <= 0) return; setTimeout(() => setLeft(left - 1), 1000)`),
+`if (left <= 0) return; setTimeout(() => setLeft(left - 1), 1000)`; the delay is
+checked where the timer is registered; no further `setTimeout` arguments),
 external writes (`localStorage.setItem`, `document.title = …`, `console.*`) are
-allowed and have no modelled effect; no async. A cleanup is an inline
-`() => { … }` that only calls `clearTimeout`/`clearInterval` and makes those
-external writes, possibly under `if`/`else` (`if (id !== null) clearInterval(id)`;
-no setters, `dispatch`, parent callbacks or local helpers: it runs later with a
-stale render's values and is not verified).
+allowed and have no modelled effect, but JS evaluates their arguments, so these
+are checked like any expression (here and in handlers, timers, cleanups, render
+and functions: `console.log(xs[i].name)` needs `i` in bounds; an argument may be
+`JSON.stringify(v)` or `JSON.stringify(v, null, 2)`, which cannot throw on a VTS
+value); no async. A cleanup
+is an inline `() => { … }`, returned at the end of the effect body or of a branch
+of it, that only calls `clearTimeout`/`clearInterval` and makes those external
+writes, possibly under `if`/`else` (`if (id !== null) clearInterval(id)`: a timer
+handle is never null). A timer handle is `const id = setTimeout(…)` and can only be
+cleared, by a cleanup returned after that statement: one returned earlier (from a
+branch before it) would read `id` in its temporal dead zone, a ReferenceError
+when React calls it. No setters, `dispatch`, parent callbacks or local helpers:
+it runs later with the values it captured. Its conditions and arguments are
+checked where the effect returns it, under the facts that hold there (the
+effect's early returns, its `if`s). Statements after the effect's `return` are
+rejected (they never run).
 
 JSX: intrinsic elements with string/int/bool/enum attributes (`className`,
 `value`, `checked`, `disabled`, `placeholder`, `type`, …; no `style`, `ref`,
@@ -316,6 +367,39 @@ lists is checked too (JS evaluates it). A JSX const (`const row = <p>{e}</p>;`)
 is checked where it is declared, even if it is rendered only under a condition or
 not at all (JS evaluates it there); JSX only appears in a component's render.
 `children` props are not supported yet.
+Tags are plain names: a lower-case one is always the HTML element (`<p>` even
+where a variable `p` exists), a capitalised one a verified component. Rejected:
+member-expression tags (`<props.as>`, `<ui.Button>`: a dynamic element type),
+namespaced tags (`<svg:rect>`), custom elements (`<my-el>`) and `<script>`. An
+HTML tag is ASCII lower-case letters and digits (the document lower-cases names:
+`<bUTTON>` would be a `<button>`; `<foreignObject>` outside `<svg>` is rejected).
+Inside `<svg>` (and `<math>`) React creates SVG (MathML) elements, except inside a
+`<foreignObject>`, whose children are HTML again: there an `<input>`, `<button>`,
+`<select>`, `<textarea>`, `<label>`, `<form>`, … is rejected (it would be an SVG
+element with no value, type or activation), other elements count as plain content
+for the layout checks below (an SVG `<a href>` does not stop a label), and user
+components are rejected. React throws while rendering children of a void element
+(`<input>`, `<br>`, `<hr>`, `<img>`, …, even `{false}`) and a `<textarea>` with
+children: both are rejected (a textarea's text is `value`/`defaultValue`). Also
+rejected: a `children=` attribute (it is the element's children), `contentEditable`
+(the user could delete nodes React rendered: React's next update throws),
+`suppressContentEditableWarning`, `is=` (a customized built-in element), a
+`javascript:` URL written in `href`/`src`/`action`/`formAction`/`data`, `srcDoc`
+(a same-origin document whose scripts reach this page), and
+`value`/`defaultValue` other than `""` on an `<input>` that may be `type="file"`
+(setting a file input's value throws): its `type` must be a string, a choice
+between strings (`show ? "text" : "password"`) or an enum, without `"file"`.
+Type keywords are matched ASCII-case-insensitively, as HTML does
+(`type="CheckBox"` is a checkbox, `type="chec&#8490;box"` with a Kelvin sign is
+not: a text input). Character
+references in JSX text and attribute strings are decoded as JSX does (`&amp;`,
+`&#65;`, `&#x41;`, the HTML 4 entities), also for the layout checks below:
+`type="&#115;ubmit"` is a submit button. References that JSX compilers read
+differently (`&check;` and other names outside HTML 4, `&#X41;`, `&#+65;`, code
+points above U+10FFFF) are rejected: write the character, or `{"…"}`. So are JSX
+text with a tab (Babel makes it a space) and attribute strings with a line break,
+written as one or as a reference (`&#10;`): Babel replaces a line break and the
+whitespace after it with a space; write `{"a\n b"}`.
 One native event may reach at most one discrete handler: an element may not
 combine handlers fired by the same native event (a checkbox's `onClick` +
 `onChange` both run on click; `onInput` + a text input's `onChange` both run on
