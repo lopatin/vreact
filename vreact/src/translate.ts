@@ -288,6 +288,9 @@ function checkCollectionMutation(body: ts.Node, env: Env) {
         let st: ts.Node = n;
         while (ts.isParenthesizedExpression(st.parent)) st = st.parent;
         if (ts.isExpressionStatement(st.parent)) {
+          if (ts.isCallExpression(recv) && ts.isPropertyAccessExpression(recv.expression) && MUTATORS.has(recv.expression.name.text)) {
+            fail(n, `a chain of mutations as a statement: write one statement per mutation (n.${recv.expression.name.text}(…); n.${name}(…);)`);
+          }
           const sym = ts.isIdentifier(recv) ? ck.getSymbolAtLocation(recv) : undefined;
           const d = sym?.valueDeclaration;
           const local = !!d && ts.isVariableDeclaration(d) && ts.isVariableDeclarationList(d.parent) && within(d, body);

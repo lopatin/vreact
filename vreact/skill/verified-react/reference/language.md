@@ -29,9 +29,10 @@ The tsconfig needs `"strict": true` (with `strictNullChecks` and `noImplicitAny`
 | `{ readonly f: T; g?: U }`              | records (optional field = `U \| undefined`) |
 | `{ kind: "x"; … } \| { kind: "y"; … }`  | discriminated unions — any common string-literal field works |
 | `readonly T[]`, `T \| null`, `[A, B]`   | lists, options (not both null and undefined), tuples |
+| `ReadonlyMap<K, V>`, `ReadonlySet<T>`   | Maps and Sets (also `Map`/`Set`): see [Map and Set](#map-and-set) |
 | `(a: A) => void`                        | only as callback **props** |
 
-Not supported: `any`, generics, classes, `Map/Set/Record`, recursive types,
+Not supported: `any`, generics, classes, `Record`, `WeakMap`/`WeakSet`, recursive types,
 non-discriminated unions (`string | number`), `ReactNode`/`children` props.
 
 ## Expressions
@@ -114,6 +115,63 @@ non-discriminated unions (`string | number`), `ReactNode`/`children` props.
   Assigning a present value to a `let x: T | null` (`x = 0`, `let x: int | null = 3`)
   narrows it too; assigning again (or in a loop) forgets it.
 
+## Map and Set
+
+`ReadonlyMap<K, V>`, `ReadonlySet<T>` (and `Map`, `Set`: prefer the readonly forms in
+signatures, state and props, so that TypeScript rejects `set` on them), wherever a type may
+appear: parameters, results, state, props, record fields, array elements, reducer state.
+
+* Keys and elements: `int`, `string`, `boolean`, string-literal enums. JS compares keys with
+  SameValueZero, so `number` (NaN, -0), objects, arrays and tuples (identity) and optional
+  types (`null` and `undefined` are different keys) are rejected. Values: any data type but an
+  optional one (`m.get(k)` is `undefined` for a missing key): no `ReadonlyMap<K, V | null>` —
+  delete the key instead.
+* Order is JS's insertion order, exactly: `set` on a present key keeps its position, on a new
+  key appends it; `delete` then `set` moves the key to the end; `new Map(entries)` with a
+  repeated key keeps its first position and its last value; `new Set(xs)` keeps first occurrences.
+* Create: `new Map<K, V>()`, or `new Map()` where the type is known (an annotation,
+  `useState<T>(…)`, a parameter, the return type) — never with neither (TypeScript types it
+  `Map<any, any>`); `new Map(m)` (a copy), `new Map(pairs)` (`[k, v]` pairs: a literal,
+  `new Map<int, Item>(xs.map((x: Item) => [x.id, x]))`), `new Set(xs)`, `new Set(s)`.
+  `new Set(string)` is rejected (it iterates code points).
+* Read: `m.get(k)` (`V | undefined`: `m.get(k) ?? d`, `m.get(k)!` with an obligation, or
+  `const v = m.get(k); if (v !== undefined) …` — a call is not narrowed), `m.has(k)`, `m.size`,
+  `s.has(x)`, `s.size`.
+* Iterate where the iteration is consumed at once: `[...m]` / `[...m.entries()]` (`[k, v]`
+  pairs), `[...m.keys()]`, `[...m.values()]`, `[...s]`, `Array.from(it)` (one argument),
+  `for (const [k, v] of m)`, `for (const k of m.keys())`, `for (const x of s)`, and the argument
+  of `new Map(…)` / `new Set(…)`. An iterator anywhere else (stored in a `const`, passed,
+  rendered) is rejected: a JS iterator is used up once and sees later changes. Render a Map as
+  a keyed list: `{[...m.values()].map((it) => <li key={it.id}>…</li>)}`.
+* Tuples destructure exactly: `([k, v]) => …`, `for (const [k, v] of m)`, `const [k, v] = pair`
+  (all elements; `[, v]` skips one).
+* Update in an expression with `.set` / `.add` chains on a fresh copy:
+  `new Map(m).set(k, v)`, `new Set(s).add(x).add(y)`. As statements, mutate a local copy:
+  `const n = new Map(m); n.set(k, v); n.delete(j); n.clear(); return n;` — only a `const`
+  initialised in the same function with `new Map(…)` / `new Set(…)`, also in a `for…of`
+  (`for (const x of xs) n.set(x.id, x);`), a functional update
+  (`setM((p) => { const n = new Map(p); n.set(k, v); return n; })`) or a reducer. Rejected:
+  mutating parameters, props, state, constants, `let`s or values read from elsewhere (the
+  caller, React or other code holds the same object); `set`/`add`/`delete`/`clear` inside an
+  expression (`if (n.delete(k))`, `console.log(m.set(…))`); mutating from inside a callback or
+  helper; using `n` — storing it, passing it to a function, setter or child, rendering it,
+  capturing it in a handler or helper — when a mutation of `n` follows (later in the code, or in
+  a later loop iteration; a `return n` is fine): mutate first, or pass a copy `new Map(n)`;
+  mutating `n` in a `for…of` over `n` itself (iterate `[...n]`).
+* Not supported: `===` on Maps/Sets (identity: compare the contents), truthiness (`if (m)` is
+  always true: test `m.size > 0`), `forEach` (use `for…of`), `entries()` of a Set, `WeakMap`,
+  `WeakSet`, `Map.groupBy`, the ES2025 Set methods, a Map or Set as a JSX child or a string.
+  Effect dependencies compare Maps by identity (a new Map re-runs the effect).
+* Contracts use the same forms: `r.get(k) === v`, `r.has(k)`, `r.size`,
+  `[...r.values()].every((v) => v >= 0)`, frames
+  `[...m.keys()].every((j) => j === k || r.get(j) === m.get(j))`, order
+  `[...r.keys()].indexOf(k) === m.size`. The automation knows `get`/`has`/`size` after
+  `set`/`delete`, that keys are distinct (keyed lists by the keys, or by the values' `id` when an
+  invariant states `[...m.entries()].every(([k, v]) => k === v.id)`), the position of a set or
+  re-set key, `new Map`/`new Set` of literals, and the loops `for (const x of xs) n.set(f(x), g(x))`
+  / `n.add(f(x))`. Lean lemmas for `proofs/` (e.g. `JSMap.keys_set`, `JSMap.get_set`,
+  `JSMap.entries_set`) are in `VReact/JSMap.lean`.
+
 ## Statements
 
 `const`, `let` + reassignment (locals only), `if/else`, `return`, `switch`
@@ -124,6 +182,8 @@ on an int is rejected; on an enum or `x.kind`: string literals), `for (const x o
 assign outer `let`s; no `return`/`continue` inside, `break` only to end a `switch`
 case), `throw` (must be provably
 unreachable), `assert(c)`, `assume(c)`. No `while`, `try`, `var`, recursion.
+
+A Map or Set mutated by statements follows the rules of [Map and Set](#map-and-set).
 
 Closures and `let`: JS closures read a variable when they run. So a function
 that runs later (helper arrow, handler, callback prop, `setX(prev => …)`, effect,

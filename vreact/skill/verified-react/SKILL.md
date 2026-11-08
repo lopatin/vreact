@@ -110,6 +110,9 @@ export function ItemList(props: ItemListProps) {
 
 * Use `int` for integers (counts, ids, cents); `number` is a float the prover cannot reason about.
 * State is immutable: spread, `filter`, `map`, `toSorted`, `with` — never `push`/`sort`/property assignment.
+* Maps/Sets (`ReadonlyMap<int, Item>`, `ReadonlySet<string>`; keys int/string/boolean/enum):
+  update a fresh copy — `new Map(m).set(k, v)`, or `const n = new Map(m); n.delete(k); return n;` —
+  never state, props or parameters; consume iterators at once (`[...m.values()]`, `for…of`).
 * Handlers may call setters, `dispatch`, and **at most one** parent callback per path.
 * `setX(v)` uses the render snapshot; two of them in one handler do not compose — use
   `setX(prev => …)` when updates must accumulate.

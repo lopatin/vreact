@@ -144,6 +144,15 @@ first one that fails.
    dividend and a non-zero divisor is in `[0, |divisor|)`, and its exact value
    is known where index arithmetic needs it: `a % n === a` for `0 <= a < |n|`
    (and for `-|n| < a <= 0`), `n % n === 0`.
+   Maps and Sets: `get`, `has` and `size` after `set`/`delete` (also through chains of them),
+   distinct keys (`[...m.keys()]`, `[...m.entries()]` keyed by `k`; `[...m.values()]` keyed by
+   `v.id` when an invariant says `[...m.entries()].every(([k, v]) => k === v.id)`), the position
+   of a key after `set` (`[...r.keys()].indexOf(k)`: kept for a present key, last for a new one),
+   every value after a `set` (`[...r.values()].every(…)`), `new Map`/`new Set` of literals, and
+   the loops `for (const x of xs) n.set(f(x), g(x))` / `n.add(f(x))` (as `new Map`/`new Set` of
+   the mapped list). Facts about other loops over Maps need a lemma, as for arrays; the model's
+   lemmas (`JSMap.keys_set`, `JSMap.entries_set`, `JSMap.get_set`, …) are in
+   `VReact/JSMap.lean`.
 9. **Bounded quantifiers.** `forall(lo, hi, i => …)` and guarded `&&` in
    hypotheses are split and instantiated at the indices of the goal, also
    nested (`g[r][c]` of a 2-D grid); to *establish* one with numeral bounds

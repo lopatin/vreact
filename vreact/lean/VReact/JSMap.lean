@@ -421,8 +421,9 @@ end JSSet
 /-! ## Automation
 
 Normal form: `get`, `keys`, `values` and `size` of a map stay atomic; Bool `has` becomes a
-membership; deletes become list filters (`vreact_simp`).  `keys_set` is `grind`-only: as a rewrite rule it would put an
-`if` into the `Nodup` sources of `vreact_subperm`. -/
+membership; deletes become list filters (`vreact_simp`).  `keys_set` is `grind`-only: as a
+rewrite rule it would put an `if` into the `Nodup` sources of `vreact_subperm`.  The two Option
+facts at the end (`o!`, `o ?? d`) serve every optional value, `m.get(k)` among them. -/
 
 attribute [vreact_simp] JSMap.has_def JSMap.get_set JSMap.get_delete
   JSMap.get_empty JSMap.mem_keys_set JSMap.size_set JSMap.size_delete
