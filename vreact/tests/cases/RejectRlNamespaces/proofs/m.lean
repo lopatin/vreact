@@ -11,3 +11,7 @@ export List (map)
 namespace My
 theorem _root_.VTS.x : True := trivial
 end My
+open VReact in namespace VTS.m
+theorem bar : True := t where
+  t := trivial
+  _root_.VTS.m.zz : Nat := 1

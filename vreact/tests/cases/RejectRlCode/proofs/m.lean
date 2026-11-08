@@ -14,4 +14,6 @@ end
 theorem readsFile : True := by
   have : String := include_str "m.lean"
   trivial
+meta section
+end
 #exit

@@ -112,8 +112,10 @@ first one that fails.
      `VReact` (those hold the generated declarations and the library: a lemma
      there could replace or extend a translated declaration) and not like a
      `VReact.` name;
-   * `open`, `namespace`/`section`/`end` (not `VTS…`/`VReact…`), `variable`,
-     `universe`, `include`, `omit`, `/-! … -/`, `#check`, `#print`;
+   * `open`, `namespace`/`section`/`end` (not `VTS…`/`VReact…`; `noncomputable
+     section` too), `variable`, `universe`, `include`, `omit`, `/-! … -/`,
+     `#check`, `#print`, and `open … in` / `set_option … in` before one of these
+     or a declaration (not before `namespace`/`section`/`end`);
    * the attributes `simp`, `vreact_simp`, `grind` (`grind =`, `grind →`, …), also
      `local` and erased (`attribute [-simp] f`), and `grind_pattern`: this is how
      the automation is extended (there is no `macro_rules` for `vreact_auto`);

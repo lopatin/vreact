@@ -23,8 +23,11 @@ file without imports, otherwise `import VReact`; scope commands `open`/`namespac
   `private`, `protected`, `noncomputable`, `nonrec`), named outside the namespaces `VTS` and
   `VReact` (the generated declarations and the library) and not named like a `VReact.` name
   (generated files `open VReact`);
-* `open`, `namespace`/`section`/`end` (no namespace under `VTS` or `VReact`), `variable`,
-  `universe`, `include`, `omit`, module docs `/-! … -/`, `#check`, `#print`;
+* `open`, `namespace`/`section`/`end` (no namespace under `VTS` or `VReact`; `section` or
+  `noncomputable section`, no module-system modifiers), `variable`, `universe`, `include`,
+  `omit`, module docs `/-! … -/`, `#check`, `#print`; `open … in` and `set_option … in`
+  before any of these but `namespace`/`section`/`end` (which `in` would leave open unseen);
+  no `_root_.VTS…`/`_root_.VReact…` name anywhere (`where`/`let rec` declare with it);
 * attributes `simp`, `vreact_simp`, `grind` (and `grind!`, `grind?`, `grind!?`), also `local`
   and, in `attribute [-…]`, erased; `grind_pattern`;
 * `set_option` of `maxHeartbeats`, `maxRecDepth`, `synthInstance.maxHeartbeats`,
@@ -164,6 +167,13 @@ partial def hasAtom (stx : Syntax) (a : String) : Bool :=
   | .node _ _ args => args.any (hasAtom · a)
   | _ => false
 
+/-- The atoms of `stx`. -/
+partial def atomsOf (stx : Syntax) : Array String :=
+  match stx with
+  | .atom _ v => #[v]
+  | .node _ _ args => args.flatMap atomsOf
+  | _ => #[]
+
 /-- Check a `set_option` node (command, term or tactic): its option name is child 1. -/
 def checkSetOption (stx : Syntax) : M Unit := do
   let n := stx[1].getId
@@ -199,6 +209,10 @@ partial def walk (stx : Syntax) : M Unit := do
         report stx s!"`{n}` is not allowed in a proof file: it trusts compiled code instead of the kernel"
       if n == `native then
         report stx "`native` (e.g. `decide +native`) is not allowed in a proof file: it trusts compiled code instead of the kernel (axiom Lean.ofReduceBool)"
+    -- (`where`/`let rec` names with `_root_` declare at the root: `_root_.VTS.m.f` would be
+    -- a generated name; references never need `_root_` for these namespaces)
+    if n.getRoot == `_root_ && reservedRoots.contains (n.replacePrefix `_root_ .anonymous).getRoot then
+      report stx s!"`{n}` is not allowed in a proof file: the namespaces VTS and VReact belong to the generated code and the library (refer to their names without `_root_`)"
   | .missing => pure ()
 
 /-- The full name a declaration id declares in the current namespace. -/
@@ -245,8 +259,16 @@ partial def checkCommand (stx : Syntax) : M Unit := do
     unless [``Command.open, ``Command.set_option].contains c1.getKind do
       report stx s!"`{← excerpt stx}` is not allowed in a proof file: only `open … in` and `set_option … in` are"
       return
+    -- `c₁ in c₂` is `section c₁ c₂ end`: a scope command as c₂ would leave a namespace open
+    -- (its `end` fails) that this check, which does not elaborate `in`, would not see
+    if [``Command.namespace, ``Command.section, ``Command.end].contains stx[2].getKind then
+      report stx s!"`{← excerpt stx}` is not allowed in a proof file: `… in` may precede a declaration or command, not `namespace`, `section` or `end`"
+      return
     checkCommand c1
     checkCommand stx[2]
+  else if k == ``Command.section && (atomsOf stx[0]).any (· != "noncomputable") then
+    -- `meta section`, `public section`, `@[expose] section`: module-system modifiers
+    report stx s!"`{← excerpt stx}` is not allowed in a proof file: only `section` and `noncomputable section` are"
   else if plainKinds.contains k then
     walk stx
   else

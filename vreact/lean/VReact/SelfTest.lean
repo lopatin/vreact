@@ -232,4 +232,22 @@ example : True := by
   vreact_fails_showing_goal (∀ (o : Box2), o.b.c = .red ∨ o.b.c = .green)
   trivial
 
+-- round 4 (Rl): numbers are opaque — congruence works, nothing is computed or decided
+example (x : JS.Num) (k : Int) :
+    JS.eq (JS.Num.lt x (JS.Num.ofInt k)) (JS.Num.lt x (JS.Num.ofInt k)) = true := by vreact_auto
+example (x y : JS.Num) (h : JS.Num.lt x y = true) : JS.Num.lt x y = true := by vreact_auto
+example : True := by
+  -- `===` is not reflexive (NaN)
+  vreact_fails_showing_goal (∀ (x : JS.Num), JS.Num.eq x x = true)
+  -- `Math.max(1, NaN)` is NaN (Lean's `max` on Float is 1)
+  vreact_fails_showing_goal (JS.Num.eq (JS.Num.max 1 (JS.Num.ofInt 0 / JS.Num.ofInt 0)) 1 = true)
+  -- no arithmetic on literals
+  vreact_fails_showing_goal (JS.Num.eq ((0.1 : JS.Num) + 0.2) 0.30000000000000004 = true)
+  vreact_fails_showing_goal ((0.1 : JS.Num) + 0.2 = 0.30000000000000004)
+  -- `<`, `<=`, `===` are unrelated; rounding functions are unrelated
+  vreact_fails_showing_goal (∀ (x y : JS.Num), JS.Num.lt x y = true → JS.Num.le x y = true)
+  vreact_fails_showing_goal (∀ (x : JS.Num), JS.Num.round x = JS.Num.floor (x + 0.5))
+  vreact_fails_showing_goal (∀ (x : JS.Num), JS.Num.trunc x = JS.Num.round x)
+  trivial
+
 end VReact.SelfTest
