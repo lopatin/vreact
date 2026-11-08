@@ -61,7 +61,9 @@ non-discriminated unions (`string | number`), `ReactNode`/`children` props.
   (or `r.f`, `r[i]`) where the type tells null from undefined (`isNull(r)` with
   `isNull(x: int | null)`, `xs.includes(r)`, `{ f: r }`) is rejected unless its
   nullish value, from the return type, is that one. Annotate `r` with the return
-  type to have TypeScript check it.
+  type to have TypeScript check it. Its nullish value is known through fields, indexes,
+  `!`, optional chains and the reads of a Map, Set or array (`r.get(k)?.name === x`,
+  `r.at(0)?.id === y`); a comparison it cannot type asks for the annotation.
 * `+` with a string operand concatenates; `int`, `boolean` and enum operands are
   converted as in template literals (`x + "px"`); a `number` or nullable operand is
   rejected (use an int, or `${n}`). Bitwise operators (`~ & | ^ << >> >>>`) and
@@ -163,7 +165,11 @@ appear: parameters, results, state, props, record fields, array elements, reduce
   capturing it in a handler or helper — when a mutation of `n` follows (later in the code, or in
   a later loop iteration; the function's own `return n` is fine, a callback's `return n` is
   not — it hands `n` back to the function, which goes on): mutate first, or pass a copy
-  `new Map(n)`; mutating `n` in a `for…of` over `n` itself (iterate `[...n]`). The mutating
+  `new Map(n)`; mutating `n` in a `for…of` over `n` itself (iterate `[...n]`). Logging or
+  writing out `n` where it stands is not a use: `console.log("start", n)`,
+  `localStorage.setItem(k, JSON.stringify(n))` (the model reads nothing of it). A local named
+  like a global (`const console = new Set(…)`) is an ordinary variable: `console.add(1)` mutates
+  it. The mutating
   methods are only called directly, `n.set(…)`: not through an index (`m["clear"]()`), as a
   value (`const f = n.set`, `n.set.bind(n)`) or via the prototype (`Map.prototype.set.call(m, …)`),
   and a Map or Set is never indexed (`m[k]`: use `m.get(k)`).
@@ -179,7 +185,7 @@ appear: parameters, results, state, props, record fields, array elements, reduce
   invariant states `[...m.entries()].every(([k, v]) => k === v.id)`), that a value read with
   `m.get(k)` is the value of `k`'s entry (so such an invariant applies to it), the position of a
   set or re-set key, the entries and values of `new Map(pairs)`, of `new Map` of a filtered
-  `[...m]` and of the loops `for (const x of xs) n.set(f(x), g(x))` / `n.add(f(x))` (they come
+  `[...m]` and of the loops `for (const x of xs) n.set(f(x), g(x))` / `n.add(f(x))` / `n.add(x)` (they come
   from the pairs), `new Map`/`new Set` of literals, `[...m].length === m.size` (also
   `[...m.values()]`), `new Set(xs).size <= xs.length` (`===` when `distinct(xs)`), the size of
   `new Map(pairs)` with distinct keys, and membership in a Set after `add`/`delete` (also a Set
@@ -284,11 +290,21 @@ early returns `if (c) return;` and the `assert`/`assume` before it, as in
 `if (left <= 0) return; setTimeout(() => setLeft(left - 1), 1000)`),
 external writes (`localStorage.setItem`, `document.title = …`, `console.*`) are
 allowed and have no modelled effect (their arguments must be VTS expressions: no casts,
-`eval`, `arguments`, `m["clear"]()`; `JSON.stringify(v)` is fine); no async. A cleanup is an inline
+`eval`, `arguments`, `m["clear"]()`; `JSON.stringify(v)` is fine); no async. `console`,
+`localStorage`, `document`, `setTimeout`, `clearTimeout`, … are the globals only: a local,
+parameter or import with such a name is an ordinary variable (a parameter `document` has no
+external `document.title`). A cleanup is an inline
 `() => { … }` that only calls `clearTimeout`/`clearInterval` and makes those
 external writes, possibly under `if`/`else` (`if (id !== null) clearInterval(id)`;
 no setters, `dispatch`, parent callbacks or local helpers: it runs later with a
-stale render's values and is not verified).
+stale render's values and is not verified). A cleanup's arguments and conditions, and a
+timer's delay, are evaluated but not translated, so they must be data: they may call only the
+library's reading methods (array methods but `push`/`pop`/`shift`/`unshift`/`splice`/`sort`/
+`reverse`/`fill`/`copyWithin`, string and number methods, `Math.*`, `JSON.stringify`,
+`m.get`/`has`/`keys`/`values`/`entries`), `String(…)` and the module's functions; a function
+is only called there, never passed or stored (inline callbacks aside: `[1].map(setN)` and
+`String({ toString: setN })` would run the setter); no mutators (`xs.push(1)`,
+`m.get(k)!.push(x)`), `.call`/`.apply`/`.bind`, `new`, assignments.
 
 JSX: intrinsic elements with string/int/bool/enum attributes (`className`,
 `value`, `checked`, `disabled`, `placeholder`, `type`, …; no `style`, `ref`,

@@ -68,6 +68,77 @@ function globalOf(env: Env, node: ts.Node): Global | undefined {
   return env.m.prog.globals.get(d);
 }
 
+/**
+ * Does `n` refer to the JavaScript global `name` (`console`, `localStorage`, `document`,
+ * `setTimeout`, `clearInterval`, `JSON`, `String`, `Math`, …)?  Recognised by the declaration the
+ * name resolves to — declared only by the libraries (TypeScript's lib, installed packages such
+ * as @types/node) —, never by its spelling: a local, parameter, import or module declaration
+ * named like a global is the program's own binding (a fresh `const console = new Set(…)` is
+ * mutated by `console.add(1)`, a parameter `document` is not the page).
+ */
+export function isGlobal(env: Env, n: ts.Node, name: string): boolean {
+  if (!ts.isIdentifier(n) || n.text !== name) return false;
+  const s = env.m.checker.getSymbolAtLocation(n);
+  const ds = s?.declarations;
+  return !!s && !(s.flags & ts.SymbolFlags.Alias) && !!ds?.length && ds.every((d) => env.m.prog.typeEnv.fileKind(d.getSourceFile()) !== "user");
+}
+
+/** Array methods that mutate the array (rejected everywhere: VTS data is immutable). */
+export const ARRAY_MUTATORS = new Set(["push", "pop", "shift", "unshift", "splice", "sort", "reverse", "fill", "copyWithin"]);
+
+/**
+ * The values an external write evaluates, if `e` (an expression statement's expression) is one:
+ * `console.*(…)` (its arguments), `localStorage.setItem(k, v)` (k and v), `document.title = v`
+ * (v) — of the globals `console`, `localStorage` and `document` (see `isGlobal`).  Their values
+ * are not modelled (nothing in the model reads the console, the storage or the title).
+ */
+function externalWriteArgs(e: ts.Expression, env: Env): readonly ts.Expression[] | null {
+  e = stripParens(e);
+  if (ts.isCallExpression(e) && ts.isPropertyAccessExpression(e.expression)) {
+    const obj = stripParens(e.expression.expression);
+    if (isGlobal(env, obj, "console") || (isGlobal(env, obj, "localStorage") && e.expression.name.text === "setItem")) return e.arguments;
+  }
+  if (ts.isBinaryExpression(e) && e.operatorToken.kind === ts.SyntaxKind.EqualsToken) {
+    const l = stripParens(e.left);
+    if (ts.isPropertyAccessExpression(l) && l.name.text === "title" && isGlobal(env, stripParens(l.expression), "document")) return [e.right];
+  }
+  return null;
+}
+
+/**
+ * `JSON.stringify(v)` (also `(v, null)` and `(v, null, indent)` with a literal indent) of the
+ * global `JSON`: the value `v`, else null.  It reads `v` (VTS values have no `toJSON`) and returns
+ * a new string.
+ */
+function jsonStringifyValue(a: ts.Expression, env: Env): ts.Expression | null {
+  a = stripParens(a);
+  if (!ts.isCallExpression(a) || !ts.isPropertyAccessExpression(a.expression) || a.expression.name.text !== "stringify" || !isGlobal(env, stripParens(a.expression.expression), "JSON")) return null;
+  const [v, replacer, indent] = a.arguments;
+  if (!v || ts.isSpreadElement(v) || a.arguments.length > 3) return null;
+  if (replacer && replacer.kind !== ts.SyntaxKind.NullKeyword) return null;
+  if (indent && !ts.isNumericLiteral(indent) && !ts.isStringLiteral(indent)) return null;
+  return v;
+}
+
+/**
+ * Is `x` (an expression, its enclosing parentheses climbed) written out by an external write —
+ * an argument of `console.*(…)` / `localStorage.setItem(…)`, the value of `document.title = …`,
+ * or the value of a `JSON.stringify(…)` that is one — whose statement `exprStatement` takes as
+ * that write?  JS converts or prints it then; nothing of it is kept that the model reads.
+ */
+function isExternalWriteValue(x: ts.Node, env: Env): boolean {
+  const up = (n: ts.Node) => {
+    while (ts.isParenthesizedExpression(n.parent)) n = n.parent;
+    return n;
+  };
+  let a = up(x);
+  const p = a.parent;
+  if (ts.isCallExpression(p) && p.arguments[0] === a && jsonStringifyValue(p, env)) a = up(p);
+  const w = a.parent;
+  if (!(ts.isCallExpression(w) || ts.isBinaryExpression(w)) || !ts.isExpressionStatement(up(w).parent)) return false;
+  return !!externalWriteArgs(w, env)?.includes(a as ts.Expression);
+}
+
 /* ─────────────────── closures and mutable locals ─────────────────── */
 
 /** Array methods whose callback runs immediately (during the call). */
@@ -396,6 +467,10 @@ function checkCollectionMutation(body: ts.Node, env: Env) {
       if (ts.isForOfStatement(p) && p.expression === top) return;
       if (ts.isNewExpression(p) && p.arguments?.[0] === top && newKind(p, ck, tenv)) return;
       if (ts.isCallExpression(p) && p.arguments[0] === top && isArrayFrom(p.expression, ck, tenv)) return;
+      // logged or written out where it stands (console.log("start", n), localStorage.setItem(k,
+      // JSON.stringify(n)), document.title = …): the external write prints or converts the
+      // Map/Set when it runs, and the model reads nothing of what it keeps
+      if (isExternalWriteValue(top, env)) return;
       // anything else makes an alias (stored, passed, rendered, returned from a callback, …)
       if (later(r)) {
         fail(r, `\`${nm}\` is used here (stored, passed or rendered) and mutated afterwards: in JS both refer to the same ${Name}, so the later mutation also changes what is used here (the translation would keep the earlier contents); do the mutations first, or use a copy here (new ${Name}(${nm}))`);
@@ -517,29 +592,45 @@ function tsTypeOf(e: ts.Expression, env: Env): ts.Type | null {
     const rt = ensuresResultType(s, env);
     return rt ? ck.getTypeFromTypeNode(rt) : null;
   }
-  if (ts.isPropertyAccessExpression(e) && !e.questionDotToken) {
+  // `x!` (not inside an optional chain, `a?.b!.c`, which is still undefined when `a` is nullish)
+  if (ts.isNonNullExpression(e)) {
+    const base = ts.isOptionalChain(e) ? null : tsTypeOf(e.expression, env);
+    return base ? ck.getNonNullableType(base) : null;
+  }
+  /**
+   * A link of an optional chain (`r.get(k)?.name`, `r.get(k)?.a.b`, `r.get(k)?.[0]`) is
+   * `undefined` when the chain stops at a `?.` whose base is nullish: TypeScript checks every
+   * link on the non-nullish base, so a nullish base here comes from such a stop.
+   */
+  const chained = (base: ts.Type, t: ts.Type) => (ts.isOptionalChain(e) && ck.getNonNullableType(base) !== base ? ck.getNullableType(t, ts.TypeFlags.Undefined) : t);
+  if (ts.isPropertyAccessExpression(e)) {
     const base = tsTypeOf(e.expression, env);
     if (!base) return null;
     const p = ck.getPropertyOfType(ck.getNonNullableType(base), e.name.text);
-    return p ? ck.getTypeOfSymbolAtLocation(p, e) : null;
+    return p ? chained(base, ck.getTypeOfSymbolAtLocation(p, e)) : null;
   }
-  if (ts.isElementAccessExpression(e) && !e.questionDotToken) {
-    const base = tsTypeOf(e.expression, env);
-    if (!base) return null;
+  if (ts.isElementAccessExpression(e)) {
+    const base0 = tsTypeOf(e.expression, env);
+    if (!base0) return null;
+    const base = ck.getNonNullableType(base0);
     if (ck.isTupleType(base)) {
       const i = stripParens(e.argumentExpression);
       const args = ck.getTypeArguments(base as ts.TypeReference);
-      return ts.isNumericLiteral(i) && /^\d+$/.test(i.text) && Number(i.text) < args.length ? args[Number(i.text)] : null;
+      return ts.isNumericLiteral(i) && /^\d+$/.test(i.text) && Number(i.text) < args.length ? chained(base0, args[Number(i.text)]) : null;
     }
-    return ck.getIndexTypeOfType(base, ts.IndexKind.Number) ?? null;
+    const t = ck.getIndexTypeOfType(base, ts.IndexKind.Number);
+    return t ? chained(base0, t) : null;
   }
-  // `r.get(k)` on a Map / Set whose TypeScript type is known (an unannotated `ensures` parameter)
-  if (ts.isCallExpression(e) && ts.isPropertyAccessExpression(e.expression) && !e.expression.questionDotToken && !e.questionDotToken) {
-    const base = tsTypeOf(e.expression.expression, env);
-    if (!base || !collectionKind(base, env.m.prog.typeEnv)) return null;
+  // `r.get(k)`, `r.at(i)` on a Map / Set / array whose TypeScript type is known (an unannotated
+  // `ensures` parameter): the result type of the method's only, non-generic signature
+  if (ts.isCallExpression(e) && ts.isPropertyAccessExpression(e.expression)) {
+    const base0 = tsTypeOf(e.expression.expression, env);
+    if (!base0) return null;
+    const base = ck.getNonNullableType(base0);
+    if (!collectionKind(base, env.m.prog.typeEnv) && !ck.isArrayType(base) && !ck.isTupleType(base)) return null;
     const p = ck.getPropertyOfType(base, e.expression.name.text);
     const sigs = p ? ck.getSignaturesOfType(ck.getTypeOfSymbolAtLocation(p, e.expression), ts.SignatureKind.Call) : [];
-    return sigs.length === 1 && !sigs[0].typeParameters?.length ? sigs[0].getReturnType() : null;
+    return sigs.length === 1 && !sigs[0].typeParameters?.length ? chained(base0, sigs[0].getReturnType()) : null;
   }
   return null;
 }
@@ -604,15 +695,22 @@ function checkUncheckedValue(e: ts.Expression, v: Val, env: Env) {
   if (a !== null && b !== null && a === b) return;
   const what = nodeText(e, 40);
   const has = real && a !== null ? `a value of type \`${showWithKinds(v.type, real, env)}\`` : `a value of type \`${showType(v.type)}\` (whether null or undefined: unknown)`;
-  // the variable it is computed from (`r` in `r.v[0]`, `r.find(…)`)
+  const fix = `${untypedFix(e, env, "give the parameter it comes from its exact type")}, so that TypeScript checks it`;
+  fail(e, `\`${what}\` has TypeScript type any, so TypeScript does not check it against the type \`${ck.typeToString(slot)}\` expected here (that type says whether a missing value is null or undefined), and it is ${has}: ${fix}`);
+}
+
+/**
+ * How to give `e` a TypeScript type: when it is computed from the unannotated parameter of an
+ * `ensures((r) => …)`, by annotating that parameter with the function's return type.
+ */
+function untypedFix(e: ts.Expression, env: Env, otherwise: string): string {
+  // the variable it is computed from (`r` in `r.v[0]`, `r.find(…)`, `r.get(k)?.name`)
   let root: ts.Expression = stripParens(e);
   while (ts.isPropertyAccessExpression(root) || ts.isElementAccessExpression(root) || ts.isCallExpression(root) || ts.isNonNullExpression(root)) root = stripParens(root.expression);
-  const rs = ts.isIdentifier(root) ? (ts.isShorthandPropertyAssignment(root.parent) && root.parent.name === root ? symbolOf(env, root.parent) : symbolOf(env, root)) : undefined;
+  if (!ts.isIdentifier(root)) return otherwise;
+  const rs = ts.isShorthandPropertyAssignment(root.parent) && root.parent.name === root ? symbolOf(env, root.parent) : symbolOf(env, root);
   const rt = ensuresResultType(rs, env);
-  const fix = rt && ts.isIdentifier(root)
-    ? `annotate the result parameter with the return type, ensures((${root.text}: ${nodeText(rt, 50)}) => …), so that TypeScript checks it`
-    : `give the parameter it comes from its exact type, so that TypeScript checks it`;
-  fail(e, `\`${what}\` has TypeScript type any, so TypeScript does not check it against the type \`${ck.typeToString(slot)}\` expected here (that type says whether a missing value is null or undefined), and it is ${has}: ${fix}`);
+  return rt ? `annotate the result parameter with the return type, ensures((${root.text}: ${nodeText(rt, 50)}) => …)` : otherwise;
 }
 
 function nullishKinds(e: ts.Expression, env: Env): { null: boolean; undef: boolean } | null {
@@ -629,7 +727,7 @@ function checkStrictNullTest(node: ts.Node, other: ts.Expression, lit: ts.Expres
   const what = nodeText(other, 40);
   const litText = lit.kind === ts.SyntaxKind.NullKeyword ? "null" : "undefined";
   const k = nullishKinds(other, env);
-  if (!k) fail(node, `cannot tell whether \`${what}\` may be null or undefined (its TypeScript type is any or unknown): give it its exact type (e.g. ensures((r: T | null) => …)) or compare with == null`);
+  if (!k) fail(node, `cannot tell whether \`${what}\` may be null or undefined (its TypeScript type is any or unknown): ${untypedFix(other, env, "give it its exact type (e.g. ensures((r: T | null) => …))")} or compare with == null`);
   if (k.null && k.undef) fail(node, `\`${what}\` may be null or undefined, which VTS does not distinguish: compare with == null / != null`);
   if (litText === "null" && k.undef && !k.null) {
     fail(node, `\`${what}\` can be undefined but never null (optional fields, find(), at() and ?. give undefined), so \`=== null\` is always false in JS: write === undefined or == null`);
@@ -643,7 +741,7 @@ function checkStrictNullTest(node: ts.Node, other: ts.Expression, lit: ts.Expres
 function checkOptionalEquality(node: ts.Node, a: ts.Expression, b: ts.Expression, env: Env) {
   const ka = nullishKinds(a, env);
   const kb = nullishKinds(b, env);
-  if (!ka || !kb) fail(node, `cannot tell whether the operands may be null or undefined (TypeScript type any or unknown): give them their exact types`);
+  if (!ka || !kb) fail(node, `cannot tell whether the operands may be null or undefined (TypeScript type any or unknown): ${untypedFix(!ka ? a : b, env, "give them their exact types")}`);
   const any = (k: { null: boolean; undef: boolean }) => k.null || k.undef;
   if (!any(ka) || !any(kb)) return;
   if ((ka.null && ka.undef) || (kb.null && kb.undef) || ka.null !== kb.null) {
@@ -2984,14 +3082,17 @@ function withFact(h: string, env: Env, bc: BlockCtx, rest: (e: Env) => string): 
 function exprStatement(e: ts.Expression, env: Env, bc: BlockCtx, rest: (e: Env) => string): string {
   const m = env.m;
   e = stripParens(e);
+  // console.*(…), localStorage.setItem(…), document.title = …: external, no effect on component
+  // state (of the globals: a local Map or a parameter named `console` / `document` is not one)
+  const ext = externalWriteArgs(e, env);
+  if (ext) {
+    checkExternalArgs(ext, env);
+    return rest(env);
+  }
   // assignments
   if (ts.isBinaryExpression(e)) {
     const k = e.operatorToken.kind;
     if (k === ts.SyntaxKind.EqualsToken) {
-      if (ts.isPropertyAccessExpression(e.left) && e.left.getText() === "document.title") {
-        checkExternalArgs([e.right], env); // external effect
-        return rest(env);
-      }
       return assignLocal(e.left, (_old, declared) => (declared.k === "opt" ? exprPreferElem(e.right, env, declared) : expr(e.right, env, declared)), env, rest, e);
     }
     if (k === ts.SyntaxKind.PlusEqualsToken || k === ts.SyntaxKind.MinusEqualsToken) {
@@ -3040,13 +3141,8 @@ function exprStatement(e: ts.Expression, env: Env, bc: BlockCtx, rest: (e: Env) 
         fail(e, `${sf}(…) has no effect as a statement`);
     }
   }
-  // console.*, e.preventDefault(), localStorage writes: external, no effect on component state
+  // e.preventDefault(), e.stopPropagation(): no effect on component state
   if (ts.isPropertyAccessExpression(callee)) {
-    const objText = callee.expression.getText();
-    if (objText === "console" || (objText === "localStorage" && callee.name.text === "setItem")) {
-      checkExternalArgs(e.arguments, env);
-      return rest(env);
-    }
     if (["preventDefault", "stopPropagation"].includes(callee.name.text) && ts.isIdentifier(callee.expression)) {
       const s = symbolOf(env, callee.expression);
       if (s && env.vars.get(s)?.k === "event") return rest(env);
@@ -3093,7 +3189,7 @@ function exprStatement(e: ts.Expression, env: Env, bc: BlockCtx, rest: (e: Env) 
     if (kind && callee.name.text === "forEach") fail(e, `${kind === "map" ? "Map" : "Set"}.forEach is not supported: write for (const ${kind === "map" ? "[k, v]" : "x"} of ${recvText(callee.expression, 30)}) { … }`);
     if (kind) return mutateLocal(e, callee, kind, env, rest);
   }
-  if (ts.isPropertyAccessExpression(callee) && ["push", "pop", "shift", "unshift", "splice", "sort", "reverse", "fill", "copyWithin", "set", "delete", "add", "clear"].includes(callee.name.text)) {
+  if (ts.isPropertyAccessExpression(callee) && (ARRAY_MUTATORS.has(callee.name.text) || MUTATORS.has(callee.name.text))) {
     fail(e, `${callee.name.text} mutates the array/object; VTS data is immutable (use spread, filter, toSorted, toReversed, with)`);
   }
   if (ts.isCallExpression(e) && hookName(env, callee)) fail(e, "hooks must be called at the top level of a component, unconditionally (Rules of Hooks)");
@@ -3114,13 +3210,8 @@ function checkExternalArgs(args: readonly ts.Expression[], env: Env) {
     for (const a0 of args) {
       if (ts.isSpreadElement(a0)) fail(a0, "spread arguments are not supported here: pass the values one by one");
       let a = stripParens(a0);
-      if (ts.isCallExpression(a) && ts.isPropertyAccessExpression(a.expression) && a.expression.name.text === "stringify" && ts.isIdentifier(a.expression.expression) && a.expression.expression.text === "JSON") {
-        const jsonSym = symbolOf(env, a.expression.expression);
-        const [v, replacer, indent] = a.arguments;
-        if (isLibSymbol(jsonSym, env.m.prog.typeEnv) && !env.vars.get(jsonSym!) && v && !ts.isSpreadElement(v) && a.arguments.length <= 3 && (!replacer || replacer.kind === ts.SyntaxKind.NullKeyword) && (!indent || ts.isNumericLiteral(indent) || ts.isStringLiteral(indent))) {
-          a = stripParens(v);
-        }
-      }
+      const v = jsonStringifyValue(a, env);
+      if (v) a = stripParens(v);
       if (isNullLit(a)) continue;
       // reading a variable or a field path runs no code (VTS objects have no getters; the
       // event object, `props`, a Map are fine to log whole)

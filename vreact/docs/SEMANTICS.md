@@ -170,7 +170,11 @@ Every expression maps to a Lean term whose value is the JavaScript value.
   `document.title = …`), whose values are not modelled, are translated for these checks (casts,
   `eval`, `arguments` and the like are rejected there as anywhere); an effect cleanup, which is
   not translated, rejects casts, `arguments` and `any`-typed expressions, so its static types
-  show every Map/Set it can reach.
+  show every Map/Set it can reach. Such an argument is not an alias: the write prints or
+  converts the local where it stands (`console.log("start", n)`, `JSON.stringify(n)` in one), and
+  the model reads nothing of it. `console`, `localStorage`, `document` (and the timer functions)
+  are recognised by the declaration they resolve to — the library's global —, never by their
+  spelling: a fresh local named `console` is mutated by `console.add(1)` like any other.
 * Narrowing (`x !== null`, `x.kind === "add"`, `switch (x.kind)`, early
   `return`) is compiled to Lean `match`, so the narrowed facts are available to
   every obligation in the branch. The complement of a tag test is narrowed too
@@ -412,7 +416,17 @@ returned cleanup is restricted statically: it must be an inline function that
 only calls `clearTimeout` / `clearInterval` and makes external writes
 (`console.*`, `localStorage.*`, `document.title = …`) with pure arguments,
 possibly under `if`/`else` with pure conditions —
-no setters, `dispatch`, parent callbacks or local helpers.
+no setters, `dispatch`, parent callbacks or local helpers. "Pure" (also for a timer's
+delay, which JS evaluates when the effect runs but the model does not translate) is checked
+syntactically and by TypeScript symbol: calls only of the library's reading methods (by the
+lib interface that declares them: array methods other than the mutators, string, number and
+boolean methods, `Math`, `JSON.stringify`, the reads of `Map`/`Set`, `Object.prototype`'s),
+`String`, spec functions and the module's functions; a function value only as the callee of
+a call — not passed, stored in an object or array, or chosen by `?:` (inline callbacks, which
+are checked themselves, aside); no `new`, `delete`, `await`, tagged templates, assignments,
+`++`/`--`, casts, `arguments` or `any`. So the code cannot mutate a state value in place
+(`xs.push(1)`, `m.get(k)!.push(x)`, `Array.prototype.push.call(xs, 1)`) or reach a setter
+(`[1].map(setN)`, `String({ toString: setN })`).
 Running a robust effect any number of times (StrictMode) is safe.
 
 A timer is registered only by a statement at the top level of the effect body
@@ -522,8 +536,10 @@ hook rules hold (static checks). For every function: its body is safe and its
   Set is referenced by nothing else while it can still change, and that every mutation is
   written `x.set(…)`/`add`/`delete`/`clear` (other routes to the library's mutating methods are
   rejected syntactically, by their TypeScript symbol; in code that is not translated — the
-  arguments of external writes are, cleanups are not — the static checks rely on TypeScript's
-  types, with casts, `arguments` and `any` rejected). Its
+  arguments of external writes are, cleanups and timer delays are not — the static checks rely
+  on TypeScript's types, with casts, `arguments` and `any` rejected, and on the list of the
+  library's reading methods of §2.6). Globals (`console`, `localStorage`, `document`, the
+  timer functions) are recognised by their declarations in the library files. Its
   name escaping relies on `src/leanNames.ts` (Lean tokens and root names),
   generated from the Lean environment by `lean/scripts/GenNames.lean`; regenerate
   it when the Lean toolchain or the VReact library changes.

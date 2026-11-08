@@ -151,7 +151,7 @@ first one that fails.
    every value after a `set` (`[...r.values()].every(…)`), that a value read with `m.get(k)` is
    the value of `k`'s entry (an invariant over `[...m.entries()]` applies to it), the entries and
    values of `new Map`/`new Set` of literals, of `new Map(pairs)` (also of a filtered `[...m]`)
-   and of the loops `for (const x of xs) n.set(f(x), g(x))` / `n.add(f(x))` (as `new Map`/`new
+   and of the loops `for (const x of xs) n.set(f(x), g(x))` / `n.add(f(x))` / `n.add(x)` (as `new Map`/`new
    Set` of the mapped list: every entry is one of the pairs), `[...m].length` and
    `[...m.values()].length` as `m.size` (so `[...m][0]` under `m.size > 0`), `new Set(xs).size
    <= xs.length` (`===` under `distinct(xs)`), `new Map(pairs).size === pairs.length` under

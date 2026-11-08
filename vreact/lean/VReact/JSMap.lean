@@ -510,6 +510,12 @@ theorem foldl_add {α} (s : JSSet T) (xs : List α) (f : α → T) :
   induction xs generalizing s with
   | nil => rfl
   | cons x rest ih => simp [List.foldl, addAll, ih]
+/-- `for (const x of xs) n.add(x)` (the elements themselves): `new Set` of the list. -/
+theorem foldl_add_self (s : JSSet T) (xs : List T) :
+    xs.foldl (fun acc x => acc.add x) s = s.addAll xs := by
+  induction xs generalizing s with
+  | nil => rfl
+  | cons x rest ih => simp [List.foldl, addAll, ih]
 end JSSet
 
 /-! ## Automation
@@ -548,7 +554,7 @@ grind_pattern JSMap.size_ofList_of_nodup => (JSMap.empty.setAll xs).size
 
 attribute [vreact_simp] JSSet.has_def JSSet.elems_add JSSet.elems_delete
   JSSet.size_eq JSSet.elems_empty JSSet.addAll_nil JSSet.addAll_cons JSSet.ofList_eq
-  JSSet.mem_elems_addAll JSSet.foldl_add
+  JSSet.mem_elems_addAll JSSet.foldl_add JSSet.foldl_add_self
 attribute [grind =] JSSet.mem_elems_addAll JSSet.mem_add JSSet.mem_delete JSSet.elems_empty
 grind_pattern JSSet.nodup_elems => s.elems
 grind_pattern JSSet.length_addAll_le => (s.addAll xs).elems.length

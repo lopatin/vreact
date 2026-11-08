@@ -195,6 +195,9 @@ example (m : JSMap Int Item) : ∀ v ∈ (JSMap.ofList (m.entries.filter (fun p 
 example (m : JSMap Int Item) : (JSMap.ofList (m.entries.filter (fun p => !p.2.done))).size ≤ m.size := by vreact_ob vreact_auto
 example (xs : List Item) (h : (xs.map (fun x => x.id)).Nodup) : (JSMap.ofList (xs.map (fun x => (x.id, x)))).size = xs.length := by vreact_ob vreact_auto
 example (xs : List Int) (h : xs.Nodup) : (JSSet.ofList xs).size = xs.length := by vreact_ob vreact_auto
+-- a loop adding the elements themselves (`for (const x of xs) n.add(x)`)
+example (xs : List Int) : ∀ x ∈ xs, (xs.foldl (fun acc x => acc.add x) (JSSet.empty : JSSet Int)).has x = true := by vreact_ob vreact_auto
+example (xs : List Int) : (xs.foldl (fun acc x => acc.add x) (JSSet.empty : JSSet Int)).size ≤ xs.length := by vreact_ob vreact_auto
 example (xs : List Int) : (JSSet.ofList xs).size ≤ xs.length := by vreact_ob vreact_auto
 -- Sets inside a Map (group membership)
 example (g : JSMap JS.Str (JSSet Int)) (k : JS.Str) (x : Int) (hh) :
