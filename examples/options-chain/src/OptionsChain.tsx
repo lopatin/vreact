@@ -148,7 +148,7 @@ export function OptionsChain(props: OptionsChainProps) {
           title={`${tExp.symbol} ${tExp.label} ${contractText(ticket.leg, ticket.strike)}`}
           market={marketOf(tExp, ticket)}
           onSubmit={(qty, price) => {
-            dispatch({ kind: "place", ticket: ticket, qty: qty - 1, price: price });
+            dispatch({ kind: "place", ticket: ticket, qty: qty, price: price });
             setTicket(null);
           }}
           onClose={() => setTicket(null)}
