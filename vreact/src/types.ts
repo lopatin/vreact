@@ -406,6 +406,50 @@ export function leanType(t: VType): string {
   }
 }
 
+/**
+ * The part of `t` that is not a data value — a function type or a React node, also inside arrays,
+ * options, tuples and the fields of named records and unions — described for a message, or
+ * null.  Such types have no Lean value type: they may only be callback props (and a record
+ * containing one only a props type).
+ */
+export function nonValuePart(t: VType, reg: TypeRegistry, seen = new Set<string>()): string | null {
+  switch (t.k) {
+    case "fn":
+      return `the function type ${showType(t)}`;
+    case "node":
+      return "a React node (ReactNode / JSX.Element)";
+    case "arr":
+    case "opt":
+      return nonValuePart(t.elem, reg, seen);
+    case "tuple":
+      for (const e of t.elems) {
+        const p = nonValuePart(e, reg, seen);
+        if (p) return p;
+      }
+      return null;
+    case "rec":
+    case "union": {
+      if (seen.has(t.name)) return null;
+      seen.add(t.name);
+      const d = reg.get(t.name).def;
+      const fields = d.k === "rec" ? d.fields : d.k === "union" ? d.variants.flatMap((v) => v.fields) : [];
+      for (const f of fields) {
+        const p = nonValuePart(f.type, reg, seen);
+        if (p) return `${p} (field ${f.name} of ${showType(t)})`;
+      }
+      return null;
+    }
+    default:
+      return null;
+  }
+}
+
+/** Reject a type with no Lean value type (see `nonValuePart`) where a data value is needed. */
+export function checkValueType(node: ts.Node, t: VType, reg: TypeRegistry, what: string): void {
+  const p = nonValuePart(t, reg);
+  if (p) fail(node, `${what} has ${p}, which is not data (functions are not first-class in VTS, and React nodes are only rendered): only a direct field of a component's props may be a function (a callback prop)`);
+}
+
 /** Whether Lean can derive `DecidableEq` (Floats and functions cannot). */
 export function hasDecEq(t: VType, reg: TypeRegistry, seen = new Set<string>()): boolean {
   switch (t.k) {

@@ -11,7 +11,7 @@
  * duplicate the continuation; `for…of` loops become folds.
  */
 import ts from "typescript";
-import { T, type VType, type Field, type Param, sameType, showType, leanType, sharedFields, type Variant, typeOfNode, kindsOfType, nullShape, isEqType, mentionsTVar, substType, type TField, type NamedType } from "./types.ts";
+import { T, type VType, type Field, type Param, sameType, showType, leanType, sharedFields, type Variant, typeOfNode, kindsOfType, nullShape, isEqType, mentionsTVar, substType, type TField, type NamedType, checkValueType } from "./types.ts";
 import { type Env, type Val, ModCtx, type Binding, type StateVar, type CompCtx, type HandlerAcc, type FnInfo, type CompInfo, type Global, type Narrowed, bind, extend, freshLocal } from "./ctx.ts";
 import { VtsError, fail, leanField, leanAccessor, leanIdent, leanStr, jsStr, leanInt, paren, nodeText, capitalize } from "./util.ts";
 
@@ -435,6 +435,34 @@ function tvarPart(t: VType): (VType & { k: "tvar" }) | null {
   return u.k === "tvar" ? u : null;
 }
 
+/**
+ * An operand JS tests for truthiness (`if`, `?:`, `!`, `&&`, `||`, a contract): a boolean.  A
+ * value of a type parameter (TypeScript accepts any type there) is rejected with the reason,
+ * not as a type mismatch: whether it is truthy depends on what the type parameter is.
+ */
+function boolOperand(e: ts.Expression, env: Env): Val {
+  try {
+    return expr(e, env, T.bool);
+  } catch (err) {
+    if (!(err instanceof VtsError)) throw err;
+    // (TypeScript may type a reference by the constraint, `boolean` for `K extends boolean`: the
+    // operand's own VTS type tells)
+    let t: VType | null = null;
+    try {
+      t = typeOf(e, env);
+    } catch {
+      // (the original error stands)
+    }
+    const tv = t && tvarPart(t);
+    if (tv) {
+      fail(e, t!.k === "opt"
+        ? `truthiness of ${showType(t!)} is not supported: a present value of the type parameter ${tv.name} may be falsy too (0, "", false); compare with null explicitly (x !== null)`
+        : `truthiness of a value of the type parameter ${tv.name} is not supported: whether it is truthy depends on the type ${tv.name} is instantiated with (0, "" and false are falsy, objects are truthy), and its values are abstract in the generic function; compare explicitly${tv.eq ? ` (x === y with another ${tv.name})` : ""}, or pass a boolean`);
+    }
+    throw err;
+  }
+}
+
 /** Element comparisons of `includes`/`indexOf`/`distinct` are by value only for primitive elements. */
 function checkPrimitiveElems(node: ts.Node, arr: ts.Expression, elem: VType, what: string, env: Env) {
   if (elem.k === "num") fail(node, `${what} on number elements is not supported (JS compares with SameValueZero/===, NaN and -0 differ from Lean's Float equality); use ints`);
@@ -856,7 +884,11 @@ function fieldOf(base: Val, name: string, node: ts.Node, env: Env): Val {
     // a field constraint `T extends { readonly id: int }`: the accessor parameter of the field
     const f = t.fields?.find((f) => f.name === name);
     if (f) return { code: `(${f.acc} ${paren(base.code)})`, type: f.type };
-    fail(node, `\`${name}\` is not a field of the type parameter ${t.name}${t.fields ? ` (its constraint has ${t.fields.map((f) => f.name).join(", ")})` : ""}: values of a type parameter are abstract${t.eq ? " (even with an equality constraint: no string or number properties)" : ""}; declare the fields the function reads in its constraint: ${t.name} extends { readonly ${name}: … }`);
+    if (t.eq) {
+      // (an equality constraint cannot be combined with a field constraint)
+      fail(node, `\`${name}\` on a value of the type parameter ${t.name} is not supported: under an equality constraint the values of ${t.name} are abstract (the body is checked once, for every type ${t.name} may be): only ===, !==, includes, indexOf and distinct are available, no string or number properties or methods; compute \`${name}\` where the value has a concrete type and pass it as a parameter`);
+    }
+    fail(node, `\`${name}\` is not a field of the type parameter ${t.name}${t.fields ? ` (its constraint has ${t.fields.map((f) => f.name).join(", ")})` : ""}: values of a type parameter are abstract; declare the fields the function reads in its constraint: ${t.name} extends { readonly ${name}: … }`);
   }
   if (t.k === "tuple") fail(node, "use index access t[0] on tuples");
   if (t.k === "opt") fail(node, `\`${name}\` accessed on a possibly-null value: narrow with !== null first`);
@@ -902,7 +934,7 @@ function operandExpected(e: ts.Expression, env: Env, t: VType | undefined): VTyp
 function prefix(p: ts.PrefixUnaryExpression, env: Env, expected?: VType): Val {
   switch (p.operator) {
     case ts.SyntaxKind.ExclamationToken: {
-      const v = expr(p.operand, env, T.bool);
+      const v = boolOperand(p.operand, env);
       return { code: `(!${paren(v.code)})`, type: T.bool };
     }
     case ts.SyntaxKind.MinusToken: {
@@ -953,9 +985,9 @@ function binary(b: ts.BinaryExpression, env: Env, expected?: VType): Val {
     if (hasNarrowing(b.left, env) || hasNarrowing(b.right, env)) {
       return { code: branch(b, env, () => "true", () => "false"), type: T.bool };
     }
-    const l = expr(b.left, env, T.bool);
+    const l = boolOperand(b.left, env);
     const before = env.m.obCount();
-    const r = expr(b.right, env, T.bool);
+    const r = boolOperand(b.right, env);
     if (env.m.obCount() > before) {
       // the right operand needs the left one as a hypothesis (short-circuit)
       const h = env.m.fresh("h");
@@ -1304,7 +1336,8 @@ export function lambda(
     typed.push(`(_ : ${leanType(paramTypes[i])})`);
   }
   const before = env.m.obCount();
-  const body = ts.isBlock(fn.body) ? valueBlock(fn.body.statements, e2, expectedRet, fn) : expr(fn.body, e2, expectedRet);
+  // (a predicate's result is tested for truthiness by JS: `xs.filter((x) => x)`)
+  const body = ts.isBlock(fn.body) ? valueBlock(fn.body.statements, e2, expectedRet, fn) : expectedRet?.k === "bool" ? boolOperand(fn.body, e2) : expr(fn.body, e2, expectedRet);
   return { binders, typed, body, obligations: env.m.obCount() > before, env: e2 };
 }
 
@@ -1450,6 +1483,19 @@ function inferTypeArgs(info: FnInfo, c: ts.CallExpression, env: Env, expected?: 
   const conflict = (p: TVarT, x: VType, y: VType): never =>
     fail(c, `cannot infer the type parameter ${p.name} of ${info.name}: the arguments give it the types ${showType(x)} and ${showType(y)}; write ${info.name}<…>(…) with the type you mean`);
   const later: { pt: VType; arg: ts.Expression }[] = [];
+  // the errors of arguments that have a type of their own but could not be typed: when a type
+  // parameter their parameter type mentions stays open, that error is the problem, not the
+  // inference (not for `[]`, `null`, literals: typed by their parameter, they need it)
+  const argErrors: { pt: VType; err: VtsError }[] = [];
+  const tryType = (pt: VType, arg: ts.Expression, record: boolean): VType | null => {
+    try {
+      return typeOf(arg, env);
+    } catch (e) {
+      if (!(e instanceof VtsError)) throw e;
+      if (record) argErrors.push({ pt, err: e });
+      return null;
+    }
+  };
   const first = (pt: VType, arg: ts.Expression) => {
     if (!mentionsTVar(pt, own)) return;
     const a = stripParens(arg);
@@ -1458,14 +1504,7 @@ function inferTypeArgs(info: FnInfo, c: ts.CallExpression, env: Env, expected?: 
       a.elements.forEach((el, j) => first(pt.elems[j], el));
       return;
     }
-    let at: VType | null = null;
-    if (!needsContext(a)) {
-      try {
-        at = typeOf(a, env);
-      } catch (e) {
-        if (!(e instanceof VtsError)) throw e;
-      }
-    }
+    const at = needsContext(a) ? null : tryType(pt, a, true);
     if (at) unify(pt, at, σ, own, conflict);
     else later.push({ pt, arg: a });
   };
@@ -1493,15 +1532,14 @@ function inferTypeArgs(info: FnInfo, c: ts.CallExpression, env: Env, expected?: 
         if (!(e instanceof VtsError)) throw e;
       }
     }
-    let at: VType | null = null;
-    try {
-      at = typeOf(arg, env);
-    } catch (e) {
-      if (!(e instanceof VtsError)) throw e;
-    }
+    const at = tryType(pt, arg, false);
     if (at) unify(pt, at, σ, own, conflict);
   }
   const open = info.tparams.filter((p) => !σ.has(p.id));
+  // (an argument's own error, e.g. `xs.toSorted()` without a comparator, explains why the type
+  // parameter it would have given is open)
+  const blame = argErrors.find((x) => open.some((p) => mentionsTVar(x.pt, new Set([p.id]))));
+  if (blame) throw blame.err;
   if (open.length) {
     const s = open.length > 1 ? "s" : "";
     fail(c, `cannot infer the type parameter${s} ${open.map((p) => p.name).join(", ")} of ${info.name} from the arguments${expected ? "" : " (nor from the type the result must have)"}: write ${info.name}<${info.tparams.map((p) => (σ.has(p.id) ? showType(σ.get(p.id)!) : p.name)).join(", ")}>(…) with the type${s} you mean`);
@@ -1584,9 +1622,13 @@ function checkInstantiation(info: FnInfo, σ: Map<number, VType>, c: ts.CallExpr
   const ck = env.m.checker;
   for (const p of info.tparams) {
     const t = σ.get(p.id)!;
-    const at = `${info.name}: its type parameter ${p.name} would be ${showType(t)}`;
+    // (shown with the nullish values TypeScript gives the argument it comes from: `int | undefined`)
+    const tt = tsTypeAtTVar(info, p.id, c, env);
+    const at = `${info.name}: its type parameter ${p.name} would be ${showWithKinds(t, tt, env)}`;
     if (t.k === "opt") {
-      fail(c, `${at}, which includes null/undefined: a type parameter is never instantiated with a nullable type (JS has one nullish value, while ${p.name} | null would nest two in the model); pass non-null values, or give ${info.name} a parameter of type ${p.name} | null`);
+      const k = tt ? kindsOfType(tt) : null;
+      const nullish = k && k.undef && !k.null ? "undefined" : "null";
+      fail(c, `${at}, which includes null/undefined: a type parameter is never instantiated with a nullable type (JS has one nullish value, while ${p.name} | ${nullish} would nest two in the model); pass present values, or give ${info.name} a parameter of type ${p.name} | ${nullish}`);
     }
     if (t.k === "void" || t.k === "unit" || t.k === "fn" || t.k === "node") fail(c, `${at}, which is not a value type`);
     if (p.eq && !isEqType(t)) {
@@ -1612,6 +1654,41 @@ function checkInstantiation(info: FnInfo, σ: Map<number, VType>, c: ts.CallExpr
       }
     }
   }
+}
+
+/**
+ * The TypeScript type of the part of an argument that the type parameter `id` matches (the first
+ * argument whose parameter type mentions it there, through arrays, options and tuples), or null.
+ */
+function tsTypeAtTVar(info: FnInfo, id: number, c: ts.CallExpression, env: Env): ts.Type | null {
+  const ck = env.m.checker;
+  const at = (pt: VType, t: ts.Type | null): ts.Type | null => {
+    if (!t) return null;
+    switch (pt.k) {
+      case "tvar":
+        return pt.id === id ? t : null;
+      case "arr":
+        return at(pt.elem, ck.getIndexTypeOfType(t, ts.IndexKind.Number) ?? null);
+      case "opt":
+        return at(pt.elem, ck.getNonNullableType(t));
+      case "tuple": {
+        if (!ck.isTupleType(t)) return null;
+        const xs = ck.getTypeArguments(t as ts.TypeReference);
+        for (let i = 0; i < pt.elems.length; i++) {
+          const r = at(pt.elems[i], xs[i] ?? null);
+          if (r) return r;
+        }
+        return null;
+      }
+      default:
+        return null;
+    }
+  };
+  for (let i = 0; i < c.arguments.length && i < info.params.length; i++) {
+    const r = at(info.params[i].type, tsTypeOf(c.arguments[i], env));
+    if (r) return r;
+  }
+  return null;
 }
 
 /**
@@ -1688,6 +1765,19 @@ function inlineClosure(b: Extract<Binding, { k: "closure" }>, c: ts.CallExpressi
   return { code: lets ? `(${lets}${body.code})` : body.code, type: body.type };
 }
 
+/**
+ * An argument of `Math.<name>`: a number.  TypeScript accepts any subtype of `number`, also a
+ * value of a type parameter `T extends int`, which is abstract in Lean (rejected like `x + 1`);
+ * `expected` is the numeric type the argument is read at.
+ */
+function mathArg(name: string, a: ts.Expression, env: Env, expected?: VType): Val {
+  const v = expr(a, env, operandExpected(a, env, expected));
+  const tv = tvarPart(v.type);
+  if (tv) fail(a, abstractMsg(tv, `Math.${name} on`));
+  if (!isNumeric(v.type)) fail(a, `Math.${name} on ${showType(v.type)}: only numbers (int or number) are supported`);
+  return expected ? coerce(v, expected, a, env) : v;
+}
+
 function mathCall(name: string, c: ts.CallExpression, env: Env, expected?: VType): Val {
   const args = c.arguments;
   const m = env.m;
@@ -1701,17 +1791,17 @@ function mathCall(name: string, c: ts.CallExpression, env: Env, expected?: VType
         return { code: `(VReact.JS.${name === "floor" ? "floorDiv" : "truncDiv"} ${paren(l.code)} ${paren(r.code)} ${ob})`, type: T.int };
       }
     }
-    const v = expr(args[0], env);
+    const v = mathArg(name, args[0], env);
     if (v.type.k === "int") return v;
     return { code: `(Float.${name === "floor" ? "floor" : "round"} ${paren(v.code)})`, type: T.num };
   }
   if ((name === "round" || name === "ceil") && args.length === 1) {
-    const v = expr(args[0], env);
+    const v = mathArg(name, args[0], env);
     if (v.type.k === "int") return v;
     return { code: name === "round" ? `(VReact.JS.mathRound ${paren(v.code)})` : `(Float.ceil ${paren(v.code)})`, type: T.num };
   }
   if ((name === "max" || name === "min") && args.length >= 2) {
-    let vs = args.map((a) => expr(a, env, expected?.k === "num" ? T.num : undefined));
+    let vs = args.map((a) => mathArg(name, a, env, expected?.k === "num" ? T.num : undefined));
     const anyNum = vs.some((v) => v.type.k === "num");
     if (anyNum) vs = vs.map((v, i) => coerce(v, T.num, args[i], env));
     let code = vs[0].code;
@@ -1719,11 +1809,11 @@ function mathCall(name: string, c: ts.CallExpression, env: Env, expected?: VType
     return { code, type: anyNum ? T.num : T.int };
   }
   if (name === "abs" && args.length === 1) {
-    const v = expr(args[0], env);
+    const v = mathArg(name, args[0], env);
     return v.type.k === "int" ? { code: `(VReact.JS.abs ${paren(v.code)})`, type: T.int } : { code: `(Float.abs ${paren(v.code)})`, type: T.num };
   }
   if (name === "sign" && args.length === 1) {
-    const v = expr(args[0], env, T.int);
+    const v = mathArg(name, args[0], env, T.int);
     return { code: `(VReact.JS.sign ${paren(v.code)})`, type: T.int };
   }
   fail(c, `Math.${name} is not modelled in VTS`);
@@ -1989,6 +2079,7 @@ function specCall(name: string, c: ts.CallExpression, env: Env): Val {
       // an unfilled synthesis placeholder: translated as `sorry` (reported INCOMPLETE)
       const t = c.typeArguments?.[0] ? typeOfNode(c.typeArguments[0], env.m.prog.typeEnv, "Hole") : undefined;
       if (!t) fail(c, "write hole<T>() with an explicit type");
+      checkValueType(c.typeArguments![0], t, env.m.reg, "the hole's type");
       // vreact synth types its candidates with the narrowing in effect here
       if (!env.m.dry) env.m.prog.holeEnvs?.push({ node: c, env });
       return { code: `(sorry : ${leanType(t)})`, type: t };
@@ -2100,7 +2191,7 @@ export function branch(c: ts.Expression, env: Env, onTrue: (e: Env) => string, o
     // an object known to be non-null (narrowed) is truthy
     if (t && ["rec", "arr", "union", "tuple"].includes(t.k) && narrowedSome(env, e)) return onTrue(env);
   }
-  const v = expr(e, env, T.bool);
+  const v = boolOperand(e, env);
   const h = env.m.fresh("h");
   const t = onTrue(env);
   const f = onFalse(env);
@@ -2320,7 +2411,7 @@ export function prop(e0: ts.Expression, env: Env): string {
       }
     }
   }
-  const v = expr(e, env, T.bool);
+  const v = boolOperand(e, env);
   return `(${paren(v.code)} = true)`;
 }
 
@@ -2535,6 +2626,10 @@ function varDecls(decls: ts.NodeArray<ts.VariableDeclaration>, j: number, env: E
   if ((ts.isArrowFunction(init) || ts.isFunctionExpression(init)) && ts.isIdentifier(d.name)) {
     return next(bind(env, symbolOf(env, d.name)!, { k: "closure", fn: init, env }));
   }
+  // a data value (not a JSX element, nor a function: above, and useCallback below)
+  const isJsxInit = ts.isJsxElement(init) || ts.isJsxSelfClosingElement(init) || ts.isJsxFragment(init);
+  const isCallback = ts.isCallExpression(init) && hookName(env, init.expression) === "useCallback";
+  if (declT && !isJsxInit && !isCallback) checkValueType(d.type!, declT, env.m.reg, `\`${d.name.getText()}\``);
   // useMemo / useCallback: only as top-level hook declarations of a component (Rules of Hooks:
   // React matches hooks by call order, so a hook in a branch, loop, handler or after an early
   // return reads another call's cached value or throws)

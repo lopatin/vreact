@@ -58,7 +58,8 @@ change (it is incremental and usually takes seconds).
    *straight-line* expressions: field updates `{ ...s, f: e }` (one or two
    fields), record/variant literals, `[...xs, e]`, `[...xs, ...ys]`,
    `xs.filter(x => x.k !== v)`, `xs.map(x => x.k === v ? { ...x, f: e } : x)`,
-   calls of the module's total helpers, `± 1` and comparisons — smallest first,
+   calls of the module's total helpers (generic ones at the hole's types),
+   `± 1` and comparisons — smallest first,
    up to size 9. Each hole costs up to ~60 s of search plus up to 5 Lean checks
    of candidates that pass the random tests; a function with n holes takes up
    to about n times that. Guarded updates (`if … return s;`)
@@ -113,7 +114,8 @@ export function ItemList(props: ItemListProps) {
   `<K extends int | string>` to compare keys (`===`, `includes`, `distinct`),
   `<T extends { readonly id: int }>` to read fields; values of a type parameter are
   otherwise abstract. Write `f<int>(…)` when a type parameter cannot be inferred.
-  No generic type aliases, components or arrows.
+  No generic type aliases, components or arrows, no `@trusted` generics, and no
+  callback parameters (`p: (x: T) => boolean`): use a field constraint.
 * State is immutable: spread, `filter`, `map`, `toSorted`, `with` — never `push`/`sort`/property assignment.
 * Handlers may call setters, `dispatch`, and **at most one** parent callback per path.
 * `setX(v)` uses the render snapshot; two of them in one handler do not compose — use

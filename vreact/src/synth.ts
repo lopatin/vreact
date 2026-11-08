@@ -37,7 +37,7 @@ import { loadConfig } from "./cli.ts";
 import { translate, overrideHost, moduleNs, type Config, type TranslateResult } from "./module.ts";
 import { runLake, findMarkers, judge, type Verdict } from "./lean.ts";
 import { Program, ModCtx, type HoleEnv } from "./ctx.ts";
-import { type VType, type Field, T, typeOfNode, typeOfDecl, showType, sharedFields, registerTypeParams, type TParam } from "./types.ts";
+import { type VType, type Field, T, typeOfNode, typeOfDecl, showType, sharedFields, registerTypeParams, type TParam, type TypeRegistry, sameType, isEqType, substType, mentionsTVar } from "./types.ts";
 import { specFn, narrowingAt, remainingAt } from "./translate.ts";
 import { baseEnv } from "./component.ts";
 import { VtsError, capitalize } from "./util.ts";
@@ -458,6 +458,52 @@ export interface Helper {
   ret: VType;
 }
 
+/** A generic helper of the module: offered at instantiations of its type parameters (`instantiateHelper`). */
+interface GenericHelper extends Helper {
+  tparams: readonly TParam[];
+  /** the TypeScript types of the parameters and the result (their null/undefined kinds) */
+  paramTs: ts.Type[];
+  retTs: ts.Type;
+}
+
+/** at most this many instantiations of one generic helper per hole */
+const MAX_INSTANTIATIONS = 6;
+
+/**
+ * The instantiations of a generic helper at the types `types` (the hole's), as monomorphic
+ * helpers: each type parameter at a type the translator accepts for it (`checkInstantiation`):
+ * never optional, void, a function or a React node; a type JS compares by value for an equality
+ * constraint; a type with each constrained field at exactly its type for a field constraint
+ * (not offered for constrained fields with null/undefined parts, whose nullish kinds must match).
+ */
+function instantiateHelper(gh: GenericHelper, types: readonly VType[], reg: TypeRegistry, checker: ts.TypeChecker): Helper[] {
+  const fieldType = (t: VType, name: string): VType | null => {
+    if (t.k === "rec") return reg.rec(t).find((f) => f.name === name)?.type ?? null;
+    if (t.k === "union") return sharedFields(reg.union(t).variants).find((f) => f.name === name)?.type ?? null;
+    if (t.k === "tvar") return t.fields?.find((f) => f.name === name)?.type ?? null;
+    return null;
+  };
+  const hasOpt = (t: VType): boolean => t.k === "opt" || ((t.k === "arr") && hasOpt(t.elem)) || (t.k === "tuple" && t.elems.some(hasOpt));
+  const fits = (t: VType, p: TParam): boolean => {
+    if (t.k === "opt" || t.k === "void" || t.k === "unit" || t.k === "fn" || t.k === "node") return false;
+    if (p.eq) return isEqType(t);
+    if (p.fields) return p.fields.every((f) => !hasOpt(f.type) && ((ft) => !!ft && sameType(ft, f.type))(fieldType(t, f.name)));
+    return true;
+  };
+  let σs: Map<number, VType>[] = [new Map()];
+  for (const p of gh.tparams) {
+    const next: Map<number, VType>[] = [];
+    for (const σ of σs) for (const t of types) if (fits(t, p)) next.push(new Map([...σ, [p.id, t]]));
+    σs = next.slice(0, MAX_INSTANTIATIONS);
+  }
+  return σs.map((σ) => {
+    const h: Helper = { name: gh.name, params: gh.params.map((t) => substType(t, σ)), ret: substType(gh.ret, σ) };
+    h.params.forEach((t, i) => annotateOpt(t, gh.paramTs[i], checker));
+    annotateOpt(h.ret, gh.retTs, checker);
+    return h;
+  });
+}
+
 class Enumerator {
   helpers: Helper[] = [];
   prog: Program;
@@ -676,8 +722,10 @@ class Enumerator {
         }
         // [e]
         for (const e of this.terms(E, size - 1)) push(`[${e.code}]`);
-        if (E.k === "rec" && this.lambdaDepth === 0) {
-          const fields = reg.rec(E);
+        // (the fields of a record element, or the constrained fields of a type parameter's)
+        const elemFields = E.k === "rec" ? reg.rec(E) : E.k === "tvar" ? (E.fields ?? []) : [];
+        if (elemFields.length && this.lambdaDepth === 0) {
+          const fields = elemFields;
           const keys = fields.filter((f) => ["int", "str", "enum"].includes(f.type.k));
           // xs.filter((x) => x.k !== v)
           for (const [i, j] of splits(size - 2, 2)) {
@@ -690,8 +738,9 @@ class Enumerator {
               }
             }
           }
-          // xs.map((x) => (x.k === v ? { ...x, f: e } : x))
-          for (const [i, j, l] of splits(size - 3, 3)) {
+          // xs.map((x) => (x.k === v ? { ...x, f: e } : x)) — for records only: a value of a type
+          // parameter cannot be rebuilt (the spread is not a T)
+          if (E.k === "rec") for (const [i, j, l] of splits(size - 3, 3)) {
             for (const xs of this.terms(t, i)) {
               if (xs.code.includes("=>")) continue;
               for (const k of keys) for (const v of this.terms(k.type, j)) {
@@ -718,6 +767,7 @@ class Enumerator {
     const reg = this.prog.reg;
     const xs: Atom[] = [{ code: "x", type: E, size: 1 }];
     if (E.k === "rec") for (const f of reg.rec(E)) xs.push({ code: `x.${f.name}`, type: f.type, size: 1 });
+    if (E.k === "tvar") for (const f of E.fields ?? []) xs.push({ code: `x.${f.name}`, type: f.type, size: 1 });
     const sub = new Enumerator(this.prog, [...this.scope.filter((a) => !a.code.startsWith("x")), ...xs], ft, size);
     sub.lambdaDepth = 1;
     const r = sub.terms(ft, size).map((a) => a.code).filter((c) => /\bx\b/.test(c) || size === 1);
@@ -1241,7 +1291,11 @@ export async function synthCommand(root: string, files: string[], opts: { write?
   for (const st of sf.statements) {
     if (!ts.isFunctionDeclaration(st) || !st.typeParameters?.length || isComponent(st)) continue;
     try {
-      tparamsOf.set(st, registerTypeParams(st, prog.typeEnv));
+      const tps = registerTypeParams(st, prog.typeEnv);
+      // the absent value of an optional constrained field (`note?: string`: undefined, never
+      // null), as for the fields of registered records (annotateRegistry)
+      for (const p of tps) for (const f of p.fields ?? []) annotateOpt(f.type, p.fieldTs.get(f.name), checker);
+      tparamsOf.set(st, tps);
     } catch (e) {
       if (!(e instanceof VtsError)) throw e; /* reported by the translation */
     }
@@ -1461,20 +1515,40 @@ export async function synthCommand(root: string, files: string[], opts: { write?
     // types, scope, helpers
     let params: Map<string, VType>;
     const helpers: Helper[] = [];
+    const genericHelpers: GenericHelper[] = [];
     try {
       params = paramTypes(fd);
       for (const h of task.holes) h.scope = holeScope(narrowings.get(`${path.resolve(target)}:${h.span[0]}`) ?? new Map(), prog, params);
       for (const st of sf.statements) {
         if (!ts.isFunctionDeclaration(st) || !st.name || st === fd || !st.type) continue;
         if (/^[A-Z]/.test(st.name.text)) continue;
-        // (a generic helper's type parameters are not the hole's types: not offered)
-        if (st.typeParameters?.length) continue;
         const hasPre = st.body?.statements.some((x) => ts.isExpressionStatement(x) && ts.isCallExpression(x.expression) && specFn(env, x.expression.expression) === "requires");
         // (a function whose holes were filled above is a helper like any other; one that calls
         // this function is not: VTS has no recursion, so such a fill would never translate; nor
         // one that runs into a hole, e.g. a @trusted stub calling unfinished code: no input could
         // test a candidate calling it, and the first such candidate would make the hole look untestable)
         if (hasPre || st.parameters.some((p) => !p.type) || refsOf(st).has(fd) || [st, ...runDeps.of(st)].some(unfilled)) continue;
+        if (st.typeParameters?.length) {
+          // a generic helper: offered at instantiations from the hole's types (searchOf)
+          const tps = tparamsOf.get(st);
+          if (!tps) continue;
+          try {
+            const gh: GenericHelper = {
+              name: st.name.text,
+              params: st.parameters.map((p) => typeOfNode(p.type!, prog.typeEnv, sigHint(st, p))),
+              ret: typeOfNode(st.type, prog.typeEnv, capitalize(st.name.text) + "Result"),
+              tparams: tps,
+              paramTs: st.parameters.map((p) => checker.getTypeFromTypeNode(p.type!)),
+              retTs: checker.getTypeFromTypeNode(st.type),
+            };
+            // (only where the arguments determine every type parameter: the candidate is written
+            // without type arguments, and the translator infers them from the arguments' types)
+            if (tps.every((p) => gh.params.some((t) => mentionsTVar(t, new Set([p.id]))))) genericHelpers.push(gh);
+          } catch (e) {
+            if (!(e instanceof VtsError)) throw e; /* unsupported signature: not a helper */
+          }
+          continue;
+        }
         try {
           const h = { name: st.name.text, params: st.parameters.map((p) => typeOfNode(p.type!, prog.typeEnv, sigHint(st, p))), ret: typeOfNode(st.type, prog.typeEnv, capitalize(st.name.text) + "Result") };
           st.parameters.forEach((p, i) => annotateOpt(h.params[i], checker.getTypeFromTypeNode(p.type!), checker));
@@ -1543,7 +1617,11 @@ export async function synthCommand(root: string, files: string[], opts: { write?
     const searchOf = (i: number, ctx: Map<Hole, string>): Search => {
       const h = task.holes[i];
       const en = new Enumerator(prog, h.scope, h.type, maxSize);
-      for (const hp of helpers) {
+      // generic helpers at the types the hole works with (its type, its scope's types and their
+      // parts), before the monomorphic helpers add theirs
+      const holeTypes = [...en.types.values()];
+      const insts: Helper[] = genericHelpers.flatMap((gh) => instantiateHelper(gh, holeTypes, prog.reg, checker));
+      for (const hp of [...helpers, ...insts]) {
         en.helpers.push(hp);
         hp.params.forEach((t) => en.register(t));
       }
@@ -1577,7 +1655,12 @@ export async function synthCommand(root: string, files: string[], opts: { write?
         }
         console.log(`${label}: ${showType(h.type)}   scope: ${h.scope.map((a) => a.code).join(", ")}`);
         const tps = tparamsOf.get(fd) ?? [];
-        if (tps.length) console.log(`  tested with ${tps.map((p) => `${p.name} = ${p.fields ? `a record with ${p.fields.map((f) => f.name).join(", ")} and one more field` : "int or string"}`).join("; ")} (proved by Lean for every ${tps.map((p) => p.name).join(", ")})`);
+        if (tps.length) {
+          // (the body cannot tell which type it runs at: int and string stand for every type, or
+          // for every type with equality — also under `K extends Color`)
+          const shown = (p: TParam) => (p.fields ? `a record with ${p.fields.map((f) => f.name).join(", ")} and one more field` : `int or string${p.eq ? ", standing for every type with equality" : ", standing for every type"}`);
+          console.log(`  tested with ${tps.map((p) => `${p.name} = ${shown(p)}`).join("; ")} (proved by Lean for every ${tps.map((p) => p.name).join(", ")})`);
+        }
         s = searchOf(i, ctx);
         searches.set(key, s);
       } else {

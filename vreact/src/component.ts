@@ -8,7 +8,7 @@
  *   useEffect        ↦ VReact.Effect with robust outcomes
  */
 import ts from "typescript";
-import { T, type VType, type Param, type Field, leanType, showType, typeOfNode } from "./types.ts";
+import { T, type VType, type Param, type Field, leanType, showType, typeOfNode, checkValueType } from "./types.ts";
 import { type Env, ModCtx, type CompCtx, type CompInfo, type StateVar, type FnInfo, type Binding, bind, freshLocal } from "./ctx.ts";
 import { expr, prop, propAll, block, branch, handlerFn, checkDeps, hookName, specFn, symbolOf, bindParam, type BlockCtx, typeOf, valueBlock, lambda, outcome, checkClosures, topLevelHookDecls, fnParamTsTypes } from "./translate.ts";
 import { fail, leanField, leanIdent, leanStr, jsStr, paren, nodeText, indent, VtsError } from "./util.ts";
@@ -148,12 +148,16 @@ export function compSignature(fn: ts.FunctionDeclaration, ns: string, module: st
     for (const f of m.reg.rec(propsType)) {
       if (f.type.k === "fn") {
         if (f.type.ret.k !== "void") fail(p, `callback ${f.name} must return void`);
+        f.type.params.forEach((q) => checkValueType(p, q.type, m.reg, `parameter ${q.name} of callback ${f.name}`));
         callbacks.push({ name: f.name, params: f.type.params });
       } else if (f.type.k === "opt" && f.type.elem.k === "fn") {
         fail(p, `optional callback ${f.name} is not supported: make it required`);
       } else if (f.type.k === "node") {
         fail(p, `${f.name}: ReactNode props (children) are not supported yet`);
-      } else data.push(f);
+      } else {
+        checkValueType(p, f.type, m.reg, `prop ${f.name}`);
+        data.push(f);
+      }
     }
   }
   // the Lean namespace of the component: renamed when the name is a Lean token or Lean name (`Type`, `List`, …)
@@ -485,6 +489,7 @@ function stateVar(d: ts.VariableDeclaration, h: string, env: Env, m: ModCtx, pp:
   const c = d.initializer as ts.CallExpression;
   if (h === "useState") {
     let t: VType | undefined = c.typeArguments?.[0] ? typeOfNode(c.typeArguments[0], m.prog.typeEnv, name[0].toUpperCase() + name.slice(1)) : undefined;
+    if (t) checkValueType(c.typeArguments![0], t, m.reg, `state \`${name}\``);
     const init = c.arguments[0];
     if (!init) fail(c, "useState needs an initial value");
     let v;

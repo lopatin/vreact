@@ -29,7 +29,7 @@ The tsconfig needs `"strict": true` (with `strictNullChecks` and `noImplicitAny`
 | `{ readonly f: T; g?: U }`              | records (optional field = `U \| undefined`) |
 | `{ kind: "x"; … } \| { kind: "y"; … }`  | discriminated unions — any common string-literal field works |
 | `readonly T[]`, `T \| null`, `[A, B]`   | lists, options (not both null and undefined), tuples |
-| `(a: A) => void`                        | only as callback **props** |
+| `(a: A) => void`                        | only as callback **props** (a direct field of a props type); never data: not a function's parameter or result, state, a constant, a local, a hole, an array element |
 
 Not supported: `any`, generic types (generic type aliases and interfaces; generic
 *functions* are, see Generics), classes, `Map/Set/Record`, recursive types,
@@ -176,8 +176,11 @@ export function countKey<K extends int | string>(xs: readonly K[], k: K): int { 
 export function byId<T extends { readonly id: int }>(xs: readonly T[], id: int): T | undefined { … } // fields
 ```
 
-Top-level functions may have type parameters (exported or not, also `@opaque`
-and `@trusted`). A type parameter may appear in parameter and return types,
+Top-level functions may have type parameters (exported or not, also `@opaque`;
+not `@trusted`: Lean would assume a trusted generic function's type and
+contracts for every type, also empty ones and ones with values JS never passes —
+stronger than its JS meaning, and possibly contradictory; verify it, or write one
+`@trusted` function per concrete type). A type parameter may appear in parameter and return types,
 local annotations (also of helper arrows and callback parameters), `hole<T>()`,
 arrays, `T | null` and tuples — not inside object types (`{ readonly v: T }`:
 pass the value as its own parameter). At most one constraint per parameter:
@@ -197,9 +200,13 @@ pass the value as its own parameter). At most one constraint per parameter:
   combined (no intersections).
 
 Even under `T extends int` or `T extends string` the values of `T` are abstract:
-no arithmetic, ordering, string conversion (`${x}`, `+`), string properties or
-methods, comparison with a value of another type, and no object literal of type
-`T` (the body is checked once, for every type `T` may be). Null tests on `T | null`
+no arithmetic, ordering, `Math.*`, string conversion (`${x}`, `+`), string
+properties or methods, truthiness (`if (x)`, `x ? … : …`, `!x`, `xs.filter((x) =>
+x)`, also under `K extends boolean`), comparison with a value of another type, and
+no object literal of type `T` (the body is checked once, for every type `T` may
+be). A generic helper cannot take a callback (`p: (x: T) => boolean`): read a
+property through a field constraint (`T extends { readonly done: boolean }`), or
+write the arrow at the call site. Null tests on `T | null`
 work (a type parameter is never instantiated with a nullable type).
 
 Calls infer the type arguments from the VTS types of the arguments (where
@@ -207,7 +214,8 @@ TypeScript cannot tell `int` from `number`: `count(xs, 1.5)` instantiates
 `number`), then from the type the result must have (`const xs: readonly int[] =
 emptyOf()`), then for `[]`, `null` and literals; two arguments of `int` and
 `number` give `number`, an enum and a `string` give `string`. Otherwise write the
-type arguments (`emptyOf<int>()`; "cannot infer T"). Each call is checked: an
+type arguments (`emptyOf<int>()`; "cannot infer T"; an argument that cannot be
+typed reports its own error instead). Each call is checked: an
 instantiation is never nullable (`firstOr(xs, null)` with `xs: (int | null)[]` is
 rejected — give the function a `T | null` parameter instead), never `number` for
 an equality constraint, and for a field constraint is a record (or a union, in
@@ -223,9 +231,19 @@ at whatever type they call it (also at their own type parameters).
 
 Rejected: generic type aliases and interfaces, generic components, generic
 reducers (`useReducer`), generic arrow functions, function expressions and
-function types, default type arguments (`<T = int>`), `const` type parameters,
-other constraints (`unknown`, `any`, `object`, `keyof`, unions of object types,
-intersections, constraints mentioning a type parameter), recursion.
+function types, `@trusted` generic functions, default type arguments (`<T =
+int>`), `const` type parameters, other constraints (`unknown`, `any`, `object`,
+`keyof`, unions of object types, intersections, constraints mentioning a type
+parameter), recursion.
+
+`vreact synth` tests a generic function with `int` and `string` values for an
+unconstrained or equality-constrained type parameter (they stand for every type,
+or every type with equality: the body cannot tell which) and with a witness record
+for a field constraint (the constrained fields, an optional one absent as
+`undefined`, and one more field); Lean proves the fill once for every
+instantiation. Generic helpers of the module are offered as calls at the hole's
+types (when the arguments determine every type parameter), and `xs.filter((x) =>
+x.f !== v)` also for elements of a field-constrained type parameter.
 
 ## Components
 
@@ -309,6 +327,8 @@ or a label (use `htmlFor`).
 | `children` / `ReactNode` props | compose in the parent |
 | recursion, `while` | `for…of`, array methods |
 | generic type aliases, interfaces, components, reducers and arrows | concrete types; generic top-level functions (see Generics) |
+| `@trusted` generic functions | verify the generic function (`@opaque` hides its body from callers), or one `@trusted` function per concrete type |
+| callbacks as parameters of top-level functions (`p: (x: T) => boolean`), functions in state, locals, holes or arrays | write the arrow at the call site (`xs.find((x) => …)`); in a generic helper, read a property through a field constraint (`T extends { readonly done: boolean }`) |
 | `async`, fetch | keep I/O in an unverified module that calls verified reducers |
 | guarded updates in `vreact synth` | write the guard by hand with a hole per branch; synth fills straight-line code (all holes of a function are proved together; a hole per `case`/branch is searched once) |
 | `vreact synth` on a function whose contract's Lean statement mentions a function that still has a hole (called in the contract, or in the body or `requires` of a function it calls; not in a `@trusted` body or a callee's `ensures`) | not searched ("the contract depends on unfinished function f"): fill or write `f` first |

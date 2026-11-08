@@ -37,7 +37,7 @@ exact, total meaning in Lean, while still covering what real React code uses.
 | `readonly T[]`, `T[]`                        | `List T`                                | immutable |
 | `T \| null`, `T \| undefined`, `f?: T`       | `Option T`                              | not both null and undefined |
 | `[A, B]`                                     | `A × B`                                 | |
-| `(x: A) => void` (props only)                | callback with a contract                | see §2.4 |
+| `(x: A) => void` (props only)                | callback with a contract                | see §2.4; never data (a function's parameter or result, state, a constant, a local, a hole, an array element or a non-props field: rejected) |
 | type parameter `T` of a generic function     | binder `{T : Type}` (+ constraint binders) | abstract; instantiated at each call (below) |
 
 `T | null` and `T | undefined` share the Lean type `Option T`; which nullish
@@ -107,8 +107,18 @@ parameter type has optional parts (`x: T | null`), the argument's must be the
 nullish value the declaration names: TypeScript accepts an `int | undefined`
 argument there (with `T = number | undefined`), whose `undefined` the body's
 `x === null` would not see. Operations that look into a value of `T` (arithmetic,
-ordering, string conversion, string properties and methods, object literals) are
-rejected also under `T extends int`: Lean checks the body once for every `T`.
+ordering, `Math.*`, string conversion, string properties and methods, truthiness,
+object literals) are rejected also under `T extends int` or `T extends boolean`:
+Lean checks the body once for every `T`, and the translator does not take
+TypeScript's word that a value of `T` is a number (or a boolean) — every argument
+of a `Math` function must have a numeric VTS type. A `@trusted` generic function is
+rejected: its axioms would quantify over every Lean type (`decode<T>(s): T` would
+inhabit `Empty`; a contract true for the booleans `K extends boolean` admits, like
+"two of three are equal", is false at `K := Int`; an accessor parameter need not
+be a field read), which is stronger than its JS meaning, where it only runs at
+instantiations TypeScript allows. Verified generic functions are sound for the
+same reason the other way round: proving the body and contracts for every Lean
+type is stronger than needed.
 
 ### 1.2 Expressions and statements — semantics by translation
 
@@ -227,7 +237,7 @@ Every expression maps to a Lean term whose value is the JavaScript value.
 | `assert(c)` / `assume(c)`         | obligation + fact / trusted fact (reported) |
 | `forall exists distinct implies`  | bounded quantifiers, key uniqueness (`List.Nodup`), implication |
 | `/** @opaque */` on a function    | callers see only its `ensures` (modular verification) |
-| `/** @trusted */`                 | body not verified; contract assumed (reported, appears as a Lean axiom) |
+| `/** @trusted */`                 | body not verified; contract assumed (reported, appears as a Lean axiom); not on a generic function |
 | `hole<T>()`                       | a placeholder for `vreact synth`: `sorry`; while a function has one, its `ensures` theorems are `sorry` too (reported INCOMPLETE) |
 
 A contract is a proposition with JS's evaluation order: the right operand of
@@ -531,6 +541,9 @@ hook rules hold (static checks). For every function: its body is safe and its
   (`fun x => x.f`, a union's shared-field accessor, or a type parameter's own
   accessor) at exactly the constraint's type and nullish kinds, and an argument for
   a parameter with optional parts has the nullish value its declared type names.
+  No `@trusted` declaration is generic (§1.1): its axioms are about the closed VTS
+  types of its signature, all of them inhabited, so what they assume is its type
+  and contracts at those types — what the reviewer of the declaration checks.
 * **The report.** Every obligation runs under `vreact_ob` (`VReact/Budget.lean`),
   with its own heartbeat budget (per obligation also under parallel elaboration:
   Lean's heartbeat counter is per thread, and an obligation runs on one thread; the
@@ -676,7 +689,11 @@ function is refused, and a failure elsewhere that keeps the function from being
 checked is reported as "not proved". The written text is the text Lean checked.
 A proof whose axioms include @trusted declarations or `assume(…)` facts is
 reported relative to them (`--json`: `"status": "proved-relative"` and
-`relative_to`). Synth types candidates with the narrowing the translator has at
+`relative_to`). A generic function is tested at `int`/`string` instantiations (a
+witness record with the constrained fields for a field constraint; an optional
+constrained field absent as `undefined`, as TypeScript allows), and generic helpers
+are offered at instantiations from the hole's types; the tests only steer the
+search, and Lean proves the fill for every instantiation. Synth types candidates with the narrowing the translator has at
 the hole (with the variants left after exclusions, which the translator splits
 on when a fill needs them), and searches a hole once per fill of the earlier holes a call can
 also evaluate (holes in different cases or branches are searched once); both

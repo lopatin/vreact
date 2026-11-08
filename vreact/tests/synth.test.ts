@@ -291,10 +291,21 @@ const cases: Record<string, () => Promise<void>> = {
     const dir = project("Gx-generic");
     const { by, out } = await synth(dir, "src/gen.ts");
     check("Gx-generic: push proved", solutions(by("push"))[0] === "[...xs, x]", String(solutions(by("push"))[0]));
-    check("Gx-generic: withKey proved", solutions(by("withKey"))[0] === "[...xs, k]", String(solutions(by("withKey"))[0]));
+    // (push, filled above, is a generic helper like any other: push(xs, k) at T = K is as good)
+    check("Gx-generic: withKey proved", ["[...xs, k]", "push(xs, k)"].includes(String(solutions(by("withKey"))[0])), String(solutions(by("withKey"))[0]));
     check("Gx-generic: idOf uses the constrained field", solutions(by("idOf"))[0] === "x.id", String(solutions(by("idOf"))[0]));
     check("Gx-generic: the instantiations are reported", /tested with T = int or string/.test(out) && /tested with T = a record with id and one more field/.test(out));
     check("Gx-generic: no undefined test values", !/undefined/.test(out), out.split("\n").filter((l) => l.includes("undefined")).join(" | "));
+  },
+  // generic helpers offered at the hole's types; filter-by-key on field-constrained elements;
+  // optional constrained fields absent as undefined; enum-constrained parameters explained
+  async "Gx-helpers"() {
+    const dir = project("Gx-helpers");
+    const { by, out } = await synth(dir, "src/gen.ts");
+    check("Gx-helpers: generic helper offered (K = int)", solutions(by("flip"))[0] === "toggleIn(sel, id)", String(solutions(by("flip"))[0]));
+    check("Gx-helpers: filter by a constrained field", solutions(by("removeById"))[0] === "xs.filter((x) => x.id !== id)", String(solutions(by("removeById"))[0]));
+    check("Gx-helpers: optional constrained field absent as undefined, never null", solutions(by("zeroNote"))[0] === "0" && !/"note":null/.test(out), String(solutions(by("zeroNote"))[0]));
+    check("Gx-helpers: enum-constrained K tested at int/string, explained", /tested with K = int or string, standing for every type with equality/.test(out) && solutions(by("firstKey"))[0] === "[k]", String(solutions(by("firstKey"))[0]));
   },
 };
 

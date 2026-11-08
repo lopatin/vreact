@@ -1,4 +1,4 @@
-// expect: verified removeKey=verified onInts=verified onStrs=verified upsert=verified addItem=verified removeTwice=verified lookup=trusted viaLookup=relative
+// expect: verified removeKey=verified onInts=verified onStrs=verified upsert=verified addItem=verified removeTwice=verified lookup=verified viaLookup=verified
 // @opaque generic functions: proved once for every type, used at two instantiations (and from a
 // generic caller, at its own type parameter) only through their polymorphic .post theorems, whose
 // binder lists are the definition's ({K : Type} [DecidableEq K] … / {T : Type} (T_id : T → Int) …).
@@ -41,15 +41,17 @@ export function removeTwice<K extends int | string>(xs: readonly K[], a: K, b: K
   return removeKey(removeKey(xs, a), b);
 }
 
-/** @trusted */
-export function lookup<T extends { readonly id: int }>(xs: readonly T[], id: int): T {
-  requires(xs.some((x) => x.id === id));
+// (a @trusted generic function is rejected: GxRejectTrusted)
+/** @opaque */
+export function lookup<T extends { readonly id: int }>(xs: readonly T[], id: int, d: T): T {
+  requires(d.id === id);
   ensures((r: T) => r.id === id);
-  return xs.filter((x) => x.id === id)[0];
+  const f = xs.find((x) => x.id === id);
+  return f === undefined ? d : f;
 }
 
-export function viaLookup(xs: readonly Item[]): int {
-  requires(xs.some((x) => x.id === 5));
+export function viaLookup(xs: readonly Item[], d: Item): int {
+  requires(d.id === 5);
   ensures((r: int) => r === 5);
-  return lookup(xs, 5).id;
+  return lookup(xs, 5, d).id;
 }

@@ -1,4 +1,4 @@
-// expect: reject `length` is not a field of the type parameter T
+// expect: reject `length` on a value of the type parameter T is not supported: under an equality constraint
 // T extends string is still abstract: no string properties or methods.
 import { ensures, requires, type int } from "vreact/spec";
 
