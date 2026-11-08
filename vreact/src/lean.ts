@@ -40,6 +40,51 @@ export function leanBin(): string {
   return fs.existsSync(path.join(elan, "lake")) ? elan : "";
 }
 
+/** A command of a user proof file that the whitelist rejects (`lean/ProofCheck.lean`). */
+export interface ProofIssue {
+  /** the file's path relative to the proofs directory */
+  file: string;
+  line: number;
+  col: number;
+  msg: string;
+}
+
+/** Results of `checkProofFiles` by input (the check runs Lean: `vreact synth` translates often). */
+const proofCheckCache = new Map<string, ProofIssue[]>();
+
+/**
+ * The whitelist check of user proof files, before Lean elaborates them (they are imported by
+ * the generated files, so whatever they declare — syntax, instances, options, code — takes
+ * effect while the translation is checked). Runs `vreact-proofcheck` (`lean/ProofCheck.lean`),
+ * which parses each file with Lean's parser and accepts only lemma-like commands; the library
+ * (and the checker) are built first if needed.
+ */
+export function checkProofFiles(leanLib: string, files: { name: string; text: string }[]): ProofIssue[] {
+  if (!files.length) return [];
+  const input = JSON.stringify(files);
+  const cached = proofCheckCache.get(input);
+  if (cached) return cached;
+  const bin = leanBin();
+  const env = { ...process.env, PATH: bin ? `${bin}:${process.env.PATH}` : process.env.PATH };
+  const build = spawnSync("lake", ["build"], { cwd: leanLib, env, encoding: "utf8", maxBuffer: 64 * 1024 * 1024 });
+  if (build.error) throw new Error(`could not run lake (is Lean installed? see SKILL.md): ${build.error.message}`);
+  if (build.status !== 0) throw new Error(`could not build the VReact Lean library in ${leanLib}:\n${((build.stdout ?? "") + (build.stderr ?? "")).trim().split("\n").slice(-12).join("\n")}`);
+  const exe = path.join(leanLib, ".lake", "build", "bin", "vreact-proofcheck");
+  const r = spawnSync("lake", ["env", exe], { cwd: leanLib, env, input, encoding: "utf8", maxBuffer: 64 * 1024 * 1024 });
+  if (r.error) throw new Error(`could not run the proof file check ${exe}: ${r.error.message}`);
+  let out: ProofIssue[] | null = null;
+  try {
+    const parsed: unknown = JSON.parse(r.stdout ?? "");
+    if (Array.isArray(parsed)) out = parsed as ProofIssue[];
+  } catch {
+    out = null;
+  }
+  // never "no objections" from a check that did not run to the end
+  if (r.status !== 0 || out === null) throw new Error(`the proof file check failed (exit ${r.status}${r.signal ? `, ${r.signal}` : ""}):\n${((r.stdout ?? "") + (r.stderr ?? "")).trim().split("\n").slice(-12).join("\n")}`);
+  proofCheckCache.set(input, out);
+  return out;
+}
+
 export function runLake(outDir: string): { messages: LeanMessage[]; raw: string; status: number } {
   const bin = leanBin();
   const env = { ...process.env, PATH: bin ? `${bin}:${process.env.PATH}` : process.env.PATH };

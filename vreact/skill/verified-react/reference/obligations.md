@@ -101,9 +101,38 @@ first one that fails.
 
    (A `proofs/A.lean` that itself imports `VTS.B.…` of a module `B` importing
    `A` would form an import cycle; `B` then sees only `A`'s definitions.)
-   Declare lemmas outside the generated names: a user declaration named like a
-   generated one (`VTS.A.f`, `VTS.A.f.post`) keeps the generated one out of
-   Lean, and then `f` and everything that uses it is `INCOMPLETE`.
+
+   **What a proof file may contain.** Proof files are imported by the generated
+   Lean, so `vreact` checks each one before Lean runs (it parses it with Lean's
+   parser) and rejects, with file:line and the command, anything but:
+   * `import`s of `VTS.…` (generated modules), `Proofs.…` (other proof files),
+     `VReact`/`VReact.…`;
+   * `theorem`, `def`, `abbrev`, `example` (with a doc comment, `private`,
+     `protected`, `noncomputable`), named outside the namespaces `VTS` and
+     `VReact` (those hold the generated declarations and the library: a lemma
+     there could replace or extend a translated declaration) and not like a
+     `VReact.` name;
+   * `open`, `namespace`/`section`/`end` (not `VTS…`/`VReact…`), `variable`,
+     `universe`, `include`, `omit`, `/-! … -/`, `#check`, `#print`;
+   * the attributes `simp`, `vreact_simp`, `grind` (`grind =`, `grind →`, …), also
+     `local` and erased (`attribute [-simp] f`), and `grind_pattern`: this is how
+     the automation is extended (there is no `macro_rules` for `vreact_auto`);
+   * `set_option` of `maxHeartbeats`, `maxRecDepth`, `synthInstance.maxHeartbeats`,
+     `synthInstance.maxSize`, `autoImplicit`, `relaxedAutoImplicit`,
+     `diagnostics`, `linter.*`, `pp.*`, `trace.*` (also `… in` and in tactics);
+   * any term or tactic except `run_tac`, `by_elab`, `unsafe`, `include_str`,
+     `native_decide`/`+native`, `bv_decide` and `Lean.ofReduceBool`.
+
+   Rejected, with the reason: `axiom` (an unproved assumption: use `assume(…)` or
+   `@trusted` in the source, which the report shows), `instance` and `deriving`
+   (they change which `==`, `DecidableEq` or string conversion the generated code
+   uses), `macro`, `macro_rules`, `syntax`, `notation`, `elab`, simprocs (they change
+   how the generated code and the tactics parse and run), `#eval`, `run_cmd`,
+   `initialize` (they run code), `opaque`, `structure`, `inductive`, `partial`,
+   `export`, other attributes (`implemented_by`, `extern`, `reducible`, `instance`,
+   …) and options (`debug.skipKernelTC`, …). A lemma admitted with `sorry` is
+   accepted but shows as `sorryAx` in the axioms of everything that uses it
+   (`INCOMPLETE`).
 5. **Large constants.** Transparent constants (`@[vreact_simp, reducible]` in
    the generated Lean) are unfolded into every goal that mentions them; a list
    literal of dozens of records turns into long disjunctions. Mark such constants

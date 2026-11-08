@@ -34,8 +34,9 @@ import VReact.Simprocs
 The normalisation set is the simp attribute `vreact_simp` (so a typo in a lemma
 name is a build error of this library, never a silent weakening of the tactic).
 Users extend the automation by tagging their lemmas `@[vreact_simp]` (rewrite
-rules) or `@[grind]`/`grind_pattern` (E-matching facts), or by adding
-`macro_rules` for `vreact_auto`.
+rules) or `@[grind]`/`grind_pattern` (E-matching facts). (Not with `macro_rules`
+for `vreact_auto` or other syntax: user proof files may contain only lemmas, see
+`ProofCheck.lean`.)
 -/
 namespace VReact
 

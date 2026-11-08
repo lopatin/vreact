@@ -1,5 +1,6 @@
 // expect: status verdict=not-verified errors=internal bump=incomplete twice=incomplete keep=verified proved=1 unchecked=2
-// proofs/Base.lean declares `VTS.model.bump` itself (with a body that satisfies the ensures),
+// smuggled/Base.lean (a proof file the whitelist rejects, put in place after the translation)
+// declares `VTS.model.bump` itself (with a body that satisfies the ensures),
 // so the generated `def bump` (whose body violates it) is never added to the environment:
 // Lean reports "already declared" and `bump.post`, `twice.post` are proved about the user's
 // definition. Neither obligation may count as proved, and twice (which uses bump) must not be

@@ -1,0 +1,355 @@
+import Lean
+/-!
+# `vreact-proofcheck`: the whitelist for user proof files
+
+User proofs (`proofs/**/*.lean`, copied to `Proofs/` of the generated project) are imported
+by the generated Lean files. Lean elaborates them *before* the generated code that imports
+them, so anything they declare runs, or takes effect, while the translation is checked: a
+`macro`, `syntax` or `macro_rules` changes how the generated code and vreact's tactics parse;
+an `instance` changes which `==`, `DecidableEq` or string conversion the generated code uses;
+`set_option debug.skipKernelTC true` lets declarations into the environment that the kernel
+never checked; `#eval`, `run_tac`, `initialize`, … run arbitrary code (they can rewrite the
+generated files or the report). The axiom report catches `sorry` and new axioms, none of
+these.
+
+So, before Lean runs, `vreact` hands every proof file to this program, which **parses** it
+with Lean's own parser (in the environment the file will be elaborated in: `Init` alone for a
+file without imports, otherwise `import VReact`; scope commands `open`/`namespace`/`section`/
+`end` are elaborated, so scoped syntax is parsed as Lean will parse it) and accepts only:
+
+* the header: plain `import`s of `VTS.*` (generated modules), `Proofs.*` (other proof files),
+  `VReact` / `VReact.*` and `Init` / `Init.*`;
+* `theorem`, `def`, `abbrev`, `example` (modifiers: doc comment, the attributes below,
+  `private`, `protected`, `noncomputable`, `nonrec`), named outside the namespaces `VTS` and
+  `VReact` (the generated declarations and the library) and not named like a `VReact.` name
+  (generated files `open VReact`);
+* `open`, `namespace`/`section`/`end` (no namespace under `VTS` or `VReact`), `variable`,
+  `universe`, `include`, `omit`, module docs `/-! … -/`, `#check`, `#print`;
+* attributes `simp`, `vreact_simp`, `grind` (and `grind!`, `grind?`, `grind!?`), also `local`
+  and, in `attribute [-…]`, erased; `grind_pattern`;
+* `set_option` of `maxHeartbeats`, `maxRecDepth`, `synthInstance.maxHeartbeats`,
+  `synthInstance.maxSize`, `autoImplicit`, `relaxedAutoImplicit`, `diagnostics`,
+  `diagnostics.threshold`, `linter.*`, `pp.*`, `trace.*` (as a command, `… in`, or inside
+  terms and tactics);
+* inside terms and tactics anything except code execution and trusted evaluation:
+  `run_tac`, `by_elab`, `unsafe`, `include_str`, `native_decide`, `+native`, `bv_decide`,
+  `bv_check`, `idbg`, the library's test tactics, and the `Lean.ofReduceBool` family.
+
+Usage: the files arrive on stdin as a JSON array `[{"name": …, "text": …}]` (`name` is used in
+the messages); the result is a JSON array `[{"file", "line", "col", "msg"}]` on stdout (lines
+1-based, columns 1-based), empty when every file is acceptable. Exit code 0 unless the
+program itself failed.
+-/
+open Lean Elab Command Parser
+
+namespace VReactProofCheck
+
+/-- Options a proof file may set: resource limits and output, nothing that changes what is
+checked or how. -/
+def optionAllowed (n : Name) : Bool :=
+  [`maxHeartbeats, `maxRecDepth, `synthInstance.maxHeartbeats, `synthInstance.maxSize,
+   `autoImplicit, `relaxedAutoImplicit, `diagnostics, `diagnostics.threshold].contains n ||
+  [`linter, `pp, `trace].contains n.getRoot
+
+private def attrName (s : String) : Name := Name.mkStr (Name.mkStr (Name.mkStr (Name.mkStr .anonymous "Lean") "Parser") "Attr") s
+
+/-- Attribute syntax kinds a proof file may use: the simp sets and `grind`. -/
+def attrKindsAllowed : List Name :=
+  [attrName "simp", attrName "grind", attrName "grind!", attrName "grind?", attrName "grind!?",
+   Name.mkStr (Name.mkStr (Name.mkStr .anonymous "Parser") "Attr") "vreact_simp"]
+
+/-- Attribute names `attribute [-…]` may erase. -/
+def erasableAttrs : List Name := [`simp, `vreact_simp, `grind]
+
+def reservedRoots : List Name := [`VTS, `VReact]
+
+def allowedImport (m : Name) : Bool :=
+  m == `VReact || m == `Init || [`VTS, `Proofs, `VReact, `Init].contains m.getRoot && !m.isAtomic
+
+/-- Constants whose use trusts compiled code instead of the kernel. -/
+def trustedEval : List String := ["ofReduceBool", "ofReduceNat", "reduceBool", "reduceNat", "trustCompiler"]
+
+structure Issue where
+  pos : String.Pos.Raw
+  msg : String
+
+abbrev M := StateT (Array Issue) CommandElabM
+
+/-- Where `stx` starts, after a leading doc comment (and, for a declaration, after its
+modifiers): the position a message about a command points at. -/
+partial def startPos? (stx : Syntax) : Option String.Pos.Raw :=
+  match stx with
+  | .node _ k args =>
+    if k == ``Command.docComment || k == ``Command.declModifiers then none
+    else args.findSome? startPos?
+  | _ => stx.getPos?
+
+def report (stx : Syntax) (msg : String) : M Unit := do
+  let pos := (startPos? stx).getD (stx.getPos?.getD 0)
+  modify (·.push { pos, msg })
+
+/-- The source text of `stx` (from `startPos?`), first line, shortened. -/
+def excerpt (stx : Syntax) : CommandElabM String := do
+  let fm ← getFileMap
+  let some s := startPos? stx <|> stx.getPos? | return ""
+  let some e := stx.getTailPos? | return ""
+  let txt := (String.Pos.Raw.extract fm.source s e)
+  let line := (txt.splitOn "\n").headD ""
+  return if line.length > 60 then (line.take 57).toString ++ "…" else line
+
+def whitelistHint : String :=
+  "a proof file may contain only theorem/def/abbrev/example, open, namespace/section/end, variable, " ++
+  "universe, include/omit, #check/#print, attribute [simp|vreact_simp|grind …], grind_pattern and " ++
+  "set_option of maxHeartbeats/maxRecDepth/synthInstance.*/linter.*/pp.*/trace.* " ++
+  "(see reference/obligations.md, \"Lean lemmas\")"
+
+def optionMsg (n : Name) : String :=
+  s!"`set_option {n}` is not allowed in a proof file: only resource limits and output options " ++
+  "(maxHeartbeats, maxRecDepth, synthInstance.maxHeartbeats/maxSize, autoImplicit, linter.*, pp.*, trace.*) " ++
+  "may be set; other options can change what Lean checks (e.g. debug.skipKernelTC skips the kernel)"
+
+/-- The message for a command (or declaration) kind that is not whitelisted. -/
+def commandMsg (k : Name) (text : String) : String :=
+  let s := k.toString
+  let has (p : String) := (s.splitOn p).length > 1
+  let why :=
+    if [``Command.axiom].contains k then
+      "an axiom is an unproved assumption: state it as a theorem and prove it (assumptions belong in the source, as `assume(…)` or `@trusted`, where the report shows them)"
+    else if [``Command.instance].contains k || has "deriving" || has "Deriving" then
+      "an instance can change the meaning of the generated code (which `==`, `DecidableEq` or string conversion it uses); state the facts you need as theorems"
+    else if has "macro" || has "syntax" || has "notation" || has "infix" || has "prefix" || has "postfix" ||
+        has "elab" || has "mixfix" || has "binder_predicate" || has "binderPredicate" || has "unif_hint" || has "unifHint" ||
+        has "declare" || has "Declare" || has "Config" then
+      "syntax extensions (macro, macro_rules, syntax, notation, elab, …) change how the generated code and vreact's tactics parse and run; help the automation with lemmas tagged @[vreact_simp], @[simp] or @[grind …], or with grind_pattern"
+    else if has "eval" || has "Eval" || has "run" || has "initialize" || has "Initialize" || has "exit" then
+      "running code while the proofs are checked can change the environment, the generated files or the report"
+    else if has "simproc" || has "Simproc" || has "dsimproc" || has "propagator" then
+      "simprocs and grind propagators run code inside the automation; state rewrite rules as theorems tagged @[vreact_simp] or @[simp]"
+    else if [``Command.opaque, ``Command.structure, ``Command.inductive, ``Command.classInductive].contains k ||
+        has "coinductive" || has "mutual" then
+      "only theorem, def, abbrev and example declarations are allowed"
+    else if has "export" then
+      "`export` adds aliases that can change what a name in the generated code refers to"
+    else
+      "it is not on the whitelist"
+  s!"`{text}` is not allowed in a proof file: {why}; {whitelistHint}"
+
+def bannedKind? (k : Name) : Option String :=
+  let s := k.toString
+  if k == ``Lean.Parser.Tactic.runTac then some "`run_tac` runs arbitrary code"
+  else if k == `Lean.byElab then some "`by_elab` runs arbitrary code"
+  else if k == ``Lean.Parser.Term.unsafe then some "`unsafe` terms run compiled code that the kernel does not check"
+  else if k == ``Lean.Parser.Term.elabToSyntax then some "this term is internal to Lean's elaborator"
+  else if k == `Lean.includeStr then some "`include_str` reads files"
+  else if k == ``Lean.Parser.Term.idbg then some "`idbg` runs code"
+  else if k == ``Lean.Parser.Tactic.nativeDecide then some "`native_decide` trusts compiled code instead of the kernel (axiom Lean.ofReduceBool)"
+  else if k == ``Lean.Parser.Tactic.bvDecide || k == ``Lean.Parser.Tactic.bvCheck || k == ``Lean.Parser.Tactic.bvTrace then
+    some "`bv_decide` trusts compiled code instead of the kernel (axiom Lean.ofReduceBool)"
+  else if (s.splitOn "vreact_test").length > 1 || (s.splitOn "Vreact_test").length > 1 || (s.splitOn "Server.Test").length > 1 then
+    some "the library's test tactics are not for proofs"
+  else none
+
+def bannedAtom? (a : String) : Option String :=
+  if a == "unsafe" then some "`unsafe` code is not checked by the kernel"
+  else if a == "partial" then some "`partial` definitions are not allowed (state the function with structural or well-founded recursion)"
+  else if a == "native_decide" then some "`native_decide` trusts compiled code instead of the kernel (axiom Lean.ofReduceBool)"
+  else if a == "run_tac" || a == "by_elab" then some s!"`{a}` runs arbitrary code"
+  else if a == "deriving" || a == "instance" then some "an instance can change the meaning of the generated code (which `==`, `DecidableEq` or string conversion it uses)"
+  else none
+
+/-- Whether `stx` contains the atom `a`. -/
+partial def hasAtom (stx : Syntax) (a : String) : Bool :=
+  match stx with
+  | .atom _ v => v == a
+  | .node _ _ args => args.any (hasAtom · a)
+  | _ => false
+
+/-- Check a `set_option` node (command, term or tactic): its option name is child 1. -/
+def checkSetOption (stx : Syntax) : M Unit := do
+  let n := stx[1].getId
+  unless optionAllowed n do report stx (optionMsg n)
+
+/-- Every node of `stx`: banned kinds/atoms, attributes, options. -/
+partial def walk (stx : Syntax) : M Unit := do
+  match stx with
+  | .node _ k args =>
+    if let some why := bannedKind? k then
+      report stx s!"`{← excerpt stx}` is not allowed in a proof file: {why}"
+      return
+    if k == ``Lean.Parser.Command.set_option || k == ``Lean.Parser.Term.set_option || k == ``Lean.Parser.Tactic.set_option then
+      checkSetOption stx
+    if k == ``Lean.Parser.Term.attrInstance then
+      -- attrKind (scoped/local), then the attribute itself
+      if hasAtom stx[0] "scoped" then
+        report stx s!"`{← excerpt stx}`: scoped attributes are not allowed in a proof file (use the attribute itself, or `local`)"
+      let a := stx[1]
+      unless attrKindsAllowed.contains a.getKind do
+        report a s!"the attribute `{← excerpt a}` is not allowed in a proof file: only simp, vreact_simp and grind (grind =, grind →, …) are; other attributes can change how the generated code is elaborated or compiled (instance, coe, macro, implemented_by, extern, reducible, …)"
+        return
+    if k == ``Lean.Parser.Command.eraseAttr then
+      unless erasableAttrs.contains stx[1].getId do
+        report stx s!"`{← excerpt stx}` is not allowed in a proof file: only simp, vreact_simp and grind attributes may be erased"
+    for a in args do walk a
+  | .atom _ v =>
+    if let some why := bannedAtom? v then
+      report stx s!"`{v}` is not allowed in a proof file: {why}"
+  | .ident _ _ n _ =>
+    if let .str _ last := n then
+      if trustedEval.contains last then
+        report stx s!"`{n}` is not allowed in a proof file: it trusts compiled code instead of the kernel"
+      if n == `native then
+        report stx "`native` (e.g. `decide +native`) is not allowed in a proof file: it trusts compiled code instead of the kernel (axiom Lean.ofReduceBool)"
+  | .missing => pure ()
+
+/-- The full name a declaration id declares in the current namespace. -/
+def fullName (id : Name) : CommandElabM Name := do
+  if id.getRoot == `_root_ then return id.replacePrefix `_root_ .anonymous
+  return (← getCurrNamespace) ++ id
+
+def checkDeclName (declId : Syntax) : M Unit := do
+  let id := declId[0].getId
+  let n ← fullName id
+  if reservedRoots.contains n.getRoot then
+    report declId s!"`{n}` is not allowed in a proof file: the namespaces VTS and VReact belong to the generated code and the library (a declaration there can replace or extend a translated declaration); name it outside them"
+  else if (← getEnv).contains (`VReact ++ n) then
+    report declId s!"`{n}` is not allowed in a proof file: the generated code opens VReact, where `VReact.{n}` exists, so the name would become ambiguous there; choose another name"
+
+/-- Commands the check elaborates after accepting them, so that the parser state stays Lean's:
+namespaces and `open` activate scoped syntax; options (whitelisted ones only) are in the
+parser's context. -/
+def scopeKinds : List Name :=
+  [``Command.open, ``Command.namespace, ``Command.section, ``Command.end, ``Command.set_option]
+
+def plainKinds : List Name :=
+  [``Command.open, ``Command.namespace, ``Command.section, ``Command.end, ``Command.variable,
+   ``Command.universe, ``Command.include, ``Command.omit, ``Command.check, ``Command.print,
+   ``Command.printAxioms, ``Command.moduleDoc, ``Command.attribute, ``Command.set_option,
+   ``Command.grindPattern]
+
+partial def checkCommand (stx : Syntax) : M Unit := do
+  let k := stx.getKind
+  if k == ``Command.declaration then
+    let mods := stx[0]
+    let decl := stx[1]
+    let dk := decl.getKind
+    if [``Command.theorem, ``Command.definition, ``Command.abbrev].contains dk then
+      checkDeclName decl[1]
+    else if dk != ``Command.example then
+      report stx (commandMsg dk (← excerpt stx))
+      return
+    -- modifiers: no `meta` (the rest is checked by `walk`: unsafe, partial, attributes)
+    if hasAtom mods "meta" then report mods s!"`meta` declarations are not allowed in a proof file"
+    walk stx
+  else if k == ``Command.in then
+    let c1 := stx[0]
+    unless [``Command.open, ``Command.set_option].contains c1.getKind do
+      report stx s!"`{← excerpt stx}` is not allowed in a proof file: only `open … in` and `set_option … in` are"
+      return
+    checkCommand c1
+    checkCommand stx[2]
+  else if plainKinds.contains k then
+    walk stx
+  else
+    report stx (commandMsg k (← excerpt stx))
+
+/-- The environment a file is parsed in: what its imports would give (for the token table and
+the parsers). Generated modules and other proof files add no syntax (the latter are checked
+too), so `VReact` stands for any of them. -/
+def envFor (imports : Array Import) (cache : IO.Ref (Option Environment × Option Environment))
+    (enableInit : IO Unit) : IO Environment := do
+  let (init?, vr?) ← cache.get
+  if imports.all (fun i => i.module == `Init) then
+    if let some e := init? then return e
+    enableInit
+    let e ← importModules #[{ module := `Init }] {} (loadExts := true)
+    cache.set (some e, vr?)
+    return e
+  else
+    if let some e := vr? then return e
+    enableInit
+    let e ← importModules #[{ module := `Init }, { module := `VReact }] {} (loadExts := true)
+    cache.set (init?, some e)
+    return e
+
+def posOf (fm : FileMap) (p : String.Pos.Raw) : Nat × Nat :=
+  let q := fm.toPosition p
+  (q.line, q.column + 1)
+
+def checkFile (name text : String) (cache : IO.Ref (Option Environment × Option Environment))
+    (enableInit : IO Unit) : IO (Array (Nat × Nat × String)) := do
+  let inputCtx := Parser.mkInputContext text name
+  let fm := inputCtx.fileMap
+  let (header, pstate, msgs) ← Parser.parseHeader inputCtx
+  let mut out : Array (Nat × Nat × String) := #[]
+  if msgs.hasErrors then
+    for m in msgs.toList do
+      if m.severity == .error then
+        return #[(m.pos.line, m.pos.column + 1, s!"the proof file does not parse: {← m.data.toString}")]
+  -- header: `import X` only, of the generated modules, other proofs, the library, Init
+  let h := header.raw
+  if !h[0].isNone || !h[1].isNone then
+    out := out.push (1, 1, "`module` and `prelude` are not allowed in a proof file")
+  let mut imports : Array Import := #[]
+  for imp in h[2].getArgs do
+    let n := imp[4].getId
+    let (l, c) := posOf fm (imp.getPos?.getD 0)
+    if !imp[0].isNone || !imp[1].isNone || !imp[3].isNone then
+      out := out.push (l, c, s!"`{n}`: only plain `import` is allowed in a proof file (no public/meta/all)")
+    else if !allowedImport n then
+      out := out.push (l, c, s!"`import {n}` is not allowed in a proof file: proof files may import the generated modules (VTS.…), other proof files (Proofs.…) and the library (VReact, VReact.…)")
+    imports := imports.push { module := n }
+  unless out.isEmpty do return out
+  let env ← envFor imports cache enableInit
+  let cmdCtx : Command.Context := { fileName := name, fileMap := fm, snap? := none, cancelTk? := none }
+  let mut cmdState := Command.mkState env {} {}
+  let mut pstate := pstate
+  let mut issues : Array Issue := #[]
+  repeat
+    let scope := cmdState.scopes.head!
+    let pmctx : ParserModuleContext := { env := cmdState.env, options := scope.opts, currNamespace := scope.currNamespace, openDecls := scope.openDecls }
+    let (cmd, ps, msgs') := Parser.parseCommand inputCtx pmctx pstate {}
+    pstate := ps
+    if msgs'.hasErrors then
+      for m in msgs'.toList do
+        if m.severity == .error then
+          return out.push (m.pos.line, m.pos.column + 1, s!"the proof file does not parse: {(← m.data.toString).trimAscii}")
+    if cmd.isOfKind ``Command.eoi then break
+    -- check, then elaborate the scope commands (namespaces activate scoped syntax)
+    let act : CommandElabM (Array Issue) := do
+      let ((), is) ← (checkCommand cmd).run #[]
+      if is.isEmpty && scopeKinds.contains cmd.getKind then
+        elabCommandTopLevel cmd
+        let ns ← getCurrNamespace
+        if reservedRoots.contains ns.getRoot then
+          return #[{ pos := cmd.getPos?.getD 0, msg := s!"`namespace {ns}` is not allowed in a proof file: the namespaces VTS and VReact belong to the generated code and the library" }]
+      return is
+    match ← (act cmdCtx).run cmdState |>.toIO' with
+    | .error e => return out.push (1, 1, s!"internal error of the proof check: {← e.toMessageData.toString}")
+    | .ok (is, s) =>
+      cmdState := s
+      issues := issues ++ is
+    -- (`#exit`, rejected above, ends the file for Lean too)
+    if Parser.isTerminalCommand cmd then break
+  for i in issues do
+    let (l, c) := posOf fm i.pos
+    out := out.push (l, c, i.msg)
+  return out
+
+end VReactProofCheck
+
+open VReactProofCheck in
+unsafe def main (_args : List String) : IO UInt32 := do
+  initSearchPath (← findSysroot)
+  let input ← (← IO.getStdin).readToEnd
+  let files ← match Json.parse input >>= fun j => j.getArr? with
+    | .ok a => pure a
+    | .error e => throw <| IO.userError s!"vreact-proofcheck: bad input: {e}"
+  let cache ← IO.mkRef ((none, none) : Option Environment × Option Environment)
+  let mut out : Array Json := #[]
+  for f in files do
+    let name ← IO.ofExcept (f.getObjValAs? String "name")
+    let text ← IO.ofExcept (f.getObjValAs? String "text")
+    for (l, c, msg) in ← checkFile name text cache enableInitializersExecution do
+      out := out.push (Json.mkObj [("file", name), ("line", l), ("col", c), ("msg", msg)])
+  IO.println (Json.arr out).compress
+  return 0

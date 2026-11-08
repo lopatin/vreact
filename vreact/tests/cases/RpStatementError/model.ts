@@ -1,5 +1,6 @@
 // expect: fail postcondition verdict=not-verified errors=internal grow=incomplete keep=verified viaGrow=verified failed=1 proved=2
-// proofs/Base.lean redefines `≥` so that the *statement* of grow's postcondition theorem does
+// smuggled/Base.lean (a proof file the whitelist rejects, put in place after the translation)
+// redefines `≥` so that the *statement* of grow's postcondition theorem does
 // not elaborate (the def bodies do not use `≥`). The obligation must not count as proved
 // (its theorem is about an ill-formed statement), grow is INCOMPLETE, the verdict NOT
 // VERIFIED; keep and viaGrow (which unfolds grow, not its broken contract) keep their status.

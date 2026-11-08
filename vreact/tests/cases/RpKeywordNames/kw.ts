@@ -3,8 +3,8 @@
 // `end'`, … in Lean; a let-chain puts `end')` or `namespace')` at the start of a line. The
 // report's reading of the generated file must not take them for `end`/`namespace` commands
 // (before: the namespace stack was popped/pushed there, so the declarations below were
-// named `).after`, …, and an error in `after` was not seen as after's: proofs/Base.lean
-// pre-declares `VTS.kw.after`, the generated one is never added, and after was VERIFIED).
+// named `).after`, …, and an error in `after` was not seen as after's: smuggled/Base.lean,
+// a proof file the whitelist rejects put in place after the translation, pre-declares `VTS.kw.after`, the generated one is never added, and after was VERIFIED).
 import { ensures, requires, type int } from "vreact/spec";
 export function open(x: int): int {
   ensures((r: int) => r === x + 1);

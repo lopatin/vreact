@@ -1,5 +1,6 @@
 // expect: fail handler verdict=not-verified Counter=incomplete Counter.certificate=incomplete tick=verified failed=1 errors=none
-// proofs/m.lean adds a simproc to the automation that logs "vreact:ok" whenever it fires, i.e.
+// smuggled/m.lean (a proof file the whitelist rejects, put in place after the translation)
+// adds a simproc to the automation that logs "vreact:ok" whenever it fires, i.e.
 // inside the obligations that mention tick. The handler's obligation is false (n = 0 gives -1):
 // vreact_ob drops `vreact:` messages logged inside the obligation and reports the failure, so
 // the forged evidence never turns it into a proof.

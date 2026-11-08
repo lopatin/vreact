@@ -8,15 +8,17 @@
  * `why.Name=<text>` (the item's reported reason mentions the text; `~` stands for a space).
  * A directory `cases/<Name>/` is a multi-file case with its own project: its .ts/.tsx files
  * and subdirectories go to src/, `proofs/` and `vreact.json` are copied, `tsconfig.json` replaces the default
- * one (a file `NO_TSCONFIG` means none); the header of its first source file applies.
+ * one (a file `NO_TSCONFIG` means none); the header of its first source file applies. Files in
+ * `smuggled/` replace the proof files of the same name in the generated project after the
+ * translation (a proof the whitelist would reject: the report must stay honest regardless).
  */
 import fs from "node:fs";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { loadConfig, verify, CAUSE_LABEL, type Report } from "../src/cli.ts";
+import { loadConfig, verify, reportFrom, CAUSE_LABEL, type Report } from "../src/cli.ts";
 import { translate } from "../src/module.ts";
-import { parseMessages, judge, findMarkers, leanDecls } from "../src/lean.ts";
+import { parseMessages, judge, findMarkers, leanDecls, runLake } from "../src/lean.ts";
 import { honestyChecks } from "./honesty.ts";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -216,21 +218,38 @@ for (const name of dirCases) {
   fs.rmSync(dir, { recursive: true, force: true });
   fs.mkdirSync(path.join(dir, "src"), { recursive: true });
   for (const f of files) fs.copyFileSync(path.join(src, f), path.join(dir, "src", f));
-  // subdirectories other than proofs/ are source directories (nested modules)
-  for (const f of fs.readdirSync(src)) if (f !== "proofs" && fs.statSync(path.join(src, f)).isDirectory()) fs.cpSync(path.join(src, f), path.join(dir, "src", f), { recursive: true });
+  // subdirectories other than proofs/ and smuggled/ are source directories (nested modules)
+  for (const f of fs.readdirSync(src)) if (f !== "proofs" && f !== "smuggled" && fs.statSync(path.join(src, f)).isDirectory()) fs.cpSync(path.join(src, f), path.join(dir, "src", f), { recursive: true });
   if (fs.existsSync(path.join(src, "proofs"))) fs.cpSync(path.join(src, "proofs"), path.join(dir, "proofs"), { recursive: true });
   if (fs.existsSync(path.join(src, "vreact.json"))) fs.copyFileSync(path.join(src, "vreact.json"), path.join(dir, "vreact.json"));
   if (fs.existsSync(path.join(src, "tsconfig.json"))) fs.copyFileSync(path.join(src, "tsconfig.json"), path.join(dir, "tsconfig.json"));
   else if (!fs.existsSync(path.join(src, "NO_TSCONFIG"))) fs.writeFileSync(path.join(dir, "tsconfig.json"), tsconfig);
   if (expect[0] === "reject") {
+    // several expected messages are separated by ` ;; `; a message is also matched with its
+    // location (`proofs/m.lean:4:1: …`, relative to the case's project)
     const tr = translate(loadConfig(dir));
-    const want = expect.slice(1).join(" ");
-    const msgs = [...tr.tsDiagnostics, ...tr.errors.map((e) => e.message)];
-    if (!tr.ok && msgs.some((x) => x.includes(want))) ok(name, `"${want}"`);
-    else bad(name, `expected rejection containing "${want}", got: ${msgs.join(" | ") || "accepted"}`);
+    const wants = expect.slice(1).join(" ").split(" ;; ");
+    const msgs = [...tr.tsDiagnostics, ...tr.errors.map((e) => `${e.file ? path.relative(dir, e.file).split(path.sep).join("/") : "?"}:${e.line}:${e.col}: ${e.message}`)];
+    const missing = wants.filter((w) => !msgs.some((x) => x.includes(w)));
+    if (!tr.ok && !missing.length) ok(name, wants.length > 1 ? `${wants.length} rejections` : `"${wants[0]}"`);
+    else bad(name, `expected rejection containing "${missing.join('" and "')}", got: ${msgs.join(" | ") || "accepted"}`);
     continue;
   }
-  const rr = verify(loadConfig(dir), { json: true });
+  // `smuggled/<P>.lean` replaces the (whitelisted) `proofs/<P>.lean` in the generated project
+  // after the translation: the report must stay honest also about a proof file that got past
+  // the whitelist check (defense in depth; the whitelist itself is tested by Rl* cases)
+  const smuggled = path.join(src, "smuggled");
+  let rr: Report;
+  if (fs.existsSync(smuggled)) {
+    const cfg = loadConfig(dir);
+    const tr = translate(cfg);
+    if (!tr.ok) {
+      bad(name, `translation failed: ${[...tr.tsDiagnostics, ...tr.errors.map((e) => e.message)].join(" | ")}`);
+      continue;
+    }
+    for (const f of fs.readdirSync(smuggled)) fs.copyFileSync(path.join(smuggled, f), path.join(cfg.outDir, "Proofs", f));
+    rr = reportFrom(cfg, tr, runLake(cfg.outDir).messages).report;
+  } else rr = verify(loadConfig(dir), { json: true });
   if (rr.stage !== "lean") {
     bad(name, rr.errors.join("\n"));
     continue;
