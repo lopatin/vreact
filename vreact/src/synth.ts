@@ -1182,7 +1182,7 @@ export async function synthCommand(root: string, files: string[], opts: { write?
   const program = ts.createProgram(cfg.files, options, overrideHost(options, new Map([[target, base]])));
   const checker = program.getTypeChecker();
   // (the translator's module names, so that type names agree with the translation's)
-  const prog = new Program(checker, root, (sf) => moduleNs(cfg.srcDir, sf.fileName));
+  const prog = new Program(checker, root, (sf) => moduleNs(cfg.srcDir, sf.fileName), (sf) => program.isSourceFileDefaultLibrary(sf));
   const sf = program.getSourceFile(target)!;
   const env = baseEnv(new ModCtx(prog, "VTS.Synth", sf, [], { n: 0 }));
   const isTrusted = (n: ts.Node) => ts.getJSDocTags(n).some((t) => t.tagName.text === "trusted");

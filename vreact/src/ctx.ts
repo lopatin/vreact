@@ -159,13 +159,14 @@ export class Program {
   modNs = new Map<string, string>();
   /** set by `vreact synth`: every translation of a `hole<T>()` kept in the output, with its environment (narrowing) */
   holeEnvs?: HoleEnv[];
-  constructor(checker: ts.TypeChecker, root: string, nsOf: (sf: ts.SourceFile) => string) {
+  constructor(checker: ts.TypeChecker, root: string, nsOf: (sf: ts.SourceFile) => string, isLib: (sf: ts.SourceFile) => boolean) {
     this.checker = checker;
     this.root = root;
     this.typeEnv = {
       checker,
       reg: this.reg,
       nsOf,
+      isLib,
       isSpecInt: (node) => {
         if (node.typeName.getText() !== "int") return false;
         let sym = checker.getSymbolAtLocation(node.typeName);

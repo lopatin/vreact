@@ -11,7 +11,7 @@
  * duplicate the continuation; `for…of` loops become folds.
  */
 import ts from "typescript";
-import { T, type VType, type Field, type Param, sameType, showType, leanType, sharedFields, type Variant, typeOfNode, kindsOfType, nullShape } from "./types.ts";
+import { T, type VType, type TypeEnv, type Field, type Param, sameType, showType, leanType, sharedFields, type Variant, typeOfNode, kindsOfType, nullShape, collectionKind, collectionTypeArgs, isLibSymbol, mapType, setType } from "./types.ts";
 import { type Env, type Val, ModCtx, type Binding, type StateVar, type CompCtx, type HandlerAcc, type FnInfo, type CompInfo, type Global, type Narrowed, bind, extend, freshLocal } from "./ctx.ts";
 import { VtsError, fail, leanField, leanAccessor, leanIdent, leanStr, jsStr, leanInt, paren, nodeText, capitalize } from "./util.ts";
 
@@ -180,6 +180,200 @@ export function checkClosures(body: ts.Node, env: Env) {
     ts.forEachChild(n, visit);
   };
   visit(body);
+  checkCollectionMutation(body, env);
+}
+
+/* ───────────────────── Map / Set: mutation and aliasing ───────────────────── */
+
+/** Map/Set methods that mutate (`set`/`add` return the receiver, `delete` a boolean, `clear` undefined). */
+const MUTATORS = new Set(["set", "add", "delete", "clear"]);
+
+/**
+ * The declarations of the fresh local Maps / Sets whose mutation statements `checkCollectionMutation`
+ * allowed: `mutateLocal` translates only those (as rebindings).
+ */
+const freshMutable = new WeakSet<ts.Node>();
+
+/** `new Map(…)` / `new Set(…)` of the library (not a user class of that name): its kind, else null. */
+function newKind(ne: ts.NewExpression, ck: ts.TypeChecker, tenv: TypeEnv): "map" | "set" | null {
+  const callee = stripParens(ne.expression);
+  if (!ts.isIdentifier(callee) || (callee.text !== "Map" && callee.text !== "Set")) return null;
+  let sym = ck.getSymbolAtLocation(callee);
+  if (sym && sym.flags & ts.SymbolFlags.Alias) sym = ck.getAliasedSymbol(sym);
+  return isLibSymbol(sym, tenv) ? (callee.text === "Map" ? "map" : "set") : null;
+}
+
+/**
+ * A freshly allocated Map / Set that no other code refers to: `new Map(…)`, `new Set(…)`, or a
+ * `.set(…)` / `.add(…)` chain on one (`new Map(m).set(k, v)`).
+ */
+function isFreshCollection(e: ts.Expression, ck: ts.TypeChecker, tenv: TypeEnv): boolean {
+  e = stripParens(e);
+  if (ts.isNewExpression(e)) return newKind(e, ck, tenv) !== null;
+  if (ts.isCallExpression(e) && ts.isPropertyAccessExpression(e.expression) && ["set", "add"].includes(e.expression.name.text)) {
+    return isFreshCollection(e.expression.expression, ck, tenv);
+  }
+  return false;
+}
+
+/** `Array.from` of the library. */
+function isArrayFrom(callee: ts.Expression, ck: ts.TypeChecker, tenv: TypeEnv): boolean {
+  if (!ts.isPropertyAccessExpression(callee) || callee.name.text !== "from" || !ts.isIdentifier(callee.expression) || callee.expression.text !== "Array") return false;
+  let sym = ck.getSymbolAtLocation(callee.expression);
+  if (sym && sym.flags & ts.SymbolFlags.Alias) sym = ck.getAliasedSymbol(sym);
+  return isLibSymbol(sym, tenv);
+}
+
+/** The receiver `n` of a mutation statement `n.set(…);` / `n.add(…);` / `n.delete(…);` / `n.clear();`. */
+function mutationReceiver(n: ts.Node): ts.Identifier | null {
+  if (!ts.isExpressionStatement(n)) return null;
+  const e = stripParens(n.expression);
+  if (!ts.isCallExpression(e) || !ts.isPropertyAccessExpression(e.expression) || !MUTATORS.has(e.expression.name.text)) return null;
+  const r = stripParens(e.expression.expression);
+  return ts.isIdentifier(r) ? r : null;
+}
+
+/** The variable a `for…of` iterates directly (`n`, `n.keys()`, `n.values()`, `n.entries()`), if any. */
+function iteratedRoot(e: ts.Expression): ts.Identifier | null {
+  e = stripParens(e);
+  if (ts.isCallExpression(e) && ts.isPropertyAccessExpression(e.expression) && ITER_METHODS.has(e.expression.name.text)) e = stripParens(e.expression.expression);
+  return ts.isIdentifier(e) ? e : null;
+}
+
+/** The innermost function (arrow, function expression or declaration) containing `n`. */
+function fnOf(n: ts.Node): ts.Node | undefined {
+  for (let a = n.parent; a; a = a.parent) if (ts.isArrowFunction(a) || ts.isFunctionExpression(a) || ts.isFunctionDeclaration(a) || ts.isMethodDeclaration(a)) return a;
+  return undefined;
+}
+
+/**
+ * JS Maps and Sets are mutable objects shared by reference; the translation models them as
+ * values, so a mutation is exact only on an object nothing else can observe.  Checked here for
+ * one top-level function or component body, before it is translated:
+ * * `set`/`add`/`delete`/`clear` are statements (`n.set(k, v);`), on a local `const n` of this
+ *   body initialised with a fresh `new Map(…)` / `new Set(…)` (or a `.set`/`.add` chain on one) —
+ *   never on parameters, props, state, constants, `let`s or values read from elsewhere; in an
+ *   expression only `.set`/`.add` chains on a fresh copy (`new Map(m).set(k, v)`, a pure update);
+ * * the mutations are in the function that declares `n` (not in a callback or helper, whose
+ *   effect the translation would lose, and which may run later);
+ * * no alias of `n` may exist when a mutation can still run: a use other than a read (`n.size`,
+ *   `n.get(k)`, `n.has(k)`, an iteration consumed at once, a copy `new Map(n)`) — storing it in a
+ *   record, array or variable, passing it to a function, setter or child, rendering it — must not
+ *   be followed by a mutation (later in the code, or in a later iteration of an enclosing loop),
+ *   except in the function's `return` (nothing of the function runs after it);
+ * * a function that runs later (handler, effect, helper, functional update) may not refer to
+ *   `n` when a mutation can follow its creation (JS closures see the object as it is when they run);
+ * * no mutation inside a `for…of` that iterates `n` itself (JS visits added entries).
+ * The allowed declarations are recorded in `freshMutable`, which `mutateLocal` requires.
+ */
+function checkCollectionMutation(body: ts.Node, env: Env) {
+  const ck = env.m.checker;
+  const tenv = env.m.prog.typeEnv;
+  const kindOf = (x: ts.Expression) => collectionKind(ck.getNonNullableType(ck.getTypeAtLocation(x)), tenv);
+  const muts = new Map<ts.Symbol, ts.CallExpression[]>();
+  const collect = (n: ts.Node) => {
+    if (ts.isCallExpression(n) && ts.isPropertyAccessExpression(n.expression) && MUTATORS.has(n.expression.name.text)) {
+      const recv = stripParens(n.expression.expression);
+      const kind = kindOf(recv);
+      if (kind) {
+        const name = n.expression.name.text;
+        const Name = kind === "map" ? "Map" : "Set";
+        const what = nodeText(recv, 30);
+        let st: ts.Node = n;
+        while (ts.isParenthesizedExpression(st.parent)) st = st.parent;
+        if (ts.isExpressionStatement(st.parent)) {
+          const sym = ts.isIdentifier(recv) ? ck.getSymbolAtLocation(recv) : undefined;
+          const d = sym?.valueDeclaration;
+          const local = !!d && ts.isVariableDeclaration(d) && ts.isVariableDeclarationList(d.parent) && within(d, body);
+          const isConst = local && ((d!.parent as ts.VariableDeclarationList).flags & ts.NodeFlags.Const) !== 0;
+          const fresh = isConst && ts.isIdentifier((d as ts.VariableDeclaration).name) && !!(d as ts.VariableDeclaration).initializer && isFreshCollection((d as ts.VariableDeclaration).initializer!, ck, tenv);
+          if (!sym || !fresh) {
+            const why = !local
+              ? "is not a local variable of this function (a parameter, prop, state value, constant, or a value read from one: the caller, React or other code holds the same object, and would see the change)"
+              : !isConst
+                ? "is declared with `let` (it may hold a shared object): declare the copy with `const`"
+                : "is not initialised with a fresh new Map(…) / new Set(…) (it may be shared with whatever it was read from)";
+            fail(n, `${what}.${name}(…) mutates ${what}, which ${why}; mutate a fresh copy instead: const n = new ${Name}(${what}); n.${name}(…);${name === "set" || name === "add" ? ` (or, in an expression, new ${Name}(${what}).${name}(…))` : ""}`);
+          }
+          muts.set(sym, [...(muts.get(sym) ?? []), n]);
+        } else if (!((name === "set" || name === "add") && isFreshCollection(recv, ck, tenv))) {
+          const returns = name === "delete" ? "returns a boolean" : name === "clear" ? "returns undefined" : `returns the same ${Name}`;
+          fail(n, `${what}.${name}(…) in an expression: it mutates ${what} and ${returns}; VTS allows it only as a statement on a fresh local copy (const n = new ${Name}(…); n.${name}(…);)${name === "set" || name === "add" ? `, or in a chain on a fresh copy (new ${Name}(${what}).${name}(…))` : ""}`);
+        }
+      }
+    }
+    ts.forEachChild(n, collect);
+  };
+  collect(body);
+  for (const [sym, ws] of muts) {
+    const d = sym.valueDeclaration as ts.VariableDeclaration;
+    const F = fnOf(d);
+    const nm = sym.name;
+    const Name = kindOf(d.name as ts.Identifier) === "set" ? "Set" : "Map";
+    for (const w of ws) {
+      if (fnOf(w) !== F) {
+        fail(w, `\`${nm}\` is declared outside this function: mutating it from inside a function or callback is not supported (the translation would lose the mutation, and the function may run later); build the ${Name} where it is used, or with for…of instead of a callback`);
+      }
+    }
+    /** `x` is in a `return` of F (crossing no function): nothing of F runs after it. */
+    const inReturn = (x: ts.Node): boolean => {
+      for (let a = x.parent; a && a !== F; a = a.parent) {
+        if (ts.isArrowFunction(a) || ts.isFunctionExpression(a) || ts.isFunctionDeclaration(a)) return false;
+        if (ts.isReturnStatement(a)) return true;
+      }
+      return false;
+    };
+    /** May a mutation of `n` run after `at` (a use, or the creation of a function)? */
+    const later = (at: ts.Node): boolean => {
+      if (inReturn(at)) return false;
+      if (ws.some((w) => w.getStart() >= at.end || within(at, w))) return true;
+      // a loop around `at` (inside the variable's scope) runs the mutations in it again
+      for (let a = at.parent; a && a !== F; a = a.parent) {
+        if (ts.isForOfStatement(a) && !within(d, a) && ws.some((w) => within(w, a))) return true;
+      }
+      return false;
+    };
+    const checkRef = (r: ts.Identifier) => {
+      let top: ts.Node = r;
+      while (ts.isParenthesizedExpression(top.parent)) top = top.parent;
+      const p = top.parent;
+      // the receiver of a mutation statement
+      if (ts.isPropertyAccessExpression(p) && p.expression === top && ws.some((w) => w.expression === p)) return;
+      // referred to by a function that runs later
+      for (let g = fnOf(r); g && g !== F; g = fnOf(g)) {
+        if ((ts.isArrowFunction(g) || ts.isFunctionExpression(g)) && !isImmediateFn(g, env) && later(g)) {
+          fail(r, `this function refers to \`${nm}\`, which is mutated after the function is created: a JS closure sees the ${Name} as it is when the closure runs, not as it is here; copy it first (\`const ${nm}Now = new ${Name}(${nm});\`) and use the copy, or create the function after the last mutation`);
+        }
+      }
+      // reads: n.size, n.get(k), n.has(k), iteration consumed at once, copies
+      if (ts.isPropertyAccessExpression(p) && p.expression === top) {
+        const m = p.name.text;
+        if (m === "size") return;
+        if (["get", "has", "keys", "values", "entries"].includes(m) && ts.isCallExpression(p.parent) && p.parent.expression === p) return;
+      }
+      if (ts.isSpreadElement(p) && ts.isArrayLiteralExpression(p.parent)) return;
+      if (ts.isForOfStatement(p) && p.expression === top) return;
+      if (ts.isNewExpression(p) && p.arguments?.[0] === top && newKind(p, ck, tenv)) return;
+      if (ts.isCallExpression(p) && p.arguments[0] === top && isArrayFrom(p.expression, ck, tenv)) return;
+      // anything else makes an alias (stored, passed, rendered, returned from a callback, …)
+      if (later(r)) {
+        fail(r, `\`${nm}\` is used here (stored, passed or rendered) and mutated afterwards: in JS both refer to the same ${Name}, so the later mutation also changes what is used here (the translation would keep the earlier contents); do the mutations first, or use a copy here (new ${Name}(${nm}))`);
+      }
+    };
+    const visitRefs = (x: ts.Node) => {
+      if (ts.isIdentifier(x) && x !== d.name && varSymbol(ck, x) === sym) checkRef(x);
+      if (ts.isForOfStatement(x)) {
+        const root = iteratedRoot(x.expression);
+        if (root && varSymbol(ck, root) === sym) {
+          const w = ws.find((w) => within(w, x.statement));
+          if (w) fail(w, ITERATE_MUTATE_MSG(nm));
+        }
+      }
+      ts.forEachChild(x, visitRefs);
+    };
+    visitRefs(F ?? body);
+    freshMutable.add(d);
+  }
 }
 
 /** Path key for narrowing (identifier or property chain). */
@@ -297,6 +491,14 @@ function tsTypeOf(e: ts.Expression, env: Env): ts.Type | null {
       return ts.isNumericLiteral(i) && /^\d+$/.test(i.text) && Number(i.text) < args.length ? args[Number(i.text)] : null;
     }
     return ck.getIndexTypeOfType(base, ts.IndexKind.Number) ?? null;
+  }
+  // `r.get(k)` on a Map / Set whose TypeScript type is known (an unannotated `ensures` parameter)
+  if (ts.isCallExpression(e) && ts.isPropertyAccessExpression(e.expression) && !e.expression.questionDotToken && !e.questionDotToken) {
+    const base = tsTypeOf(e.expression.expression, env);
+    if (!base || !collectionKind(base, env.m.prog.typeEnv)) return null;
+    const p = ck.getPropertyOfType(base, e.expression.name.text);
+    const sigs = p ? ck.getSignaturesOfType(ck.getTypeOfSymbolAtLocation(p, e.expression), ts.SignatureKind.Call) : [];
+    return sigs.length === 1 && !sigs[0].typeParameters?.length ? sigs[0].getReturnType() : null;
   }
   return null;
 }
@@ -458,6 +660,8 @@ function hasOptPart(t: VType): boolean {
   if (t.k === "opt") return true;
   if (t.k === "arr") return hasOptPart(t.elem);
   if (t.k === "tuple") return t.elems.some(hasOptPart);
+  if (t.k === "map") return hasOptPart(t.key) || hasOptPart(t.val);
+  if (t.k === "set") return hasOptPart(t.elem);
   return false; // records, unions, enums: nominal (their fields' kinds are those of the declaration)
 }
 
@@ -477,6 +681,11 @@ function showWithKinds(vt: VType, t: ts.Type | null, env: Env): string {
   if (vt.k === "tuple" && t && ck.isTupleType(t)) {
     const args = ck.getTypeArguments(t as ts.TypeReference);
     return `[${vt.elems.map((e, i) => showWithKinds(e, args[i] ?? null, env)).join(", ")}]`;
+  }
+  if ((vt.k === "map" || vt.k === "set") && t) {
+    const args = collectionTypeArgs(t, ck);
+    const parts = vt.k === "map" ? [vt.key, vt.val] : [vt.elem];
+    if (args && args.length === parts.length) return `${vt.k === "map" ? "ReadonlyMap" : "ReadonlySet"}<${parts.map((p, i) => showWithKinds(p, args[i], env)).join(", ")}>`;
   }
   return showType(vt);
 }
@@ -525,6 +734,8 @@ function annotationFits(ann: VType, real: VType): boolean {
   if (ann.k === "num" && real.k === "int") return true;
   if ((ann.k === "opt" && real.k === "opt") || (ann.k === "arr" && real.k === "arr")) return annotationFits(ann.elem, real.elem);
   if (ann.k === "tuple" && real.k === "tuple") return ann.elems.length === real.elems.length && ann.elems.every((e, i) => annotationFits(e, real.elems[i]));
+  // (keys exactly: number is no key type)
+  if (ann.k === "map" && real.k === "map") return sameType(ann.key, real.key) && annotationFits(ann.val, real.val);
   return sameType(ann, real);
 }
 
@@ -684,6 +895,8 @@ function expr0(e: ts.Expression, env: Env, expected?: VType): Val {
       const ob = m.ob(e, "non-null", `\`${nodeText(e)}\` is not null/undefined`);
       return { code: `(Option.get ${paren(inner.code)} ${ob})`, type: inner.type.elem };
     }
+    case ts.SyntaxKind.NewExpression:
+      return newCollection(e as ts.NewExpression, env, expected);
     case ts.SyntaxKind.ArrowFunction:
     case ts.SyntaxKind.FunctionExpression:
       fail(e, "function values may only appear as event handlers, callbacks, or array-method arguments");
@@ -810,6 +1023,8 @@ function fieldOf(base: Val, name: string, node: ts.Node, env: Env): Val {
   const t = base.type;
   if (t.k === "arr" && name === "length") return { code: `(${paren(base.code)}.length : Int)`, type: T.int };
   if (t.k === "str" && name === "length") return { code: `(VReact.JS.strLen ${paren(base.code)})`, type: T.int };
+  if (t.k === "map" && name === "size") return { code: `(VReact.JS.JSMap.size ${paren(base.code)})`, type: T.int };
+  if (t.k === "set" && name === "size") return { code: `(VReact.JS.JSSet.size ${paren(base.code)})`, type: T.int };
   if (t.k === "rec") {
     const f = m.reg.rec(t).find((f) => f.name === name);
     if (!f) fail(node, `no field ${name} in ${showType(t)}`);
@@ -836,10 +1051,7 @@ function elementAccess(ea: ts.ElementAccessExpression, env: Env): Val {
     const i = Number(arg.text);
     const n = base.type.elems.length;
     if (i >= n) fail(arg, "tuple index out of range");
-    let code = paren(base.code);
-    for (let j = 0; j < i; j++) code = `${code}.2`;
-    if (i < n - 1) code = `${code}.1`;
-    return { code, type: base.type.elems[i] };
+    return { code: tupleProj(base.code, i, n), type: base.type.elems[i] };
   }
   if (base.type.k !== "arr") fail(ea, `indexing is only supported on arrays and tuples`);
   const idx = expr(arg, env, T.int);
@@ -1047,7 +1259,7 @@ function keepOperand(nt: { v: Val; obs: boolean }, result: string): string {
 
 /** VTS types whose JS values are never null or undefined (all but options and void). */
 function isPresentValue(t: VType): boolean {
-  return ["bool", "int", "num", "str", "enum", "rec", "union", "arr", "tuple"].includes(t.k);
+  return ["bool", "int", "num", "str", "enum", "rec", "union", "arr", "tuple", "map", "set"].includes(t.k);
 }
 
 /** The two operands of `===` / `!==` (not against null), at a common type JS compares by value. */
@@ -1072,6 +1284,7 @@ function eqOperands(b: ts.BinaryExpression, env: Env): { l: Val; r: Val } {
   if (l.type.k !== "num" && !isPrimitiveEq(l.type)) {
     const t = l.type.k === "opt" ? l.type.elem : l.type;
     if (["rec", "arr", "union", "tuple"].includes(t.k)) fail(b, `=== on ${showType(l.type)} compares object identity in JS; compare keys/fields instead`);
+    if (t.k === "map" || t.k === "set") fail(b, `=== on ${showType(l.type)} compares object identity in JS (a copy with the same entries is a different ${t.k === "map" ? "Map" : "Set"}); compare the contents instead (size, has, get, or the entries one by one)`);
     if (t.k === "num") fail(b, `=== on ${showType(l.type)} is not supported: narrow with !== null first, then compare the numbers`);
     fail(b, `=== is not supported on ${showType(l.type)}`);
   }
@@ -1192,9 +1405,11 @@ function arrayLiteral(a: ts.ArrayLiteralExpression, env: Env, expected?: VType):
   };
   for (const el of a.elements) {
     if (ts.isSpreadElement(el)) {
-      const v = expr(el.expression, env, elemT ? T.arr(elemT) : undefined);
+      // an array, a Map / Set, or an iterator consumed here (`[...m.keys()]`)
+      let v = iterated(el.expression, env, elemT ? T.arr(elemT) : undefined).v;
       if (v.type.k !== "arr") fail(el, "spread of a non-array");
       elemT = elemT ?? v.type.elem;
+      v = coerce(v, T.arr(elemT), el, env);
       flush();
       pieces.push(paren(v.code));
     } else {
@@ -1208,6 +1423,213 @@ function arrayLiteral(a: ts.ArrayLiteralExpression, env: Env, expected?: VType):
   const code = pieces.length === 0 ? "[]" : pieces.length === 1 ? pieces[0] : `(${pieces.join(" ++ ")})`;
   // ascribed, so that Lean never re-infers the element type (e.g. a fold over a literal)
   return { code: `(${code} : List ${leanType(elemT)})`, type: T.arr(elemT) };
+}
+
+/* ───────────────────────────── Map / Set ───────────────────────────── */
+
+/** Methods returning an iterator: consumed at once (see `iterated`). */
+const ITER_METHODS = new Set(["keys", "values", "entries"]);
+const ITER_MSG = (what: string) =>
+  `\`${what}\` is an iterator, which JS consumes once and which sees later changes of its Map/Set: use it at once — [...it], Array.from(it), for (… of it), new Map(it) / new Set(it) — and keep the resulting array`;
+const ITERATE_MUTATE_MSG = (n: string) =>
+  `\`${n}\` is mutated inside a for…of loop over it: JS visits the entries the loop adds (and skips those it deletes); iterate a copy instead: for (… of [...${n}])`;
+
+/**
+ * The list a JS iteration of `e` visits, where `e` is consumed at once (`[...e]`,
+ * `Array.from(e)`, `for (… of e)`, `new Map(e)` / `new Set(e)`): an array (itself), a Map (its
+ * entries `[k, v]`), a Set (its elements), or `m.keys()` / `m.values()` / `m.entries()` /
+ * `s.values()` / `s.keys()` — in insertion order.  `coll`: the Map / Set itself when `e` visits
+ * exactly its entries / elements (`new Map(m)` is a copy: the same value).
+ */
+function iterated(e: ts.Expression, env: Env, expectedArr?: VType): { v: Val; coll?: Val } {
+  const m = env.m;
+  const ck = m.checker;
+  const e0 = stripParens(e);
+  const kindOf = (x: ts.Expression) => collectionKind(ck.getNonNullableType(ck.getTypeAtLocation(x)), m.prog.typeEnv);
+  const ofColl = (c: Val, at: ts.Expression, method: string | null): { v: Val; coll?: Val } => {
+    const C = paren(c.code);
+    if (c.type.k === "opt") fail(at, `\`${nodeText(at, 30)}\` may be null or undefined (iterating it throws in JS): narrow it first`);
+    if (c.type.k === "map") {
+      if (method === "keys") return { v: { code: `(VReact.JS.JSMap.keys ${C})`, type: T.arr(c.type.key) } };
+      if (method === "values") return { v: { code: `(VReact.JS.JSMap.values ${C})`, type: T.arr(c.type.val) } };
+      return { v: { code: `(VReact.JS.JSMap.entries ${C})`, type: T.arr({ k: "tuple", elems: [c.type.key, c.type.val] }) }, coll: c };
+    }
+    if (c.type.k === "set") {
+      if (method === "entries") fail(at, "Set entries() (pairs [x, x]) is not supported: write [...s].map((x) => [x, x])");
+      return { v: { code: `(VReact.JS.JSSet.elems ${C})`, type: T.arr(c.type.elem) }, coll: c };
+    }
+    return { v: c };
+  };
+  if (ts.isCallExpression(e0) && ts.isPropertyAccessExpression(e0.expression) && ITER_METHODS.has(e0.expression.name.text)) {
+    const recvE = e0.expression.expression;
+    const name = e0.expression.name.text;
+    if (kindOf(recvE)) {
+      if (e0.questionDotToken || e0.expression.questionDotToken) fail(e0, `\`${nodeText(e0, 30)}\` may be undefined (iterating it throws in JS): narrow the ${"receiver"} first`);
+      arity(e0, name, 0, 0);
+      return ofColl(expr(recvE, env), recvE, name);
+    }
+    const rt = ck.getNonNullableType(ck.getTypeAtLocation(recvE));
+    if (ck.isArrayType(rt) || ck.isTupleType(rt)) fail(e0, `array iterators (keys/values/entries) are not modelled: use the array itself, or xs.map((x, i) => …) for the indices`);
+  }
+  if (kindOf(e0)) return ofColl(expr(e0, env), e0, null);
+  const v = expr(e0, env, expectedArr);
+  if (v.type.k === "str" || v.type.k === "enum") {
+    fail(e0, `iterating a string visits its code points (a character outside the BMP is one element), while VTS strings are UTF-16 code units: not modelled`);
+  }
+  return { v };
+}
+
+/**
+ * `new Map(…)` / `new Set(…)`: empty (types from the type arguments or the expected type), a
+ * copy of a Map / Set (the same value), or from an array or iteration of entries / elements
+ * (`JSMap.ofList`: a duplicate key keeps its first position and takes its last value;
+ * `JSSet.ofList`: first occurrences).
+ */
+function newCollection(ne: ts.NewExpression, env: Env, expected?: VType): Val {
+  const m = env.m;
+  const ck = m.checker;
+  const tenv = m.prog.typeEnv;
+  const kind = newKind(ne, ck, tenv);
+  if (!kind) fail(ne, `\`new\` is only supported for Map and Set in VTS: ${nodeText(ne, 40)}`);
+  const Name = kind === "map" ? "Map" : "Set";
+  const J = kind === "map" ? "JSMap" : "JSSet";
+  const params = kind === "map" ? "K, V" : "T";
+  const args = ne.arguments ?? [];
+  if (args.length > 1) fail(ne, `new ${Name}(…) takes at most one argument`);
+  let t: VType | undefined;
+  const ta = ne.typeArguments ?? [];
+  if (ta.length) {
+    if (kind === "map") {
+      if (ta.length !== 2) fail(ne, `write new Map<K, V>(…) with both type arguments`);
+      t = mapType(typeOfNode(ta[0], tenv, "MapKey"), typeOfNode(ta[1], tenv, "MapValue"), ne);
+    } else {
+      if (ta.length !== 1) fail(ne, `write new Set<T>(…) with one type argument`);
+      t = setType(typeOfNode(ta[0], tenv, "SetItem"), ne);
+    }
+  } else {
+    const exp = expected?.k === "opt" ? expected.elem : expected;
+    if (exp?.k === kind) t = exp;
+  }
+  // without type arguments and a type to infer them from, TypeScript types it Map<any, any> /
+  // Set<any> and checks nothing about what goes in (with an expected type, e.g. a `useState<T>`
+  // argument, the translation types it, and checks the argument, at that type)
+  const targs = collectionTypeArgs(ck.getTypeAtLocation(ne), ck);
+  if (!t && (!targs || targs.some((a) => containsAny(a, ck)))) {
+    fail(ne, `TypeScript types this \`${nodeText(ne, 30)}\` as ${Name}<${kind === "map" ? "any, any" : "any"}> (no type arguments, and nothing to infer them from), so it checks nothing about its ${kind === "map" ? "entries" : "elements"}: write new ${Name}<${params}>(…)`);
+  }
+  if (args.length === 0) {
+    if (!t) fail(ne, `the type of this empty ${Name} is not known here: write new ${Name}<${params}>()`);
+    return { code: `(VReact.JS.${J}.empty : ${leanType(t)})`, type: t };
+  }
+  const a = args[0];
+  if (isNullLit(stripParens(a))) fail(a, `new ${Name}(${nodeText(a)}) is an empty ${Name}: write new ${Name}<${params}>()`);
+  const elemOf = (x: VType): VType => (x.k === "map" ? { k: "tuple", elems: [x.key, x.val] } : (x as { elem: VType }).elem);
+  const it = iterated(a, env, t ? T.arr(elemOf(t)) : undefined);
+  if (it.coll && it.coll.type.k === kind) {
+    // a copy: the same entries in the same order
+    if (t && !sameType(it.coll.type, t)) fail(a, `type mismatch: expected ${showType(t)}, got ${showType(it.coll.type)}`);
+    return { code: it.coll.code, type: it.coll.type };
+  }
+  const v = it.v;
+  if (v.type.k !== "arr") fail(a, `new ${Name}(…) of a ${showType(v.type)} is not supported (only of an array, a Map, a Set, or their keys()/values()/entries())`);
+  if (!t) {
+    const el = v.type.elem;
+    if (kind === "map") {
+      if (el.k !== "tuple" || el.elems.length !== 2) fail(a, `new Map(…) takes [key, value] pairs (these elements are ${showType(el)}); with an array of pairs computed by a callback, give the types: new Map<K, V>(…)`);
+      t = mapType(el.elems[0], el.elems[1], a);
+    } else t = setType(el, a);
+  }
+  const w = coerce(v, T.arr(elemOf(t)), a, env);
+  return { code: `(VReact.JS.${J}.ofList ${paren(w.code)})`, type: t };
+}
+
+/** A method call on a Map / Set value `c` (receiver expression `recvE`). */
+function collectionMethod(name: string, c: Val, recvE: ts.Expression, call: ts.CallExpression, env: Env): Val {
+  const args = call.arguments;
+  const C = paren(c.code);
+  const ck = env.m.checker;
+  const t = c.type;
+  if (t.k !== "map" && t.k !== "set") throw new Error("internal: not a collection");
+  const isMap = t.k === "map";
+  const Name = isMap ? "Map" : "Set";
+  const J = isMap ? "JSMap" : "JSSet";
+  const key = t.k === "map" ? t.key : t.elem;
+  const what = nodeText(recvE, 30);
+  switch (name) {
+    case "get":
+      if (t.k !== "map") break;
+      arity(call, "get", 1, 1);
+      return { code: `(VReact.JS.JSMap.get ${C} ${paren(expr(args[0], env, key).code)})`, type: T.opt(t.val) };
+    case "has":
+      arity(call, "has", 1, 1);
+      return { code: `(VReact.JS.${J}.has ${C} ${paren(expr(args[0], env, key).code)})`, type: T.bool };
+    case "set":
+    case "add": {
+      if ((name === "set") !== isMap) break;
+      // a pure update of a fresh copy (`new Map(m).set(k, v)`); anything else mutates a shared object
+      if (!isFreshCollection(recvE, ck, env.m.prog.typeEnv)) {
+        fail(call, `${what}.${name}(…) mutates ${what}: copy it first, new ${Name}(${what}).${name}(…), or call it as a statement on a fresh local copy (const n = new ${Name}(${what}); n.${name}(…);)`);
+      }
+      if (t.k === "map") {
+        arity(call, "set", 2, 2);
+        const k = expr(args[0], env, key);
+        const v = expr(args[1], env, t.val);
+        return { code: `(VReact.JS.JSMap.set ${C} ${paren(k.code)} ${paren(v.code)})`, type: t };
+      }
+      arity(call, "add", 1, 1);
+      return { code: `(VReact.JS.JSSet.add ${C} ${paren(expr(args[0], env, key).code)})`, type: t };
+    }
+    case "delete":
+    case "clear":
+      fail(call, `${what}.${name}(…) mutates ${what} and returns ${name === "delete" ? "a boolean" : "undefined"}: VTS allows it only as a statement on a fresh local copy (const n = new ${Name}(${what}); n.${name}(…);)`);
+    case "keys":
+    case "values":
+    case "entries":
+      fail(call, ITER_MSG(nodeText(call, 40)));
+    case "forEach":
+      fail(call, `${Name}.forEach is not supported: write for (const ${isMap ? "[k, v]" : "x"} of ${what}) { … }`);
+  }
+  fail(call, `${Name} method ${name} is not modelled in VTS`);
+}
+
+/**
+ * `n.set(k, v);` / `n.add(x);` / `n.delete(k);` / `n.clear();` on a fresh local Map / Set (allowed
+ * by `checkCollectionMutation`): `n` is rebound to the updated value, as an assignment rebinds a
+ * `let`.  The arguments are evaluated before the mutation (`n.set(k, n.size)` reads the old size).
+ */
+function mutateLocal(c: ts.CallExpression, callee: ts.PropertyAccessExpression, kind: "map" | "set", env: Env, rest: (e: Env) => string): string {
+  const name = callee.name.text;
+  const recv = stripParens(callee.expression);
+  const Name = kind === "map" ? "Map" : "Set";
+  const J = kind === "map" ? "JSMap" : "JSSet";
+  const s = ts.isIdentifier(recv) ? symbolOf(env, recv) : undefined;
+  const b = s ? env.vars.get(s) : undefined;
+  if (!ts.isIdentifier(recv) || !s?.valueDeclaration || !freshMutable.has(s.valueDeclaration) || b?.k !== "val" || b.type.k !== kind) {
+    const what = nodeText(recv, 30);
+    fail(c, `${what}.${name}(…) mutates ${what}: only a local const initialised with new ${Name}(…) in this function (a fresh copy nothing else refers to) may be mutated; copy first: const n = new ${Name}(${what}); n.${name}(…);`);
+  }
+  const t = b.type;
+  const key = t.k === "map" ? t.key : (t as { elem: VType }).elem;
+  const args = c.arguments;
+  const X = paren(b.code);
+  let code: string;
+  if (name === "clear") {
+    arity(c, "clear", 0, 0);
+    code = `(VReact.JS.${J}.empty : ${leanType(t)})`;
+  } else if (name === "delete") {
+    arity(c, "delete", 1, 1);
+    code = `(VReact.JS.${J}.delete ${X} ${paren(expr(args[0], env, key).code)})`;
+  } else if (name === "set" && t.k === "map") {
+    arity(c, "set", 2, 2);
+    const k = expr(args[0], env, key);
+    const v = expr(args[1], env, t.val);
+    code = `(VReact.JS.JSMap.set ${X} ${paren(k.code)} ${paren(v.code)})`;
+  } else if (name === "add" && t.k === "set") {
+    arity(c, "add", 1, 1);
+    code = `(VReact.JS.JSSet.add ${X} ${paren(expr(args[0], env, key).code)})`;
+  } else fail(c, `${Name} has no method ${name}`);
+  const { env: e1, name: ln } = freshLocal(forgetNarrowing(env, s), leanIdent(recv.text));
+  return `(let ${ln}${letType(t)} := ${code!};\n${rest(bind(e1, s, { k: "val", code: ln, type: t }))})`;
 }
 
 /* ───────────────────────────── calls ───────────────────────────── */
@@ -1282,7 +1704,29 @@ export function bindParam(name: ts.BindingName, t: VType, env: Env, realTs?: ts.
     }
     return { env: e2, binder: ln };
   }
+  if (ts.isArrayBindingPattern(name)) {
+    // `([k, v]) => …`, `for (const [k, v] of m)`: the components of a tuple, exactly
+    if (t.k !== "tuple") fail(name, `array destructuring is only supported on tuples (this value is a ${showType(t)})`);
+    const n = t.elems.length;
+    if (name.elements.length !== n) fail(name, `destructure all ${n} elements of the tuple ${showType(t)} (an omitted element skips one, e.g. [, v])`);
+    const { env: e1, name: ln } = freshLocal(env, "tup");
+    let e2 = e1;
+    name.elements.forEach((el, i) => {
+      if (ts.isOmittedExpression(el)) return;
+      if (el.dotDotDotToken || el.initializer || !ts.isIdentifier(el.name)) fail(el, "only simple tuple destructuring [a, b] is supported (no default values, rest elements or nested patterns)");
+      e2 = bind(e2, symbolOf(env, el.name)!, { k: "val", code: tupleProj(ln, i, n), type: t.elems[i] });
+    });
+    return { env: e2, binder: ln };
+  }
   fail(name, "unsupported parameter pattern");
+}
+
+/** Component `i` of an `n`-tuple `x` (`A × B × C` is right-nested: `x.2.1` is the second). */
+function tupleProj(x: string, i: number, n: number): string {
+  let code = paren(x);
+  for (let j = 0; j < i; j++) code = `${code}.2`;
+  if (i < n - 1) code = `${code}.1`;
+  return code;
 }
 
 function call(c: ts.CallExpression, env: Env, expected?: VType): Val {
@@ -1319,13 +1763,26 @@ function call(c: ts.CallExpression, env: Env, expected?: VType): Val {
     const objE = callee.expression;
     // Math.*
     if (ts.isIdentifier(objE) && objE.text === "Math") return mathCall(mname, c, env, expected);
+    // Array.from(it): an array of what `it` iterates (the library's Array, not a user binding)
+    if (ts.isIdentifier(objE) && objE.text === "Array" && mname === "from" && isLibSymbol(resolved(env, symbolOf(env, objE)), m.prog.typeEnv)) {
+      arity(c, "Array.from", 1, 1, "a mapping function is not supported: write Array.from(x).map((y) => …)");
+      const v = iterated(args[0], env, expected?.k === "arr" ? expected : undefined).v;
+      if (v.type.k !== "arr") fail(args[0], `Array.from of a ${showType(v.type)} is not supported (only arrays, Maps, Sets and their keys()/values()/entries())`);
+      return v;
+    }
     if (ts.isIdentifier(objE) && objE.text === "props") {
       const s = symbolOf(env, objE);
       if (s && env.vars.get(s)?.k === "props") fail(c, "callbacks can only be invoked as statements inside an event handler");
     }
+    // an iterator (`m.keys()`, `s.values()`, …) is only consumed at once (see `iterated`)
+    if (ITER_METHODS.has(mname)) {
+      const rt = m.checker.getNonNullableType(m.checker.getTypeAtLocation(objE));
+      if (collectionKind(rt, m.prog.typeEnv) || m.checker.isArrayType(rt) || m.checker.isTupleType(rt)) fail(c, ITER_MSG(nodeText(c, 40)));
+    }
     const obj = expr(objE, env);
     if (obj.type.k === "arr") return arrayMethod(mname, obj, c, env, expected);
     if (obj.type.k === "str") return stringMethod(mname, obj, c, env);
+    if (obj.type.k === "map" || obj.type.k === "set") return collectionMethod(mname, obj, objE, c, env);
     if (obj.type.k === "opt") fail(c, `method call on a possibly-null value: narrow with !== null first`);
     fail(c, `method ${mname} not supported on ${showType(obj.type)}`);
   }
@@ -1755,13 +2212,14 @@ export function branch(c: ts.Expression, env: Env, onTrue: (e: Env) => string, o
       t = null;
     }
     if (t?.k === "opt") {
-      if (["rec", "arr", "union", "tuple"].includes(t.elem.k)) {
+      if (["rec", "arr", "union", "tuple", "map", "set"].includes(t.elem.k)) {
         return narrowBranch({ kind: "null", target: e, positive: false }, env, onTrue, onFalse);
       }
       fail(c, `truthiness of ${showType(t)} is ambiguous (0, "" and false are falsy): compare with null explicitly`);
     }
     // an object known to be non-null (narrowed) is truthy
     if (t && ["rec", "arr", "union", "tuple"].includes(t.k) && narrowedSome(env, e)) return onTrue(env);
+    if (t && (t.k === "map" || t.k === "set")) fail(c, `a ${t.k === "map" ? "Map" : "Set"} is always truthy, even when it is empty: test \`${nodeText(e, 30)}.size > 0\``);
   }
   const v = expr(e, env, T.bool);
   const h = env.m.fresh("h");
@@ -1955,6 +2413,21 @@ export function prop(e0: ts.Expression, env: Env): string {
       const lam = lambda(args[1], env, [xs.type.elem], undefined, [elemTsType(args[0], env) ?? undefined]);
       checkDistinctKey(e, lam.body.type);
       return `((${paren(xs.code)}.map ${lamCode(lam.typed, lam.body.code)}).Nodup)`;
+    }
+    // `m.has(k)` / `s.has(x)`: a membership
+    if (ts.isPropertyAccessExpression(e.expression) && e.expression.name.text === "has" && !e.expression.questionDotToken) {
+      let rt: VType | null = null;
+      try {
+        rt = typeOf(e.expression.expression, env);
+      } catch (err) {
+        if (!(err instanceof VtsError)) throw err;
+      }
+      if (rt?.k === "map" || rt?.k === "set") {
+        arity(e, "has", 1, 1);
+        const c = expr(e.expression.expression, env);
+        const k = expr(args[0], env, rt.k === "map" ? rt.key : rt.elem);
+        return `(${paren(k.code)} ∈ ${rt.k === "map" ? `(VReact.JS.JSMap.keys ${paren(c.code)})` : `(VReact.JS.JSSet.elems ${paren(c.code)})`})`;
+      }
     }
     if (ts.isPropertyAccessExpression(e.expression) && ["every", "some", "includes"].includes(e.expression.name.text)) {
       const xs = expr(e.expression.expression, env);
@@ -2240,6 +2713,12 @@ function varDecls(decls: ts.NodeArray<ts.VariableDeclaration>, j: number, env: E
     // bindParam created its own local name; re-bind to tmp
     return `(let ${r.binder}${letType(v.type)} := ${v.code};\n${next(r.env)})`;
   }
+  if (ts.isArrayBindingPattern(d.name)) {
+    // `const [k, v] = pair` on a tuple
+    const v = expr(init, env, declT);
+    const r = bindParam(d.name, v.type, env);
+    return `(let ${r.binder}${letType(v.type)} := ${v.code};\n${next(r.env)})`;
+  }
   if (!ts.isIdentifier(d.name)) fail(d, "unsupported destructuring");
   const v = declT?.k === "opt" ? exprPreferElem(init, env, declT) : expr(init, env, declT);
   return bindLocal(d.name, v, env, next, declT);
@@ -2440,6 +2919,11 @@ function exprStatement(e: ts.Expression, env: Env, bc: BlockCtx, rest: (e: Env) 
       const inner: BlockCtx = { ...bc, onDone: (e3) => rest({ ...env, handler: e3.handler, scope: e3.scope }) };
       return `(${lets}${block(stmts, 0, e2, inner, (e3) => rest({ ...env, handler: e3.handler, scope: e3.scope }))})`;
     }
+  }
+  // `n.set(k, v)` / `n.add(x)` / `n.delete(k)` / `n.clear()` on a fresh local Map / Set
+  if (ts.isPropertyAccessExpression(callee) && MUTATORS.has(callee.name.text)) {
+    const kind = collectionKind(m.checker.getNonNullableType(m.checker.getTypeAtLocation(callee.expression)), m.prog.typeEnv);
+    if (kind) return mutateLocal(e, callee, kind, env, rest);
   }
   if (ts.isPropertyAccessExpression(callee) && ["push", "pop", "shift", "unshift", "splice", "sort", "reverse", "fill", "copyWithin", "set", "delete", "add", "clear"].includes(callee.name.text)) {
     fail(e, `${callee.name.text} mutates the array/object; VTS data is immutable (use spread, filter, toSorted, toReversed, with)`);
@@ -2716,7 +3200,8 @@ function terminates(stmts: readonly ts.Statement[]): boolean {
 function forOf(s: ts.ForOfStatement, env: Env, bc: BlockCtx, rest: (e: Env) => string): string {
   const m = env.m;
   if (!ts.isVariableDeclarationList(s.initializer) || s.initializer.declarations.length !== 1) fail(s, "use for (const x of xs)");
-  const xs = expr(s.expression, env);
+  // an array, a Map (its entries), a Set, or an iterator (`m.keys()`, …): the list it visits
+  const xs = iterated(s.expression, env).v;
   if (xs.type.k !== "arr") fail(s.expression, "for…of over a non-array");
   // locals assigned in the body; `sw`: the innermost enclosing breakable statement (inside
   // the loop body) is a switch, so an unlabeled `break` there only ends the case
@@ -2730,6 +3215,13 @@ function forOf(s: ts.ForOfStatement, env: Env, bc: BlockCtx, rest: (e: Env) => s
       const sym = symbolOf(env, n.operand);
       if (sym && env.vars.has(sym) && !assigned.includes(sym)) assigned.push(sym);
     }
+    // a mutation statement `n.set(…)` of a fresh local Map / Set rebinds it (see mutateLocal)
+    const mr = mutationReceiver(n);
+    if (mr) {
+      const sym = symbolOf(env, mr);
+      const b = sym ? env.vars.get(sym) : undefined;
+      if (sym && b?.k === "val" && (b.type.k === "map" || b.type.k === "set") && !assigned.includes(sym)) assigned.push(sym);
+    }
     if (ts.isReturnStatement(n) || ts.isContinueStatement(n) || (ts.isBreakStatement(n) && (!!n.label || !sw))) fail(n, "return/break/continue inside for…of are not supported (a `break` may only end a switch case); use array methods (find, some, …)");
     if (ts.isCallExpression(n) && updateTarget(n.expression, env)) fail(n, "state updates inside loops are not supported; compute the new value, then update once");
     const inner = ts.isSwitchStatement(n) ? true : ts.isIterationStatement(n, false) ? false : sw;
@@ -2737,6 +3229,13 @@ function forOf(s: ts.ForOfStatement, env: Env, bc: BlockCtx, rest: (e: Env) => s
   };
   visit(s.statement);
   if (assigned.length === 0) fail(s, "loop has no effect (it assigns no local variable)");
+  // JS visits the entries a loop adds to the Map / Set it iterates (and skips deleted ones)
+  const iterRoot = iteratedRoot(s.expression);
+  const iterSym = iterRoot ? symbolOf(env, iterRoot) : undefined;
+  if (iterRoot && iterSym && assigned.includes(iterSym)) {
+    const ib = env.vars.get(iterSym);
+    if (ib?.k === "val" && (ib.type.k === "map" || ib.type.k === "set")) fail(s, ITERATE_MUTATE_MSG(iterRoot.text));
+  }
   const accTypes = assigned.map((sym) => (env.vars.get(sym) as { type: VType }).type);
   const accCodes = assigned.map((sym) => (env.vars.get(sym) as { code: string }).code);
   // fresh names for accumulator and element (what was known about the assigned locals is forgotten)

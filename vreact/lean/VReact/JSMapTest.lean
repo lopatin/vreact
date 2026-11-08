@@ -1,0 +1,168 @@
+import VReact.JSMap
+import VReact.Tactic
+import VReact.Budget
+import VReact.SelfTest
+/-! Regression tests of the automation on `JSMap`/`JSSet` goals (the shapes the translation of
+VTS Map/Set code produces), built with the library: a regression is a build error. -/
+set_option linter.unusedVariables false
+namespace VReact.JSMapTest.T1
+open VReact VReact.JS
+-- 1 get after set
+example (m : JSMap Int Int) (k v : Int) : (m.set k v).get k = some v := by vreact_auto
+-- 2 has after delete
+example (m : JSMap Int Int) (k : Int) : (m.delete k).has k = false := by vreact_auto
+-- 3 size after set
+example (m : JSMap Int Int) (k v : Int) (h : m.has k = false) : (m.set k v).size = m.size + 1 := by vreact_auto
+example (m : JSMap Int Int) (k v : Int) : m.size ≤ (m.set k v).size ∧ (m.set k v).size ≤ m.size + 1 := by vreact_auto
+-- 4 key membership
+example (m : JSMap Int Int) (k k' v : Int) (h : m.has k' = true) : (m.set k v).has k' = true := by vreact_auto
+-- 5 every over values after set
+example (m : JSMap Int Int) (k v : Int) (h : m.values.all (fun x => JS.le 0 x) = true) (hv : JS.le 0 v = true) :
+    (m.set k v).values.all (fun x => JS.le 0 x) = true := by vreact_auto
+-- 6 distinct keys / keyed rendering
+example (m : JSMap Int Int) (k v : Int) : (m.set k v).keys.Nodup := by vreact_auto
+example (m : JSMap Int JS.Str) : (m.entries.map (fun p => Key.int p.1)).Nodup := by vreact_auto
+example (m : JSMap Int JS.Str) (k : Int) (v : JS.Str) : ((m.set k v).entries.map (fun p => Key.int p.1)).Nodup := by vreact_auto
+-- 7 frame
+example (m : JSMap Int Int) (k v : Int) : ∀ k', k' ≠ k → (m.set k v).get k' = m.get k' := by vreact_auto
+-- 8 delete
+example (m : JSMap Int Int) (k : Int) : (m.delete k).get k = none := by vreact_auto
+example (m : JSMap Int Int) (k : Int) : Option.isNone ((m.delete k).get k) = true := by vreact_auto
+-- 9 keepsHolds
+example (m : JSMap Int Int) (id price : Int) :
+    m.entries.all (fun p => JS.eq p.1 id || JS.eq ((m.set id price).get p.1) (some p.2)) = true := by vreact_auto
+-- 10 literal maps
+example : (JSMap.ofList [((1 : Int), (10 : Int)), (2, 20)]).get 2 = some 20 := by vreact_auto
+example : (JSMap.ofList [((1 : Int), (10 : Int)), (1, 20)]).size = 1 := by vreact_auto
+example : (JSMap.ofList [(JS.Str.ofString "a", (10 : Int)), (JS.Str.ofString "b", 20)]).get (JS.Str.ofString "b") = some 20 := by vreact_auto
+-- 11 exact order (keys_set not in simp set: needs explicit lemma)
+example (a b c : Int) : ((((JSMap.empty : JSMap Int Int).set 1 a).set 2 b).set 1 c).keys = [1, 2] := by
+  simp only [JSMap.keys_set, JSMap.keys_empty]; decide
+-- 12 polymorphic
+example {K V : Type} [DecidableEq K] (m : JSMap K V) (k : K) (v : V) : (m.set k v).get k = some v ∧ (m.delete k).has k = false := by vreact_auto
+example {K V : Type} [DecidableEq K] (P : V → Bool) (m : JSMap K V) (k : K) (v : V)
+    (h : m.values.all P = true) (hv : P v = true) : ((m.set k v).delete k).values.all P = true ∧ (m.set k v).values.all P = true := by vreact_auto
+example {K V : Type} [DecidableEq K] (m : JSMap K V) (k : K) (v : V) (h : m.get k = some v) : m.has k = true := by vreact_auto
+-- 13 get after set of another key, then lookup known
+example (m : JSMap Int Int) (a b : Int) (hab : a ≠ b) (h : m.get a = some 5) : ((m.set b 7).get a) = some 5 := by vreact_auto
+-- 14 getD / match
+example (m : JSMap Int Int) (k : Int) (h : m.values.all (fun x => JS.le 0 x) = true) : 0 ≤ (m.get k).getD 0 := by vreact_auto
+example (m : JSMap Int Int) (k : Int) (h : m.values.all (fun x => JS.le 0 x) = true) :
+    (match m.get k with | some x => 0 ≤ x | none => True) := by vreact_auto
+-- Set
+example (s : JSSet Int) (x : Int) : (s.add x).has x = true ∧ (s.delete x).has x = false := by vreact_auto
+example (s : JSSet Int) (x : Int) (h : s.has x = false) : (s.add x).size = s.size + 1 := by vreact_auto
+example (s : JSSet Int) (x : Int) (h : s.has x = true) : (s.delete x).size = s.size - 1 := by vreact_auto
+example (s : JSSet Int) (x : Int) : ((if s.has x then s.delete x else s.add x).has x) = !(s.has x) := by vreact_auto
+example (s : JSSet Int) (x : Int) : ((s.add x).elems.map Key.int).Nodup := by vreact_auto
+example : (JSSet.ofList [(1 : Int), 2, 1]).size = 2 := by vreact_auto
+example {T : Type} [DecidableEq T] (s : JSSet T) (x y : T) (h : x ≠ y) : (s.add x).has y = s.has y := by vreact_auto
+end VReact.JSMapTest.T1
+namespace VReact.JSMapTest.T2
+open VReact VReact.JS
+structure Ui where
+  held : JSMap Int Int
+  collapsed : JSSet Int
+  heat : Int
+@[vreact_simp] def wf (u : Ui) : Prop := 1 ≤ u.heat ∧ u.held.values.all (fun p => JS.le 0 p) = true ∧ (u.collapsed.size ≤ 10)
+example (u : Ui) (id price : Int) (h : wf u) (hp : JS.le 0 price = true) : wf { u with held := u.held.set id price } := by vreact_auto
+example (u : Ui) (id price : Int) : ({ u with held := u.held.set id price }).held.get id = some price := by vreact_auto
+example (u : Ui) (id price : Int) : u.held.entries.all (fun h => JS.eq h.1 id || JS.eq (({ u with held := u.held.set id price }).held.get h.1) (some h.2)) = true := by vreact_auto
+example (u : Ui) (id : Int) : let r := (if u.collapsed.has id then { u with collapsed := u.collapsed.delete id } else { u with collapsed := u.collapsed.add id }); JS.eq (r.collapsed.has id) (!(u.collapsed.has id)) = true := by vreact_auto
+example (u : Ui) (id : Int) (h : wf u) : wf (if u.collapsed.has id then { u with collapsed := u.collapsed.delete id } else if JS.lt u.collapsed.size 10 then { u with collapsed := u.collapsed.add id } else u) := by vreact_auto
+example (m : JSMap Int Int) (a b : Int) : ((m.set a 1).set b 2).get a = if a = b then some 2 else some 1 := by vreact_auto
+example (m : JSMap Int Int) (cmp : Int → Int → Int) : ((JS.toSorted m.keys cmp).map Key.int).Nodup := by vreact_auto
+example (m : JSMap Int Int) (k : Int) : ((m.delete k).keys.filter (fun x => JS.lt 0 x)).length ≤ m.keys.length := by vreact_auto
+example (m : JSMap Int Int) (k : Int) (h : m.has k = true) : (m.delete k).size + 1 = m.size := by vreact_auto
+example {T : Type} (id : T → Int) (m : JSMap Int T) (x : T) (h : ∀ k v, m.get k = some v → id v = k) :
+    ∀ k v, (m.set (id x) x).get k = some v → id v = k := by vreact_auto
+example {T : Type} (id : T → Int) (xs : List T) (x : T) (h : x ∈ xs) :
+    (JSMap.ofList (xs.map (fun y => (id y, y)))).has (id x) = true := by vreact_auto
+example {T : Type} (id : T → Int) (xs : List T) (x : T) (hn : (xs.map id).Nodup) (h : x ∈ xs) :
+    (JSMap.ofList (xs.map (fun y => (id y, y)))).get (id x) = some x := by
+  vreact_auto
+-- whole-outcome shape
+example (u : Ui) (h : wf u) (id price : Int) (hp : JS.le 0 price = true) :
+    wf ((Outcome.mk (E := Empty) [fun t => { t with held := u.held.set id price }] none).apply u) := by vreact_auto
+-- 3 chained ops
+example (m : JSMap Int Int) (a b c : Int) (h : m.values.all (fun x => JS.le 0 x) = true) :
+    (((m.set a 1).delete b).set c 3).values.all (fun x => JS.le 0 x) = true := by vreact_auto
+example (m : JSMap Int Int) (a b c : Int) (habc : a ≠ b ∧ a ≠ c) :
+    (((m.set a 1).delete b).set c 3).get a = some 1 := by vreact_auto
+example (m : JSMap Int Int) (a b : Int) (h : m.has a = false) (hb : m.has b = false) (hab : a ≠ b) :
+    ((m.set a 1).set b 2).size = m.size + 2 := by vreact_auto
+end VReact.JSMapTest.T2
+namespace VReact.JSMapTest.T3
+open VReact VReact.JS
+structure Ui where
+  held : JSMap Int Int
+  collapsed : JSSet JS.Str
+deriving Repr, DecidableEq
+structure M2 (K V : Type) where
+  entries : List (K × V)
+  nodup : (entries.map Prod.fst).Nodup
+deriving DecidableEq
+-- false goals: must fail
+example : True := by
+  vreact_fails_showing_goal (∀ (m : JSMap Int Int) (k v : Int), (m.set k v).size = m.size + 1)
+  vreact_fails_showing_goal (∀ (m : JSMap Int Int) (k : Int), (m.delete k).size = m.size - 1)
+  vreact_fails_showing_goal (∀ (a b c : Int), ((((JSMap.empty : JSMap Int Int).set 1 a).set 2 b).set 1 c).keys = [2, 1])
+  vreact_fails_showing_goal (∀ (m : JSMap Int Int) (k k' v : Int), (m.set k v).get k' = some v)
+  vreact_fails_showing_goal (∀ (s : JSSet Int) (x y : Int), (s.delete x).has y = s.has y)
+  trivial
+end VReact.JSMapTest.T3
+namespace VReact.JSMapTest.T6
+open VReact VReact.JS
+set_option vreact.heartbeats 200000 in
+example (m : JSMap Int Int) (a b c d k : Int) (h : m.has k = true) : ((((m.set a 1).set b 2).set c 3).set d 4).has k = true := by vreact_ob vreact_auto
+set_option vreact.heartbeats 200000 in
+example (m : JSMap Int Int) (a b c d k : Int) (h : m.has k = true) (hk : k ≠ a ∧ k ≠ b ∧ k ≠ c ∧ k ≠ d) : ((((m.delete a).delete b).set c 3).delete d).has k = true := by vreact_ob vreact_auto
+set_option vreact.heartbeats 200000 in
+example (m : JSMap Int Int) (a b c d : Int) (h : m.values.all (fun x => JS.le 0 x) = true) :
+    ((((m.set a 1).delete b).set c 3).set d 4).values.all (fun x => JS.le 0 x) = true := by vreact_ob vreact_auto
+set_option vreact.heartbeats 200000 in
+example (m : JSMap Int Int) (a b c d : Int) :
+    ((((m.set a 1).set b 2).set c 3).set d 4).size ≤ m.size + 4 := by vreact_ob vreact_auto
+set_option vreact.heartbeats 200000 in
+example (m : JSMap Int Int) (a b c d : Int) :
+    ((((m.set a 1).set b 2).set c 3).set d 4).keys.length ≤ m.keys.length + 4 := by vreact_ob vreact_auto
+end VReact.JSMapTest.T6
+namespace VReact.JSMapTest.T7
+open VReact VReact.JS
+example (m : JSMap Int Int) (p : Int → Bool) (h : m.keys.Nodup) : (((JS.slice (m.keys.filter p) 1)).reverse.map Key.int).Nodup := by vreact_ob vreact_auto
+example (m : JSMap Int JS.Str) (cmp : Int × JS.Str → Int × JS.Str → Int) (h : (m.entries.map Prod.fst).Nodup) :
+    (((JS.toSorted m.entries cmp).filter (fun p => JS.lt 0 p.1)).map (fun p => Key.int p.1)).Nodup := by vreact_ob vreact_auto
+example (s : JSSet Int) (p : Int → Bool) (h : s.elems.Nodup) : (((JS.slice (s.elems.filter p) 1)).reverse.map Key.int).Nodup := by vreact_ob vreact_auto
+example (m : JSMap Int Int) (k : Int) : ((m.delete k).entries.filter (fun p => JS.lt 0 p.2)).length ≤ (m.entries.filter (fun p => JS.lt 0 p.2)).length := by vreact_ob vreact_auto
+end VReact.JSMapTest.T7
+namespace VReact.JSMapTest.T8
+open VReact VReact.JS
+example (m : JSMap Int Int) (p : Int → Bool) : (((JS.slice (m.keys.filter p) 1)).reverse.map Key.int).Nodup := by vreact_ob vreact_auto
+example (m : JSMap Int JS.Str) (cmp : Int × JS.Str → Int × JS.Str → Int) :
+    (((JS.toSorted m.entries cmp).filter (fun p => JS.lt 0 p.1)).map (fun p => Key.int p.1)).Nodup := by vreact_ob vreact_auto
+example (s : JSSet Int) (p : Int → Bool) : (((JS.slice (s.elems.filter p) 1)).reverse.map Key.int).Nodup := by vreact_ob vreact_auto
+example (m : JSMap Int Int) (k v : Int) (p : Int → Bool) : (((JS.slice ((m.set k v).keys.filter p) 1)).reverse.map Key.int).Nodup := by vreact_ob vreact_auto
+end VReact.JSMapTest.T8
+namespace VReact.JSMapTest.T9
+open VReact VReact.JS
+example (m : JSMap Int Int) (k v : Int) (p : Int → Bool) : (((JS.slice ((m.set k v).keys.filter p) 1)).reverse.map Key.int).Nodup := by vreact_ob vreact_auto
+example (m : JSMap Int Int) (k v : Int) (h : m.has k = false) : (m.set k v).keys = m.keys ++ [k] := by vreact_ob vreact_auto
+example (m : JSMap Int Int) (k v : Int) (h : m.has k = true) : (m.set k v).keys = m.keys := by vreact_ob vreact_auto
+example (m : JSMap Int Int) (k v : Int) (h : m.has k = false) : (m.set k v).keys.getLast? = some k := by vreact_ob vreact_auto
+example (m : JSMap Int Int) (a b : Int) (ha : m.has a = false) (hb : m.has b = false) (hab : a ≠ b) : ((m.set a 1).set b 2).keys = m.keys ++ [a, b] := by vreact_ob vreact_auto
+end VReact.JSMapTest.T9
+namespace VReact.JSMapTest.T10
+open VReact VReact.JS
+example (m : JSMap Int Int) (k : Int) (h : m.values.all (fun x => JS.le 0 x) = true) : 0 ≤ (m.get k).getD 0 := by vreact_ob vreact_auto
+example (xs : List Int) (h : xs.all (fun x => JS.le 0 x) = true) : 0 ≤ (xs.find? (fun x => JS.lt 3 x)).getD 0 := by vreact_ob vreact_auto
+example (m : JSMap Int Int) (k : Int) (h : m.values.all (fun x => JS.le 0 x) = true) : 0 ≤ (m.get k).getD 0 := by vreact_ob vreact_auto
+example (xs : List Int) (h : xs.all (fun x => JS.le 0 x) = true) : 0 ≤ (xs.find? (fun x => JS.lt 3 x)).getD 0 := by vreact_ob vreact_auto
+end VReact.JSMapTest.T10
+namespace VReact.JSMapTest.T11
+open VReact VReact.JS
+example (m : JSMap Int Int) (k : Int) (hk : m.has k = true) : (m.get k).isSome = true := by vreact_ob vreact_auto
+example (m : JSMap Int Int) (k : Int) (hk : m.has k = true) (h : m.values.all (fun x => JS.le 0 x) = true) :
+    0 ≤ Option.get (m.get k) (by simp [JSMap.has_def] at hk; cases hm : m.get k <;> simp_all [JSMap.get_eq_none_iff]) := by vreact_ob vreact_auto
+example (m : JSMap Int Int) (k : Int) (h : m.values.all (fun x => JS.le 0 x) = true) :
+    (match h₂ : m.get k with | some v => JS.le 0 v | none => true) = true := by vreact_ob vreact_auto
+end VReact.JSMapTest.T11

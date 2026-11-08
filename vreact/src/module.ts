@@ -168,7 +168,7 @@ export function translate(cfg: Config): TranslateResult {
   const checker = program.getTypeChecker();
   const fileSet = new Set(cfg.files.map((f) => path.resolve(f)));
   const nsOfFile = (f: string) => moduleNs(cfg.srcDir, f);
-  const prog = new Program(checker, cfg.root, (sf) => nsOfFile(sf.fileName));
+  const prog = new Program(checker, cfg.root, (sf) => nsOfFile(sf.fileName), (sf) => program.isSourceFileDefaultLibrary(sf));
   prog.holeEnvs = cfg.holeEnvs;
   const sfs = cfg.files.map((f) => program.getSourceFile(f)!);
   const counter = { n: 0 };
