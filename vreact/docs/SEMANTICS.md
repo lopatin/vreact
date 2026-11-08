@@ -70,9 +70,18 @@ function returning `{ readonly v: int }`). A value is widened where TypeScript
 allows it: an `int` to a `number`, a present value to an optional one, an array
 elementwise (`int[]` to `(int | null)[]`), an enum member to its string.
 
-Rejected: `any`, `as` casts, classes, `this`, mutation of objects/arrays,
-`==` (except `== null`), `===` on objects (reference identity), generics,
-exceptions (`try`), `var`, `while`, recursion (for now), recursive types,
+Function types and React nodes have no Lean value type: a function parameter or
+result, constant, state, local, data prop, callback parameter or `hole<T>()` whose
+type contains one (also inside an array, option, tuple or a record's fields) is
+rejected; only a direct field of a component's props may be a function (a
+callback, §2.4), and a record containing one is only a props type (it is not
+emitted as a Lean type). Types declared by a library (`Date`, `HTMLElement`, React's
+other types) are not VTS types, and an interface declared twice (TypeScript merges
+the declarations) is rejected.
+
+Rejected: `any`, `as` casts, classes, `this` (also `this` parameters), mutation of
+objects/arrays, `==` (except `== null`), `===` on objects (reference identity),
+generics, exceptions (`try`), `var`, `while`, recursion (for now), recursive types,
 `async`.
 
 ### 1.2 Expressions and statements — semantics by translation
@@ -131,6 +140,33 @@ Every expression maps to a Lean term whose value is the JavaScript value.
   statically (the value is not null); the operand is still evaluated, so its own
   obligations (`xs[5] === null`: the index; `g(x) != null`: g's precondition;
   `x! === null`: non-null) remain.
+* Builtins are recognised by the declaration a name resolves to, never by its
+  spelling: `undefined` is the checker's `undefined` symbol; `Math`, `String`,
+  `console`, `localStorage`, `document`, `setTimeout`/`setInterval`/
+  `clearTimeout`/`clearInterval` are globals declared only by library files
+  (TypeScript's standard library or installed packages); React's hooks and node
+  types (`ReactNode`, `ReactElement`, `JSX.Element`) are declarations of React's
+  type files, also through an import alias or namespace (`import { useState as
+  useS }`, `R.useState`); the `vreact/spec` functions and `int` are declarations
+  of the file `import … from "vreact/spec"` resolves to (an installed library),
+  also under an alias (`import { type int as I }` is `Int`); `ReadonlyArray`/`Array`
+  are the standard library's. A local, parameter, import or project declaration
+  spelled like one of them is that binding (`const undefined = 3` is 3; a project
+  `type int = number` is `number`; `import * as Math from "./m"` is not
+  JavaScript's Math, and a use of it is rejected).
+* Local helper functions are inlined with each parameter bound to its argument,
+  so default values, rest parameters, optional (`x?`) and `this` parameters —
+  each would give the parameter another value — are rejected.
+* Module initialisation: a module's top-level code runs in source order when it
+  is loaded (after the modules it imports, and re-exports `export … from` are
+  imports: no cycles), and a `const` read before its declaration has run throws a
+  ReferenceError. The Lean definitions are ordered by dependency, so VTS rejects
+  every constant initialiser, `export default x` and module-level `assert(…)` that
+  may read — directly or through the functions it calls, transitively — a
+  constant of the module declared at or below it (TypeScript checks only direct
+  reads); the lambdas of `ensures`/`callbackRequires`, which the running code
+  never calls, do not count. `export default` of an expression (code run at load)
+  is rejected; `export default x` of a name is a binding.
 * Names: a VTS identifier that is a Lean token, a root-level Lean name the
   generated code may use unqualified (`max`, `some`, `List`, …) or a fixed name of
   the generated code (`σ`, `props`, `h_pre`, …) is primed (`max'`; fields and
@@ -532,6 +568,17 @@ hook rules hold (static checks). For every function: its body is safe and its
   theorems are checked by Lean's kernel like everything else, but the macros,
   syntax and elaborators they declare run while the generated files are
   elaborated; the report trusts them not to forge Lean's output.
+* **The declarations of the libraries.** The program's types come from
+  TypeScript's standard library, installed packages (`node_modules`: React's
+  types, `vreact/spec`, and anything an installed package declares or augments,
+  e.g. a `declare module "react"` adding attributes) and the VTS sources, and the
+  translation trusts the library declarations to describe what runs. The
+  project cannot change them: VTS sources must be modules (a script's
+  declarations are global and its interfaces merge with the libraries'), and
+  `declare …`, `declare global`, `declare module`, namespaces and a project file
+  in the program that is not a VTS source (a `.d.ts` reached by `/// <reference
+  path>`, tsconfig `typeRoots`/`types`/`paths`) are rejected, as is
+  `/// <reference no-default-lib="true"/>`.
 * **The JS runtime model** (`JS.lean`): e.g. that `Array.prototype.slice` behaves
   like `JS.slice`. Definitions follow ECMA-262 directly; where ECMA-262 leaves a
   result implementation-defined (`toSorted` with an inconsistent comparator) the

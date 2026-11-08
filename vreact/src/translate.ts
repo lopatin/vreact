@@ -11,9 +11,9 @@
  * duplicate the continuation; `for…of` loops become folds.
  */
 import ts from "typescript";
-import { T, type VType, type Field, type Param, sameType, showType, leanType, sharedFields, type Variant, typeOfNode, kindsOfType, nullShape } from "./types.ts";
+import { T, type VType, type Field, type Param, sameType, showType, leanType, sharedFields, type Variant, typeOfNode, kindsOfType, nullShape, checkValueType } from "./types.ts";
 import { type Env, type Val, ModCtx, type Binding, type StateVar, type CompCtx, type HandlerAcc, type FnInfo, type CompInfo, type Global, type Narrowed, bind, extend, freshLocal } from "./ctx.ts";
-import { VtsError, fail, leanField, leanAccessor, leanIdent, leanStr, jsStr, leanInt, paren, nodeText, capitalize } from "./util.ts";
+import { VtsError, fail, leanField, leanAccessor, leanIdent, leanStr, jsStr, leanInt, paren, nodeText, capitalize, relLoc } from "./util.ts";
 
 /* ───────────────────────────── helpers ───────────────────────────── */
 
@@ -38,27 +38,33 @@ function resolved(env: Env, s: ts.Symbol | undefined): ts.Symbol | undefined {
   return s;
 }
 
-/** Name of a `vreact/spec` function if `callee` refers to one. */
+/**
+ * Name of the `vreact/spec` function `callee` refers to, by its declaration (through import
+ * aliases: `import { forall as all }` gives "forall"); a local or project function spelled like
+ * one is not.
+ */
 export function specFn(env: Env, callee: ts.Expression): string | null {
-  if (!ts.isIdentifier(callee)) return null;
-  const s = resolved(env, symbolOf(env, callee));
-  const d = s?.declarations?.[0];
-  if (d && /vreact[\\/](spec|lib)|vreact-spec/.test(d.getSourceFile().fileName)) return s!.name;
-  return null;
+  return env.m.prog.specName(callee);
 }
 
 const HOOKS = new Set(["useState", "useReducer", "useEffect", "useMemo", "useCallback", "useRef", "useContext", "useLayoutEffect", "useId", "useTransition", "useDeferredValue", "useSyncExternalStore", "useImperativeHandle"]);
 
-/** Name of a React hook if `callee` refers to one. */
+/**
+ * Name of the React hook `callee` (`useState`, `React.useState`, an import alias) refers to, by
+ * its declaration in React's types; a local or project function spelled like a hook is not one.
+ */
 export function hookName(env: Env, callee: ts.Expression): string | null {
-  let name: string | null = null;
-  if (ts.isIdentifier(callee)) name = callee.text;
-  else if (ts.isPropertyAccessExpression(callee) && ts.isIdentifier(callee.expression) && callee.expression.text === "React") name = callee.name.text;
-  if (!name || !HOOKS.has(name)) return null;
-  const s = resolved(env, symbolOf(env, ts.isPropertyAccessExpression(callee) ? callee.name : callee));
-  const d = s?.declarations?.[0];
-  if (d && /node_modules[\\/](@types[\\/])?react[\\/]/.test(d.getSourceFile().fileName)) return name;
-  return name; // be permissive: a user function called use* is treated as a hook too
+  const n = ts.isPropertyAccessExpression(callee) ? callee.name : callee;
+  const name = env.m.prog.reactName(n);
+  return name && HOOKS.has(name) ? name : null;
+}
+
+/** Globals the translation gives a meaning (for the message when a binding of the program is spelled like one). */
+const BUILTIN_NAMES = new Set(["undefined", "Math", "String", "Array", "console", "localStorage", "document", "setTimeout", "setInterval", "clearTimeout", "clearInterval"]);
+
+/** Does `n` refer to the JavaScript global `name` (`Math`, `console`, …; see `Program.isGlobal`)? */
+export function isGlobal(env: Env, n: ts.Node, name: string): boolean {
+  return env.m.prog.isGlobal(n, name);
 }
 
 function globalOf(env: Env, node: ts.Node): Global | undefined {
@@ -226,8 +232,9 @@ function narrowedSome(env: Env, e: ts.Expression): boolean {
   return !!n && (n.kind === "some" || n.kind === "variant");
 }
 
-function isNullLit(e: ts.Expression): boolean {
-  return e.kind === ts.SyntaxKind.NullKeyword || (ts.isIdentifier(e) && e.text === "undefined");
+/** `null`, or the global `undefined` (not a binding spelled `undefined`). */
+function isNullLit(e: ts.Expression, env: Env): boolean {
+  return e.kind === ts.SyntaxKind.NullKeyword || isGlobal(env, e, "undefined");
 }
 
 function stripParens(e: ts.Expression): ts.Expression {
@@ -236,17 +243,17 @@ function stripParens(e: ts.Expression): ts.Expression {
 }
 
 /** A conditional expression with a `null`/`undefined` leaf (`c ? x : null`, `c ? x : d ? y : null`). */
-function hasNullLeaf(e: ts.Expression): boolean {
+function hasNullLeaf(e: ts.Expression, env: Env): boolean {
   e = stripParens(e);
-  if (isNullLit(e)) return true;
-  return ts.isConditionalExpression(e) && (hasNullLeaf(e.whenTrue) || hasNullLeaf(e.whenFalse));
+  if (isNullLit(e, env)) return true;
+  return ts.isConditionalExpression(e) && (hasNullLeaf(e.whenTrue, env) || hasNullLeaf(e.whenFalse, env));
 }
 
 /** The type of some non-null leaf of a conditional (typed in its narrowed environment, nothing emitted). */
 function nonNullLeafType(e: ts.Expression, env: Env): VType | undefined {
   e = stripParens(e);
-  if (isNullLit(e)) return undefined;
-  if (ts.isConditionalExpression(e) && hasNullLeaf(e)) {
+  if (isNullLit(e, env)) return undefined;
+  if (ts.isConditionalExpression(e) && hasNullLeaf(e, env)) {
     let ot: VType | undefined;
     const c = e;
     const dry = { ...env, m: dryCtx(env.m) };
@@ -641,7 +648,7 @@ function expr0(e: ts.Expression, env: Env, expected?: VType): Val {
     case ts.SyntaxKind.ConditionalExpression: {
       const c = e as ts.ConditionalExpression;
       let ty: VType | undefined = expected;
-      if (!ty && hasNullLeaf(c)) {
+      if (!ty && hasNullLeaf(c, env)) {
         // `c ? x : null` (also nested: `c ? x : d ? y : null`): type a non-null leaf in its
         // (narrowed) environment, without emitting anything
         const ot = nonNullLeafType(c, env);
@@ -712,7 +719,7 @@ function toStr(v: Val, node: ts.Node): string {
 }
 
 function identifier(id: ts.Identifier, env: Env, expected?: VType, symOverride?: ts.Symbol): Val {
-  if (id.text === "undefined") {
+  if (isGlobal(env, id, "undefined")) {
     if (!expected || expected.k !== "opt") fail(id, "undefined needs an expected type T | undefined");
     return { code: `(none : ${leanType(expected)})`, type: expected };
   }
@@ -737,6 +744,9 @@ function identifier(id: ts.Identifier, env: Env, expected?: VType, symOverride?:
     return { code: g.info.qname, type: g.info.type };
   }
   if (g?.k === "fn") fail(id, "functions are not first-class in VTS; call the function instead");
+  if (BUILTIN_NAMES.has(id.text) && !isGlobal(env, id, id.text)) {
+    fail(id, `\`${id.text}\` here is not JavaScript's global ${id.text}: it is ${s?.declarations?.length ? `declared at ${relLoc(s.declarations[0], env.m.prog.root)}` : "a binding of this program"} (a name is recognised by its declaration, not its spelling); rename it`);
+  }
   fail(id, `unknown or unsupported identifier \`${id.text}\` (only locals, props, state, and verified top-level declarations can be referenced)`);
 }
 
@@ -921,7 +931,7 @@ function binary(b: ts.BinaryExpression, env: Env, expected?: VType): Val {
     const l = expr(b.left, env);
     if (l.type.k !== "opt" && isPresentValue(l.type)) return l; // present (e.g. narrowed): the fallback is not evaluated
     if (l.type.k !== "opt") fail(b, "?? on a non-optional value");
-    if (isNullLit(stripParens(b.right))) return l;
+    if (isNullLit(stripParens(b.right), env)) return l;
     // an optional fallback (`a ?? b ?? 0` is `(a ?? b) ?? 0`): the first present value
     let rt: VType | null = null;
     try {
@@ -1020,11 +1030,11 @@ function nullTest(b: ts.BinaryExpression, env: Env): { v: Val; isNull: boolean |
   const K = ts.SyntaxKind;
   const op = b.operatorToken.kind;
   if (op === K.EqualsEqualsToken || op === K.ExclamationEqualsToken) {
-    if (!isNullLit(b.left) && !isNullLit(b.right)) fail(b, "use === / !== (loose equality is only allowed against null)");
+    if (!isNullLit(b.left, env) && !isNullLit(b.right, env)) fail(b, "use === / !== (loose equality is only allowed against null)");
   }
-  if (!isNullLit(b.right) && !isNullLit(b.left)) return null;
-  const lit = isNullLit(b.right) ? b.right : b.left;
-  const other = isNullLit(b.right) ? b.left : b.right;
+  if (!isNullLit(b.right, env) && !isNullLit(b.left, env)) return null;
+  const lit = isNullLit(b.right, env) ? b.right : b.left;
+  const other = isNullLit(b.right, env) ? b.left : b.right;
   const before = env.m.obCount();
   const v = expr(other, env);
   const obs = env.m.obCount() > before;
@@ -1256,6 +1266,9 @@ export function lambda(
  */
 export function bindParam(name: ts.BindingName, t: VType, env: Env, realTs?: ts.Type | null | "declared"): { env: Env; binder: string } {
   const p = name.parent;
+  // TypeScript's `this` parameter is not a parameter (it types the receiver): the arguments go
+  // to the parameters after it
+  if (ts.isIdentifier(name) && name.text === "this" && ts.isParameter(p)) fail(p, "a `this` parameter is not supported (it is not a parameter: JS passes the receiver, and VTS has no `this`)");
   if (realTs !== "declared" && ts.isParameter(p) && (ts.isArrowFunction(p.parent) || ts.isFunctionExpression(p.parent))) {
     const fn = p.parent;
     const real = realTs !== undefined ? realTs : (contextualParamTsTypes(fn, env)?.[fn.parameters.indexOf(p)] ?? null);
@@ -1311,14 +1324,14 @@ function call(c: ts.CallExpression, env: Env, expected?: VType): Val {
       m.deps.add(info.qname);
       return { code: `(${info.qname}${as.map((a) => " " + a).join("")}${ob})`, type: info.ret };
     }
-    if (callee.text === "String" && args.length === 1) return { code: toStr(expr(args[0], env), args[0]), type: T.str };
+    if (isGlobal(env, callee, "String") && args.length === 1) return { code: toStr(expr(args[0], env), args[0]), type: T.str };
     fail(c, `call to \`${callee.text}\` is not supported (only verified top-level functions, local helper arrows, and modelled library methods)`);
   }
   if (ts.isPropertyAccessExpression(callee)) {
     const mname = callee.name.text;
     const objE = callee.expression;
     // Math.*
-    if (ts.isIdentifier(objE) && objE.text === "Math") return mathCall(mname, c, env, expected);
+    if (isGlobal(env, objE, "Math")) return mathCall(mname, c, env, expected);
     if (ts.isIdentifier(objE) && objE.text === "props") {
       const s = symbolOf(env, objE);
       if (s && env.vars.get(s)?.k === "props") fail(c, "callbacks can only be invoked as statements inside an event handler");
@@ -1332,8 +1345,26 @@ function call(c: ts.CallExpression, env: Env, expected?: VType): Val {
   fail(c, `unsupported call ${nodeText(c)}`);
 }
 
+/**
+ * The parameters of a local helper function (`const h = (x: T) => …`, `useCallback`), which is
+ * inlined at its calls with each parameter bound to its argument: a default value (used by JS
+ * when the argument is undefined), a rest parameter (an array of the remaining arguments), an
+ * optional parameter (`x?: T` receives `T | undefined`) and a `this` parameter (not a parameter)
+ * would each give the parameter another value.
+ */
+export function checkHelperParams(fn: ts.ArrowFunction | ts.FunctionExpression) {
+  for (const p of fn.parameters) {
+    const pname = p.name.getText();
+    if (pname === "this") fail(p, "a `this` parameter is not supported (it is not a parameter: JS passes the receiver, and VTS has no `this`)");
+    if (p.dotDotDotToken) fail(p, `rest parameter \`...${pname}\` is not supported (JS collects the remaining arguments into an array): take an array parameter instead`);
+    if (p.initializer) fail(p.initializer, `a default value for parameter \`${pname}\` is not supported (JS uses it when the argument is undefined): pass the value at every call`);
+    if (p.questionToken) fail(p, `optional parameter \`${pname}?\` is not supported: declare it \`${pname}: T | undefined\` and pass it at every call`);
+  }
+}
+
 function inlineClosure(b: Extract<Binding, { k: "closure" }>, c: ts.CallExpression, env: Env, expected?: VType): Val {
   const fn = b.fn;
+  checkHelperParams(fn);
   if (fn.parameters.length !== c.arguments.length) fail(c, "arity mismatch");
   // Evaluate the arguments in the caller env, bind them in the closure's env.
   let lets = "";
@@ -1652,6 +1683,7 @@ function specCall(name: string, c: ts.CallExpression, env: Env): Val {
       // an unfilled synthesis placeholder: translated as `sorry` (reported INCOMPLETE)
       const t = c.typeArguments?.[0] ? typeOfNode(c.typeArguments[0], env.m.prog.typeEnv, "Hole") : undefined;
       if (!t) fail(c, "write hole<T>() with an explicit type");
+      checkValueType(c.typeArguments![0], t, env.m.reg, "the hole's type");
       // vreact synth types its candidates with the narrowing in effect here
       if (!env.m.dry) env.m.prog.holeEnvs?.push({ node: c, env });
       return { code: `(sorry : ${leanType(t)})`, type: t };
@@ -1687,11 +1719,11 @@ function narrowTest(e: ts.Expression, env: Env): NarrowTest | null {
     const k = e.operatorToken.kind;
     if (!(isEqOp(k) || isNeqOp(k))) return null;
     const neg = isNeqOp(k);
-    if (isNullLit(e.right) || isNullLit(e.left)) {
-      const target = isNullLit(e.right) ? e.left : e.right;
+    if (isNullLit(e.right, env) || isNullLit(e.left, env)) {
+      const target = isNullLit(e.right, env) ? e.left : e.right;
       const key = pathKey(env, target);
       if (!key) return null;
-      if (env.narrow.get(key)?.kind !== "some") checkStrictNullTest(e, target, isNullLit(e.right) ? e.right : e.left, k, env);
+      if (env.narrow.get(key)?.kind !== "some") checkStrictNullTest(e, target, isNullLit(e.right, env) ? e.right : e.left, k, env);
       return { kind: "null", target, positive: !neg };
     }
     // x.kind === "lit"
@@ -2195,8 +2227,13 @@ function varDecls(decls: ts.NodeArray<ts.VariableDeclaration>, j: number, env: E
   const declT = d.type ? typeOfNode(d.type, env.m.prog.typeEnv, ts.isIdentifier(d.name) ? capitalize(d.name.text) : "Local") : undefined;
   // local arrow function: a closure (inlined at use sites)
   if ((ts.isArrowFunction(init) || ts.isFunctionExpression(init)) && ts.isIdentifier(d.name)) {
+    checkHelperParams(init);
     return next(bind(env, symbolOf(env, d.name)!, { k: "closure", fn: init, env }));
   }
+  // a data value (not a JSX element, nor a function: above, and useCallback below)
+  const isJsxInit = ts.isJsxElement(init) || ts.isJsxSelfClosingElement(init) || ts.isJsxFragment(init);
+  const isCallback = ts.isCallExpression(init) && hookName(env, init.expression) === "useCallback";
+  if (declT && !isJsxInit && !isCallback) checkValueType(d.type!, declT, env.m.reg, `\`${d.name.getText()}\``);
   // useMemo / useCallback: only as top-level hook declarations of a component (Rules of Hooks:
   // React matches hooks by call order, so a hook in a branch, loop, handler or after an early
   // return reads another call's cached value or throws)
@@ -2207,6 +2244,7 @@ function varDecls(decls: ts.NodeArray<ts.VariableDeclaration>, j: number, env: E
   if (ts.isCallExpression(init) && hookName(env, init.expression) === "useCallback" && ts.isIdentifier(d.name)) {
     const fn = init.arguments[0];
     if (!fn || !(ts.isArrowFunction(fn) || ts.isFunctionExpression(fn))) fail(init, "useCallback needs an inline function");
+    checkHelperParams(fn);
     checkDeps(fn, init.arguments[1], env, "useCallback");
     return next(bind(env, symbolOf(env, d.name)!, { k: "closure", fn, env }));
   }
@@ -2347,7 +2385,7 @@ function exprStatement(e: ts.Expression, env: Env, bc: BlockCtx, rest: (e: Env) 
   if (ts.isBinaryExpression(e)) {
     const k = e.operatorToken.kind;
     if (k === ts.SyntaxKind.EqualsToken) {
-      if (ts.isPropertyAccessExpression(e.left) && e.left.getText() === "document.title") return rest(env); // external effect
+      if (ts.isPropertyAccessExpression(e.left) && e.left.name.text === "title" && isGlobal(env, e.left.expression, "document")) return rest(env); // external effect
       return assignLocal(e.left, (_old, declared) => (declared.k === "opt" ? exprPreferElem(e.right, env, declared) : expr(e.right, env, declared)), env, rest, e);
     }
     if (k === ts.SyntaxKind.PlusEqualsToken || k === ts.SyntaxKind.MinusEqualsToken) {
@@ -2398,9 +2436,8 @@ function exprStatement(e: ts.Expression, env: Env, bc: BlockCtx, rest: (e: Env) 
   }
   // console.*, e.preventDefault(), localStorage writes: external, no effect on component state
   if (ts.isPropertyAccessExpression(callee)) {
-    const objText = callee.expression.getText();
-    if (objText === "console") return rest(env);
-    if (objText === "localStorage" && callee.name.text === "setItem") return rest(env);
+    if (isGlobal(env, callee.expression, "console")) return rest(env);
+    if (isGlobal(env, callee.expression, "localStorage") && callee.name.text === "setItem") return rest(env);
     if (["preventDefault", "stopPropagation"].includes(callee.name.text) && ts.isIdentifier(callee.expression)) {
       const s = symbolOf(env, callee.expression);
       if (s && env.vars.get(s)?.k === "event") return rest(env);
@@ -2422,6 +2459,8 @@ function exprStatement(e: ts.Expression, env: Env, bc: BlockCtx, rest: (e: Env) 
     const b = s ? env.vars.get(s) : undefined;
     if (b?.k === "closure" && bc.kind === "handler") {
       const fn = b.fn;
+      checkHelperParams(fn);
+      if (fn.parameters.length !== e.arguments.length) fail(e, `${callee.text} takes ${fn.parameters.length} argument(s), not ${e.arguments.length}`);
       let e2: Env = { ...b.env, handler: env.handler, scope: env.scope, curState: undefined };
       let lets = "";
       fn.parameters.forEach((p, i) => {
@@ -2809,6 +2848,7 @@ export function handlerFn(fnExpr: ts.Expression, env: Env, kind: "discrete" | "r
     const p = fnExpr.parameters[0];
     if (p) {
       if (!ts.isIdentifier(p.name)) fail(p, "destructuring the event object is not supported");
+      if (p.name.text === "this" || p.dotDotDotToken) fail(p, "an event handler's parameter is the event: a plain parameter `(e) => …` (not `this` or a rest parameter)");
       const r = freshLocal(e1, leanIdent(p.name.text));
       e1 = bind(r.env, symbolOf(env, p.name)!, { k: "event", leanVar: r.name });
       params.push(r.name);

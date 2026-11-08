@@ -1,4 +1,5 @@
 import ts from "typescript";
+import path from "node:path";
 import { fail, leanField, leanAccessor, leanIdent, leanStr, jsStr, capitalize, subscripted, INSTANCE_NAME_RE } from "./util.ts";
 
 /**
@@ -268,6 +269,50 @@ export function leanType(t: VType): string {
   }
 }
 
+/**
+ * The part of `t` that is not a data value — a function type or a React node, also inside arrays,
+ * options, tuples and the fields of named records and unions — described for a message, or
+ * null.  Such types have no Lean value type: they may only be callback props (and a record
+ * containing one only a props type).
+ */
+export function nonValuePart(t: VType, reg: TypeRegistry, seen = new Set<string>()): string | null {
+  switch (t.k) {
+    case "fn":
+      return `the function type ${showType(t)}`;
+    case "node":
+      return "a React node (ReactNode / JSX.Element)";
+    case "arr":
+    case "opt":
+      return nonValuePart(t.elem, reg, seen);
+    case "tuple":
+      for (const e of t.elems) {
+        const p = nonValuePart(e, reg, seen);
+        if (p) return p;
+      }
+      return null;
+    case "rec":
+    case "union": {
+      if (seen.has(t.name)) return null;
+      seen.add(t.name);
+      const d = reg.get(t.name).def;
+      const fields = d.k === "rec" ? d.fields : d.k === "union" ? d.variants.flatMap((v) => v.fields) : [];
+      for (const f of fields) {
+        const p = nonValuePart(f.type, reg, seen);
+        if (p) return `${p} (field ${f.name} of ${showType(t)})`;
+      }
+      return null;
+    }
+    default:
+      return null;
+  }
+}
+
+/** Reject a type with no Lean value type (see `nonValuePart`) where a data value is needed. */
+export function checkValueType(node: ts.Node, t: VType, reg: TypeRegistry, what: string): void {
+  const p = nonValuePart(t, reg);
+  if (p) fail(node, `${what} has ${p}, which is not data (functions are not first-class in VTS, and React nodes are only rendered): only a direct field of a component's props may be a function (a callback prop)`);
+}
+
 /** Whether Lean can derive `DecidableEq` (Floats and functions cannot). */
 export function hasDecEq(t: VType, reg: TypeRegistry, seen = new Set<string>()): boolean {
   switch (t.k) {
@@ -358,8 +403,14 @@ export interface TypeEnv {
   reg: TypeRegistry;
   /** Lean namespace for types declared in the given source file. */
   nsOf(sf: ts.SourceFile): string;
-  /** Whether a type reference denotes `int` from vreact/spec. */
+  /** Whether a type reference denotes `int` from vreact/spec (by its declaration, not its spelling). */
   isSpecInt(node: ts.TypeReferenceNode): boolean;
+  /** The name, among `names`, of the TypeScript lib type a reference denotes (`ReadonlyArray`), if it does. */
+  isLibType(node: ts.TypeReferenceNode, names: readonly string[]): string | null;
+  /** The name, among `names`, of the React type a reference denotes (`ReactNode`, `JSX.Element`), if it does. */
+  isReactType(node: ts.TypeReferenceNode, names: readonly string[]): string | null;
+  /** A file of TypeScript's standard library or an external library (not the project's). */
+  isLibraryFile(sf: ts.SourceFile): boolean;
 }
 
 export function typeOfNode(node: ts.TypeNode, env: TypeEnv, hint: string): VType {
@@ -413,12 +464,14 @@ export function typeOfNode(node: ts.TypeNode, env: TypeEnv, hint: string): VType
 
 function typeRef(node: ts.TypeReferenceNode, env: TypeEnv, hint: string): VType {
   const name = node.typeName.getText();
+  // builtins by the declaration the name resolves to (a project type spelled `int` or
+  // `ReadonlyArray` is the project's own)
   if (env.isSpecInt(node)) return T.int;
   const args = node.typeArguments ?? [];
-  if ((name === "ReadonlyArray" || name === "Array") && args.length === 1) {
+  if (env.isLibType(node, ["ReadonlyArray", "Array"]) && args.length === 1) {
     return T.arr(typeOfNode(args[0], env, hint + "Item"));
   }
-  if (["ReactNode", "React.ReactNode", "JSX.Element", "React.JSX.Element", "ReactElement", "React.ReactElement"].includes(name)) {
+  if (env.isReactType(node, ["ReactNode", "ReactElement", "Element"])) {
     return T.node;
   }
   let sym = env.checker.getSymbolAtLocation(node.typeName);
@@ -427,6 +480,8 @@ function typeRef(node: ts.TypeReferenceNode, env: TypeEnv, hint: string): VType 
   const decl = sym.declarations?.[0];
   if (!decl) fail(node, `cannot resolve type ${name}`);
   if (args.length) fail(node, `generic type ${name}<…> not supported in VTS`);
+  // a library's own type (DOM, React, vreact/spec other than the ones above): not a VTS type
+  if (env.isLibraryFile(decl.getSourceFile())) fail(node, `type ${name} (declared by a library, ${path.basename(decl.getSourceFile().fileName)}) is not supported in VTS`);
   if (inProgress.has(decl)) fail(node, `type ${name} refers to itself: recursive types are not supported in VTS (use an array of records with ids, e.g. a parent id field)`);
   return typeOfDecl(decl, env);
 }
@@ -451,6 +506,9 @@ function typeOfDecl0(decl: ts.Declaration, env: TypeEnv): VType {
   const sf = decl.getSourceFile();
   if (ts.isInterfaceDeclaration(decl)) {
     if (decl.typeParameters?.length) fail(decl, "generic interfaces are not supported in VTS");
+    // declaration merging: TypeScript's type has the members of every declaration
+    const n = env.checker.getSymbolAtLocation(decl.name)?.declarations?.filter((d) => ts.isInterfaceDeclaration(d)).length ?? 1;
+    if (n > 1) fail(decl, `interface ${decl.name.text} is declared ${n} times (TypeScript merges the declarations of an interface): declare it once`);
     if (decl.heritageClauses?.length) fail(decl, "interface inheritance is not supported in VTS; use a type alias");
     return recordFromMembers(decl.members, env, decl.name.text, decl, sf, decl);
   }

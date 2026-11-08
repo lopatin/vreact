@@ -1,5 +1,5 @@
 // expect: reject a command button <button> (commandfor/command
-/// <reference path="./invokers.d.ts" />
+/// <reference types="invokers" />
 // No onClick anywhere: a click on the nested invoker runs its command (onCancel) and,
 // through DOMActivate, the enclosing submit button submits (onSubmit): Chromium 152,
 // one programmatic click, n = 2.

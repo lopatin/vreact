@@ -1,4 +1,7 @@
 import ts from "typescript";
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { TypeRegistry, type VType, type Param, type Field, type TypeEnv } from "./types.ts";
 import { relLoc, nodeText, subscripted } from "./util.ts";
 
@@ -149,32 +152,122 @@ export interface Env {
   remaining?: Map<string, string[]>;
 }
 
-/** Per-program translation context. */
+/** The module of the contract functions and `int`. */
+export const SPEC_MODULE = "vreact/spec";
+/** This tool's own declarations of vreact/spec (real path). */
+const OWN_SPEC = (() => {
+  const p = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "spec", "index.d.ts");
+  try {
+    return fs.realpathSync(p);
+  } catch {
+    return p;
+  }
+})();
+/** Declaration files of React (its types package, or the package itself). */
+const REACT_FILE_RE = /[\\/]node_modules[\\/](@types[\\/])?react[\\/]/;
+
+/** The source file a module specifier (`"./x"`, `"vreact/spec"`) resolves to, if any. */
+export function moduleFile(checker: ts.TypeChecker, spec: ts.Expression): ts.SourceFile | undefined {
+  const sym = checker.getSymbolAtLocation(spec);
+  const d = sym?.valueDeclaration ?? sym?.declarations?.[0];
+  return d && ts.isSourceFile(d) ? d : d?.getSourceFile();
+}
+
+/**
+ * Per-program translation context.
+ *
+ * Builtins — JavaScript's globals (`undefined`, `Math`, `String`, `console`, …), lib types
+ * (`ReadonlyArray`), React's hooks and types, vreact/spec's functions and `int` — are recognised
+ * by the declaration a name resolves to, never by its spelling: a local, a parameter, an import
+ * alias or a project declaration spelled like one is the user's binding (`isGlobal`, `specName`,
+ * `reactName`).
+ */
 export class Program {
   checker: ts.TypeChecker;
+  tsProgram: ts.Program;
   reg = new TypeRegistry();
   globals = new Map<ts.Node, Global>();
   root: string;
   typeEnv: TypeEnv;
   modNs = new Map<string, string>();
+  /** the declaration files `import … from "vreact/spec"` resolves to (library files only) */
+  specFiles = new Set<ts.SourceFile>();
   /** set by `vreact synth`: every translation of a `hole<T>()` kept in the output, with its environment (narrowing) */
   holeEnvs?: HoleEnv[];
-  constructor(checker: ts.TypeChecker, root: string, nsOf: (sf: ts.SourceFile) => string) {
+  constructor(tsProgram: ts.Program, root: string, nsOf: (sf: ts.SourceFile) => string, projectFiles: readonly ts.SourceFile[]) {
+    const checker = tsProgram.getTypeChecker();
+    this.tsProgram = tsProgram;
     this.checker = checker;
     this.root = root;
+    for (const sf of projectFiles) {
+      for (const st of sf.statements) {
+        if (!(ts.isImportDeclaration(st) || ts.isExportDeclaration(st)) || !st.moduleSpecifier || !ts.isStringLiteral(st.moduleSpecifier)) continue;
+        if (st.moduleSpecifier.text !== SPEC_MODULE) continue;
+        const target = moduleFile(checker, st.moduleSpecifier);
+        if (target && this.isLibraryFile(target)) this.specFiles.add(target);
+      }
+    }
     this.typeEnv = {
       checker,
       reg: this.reg,
       nsOf,
-      isSpecInt: (node) => {
-        if (node.typeName.getText() !== "int") return false;
-        let sym = checker.getSymbolAtLocation(node.typeName);
-        if (!sym) return false;
-        if (sym.flags & ts.SymbolFlags.Alias) sym = checker.getAliasedSymbol(sym);
-        const d = sym.declarations?.[0];
-        return !!d && /vreact[\\/](spec|lib)|vreact-spec/.test(d.getSourceFile().fileName);
+      // `int` of vreact/spec, also through aliases (`import { type int as I }`, `type Count = int`
+      // resolves through typeOfDecl); a project type spelled `int` is the project's
+      isSpecInt: (node) => this.specName(ts.isQualifiedName(node.typeName) ? node.typeName.right : node.typeName) === "int",
+      isLibType: (node, names) => {
+        const s = this.resolve(this.checker.getSymbolAtLocation(ts.isQualifiedName(node.typeName) ? node.typeName.right : node.typeName));
+        return !!s && names.includes(s.name) && this.declaredIn(s, (f) => this.isLibraryFile(f)) ? s.name : null;
+      },
+      isLibraryFile: (sf) => this.isLibraryFile(sf),
+      isReactType: (node, names) => {
+        const n = this.reactName(ts.isQualifiedName(node.typeName) ? node.typeName.right : node.typeName);
+        return n && names.includes(n) ? n : null;
       },
     };
+  }
+  /**
+   * A file of TypeScript's standard library, of an external library (found in node_modules), or
+   * vreact's own spec declarations (however the project resolves them): not the project's.
+   */
+  isLibraryFile(sf: ts.SourceFile): boolean {
+    return this.tsProgram.isSourceFileDefaultLibrary(sf) || this.tsProgram.isSourceFileFromExternalLibrary(sf) || path.resolve(sf.fileName) === OWN_SPEC;
+  }
+  isReactFile(sf: ts.SourceFile): boolean {
+    return this.isLibraryFile(sf) && REACT_FILE_RE.test(sf.fileName);
+  }
+  /** The symbol an import alias stands for (other symbols unchanged). */
+  resolve(s: ts.Symbol | undefined): ts.Symbol | undefined {
+    if (s && s.flags & ts.SymbolFlags.Alias) return this.checker.getAliasedSymbol(s);
+    return s;
+  }
+  /** Is every declaration of `s` in a file accepted by `pred` (and is there one)? */
+  declaredIn(s: ts.Symbol | undefined, pred: (sf: ts.SourceFile) => boolean): boolean {
+    const ds = s?.declarations;
+    return !!ds?.length && ds.every((d) => pred(d.getSourceFile()));
+  }
+  /**
+   * Does `n` refer to the JavaScript global `name` (`undefined`, `Math`, `String`, `console`,
+   * `localStorage`, `document`, `setTimeout`, …): declared only by the libraries, not shadowed by a
+   * local, parameter, import or project declaration?
+   */
+  isGlobal(n: ts.Node, name: string): boolean {
+    if (!ts.isIdentifier(n) || n.text !== name) return false;
+    const s = this.checker.getSymbolAtLocation(n);
+    if (!s) return false;
+    if (name === "undefined") return this.checker.isUndefinedSymbol(s);
+    return !(s.flags & ts.SymbolFlags.Alias) && this.declaredIn(s, (f) => this.isLibraryFile(f));
+  }
+  /** The name of the vreact/spec declaration (function or `int`) that `n` refers to, through import aliases. */
+  specName(n: ts.Node): string | null {
+    if (!ts.isIdentifier(n)) return null;
+    const s = this.resolve(this.checker.getSymbolAtLocation(n));
+    return s && this.declaredIn(s, (f) => this.specFiles.has(f)) ? s.name : null;
+  }
+  /** The name of the React declaration (hook, type) that `n` refers to, through import aliases. */
+  reactName(n: ts.Node): string | null {
+    if (!ts.isIdentifier(n)) return null;
+    const s = this.resolve(this.checker.getSymbolAtLocation(n));
+    return s && this.declaredIn(s, (f) => this.isReactFile(f)) ? s.name : null;
   }
 }
 
