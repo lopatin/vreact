@@ -1330,16 +1330,15 @@ export function bindParam(name: ts.BindingName, t: VType, env: Env, realTs?: ts.
     return { env: bind(e2, s, { k: "val", code: ln, type: t, ...(known ? { ts: known } : {}) }), binder: ln };
   }
   if (ts.isObjectBindingPattern(name)) {
-    if (t.k !== "rec") fail(name, "destructuring is only supported for record types");
+    // (a field-constrained type parameter: its constrained fields, through their accessors)
+    if (t.k !== "rec" && !(t.k === "tvar" && t.fields)) fail(name, "destructuring is only supported for record types");
     const { env: e1, name: ln } = freshLocal(env, "o");
     let e2 = e1;
-    const fields = env.m.reg.rec(t);
     for (const el of name.elements) {
       if (el.dotDotDotToken || el.initializer || !ts.isIdentifier(el.name)) fail(el, "only simple destructuring { a, b } is supported");
       const fname = el.propertyName ? el.propertyName.getText() : el.name.text;
-      const f = fields.find((f) => f.name === fname);
-      if (!f) fail(el, `no field ${fname}`);
-      e2 = bind(e2, symbolOf(env, el.name)!, { k: "val", code: `${ln}.${leanField(fname)}`, type: f.type });
+      const v = fieldOf({ code: ln, type: t }, fname, el, env);
+      e2 = bind(e2, symbolOf(env, el.name)!, { k: "val", code: v.code, type: v.type });
     }
     return { env: e2, binder: ln };
   }
@@ -1483,7 +1482,17 @@ function inferTypeArgs(info: FnInfo, c: ts.CallExpression, env: Env, expected?: 
     }
   }
   for (const { pt, arg } of later) {
-    if (!mentionsTVar(substType(pt, σ), own)) continue; // typed at the instantiated parameter type below
+    const partial = substType(pt, σ);
+    if (!mentionsTVar(partial, own)) {
+      // typed at the instantiated parameter type below, if it fits there (`"z"` where `T` is an
+      // enum without that member: then by its own type, joined: T = string)
+      try {
+        typeOf(arg, env, partial);
+        continue;
+      } catch (e) {
+        if (!(e instanceof VtsError)) throw e;
+      }
+    }
     let at: VType | null = null;
     try {
       at = typeOf(arg, env);
@@ -1617,13 +1626,40 @@ function checkGenericArgKinds(info: FnInfo, c: ts.CallExpression, env: Env) {
     const pt = info.params[i].type;
     if (!hasOptPart(pt)) return;
     const declNode = info.decl.parameters[i]?.type;
-    const want = declNode ? nullShape(ck.getTypeFromTypeNode(declNode), pt, ck) : null;
     const real = tsTypeOf(a, env);
-    const got = real ? nullShape(real, pt, ck) : null;
-    if (want !== null && got !== null && want === got) return;
+    if (declNode && real && nullishWithin(real, ck.getTypeFromTypeNode(declNode), pt, ck)) return;
     const has = real ? `\`${ck.typeToString(real)}\`` : "a value whose TypeScript type does not say whether it is null or undefined";
     fail(a, `the argument \`${nodeText(a, 40)}\` is ${has}, but the parameter ${info.params[i].name} of ${info.name} is \`${declNode ? nodeText(declNode, 40) : showType(pt)}\`: null and undefined are different JS values, and the generic function was checked for the one its parameter type names; convert the argument first (e.g. x ?? null), or annotate it exactly`);
   });
+}
+
+/**
+ * At every optional position of `vt`, may a value of TypeScript type `a` be nullish only as one of
+ * type `d` (a present value fits everywhere)?  False when unknown (`any`, `unknown`).
+ */
+function nullishWithin(a: ts.Type, d: ts.Type, vt: VType, ck: ts.TypeChecker): boolean {
+  switch (vt.k) {
+    case "opt": {
+      const ka = kindsOfType(a);
+      const kd = kindsOfType(d);
+      if (!ka || !kd || (ka.null && !kd.null) || (ka.undef && !kd.undef)) return false;
+      return nullishWithin(ck.getNonNullableType(a), ck.getNonNullableType(d), vt.elem, ck);
+    }
+    case "arr": {
+      const ea = ck.getIndexTypeOfType(a, ts.IndexKind.Number);
+      const ed = ck.getIndexTypeOfType(d, ts.IndexKind.Number);
+      return !!ea && !!ed && nullishWithin(ea, ed, vt.elem, ck);
+    }
+    case "tuple": {
+      if (!ck.isTupleType(a) || !ck.isTupleType(d)) return false;
+      const xa = ck.getTypeArguments(a as ts.TypeReference);
+      const xd = ck.getTypeArguments(d as ts.TypeReference);
+      return xa.length === vt.elems.length && xd.length === vt.elems.length && vt.elems.every((e, i) => nullishWithin(xa[i], xd[i], e, ck));
+    }
+    default:
+      // (no optional part at this position; a type parameter's value is never nullish)
+      return true;
+  }
 }
 
 /** The accessor function passed for the constrained field `f` of an instantiation `t`. */

@@ -831,8 +831,18 @@ function gen(t: VType, prog: Program, pools: Pools, depth = 0, inst?: Inst): unk
       }
       return xs;
     }
-    default:
+    case "unit":
+    case "void":
       return undefined;
+    case "node":
+    case "fn":
+      // (never parameters of a function synth fills: the translation rejects them)
+      throw new Error(`internal: no test values of type ${showType(t)}`);
+    default: {
+      // every kind is handled above (tsc checks it): a new kind must say how to test with it
+      const k: never = t;
+      throw new Error(`internal: no test values of kind ${(k as VType).k}`);
+    }
   }
 }
 

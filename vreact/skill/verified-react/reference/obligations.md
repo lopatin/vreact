@@ -24,7 +24,7 @@ first one that fails.
 | `nonzero-divisor` | `%`, `idiv`, `Math.floor(a/b)` divisor ≠ 0 | guard (`total === 0 ? 0 : …`) |
 | `non-null` | `x!` is not null | narrow with `!== null` instead |
 | `precondition` | a called function's `requires` holds | establish it, or make the callee total |
-| `postcondition` | a function's `ensures` holds | the body; or the ensures is false (too strong) |
+| `postcondition` | a function's `ensures` holds | the body; or the ensures is false (too strong); a generic function's must hold for every instantiation (its type parameters are abstract in the goal) |
 | `root-precondition` | the root component can be mounted | root `requires` must hold for its (empty) props |
 | `unreachable` | a `throw` can never execute | guard; or prove the case impossible via invariant |
 | `assert` | an `assert(c)` holds | — |
@@ -40,7 +40,12 @@ first one that fails.
 2. **Go modular.** Big model functions: mark `/** @opaque */`, give precise
    `ensures` (one per property — they are proved and instantiated separately).
    Callers then reason only with the contracts (`vreact_contracts` instantiates
-   them at each call), which is faster and more robust.
+   them at each call), which is faster and more robust. A helper used at several
+   types can be one generic `@opaque` function (`function removeKey<K extends int
+   | string>(…)`, `function upsertById<T extends { readonly id: int }>(…)`): its
+   body and contracts are proved once, for every type, and the contracts are
+   instantiated at each call, whatever the type (also inside other generic
+   functions).
 3. **Intermediate facts.** `assert(c)` inside a function or handler proves `c`
    and adds it to what follows: the later obligations of the body and, in a
    handler, effect, timer or callback passed to a child, also its invariant,
@@ -60,7 +65,10 @@ first one that fails.
    ```
 
    Generated names: types `VTS.<module>.<Type>`, functions
-   `VTS.<module>.<fn>` with contracts `<fn>.post`, `<fn>.post2`, …; components
+   `VTS.<module>.<fn>` with contracts `<fn>.post`, `<fn>.post2`, … (a generic
+   function's first binders are its type parameters `{T : Type}`, then
+   `[DecidableEq K]` for equality constraints and one accessor `(T_id : T → Int)`
+   per constrained field; its contracts have the same binders); components
    `VTS.<module>.<Comp>.{Props, Cb, State, pre, inv, render}`. A name that is a
    Lean keyword or root-level Lean name gets a `'` (`function max` is
    `VTS.<module>.max'`, field `rec` is `rec'`, component `Type` is

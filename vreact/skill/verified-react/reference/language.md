@@ -31,7 +31,8 @@ The tsconfig needs `"strict": true` (with `strictNullChecks` and `noImplicitAny`
 | `readonly T[]`, `T \| null`, `[A, B]`   | lists, options (not both null and undefined), tuples |
 | `(a: A) => void`                        | only as callback **props** |
 
-Not supported: `any`, generics, classes, `Map/Set/Record`, recursive types,
+Not supported: `any`, generic types (generic type aliases and interfaces; generic
+*functions* are, see Generics), classes, `Map/Set/Record`, recursive types,
 non-discriminated unions (`string | number`), `ReactNode`/`children` props.
 
 ## Expressions
@@ -167,6 +168,65 @@ Spec helpers (usable in code and contracts): `forall(lo, hi, i => …)`,
 `exists(lo, hi, i => …)`, `distinct(xs, x => key)`, `implies(a, b)`,
 `idiv(a, b)`, `range(n)`. `hole<T>()` is a synthesis placeholder.
 
+## Generics
+
+```ts
+export function firstOr<T>(xs: readonly T[], d: T): T { … }                        // no constraint
+export function countKey<K extends int | string>(xs: readonly K[], k: K): int { … } // equality
+export function byId<T extends { readonly id: int }>(xs: readonly T[], id: int): T | undefined { … } // fields
+```
+
+Top-level functions may have type parameters (exported or not, also `@opaque`
+and `@trusted`). A type parameter may appear in parameter and return types,
+local annotations (also of helper arrows and callback parameters), `hole<T>()`,
+arrays, `T | null` and tuples — not inside object types (`{ readonly v: T }`:
+pass the value as its own parameter). At most one constraint per parameter:
+
+* **none** — values of `T` are abstract: they can be passed, stored (arrays,
+  `T | null`, tuples), returned, given to other generic functions, and used with
+  the array methods that do not compare elements (`map filter some every find
+  findIndex slice concat toReversed toSorted(cmp) with at reduce flatMap`,
+  `length`, spread, indexing).
+* **equality** — `K extends int | string | boolean | "a" | Color` (unions of
+  these; `Color` a string-literal enum type): also `===`/`!==` on `K`,
+  `includes`, `indexOf`, `distinct(xs)` and `distinct(xs, x => k)` with a `K` key.
+  `K extends number` is rejected (`NaN !== NaN`; use `int`).
+* **fields** — `T extends { readonly id: int; readonly note?: string }` (or the
+  name of a record type): `x.id` on `x: T` (an optional field is `U | undefined`).
+  Field types may not mention type parameters. Equality and fields cannot be
+  combined (no intersections).
+
+Even under `T extends int` or `T extends string` the values of `T` are abstract:
+no arithmetic, ordering, string conversion (`${x}`, `+`), string properties or
+methods, comparison with a value of another type, and no object literal of type
+`T` (the body is checked once, for every type `T` may be). Null tests on `T | null`
+work (a type parameter is never instantiated with a nullable type).
+
+Calls infer the type arguments from the VTS types of the arguments (where
+TypeScript cannot tell `int` from `number`: `count(xs, 1.5)` instantiates
+`number`), then from the type the result must have (`const xs: readonly int[] =
+emptyOf()`), then for `[]`, `null` and literals; two arguments of `int` and
+`number` give `number`, an enum and a `string` give `string`. Otherwise write the
+type arguments (`emptyOf<int>()`; "cannot infer T"). Each call is checked: an
+instantiation is never nullable (`firstOr(xs, null)` with `xs: (int | null)[]` is
+rejected — give the function a `T | null` parameter instead), never `number` for
+an equality constraint, and for a field constraint is a record (or a union, in
+every variant, or another type parameter with that field) whose field has exactly
+the constraint's type and the same `null`/`undefined`. An argument for a parameter
+`T | null` must be `null` (not `undefined`) when absent, as the declared type says
+(TypeScript would absorb `undefined` into `T`); likewise for `T | undefined`.
+
+A generic function is proved once for every instantiation, and its `ensures`
+hold for every type: a contract that is true only at the module's own calls is
+not proved. Callers of an `@opaque` generic function reason with these contracts
+at whatever type they call it (also at their own type parameters).
+
+Rejected: generic type aliases and interfaces, generic components, generic
+reducers (`useReducer`), generic arrow functions, function expressions and
+function types, default type arguments (`<T = int>`), `const` type parameters,
+other constraints (`unknown`, `any`, `object`, `keyof`, unions of object types,
+intersections, constraints mentioning a type parameter), recursion.
+
 ## Components
 
 Order inside the body:
@@ -248,7 +308,7 @@ or a label (use `htmlFor`).
 | `useRef`, `useContext`, custom hooks | lift state up / pass props; inline hook calls |
 | `children` / `ReactNode` props | compose in the parent |
 | recursion, `while` | `for…of`, array methods |
-| generics | monomorphic helpers |
+| generic type aliases, interfaces, components, reducers and arrows | concrete types; generic top-level functions (see Generics) |
 | `async`, fetch | keep I/O in an unverified module that calls verified reducers |
 | guarded updates in `vreact synth` | write the guard by hand with a hole per branch; synth fills straight-line code (all holes of a function are proved together; a hole per `case`/branch is searched once) |
 | `vreact synth` on a function whose contract's Lean statement mentions a function that still has a hole (called in the contract, or in the body or `requires` of a function it calls; not in a `@trusted` body or a callee's `ensures`) | not searched ("the contract depends on unfinished function f"): fill or write `f` first |

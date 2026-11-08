@@ -38,6 +38,7 @@ exact, total meaning in Lean, while still covering what real React code uses.
 | `T \| null`, `T \| undefined`, `f?: T`       | `Option T`                              | not both null and undefined |
 | `[A, B]`                                     | `A × B`                                 | |
 | `(x: A) => void` (props only)                | callback with a contract                | see §2.4 |
+| type parameter `T` of a generic function     | binder `{T : Type}` (+ constraint binders) | abstract; instantiated at each call (below) |
 
 `T | null` and `T | undefined` share the Lean type `Option T`; which nullish
 value a `none` stands for is taken from the TypeScript type of the expression
@@ -71,9 +72,43 @@ allows it: an `int` to a `number`, a present value to an optional one, an array
 elementwise (`int[]` to `(int | null)[]`), an enum member to its string.
 
 Rejected: `any`, `as` casts, classes, `this`, mutation of objects/arrays,
-`==` (except `== null`), `===` on objects (reference identity), generics,
+`==` (except `== null`), `===` on objects (reference identity), generic types,
+components and arrows (generic top-level functions are supported, below),
 exceptions (`try`), `var`, `while`, recursion (for now), recursive types,
 `async`.
+
+**Generic functions.** A top-level function may have type parameters; each is a
+Lean binder `{T : Type}` of the definition, abstract in its body, and its constraint
+adds what the body may do with values of `T`: an *equality constraint* (`K extends
+int | string | boolean | <string-literal enum>`) adds `[DecidableEq K]`, so `===`,
+`includes`, `indexOf` and `distinct` on `K` are Lean equality — exactly JS's `===` and
+SameValueZero on the types `K` may be instantiated with; a *field constraint* (`T
+extends { readonly id: int; … }`) adds one explicit accessor parameter per field,
+`(T_id : T → Int)`, and `x.id` on `x : T` is `T_id x` (not a type class: after a
+transparent function is unfolded at a call, the accessor `fun x => x.id` reduces to
+the record field, which the automation reasons about). The binders come first, in the
+order type binders, instance binders, accessors, then the value parameters and
+`h_pre`; every contract theorem `f.post…` has the same binders, so it is a theorem for
+every instantiation, and `vreact_contracts` applies it to the arguments of each call.
+A call passes the type arguments by name, `(f (T := X) (fun x => x.id) xs …)`: they are
+inferred by the translator from the VTS types of the arguments (TypeScript's
+inference cannot tell `int` from `number`), then from the type the context expects of
+the result, then for the arguments typed by their parameter (`[]`, `null`, literals);
+`int` and `number` join to `number`, an enum and `string` to `string`; otherwise the
+call must write them (`f<int>(…)`). Each instantiation is checked: it is closed and
+never nullable — `T | null` with `T = X | null` would be `Option (Option X)` in Lean,
+where JS has a single nullish value; so type-parameter parts of a TypeScript type
+are non-nullish for the null/undefined analysis, and `x === null` on `x : T` is
+statically false —, it is never `number` (no usable equality: `NaN`, `-0`) for an
+equality constraint, and for a field constraint it has each field (a record field,
+a union's field in every variant or its discriminant, another type parameter's
+constrained field) at exactly the constraint's type and nullish kinds. Where a
+parameter type has optional parts (`x: T | null`), the argument's must be the
+nullish value the declaration names: TypeScript accepts an `int | undefined`
+argument there (with `T = number | undefined`), whose `undefined` the body's
+`x === null` would not see. Operations that look into a value of `T` (arithmetic,
+ordering, string conversion, string properties and methods, object literals) are
+rejected also under `T extends int`: Lean checks the body once for every `T`.
 
 ### 1.2 Expressions and statements — semantics by translation
 
@@ -102,8 +137,9 @@ Every expression maps to a Lean term whose value is the JavaScript value.
   arguments that are not modelled (`thisArg`, `fromIndex`, string positions) are
   rejected, never ignored. `includes`, `indexOf` and key-less `distinct` compare
   with Lean equality, which is JS's SameValueZero/`===` only for primitive
-  elements (`boolean`, `int`, `string`, enums, options of these); on objects
-  (identity) and `number` (NaN) they are rejected.
+  elements (`boolean`, `int`, `string`, enums, equality-constrained type
+  parameters, options of these); on objects (identity) and `number` (NaN) they
+  are rejected.
 * String methods `trim includes startsWith endsWith slice repeat length` are
   exact on UTF-16 code units; `toLowerCase/toUpperCase` are opaque (Unicode case
   mapping is not modelled: proofs cannot depend on them). A literal is its cooked
@@ -184,7 +220,7 @@ Every expression maps to a Lean term whose value is the JavaScript value.
 | construct                         | meaning |
 |-----------------------------------|---------|
 | `requires(c)` in a function       | hypothesis parameter `(h_pre : c)`; every call site must prove it (several `requires` are conjoined in order into one `h_pre`) |
-| `ensures((r: T) => c)`            | theorem `f.post : ∀ args, h_pre → c[r := f args]` |
+| `ensures((r: T) => c)`            | theorem `f.post : ∀ args, h_pre → c[r := f args]` (a generic function's: also `∀ T` and its constraint binders) |
 | `requires(c)` in a component      | the props precondition `pre`; every `<C …/>` must prove it (several are conjoined in order, as in functions) |
 | `invariant(c)` in a component     | the state invariant `inv` (after the hooks; several are conjoined in order) |
 | `callbackRequires(cb, (…) => c)`  | the contract of a callback prop (§2.4) |
@@ -483,6 +519,18 @@ hook rules hold (static checks). For every function: its body is safe and its
   theorems of the module's functions that no other function or constant of the
   module uses are proved after the lemmas, in `Posts.lean` (imported by the
   module's `View.lean` and the importing modules' `Defs.lean`).
+  Generated files set `autoImplicit false`, so a binder the translation failed to
+  emit is a Lean error, never an auto-bound variable.
+  For generic functions (§1.1), Lean checks that each call's type arguments and
+  accessor arguments are well-typed and proves the body and contracts for every
+  instantiation (the type parameters are abstract, so the body cannot depend on
+  what they are); what the translator alone ensures is that the parametric model
+  means what JS does at each call: the instantiation is inferred from the
+  arguments' VTS types and is never nullable, an equality-constrained one is a type
+  JS compares by value, the accessor passed for a constrained field reads that field
+  (`fun x => x.f`, a union's shared-field accessor, or a type parameter's own
+  accessor) at exactly the constraint's type and nullish kinds, and an argument for
+  a parameter with optional parts has the nullish value its declared type names.
 * **The report.** Every obligation runs under `vreact_ob` (`VReact/Budget.lean`),
   with its own heartbeat budget (per obligation also under parallel elaboration:
   Lean's heartbeat counter is per thread, and an obligation runs on one thread; the

@@ -1,4 +1,4 @@
-// expect: verified empties=verified prepended=verified fallback=verified widened=verified colour=verified point=verified wrapped=verified swapped=verified names=verified
+// expect: verified empties=verified prepended=verified fallback=verified widened=verified colour=verified joined=verified point=verified wrapped=verified swapped=verified names=verified
 // Type-argument inference in VTS types (TypeScript cannot tell int from number): from the
 // arguments that have a type of their own, then from the type the result must have, then the
 // arguments typed by their parameter ([], null, literals); explicit type arguments where a type
@@ -13,11 +13,13 @@ export function emptyOf<T>(): readonly T[] {
   return [];
 }
 
+export const NONE: readonly int[] = emptyOf(); // a constant: from its annotation
+
 export function empties(): int {
   ensures((r: int) => r === 0);
   const xs: readonly int[] = emptyOf(); // from the result type
   const ys = emptyOf<string>(); // explicit
-  return xs.length + ys.length + emptyOf<Pt>().length;
+  return xs.length + ys.length + emptyOf<Pt>().length + NONE.length;
 }
 
 export function prepend<T>(xs: readonly T[], x: T): readonly T[] {
@@ -37,7 +39,7 @@ export function orElse<T>(x: T | null, d: T): T {
 
 export function fallback(a: int | null): int {
   ensures((r: int) => a === null ? r === 5 : r === a);
-  return orElse(a, 5) + orElse(null, 0);
+  return orElse(a, 5) + orElse(null, 0) + orElse(2, 0) * 0; // (a present argument for T | null)
 }
 
 export function pair<T>(a: T, b: T): readonly T[] {
@@ -56,6 +58,11 @@ export function colour(c: boolean): Color {
   ensures((r: Color) => c ? r === "red" : r === "green");
   const k: Color = choose(c, "red", "green"); // T = Color from the result type
   return k;
+}
+
+export function joined(c: boolean, k: Color): string {
+  ensures((r: string) => (c ? r === k : r === "z"));
+  return choose(c, k, "z"); // T = string: "z" is not a Color
 }
 
 export function same<T>(x: T): T {

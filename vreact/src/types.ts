@@ -686,7 +686,7 @@ function readConstraint(p: TParam, fname: string, env: TypeEnv, used: Set<string
     const ct = env.checker.getTypeFromTypeNode(c);
     p.fields = fields.map((f) => {
       if (f.type.k === "fn" || f.type.k === "node") fail(c!, `the field ${f.name} of the constraint of ${p.name} is not a value (functions and React nodes are not supported there)`);
-      const base = `${p.name}_${f.name}`.replace(/[^A-Za-z0-9_$\u0080-￿]/g, "_");
+      const base = `${p.name}_${f.name}`.replace(/[^A-Za-z0-9_$\u0080-\uffff]/g, "_");
       let acc = leanIdent(base);
       for (let k = 1; used.has(acc); k++) acc = leanIdent(`${base}_${k}`);
       used.add(acc);

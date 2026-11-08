@@ -1,4 +1,4 @@
-// expect: verified positive=verified withIds=verified onRecords=verified onShapes=verified noteOr=verified notes=verified keyed=verified onKeyed=verified
+// expect: verified positive=verified withIds=verified idsOf=verified onRecords=verified onShapes=verified noteOr=verified notes=verified keyed=verified onKeyed=verified
 // Field constraints: `x.f` on `x : T` is the accessor parameter of f (`(T_qty x)`), passed at each
 // call as the record's field (`fun x => x.qty`) or the union's shared field (`Shape.id'`). The
 // instantiation must have the field at exactly that type and nullish value.
@@ -19,6 +19,12 @@ export function withIds<T extends { readonly id: int; readonly qty: int }>(xs: r
   ensures((r: readonly T[]) => r.length <= xs.length);
   ensures((r: readonly T[]) => distinct(xs, (x) => x.id) ? r.length <= 1 : true);
   return xs.filter((x) => x.id === id);
+}
+
+// destructuring a value of T: its constrained fields
+export function idsOf<T extends { readonly id: int; readonly qty: int }>(xs: readonly T[]): readonly int[] {
+  ensures((r: readonly int[]) => r.length === xs.length);
+  return xs.map(({ id, qty }) => id + qty * 0);
 }
 
 export function onRecords(ls: readonly Line[]): int {

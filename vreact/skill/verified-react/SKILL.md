@@ -109,6 +109,11 @@ export function ItemList(props: ItemListProps) {
 ```
 
 * Use `int` for integers (counts, ids, cents); `number` is a float the prover cannot reason about.
+* Helpers used at several types may be generic top-level functions:
+  `<K extends int | string>` to compare keys (`===`, `includes`, `distinct`),
+  `<T extends { readonly id: int }>` to read fields; values of a type parameter are
+  otherwise abstract. Write `f<int>(…)` when a type parameter cannot be inferred.
+  No generic type aliases, components or arrows.
 * State is immutable: spread, `filter`, `map`, `toSorted`, `with` — never `push`/`sort`/property assignment.
 * Handlers may call setters, `dispatch`, and **at most one** parent callback per path.
 * `setX(v)` uses the render snapshot; two of them in one handler do not compose — use
