@@ -129,8 +129,12 @@ export function ItemList(props: ItemListProps) {
   or a project type named `int` is that binding, not the builtin. No `declare`,
   `declare global`/`module`, namespaces or project `.d.ts` files.
 * Import verified modules by their relative path (`"./model"`, not a tsconfig
-  `paths` alias), and hooks from `"react"`. No `@ts-ignore`, `@ts-expect-error`
-  or `@ts-nocheck`: fix the type error instead.
+  `paths` alias), and hooks from `"react"`. Re-export imported types with
+  `export type { T }` (VTS checks with `isolatedModules`). No `@ts-ignore`,
+  `@ts-expect-error` or `@ts-nocheck` (any spelling), no `@jsx…` pragmas and no
+  `@__PURE__`-style annotations anywhere in a file: fix the type error instead.
+* tsconfig: `"strict": true` and nothing that weakens it; unknown or
+  check-disabling compiler options (`noCheck`, …) are rejected by name.
 * Invariants must not depend on props that can change (React keeps state across
   prop changes): clamp when rendering instead.
 * Lists need `key={…}` with provably distinct keys (usually from an invariant).

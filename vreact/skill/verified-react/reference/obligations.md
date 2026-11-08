@@ -28,7 +28,7 @@ first one that fails.
 | `root-precondition` | the root component can be mounted | root `requires` must hold for its (empty) props |
 | `unreachable` | a `throw` can never execute | guard; or prove the case impossible via invariant |
 | `assert` | an `assert(c)` holds | — |
-| `fact` | a module-level `assert(c)` about an `@opaque` constant holds | the data; it is checked by evaluation (it runs when the module loads: it, like a constant's initialiser, may not reach a constant declared below it, also through calls — rejected before any obligation) |
+| `fact` | a module-level `assert(c)` about an `@opaque` constant holds | the data; it is checked by evaluation (it runs when the module loads: it, like a constant's initialiser, may not reach a constant declared below it, also through calls — rejected before any obligation). It is proved after every declaration it mentions (it may call a function declared below its constant); declarations before that point cannot use it |
 
 ## When the code and spec are right but the proof fails
 

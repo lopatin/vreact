@@ -23,7 +23,12 @@ at top level.
 * Exports: `export` on declarations, `export { a, b as c }`, `export default f`
   / `export default x` (a name; `export default <expression>` is rejected —
   declare a `const` and export that), re-exports `export … from "./m"` (they load
-  `./m` like an import: same rules, cycles included).
+  `./m` like an import: same rules, cycles included). The bundler compiles each
+  file on its own, so VTS type-checks with `"isolatedModules"` (whatever the
+  tsconfig says): a type imported from another module is re-exported with
+  `export type { Item }` / `export { type Item } from "./types"`, never
+  `export { Item }` or `export default Item` (the bundler would keep the export of
+  a name the other module does not export: the module would not load).
 * A module's top-level code runs in source order when it loads, and reading a
   `const` before its declaration has run throws. TypeScript only flags direct
   reads; VTS also rejects a constant initialiser, `export default x` or
@@ -51,8 +56,15 @@ at top level.
   global `React`, which a module bundle does not define, so tsconfig
   `"allowUmdGlobalAccess"` is rejected.
 * TypeScript's checks are part of VTS: `// @ts-ignore`, `@ts-expect-error` and
-  `// @ts-nocheck` are rejected anywhere in a verified file (also inside a
-  string or another comment).
+  `// @ts-nocheck` are rejected anywhere in a verified file, in any letter case
+  and with any suffix (`@ts-ignored`, `@ts-ignore-next-line`, `@TS-NOCHECK`: all
+  silence TypeScript), also inside a string or another comment.
+* Comments that change what the bundler does are rejected anywhere in a file
+  (also in a string), in any letter case: JSX pragmas (`@jsx`, `@jsxRuntime`,
+  `@jsxImportSource`, `@jsxFrag`: esbuild and Babel read them in any comment, not
+  only at the top) and bundler annotations (`/* @__PURE__ */`, `#__PURE__`,
+  `@__NO_SIDE_EFFECTS__`, …: a production build deletes an annotated call whose
+  result is unused, state updates included).
 
 Each file becomes the Lean module `VTS.<path>`: its path under `src` without
 `.ts`/`.tsx`, characters other than letters, digits and `_` replaced by `_`.
@@ -63,10 +75,18 @@ module, types and values share Lean's one namespace: a function or constant
 named like a type of its module (`type Limits = …; const Limits: Limits = …`)
 is rejected.
 
-The tsconfig needs `"strict": true` (with `strictNullChecks` and `noImplicitAny`) and `"lib": ["ES2023", "DOM"]` (for
-`toSorted`/`toReversed`/`with`); without a tsconfig, vreact uses these defaults.
-JSX must be React's automatic runtime: `"jsx": "react-jsx"` (no other
-`jsxImportSource`, no `@jsx…` comment pragmas).
+The tsconfig needs `"strict": true` (with every check of the strict family:
+`strictNullChecks`, `noImplicitAny`, `strictFunctionTypes`, … none set to false)
+and `"lib": ["ES2023", "DOM"]` (for `toSorted`/`toReversed`/`with`); without a
+tsconfig, vreact uses these defaults. JSX must be React's automatic runtime:
+`"jsx": "react-jsx"` (no other `jsxImportSource`, no `@jsx…` comment pragmas).
+Compiler options are a whitelist: the usual language, module, strictness, emit
+and output options are accepted; options that switch checks off (`"noCheck"`,
+`"noLib"`, `"noResolve"`, the removed `suppress…` options, `"resolvePackageJson…":
+false`) and any option vreact does not know (`"jsxFactory"`, newer ones) are
+rejected with the option's name. The tsconfig.json read is the one in the project
+root; a `tsconfig.json` inside the source directories is rejected (the bundler
+compiles a file with the nearest one's settings, e.g. its `jsxImportSource`).
 
 ## Types
 
@@ -87,6 +107,12 @@ data: a parameter, result, constant, state, local, data prop, callback parameter
 local helper parameter or result, or `hole<T>()` whose type contains one (also in
 an array, option, tuple or record) is rejected; only a direct field of a
 component's props may be a function.
+
+Field names (records, union variants, props): `__proto__` is rejected (in an
+object literal `{ __proto__: v }` sets the prototype and creates no field), and so
+is an *optional* field named like a member of `Object.prototype` (`toString?`,
+`constructor?`, `__lookupGetter__?`, …): when it is absent, reading it gives the
+inherited member, not `undefined`. Such names are fine for required fields.
 
 ## Expressions
 
@@ -221,7 +247,12 @@ assert(distinct(SEATS, (s) => s.id));            // module-level fact, proved on
 assert(SEATS.every((s) => 0 <= s.row && s.row < 3));
 ```
 
-Module-level `assert`s must mention an `@opaque` constant declared above them.
+Module-level `assert`s must mention an `@opaque` constant declared above them in
+the same module (a fact about an imported constant is stated in its module).
+They may call functions declared anywhere in the module (function declarations
+are hoisted) and mention other constants declared above them; the fact is proved
+once everything it mentions is defined, and declarations after that point can use
+it.
 
 Spec helpers (usable in code and contracts): `forall(lo, hi, i => …)`,
 `exists(lo, hi, i => …)`, `distinct(xs, x => key)`, `implies(a, b)`,

@@ -11,7 +11,7 @@
  * duplicate the continuation; `for…of` loops become folds.
  */
 import ts from "typescript";
-import { T, type VType, type Field, type Param, sameType, showType, leanType, sharedFields, type Variant, typeOfNode, kindsOfType, nullShape, checkValueType } from "./types.ts";
+import { T, type VType, type Field, type Param, sameType, showType, leanType, sharedFields, type Variant, typeOfNode, kindsOfType, nullShape, checkValueType, propertyNameText } from "./types.ts";
 import { type Env, type Val, ModCtx, type Binding, type StateVar, type CompCtx, type HandlerAcc, type FnInfo, type CompInfo, type Global, type Narrowed, bind, extend, freshLocal, refSymbol } from "./ctx.ts";
 import { VtsError, fail, leanField, leanAccessor, leanIdent, leanStr, jsStr, leanInt, paren, nodeText, capitalize, relLoc } from "./util.ts";
 
@@ -1125,6 +1125,8 @@ function objectLiteral(o: ts.ObjectLiteralExpression, env: Env, expected?: VType
   const props = new Map<string, ts.Expression | ts.ShorthandPropertyAssignment>();
   let spread: ts.Expression | null = null;
   for (const p of o.properties) {
+    // (`{ __proto__: v }` sets the prototype, it creates no property: ECMA-262 B.3.1)
+    if ((ts.isPropertyAssignment(p) || ts.isShorthandPropertyAssignment(p)) && propertyNameText(p.name) === "__proto__") fail(p, "a property `__proto__` is not supported in an object literal: `{ __proto__: v }` sets the object's prototype instead of creating a property");
     if (ts.isPropertyAssignment(p)) props.set(p.name.getText().replace(/^["']|["']$/g, ""), p.initializer);
     else if (ts.isShorthandPropertyAssignment(p)) props.set(p.name.text, p);
     else if (ts.isSpreadAssignment(p)) {

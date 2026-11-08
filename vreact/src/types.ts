@@ -525,6 +525,35 @@ function typeOfDecl0(decl: ts.Declaration, env: TypeEnv): VType {
   fail(decl, `unsupported type declaration`);
 }
 
+/** The properties of `Object.prototype` (ES2023 with Annex B), which every record value inherits. */
+const OBJECT_PROTO_NAMES = new Set(["constructor", "__defineGetter__", "__defineSetter__", "hasOwnProperty", "__lookupGetter__", "__lookupSetter__", "isPrototypeOf", "propertyIsEnumerable", "toString", "valueOf", "__proto__", "toLocaleString"]);
+
+/** The name a property name node denotes (`f`, `"f"`, `["f"]`, escapes decoded), if it is a fixed one. */
+export function propertyNameText(n: ts.PropertyName): string | undefined {
+  if (ts.isIdentifier(n) || ts.isStringLiteral(n) || ts.isNumericLiteral(n) || ts.isNoSubstitutionTemplateLiteral(n) || ts.isPrivateIdentifier(n)) return n.text;
+  if (ts.isComputedPropertyName(n) && (ts.isStringLiteralLike(n.expression) || ts.isNumericLiteral(n.expression))) return n.expression.text;
+  return undefined;
+}
+
+/**
+ * Field names that do not mean in JS what a field means in the model (a value the record always
+ * has, read back as stored):
+ * - `__proto__`: in an object literal, `{ __proto__: v }` sets the object's prototype (ECMA-262
+ *   B.3.1) and creates no property, and reading `o.__proto__` reads the prototype;
+ * - an optional field named like a property of Object.prototype (`toString?`, `__lookupGetter__?`):
+ *   when the field is absent, reading it reads the inherited property (a function), not undefined.
+ *   (TypeScript knows only the members its library declares, not `__lookupGetter__` & co.)
+ */
+function checkFieldName(m: ts.PropertySignature): void {
+  const name = propertyNameText(m.name);
+  if (name === "__proto__") {
+    fail(m.name, "a field named `__proto__` is not supported: in an object literal `{ __proto__: v }` sets the object's prototype instead of creating a field, and reading `o.__proto__` reads the prototype (ECMA-262 B.3.1); rename the field");
+  }
+  if (name !== undefined && m.questionToken && OBJECT_PROTO_NAMES.has(name)) {
+    fail(m.name, `an optional field named \`${name}\` is not supported: every object inherits \`${name}\` from Object.prototype, so when the field is absent, reading it gives that inherited property, not undefined; rename the field, or make it required (\`${name}: T | undefined\`)`);
+  }
+}
+
 function recordFromMembers(
   members: ts.NodeArray<ts.TypeElement>,
   env: TypeEnv,
@@ -541,6 +570,7 @@ function recordFromMembers(
   for (const m of members) {
     if (!ts.isPropertySignature(m)) fail(m, "only property signatures are allowed in VTS object types (no methods/index signatures)");
     if (!m.type) fail(m, "properties need type annotations");
+    checkFieldName(m);
     const fname = m.name.getText();
     let ft = typeOfNode(m.type, env, name + capitalize(fname));
     if (m.questionToken && ft.k !== "opt") ft = T.opt(ft);
@@ -695,6 +725,7 @@ function unionOf(
     const fields: Field[] = [];
     for (const p of o.members) {
       if (!ts.isPropertySignature(p) || !p.type) fail(p, "only annotated property signatures allowed");
+      checkFieldName(p);
       const fname = p.name.getText();
       if (fname === tag) continue;
       let ft = typeOfNode(p.type, env, name + capitalize(lit) + capitalize(fname));

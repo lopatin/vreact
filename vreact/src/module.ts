@@ -94,18 +94,39 @@ function loadProgram(cfg: Config): { program: ts.Program; diags: string[] } {
     noEmit: true,
     allowImportingTsExtensions: true,
   };
+  const diags: string[] = [];
   if (cfgPath && path.dirname(cfgPath) === cfg.root) {
     const raw = ts.readConfigFile(cfgPath, ts.sys.readFile);
     const parsed = ts.parseJsonConfigFileContent(raw.config, ts.sys, path.dirname(cfgPath));
     options = { ...parsed.options, noEmit: true };
+    // (an invalid tsconfig is TypeScript's error too; that its "include" matches no file does
+    // not matter: the sources are vreact.json's; nor does an option this TypeScript does not know
+    // (TS5023, e.g. one of a newer version): it changes nothing in this TypeScript's checks)
+    const host: ts.FormatDiagnosticsHost = { getCanonicalFileName: (f) => f, getCurrentDirectory: () => cfg.root, getNewLine: () => "\n" };
+    for (const d of [...(raw.error ? [raw.error] : []), ...parsed.errors]) {
+      if (d.category === ts.DiagnosticCategory.Error && d.code !== 18003 && d.code !== 5023) diags.push(ts.formatDiagnostic(d, host).trim());
+    }
   }
-  const diags: string[] = [];
+  // A bundler compiles each file on its own (Vite: esbuild, file by file), not knowing what the
+  // names a file imports are: `import { Item } from "./types"; export { Item };` of a type keeps the
+  // export in the JavaScript, and the module fails to load (no export named Item).  TypeScript
+  // reports exactly the constructs a per-file compiler cannot compile under "isolatedModules",
+  // which Vite requires: VTS always checks with it.  (TypeScript's error TS1208 for a file without
+  // imports or exports is replaced by VTS's own, which says why.)
+  const userIsolated = options.isolatedModules;
+  options = { ...options, isolatedModules: true };
   // (strictNullChecks defaults to strict; without it TypeScript types say nothing about null and
   // undefined, which the translation reads to tell them apart)
   if (!(options.strictNullChecks ?? options.strict)) diags.push("tsconfig: VTS requires \"strict\": true, with strictNullChecks (null safety is part of the model)");
   // (without noImplicitAny an unannotated parameter is `any`: TypeScript checks nothing about it,
   // in particular not whether it is null or undefined)
   if (!(options.noImplicitAny ?? options.strict)) diags.push("tsconfig: VTS requires \"strict\": true, with noImplicitAny (TypeScript checks nothing about an implicitly-any value)");
+  // the other checks of the strict family (e.g. without strictFunctionTypes a callback taking
+  // `int` is accepted where one taking `int | null` is expected, and is called with null)
+  for (const k of STRICT_FAMILY) {
+    if (!(options[k] ?? options.strict)) diags.push(`tsconfig: VTS requires "strict": true, with ${k} (each of TypeScript's strict checks is one the translation relies on)`);
+  }
+  diags.push(...optionProblems(options));
   // what JSX means is configured too: VTS models React 18's automatic runtime (react/jsx-runtime)
   if (options.jsx !== undefined && options.jsx !== ts.JsxEmit.ReactJSX && options.jsx !== ts.JsxEmit.ReactJSXDev) diags.push("tsconfig: VTS requires \"jsx\": \"react-jsx\" (JSX is modelled as React 18's automatic runtime; other settings make JSX call another factory)");
   if (options.jsxImportSource !== undefined && options.jsxImportSource !== "react") diags.push(`tsconfig: "jsxImportSource" must be "react" (JSX is modelled as React 18's; "${options.jsxImportSource}" makes JSX another library's)`);
@@ -124,10 +145,68 @@ function loadProgram(cfg: Config): { program: ts.Program; diags: string[] } {
       diags.push(`cannot load ${f}`);
       continue;
     }
-    const ds = ts.getPreEmitDiagnostics(program, sf).filter((d) => d.category === ts.DiagnosticCategory.Error);
-    for (const d of ds) diags.push(ts.formatDiagnostic(d, host).trim());
+    const ds = ts.getPreEmitDiagnostics(program, sf).filter((d) => d.category === ts.DiagnosticCategory.Error && !(d.code === 1208 && !userIsolated));
+    for (const d of ds) {
+      const text = ts.formatDiagnostic(d, host).trim();
+      diags.push(!userIsolated && text.includes("isolatedModules") ? `${text} (VTS always checks with "isolatedModules": the bundler compiles each file on its own)` : text);
+    }
   }
   return { program, diags };
+}
+
+/** TypeScript's strict checks besides strictNullChecks and noImplicitAny (each defaults to "strict"). */
+const STRICT_FAMILY = ["strictFunctionTypes", "strictBindCallApply", "strictPropertyInitialization", "strictBuiltinIteratorReturn", "noImplicitThis", "useUnknownInCatchVariables", "alwaysStrict"] as const;
+
+/**
+ * The compiler options VTS accepts, as a whitelist: TypeScript keeps adding options, and some
+ * switch its checks off (5.5's "noCheck" reports no type error at all), so an option VTS does not
+ * know is rejected rather than trusted.  Accepted: the options the translation checks itself
+ * (jsx, jsxImportSource, the strict family, the module resolution options compared with the
+ * bundler's resolution), options that only add checks (noUnused*, noImplicitReturns,
+ * noUncheckedIndexedAccess, exactOptionalPropertyTypes, isolatedModules, …), the language and
+ * library settings (target, lib, module), options about files the program may contain (each
+ * file outside node_modules must be a VTS source: checked separately), and options about emit,
+ * builds and diagnostics output (VTS emits nothing).
+ */
+const ACCEPTED_OPTIONS = new Set<string>([
+  // checked by loadProgram / the translation
+  "strict", "strictNullChecks", "noImplicitAny", ...STRICT_FAMILY, "jsx", "jsxImportSource", "allowUmdGlobalAccess",
+  "paths", "baseUrl", "rootDirs", "moduleSuffixes", "customConditions", "resolvePackageJsonExports", "resolvePackageJsonImports",
+  // language, library, modules
+  "target", "lib", "module", "moduleResolution", "moduleDetection", "types", "typeRoots", "allowImportingTsExtensions",
+  "esModuleInterop", "allowSyntheticDefaultImports", "preserveSymlinks", "resolveJsonModule", "allowArbitraryExtensions",
+  "allowJs", "checkJs", "maxNodeModuleJsDepth", "useDefineForClassFields", "experimentalDecorators", "emitDecoratorMetadata",
+  // more checks
+  "noUnusedLocals", "noUnusedParameters", "noImplicitReturns", "noFallthroughCasesInSwitch", "noUncheckedIndexedAccess",
+  "noImplicitOverride", "noPropertyAccessFromIndexSignature", "exactOptionalPropertyTypes", "noUncheckedSideEffectImports",
+  "isolatedModules", "verbatimModuleSyntax", "isolatedDeclarations", "forceConsistentCasingInFileNames", "allowUnreachableCode",
+  "allowUnusedLabels", "skipLibCheck", "skipDefaultLibCheck", "ignoreDeprecations",
+  // emit, builds, output, editors
+  "noEmit", "noEmitOnError", "noEmitHelpers", "emitDeclarationOnly", "declaration", "declarationMap", "declarationDir",
+  "sourceMap", "inlineSourceMap", "inlineSources", "sourceRoot", "mapRoot", "outDir", "outFile", "rootDir", "removeComments",
+  "importHelpers", "downlevelIteration", "emitBOM", "newLine", "stripInternal", "preserveConstEnums", "incremental", "composite",
+  "tsBuildInfoFile", "disableSourceOfProjectReferenceRedirect", "disableSolutionSearching", "disableReferencedProjectLoad",
+  "assumeChangesOnlyAffectDirectDependencies", "disableSizeLimit", "plugins", "listFiles", "listEmittedFiles", "explainFiles",
+  "traceResolution", "diagnostics", "extendedDiagnostics", "generateCpuProfile", "generateTrace", "pretty", "noErrorTruncation",
+  "preserveWatchOutput", "locale",
+  // set by TypeScript's tsconfig parser
+  "configFilePath", "pathsBasePath",
+]);
+
+/** What is wrong with the compiler options, for VTS (checked besides the strict family). */
+function optionProblems(options: ts.CompilerOptions): string[] {
+  const out: string[] = [];
+  for (const [k, v] of Object.entries(options)) {
+    if (v === undefined) continue;
+    if (k === "noCheck") {
+      if (v) out.push("tsconfig: \"noCheck\" is not supported: it switches TypeScript's type checking off, and VTS relies on TypeScript's checks (null and undefined, argument types, imports)");
+    } else if (k === "resolvePackageJsonExports" || k === "resolvePackageJsonImports") {
+      if (v === false) out.push(`tsconfig: "${k}": false is not supported: the bundler reads package.json "${k === "resolvePackageJsonExports" ? "exports" : "imports"}", so TypeScript would check another file than the one that runs`);
+    } else if (!ACCEPTED_OPTIONS.has(k)) {
+      out.push(`tsconfig: the compiler option "${k}" is not supported by VTS (it is not one VTS knows to leave TypeScript's checks and the meaning of the program unchanged); remove it`);
+    }
+  }
+  return out;
 }
 
 /**
@@ -220,6 +299,51 @@ function vtsImportProblem(spec: string, sf: ts.SourceFile, target: ts.SourceFile
   return `TypeScript resolves it to ${rel(target.fileName)}, but a bundler, relative to this file, ${runtime ? `loads ${rel(runtime)}` : "finds no such file"} (tsconfig "rootDirs", "paths" and "moduleSuffixes" change only what TypeScript reads, and a path without an extension is the first file a bundler finds: .mjs, .js, .mts, .ts, .jsx, .tsx, .json, then a directory's index): ${fix}`;
 }
 
+/**
+ * Comments that change what a source means, to TypeScript or to the tools that compile and
+ * bundle it, are rejected: the translation models the program TypeScript checked, compiled with
+ * React's automatic JSX runtime, every statement kept.  Each pattern is matched anywhere in the
+ * text (also in a string or JSX text: a superset of the comments the tools read) and without
+ * regard to letter case, so that no spelling a tool accepts gets through:
+ * - `@ts-ignore`, `@ts-expect-error` (TypeScript matches them as prefixes: `@ts-ignored`,
+ *   `@ts-ignore-next-line` silence the next line too) and `@ts-nocheck` (a pragma, whose name
+ *   TypeScript lower-cases: `@TS-NOCHECK` turns off the file's checks) silence TypeScript's
+ *   errors, and the translation relies on TypeScript's checks;
+ * - JSX pragmas (`@jsx`, `@jsxFrag`, `@jsxImportSource`, `@jsxRuntime`): TypeScript reads them,
+ *   case-insensitively, from the comments at the start of the file; esbuild (Vite) and Babel from
+ *   any comment.  They make JSX call another factory or library;
+ * - bundler annotations (`@__PURE__`, `#__PURE__`, `@__NO_SIDE_EFFECTS__`, …): minifiers and
+ *   tree-shaking delete a call so annotated whose result is unused, together with its effects
+ *   (a state update).
+ */
+function commentDirectiveErrors(sf: ts.SourceFile, rel: string): VtsError[] {
+  const errs: VtsError[] = [];
+  const at = (index: number, msg: (where: string) => string) => {
+    const { line, character } = sf.getLineAndCharacterOfPosition(index);
+    const e = new VtsError(sf, msg(`${rel}:${line + 1}`));
+    e.line = line + 1;
+    e.col = character + 1;
+    errs.push(e);
+  };
+  // (`u`: case folding, so that e.g. the Kelvin sign, which lower-cases to `k`, is a `k`)
+  for (const m of sf.text.matchAll(/@ts-(ignore|expect-error|nocheck)/giu)) {
+    at(m.index!, (w) => `${w}: \`${m[0]}\` is not supported: it silences TypeScript's errors, and VTS relies on TypeScript's checks (null and undefined, the types of library and React declarations, imports); fix the error instead`);
+  }
+  for (const m of sf.text.matchAll(/@jsx\w*/giu)) {
+    at(m.index!, (w) => `${w}: \`${m[0]}\`: JSX pragmas (\`@jsx\`, \`@jsxImportSource\`, \`@jsxFrag\`, \`@jsxRuntime\`) are not supported: VTS models JSX as React 18's automatic runtime, and a pragma in any comment (esbuild and Babel read every comment; TypeScript the first ones, in any letter case) makes JSX call another factory or library; remove it (and do not write \`@jsx\` in a string either)`);
+  }
+  for (const m of sf.text.matchAll(/[@#]__[a-z_]+__/giu)) {
+    at(m.index!, (w) => `${w}: the bundler annotation \`${m[0]}\` is not supported: minifiers and tree-shaking (esbuild, Rollup, Terser in a production build) delete a call annotated \`@__PURE__\` or a call of a function annotated \`@__NO_SIDE_EFFECTS__\` when its result is unused, with its effects (a state update), which VTS models as executed; remove the annotation`);
+  }
+  // TypeScript's own reading of the file's pragmas, in case a spelling escaped the patterns above
+  const internal = sf as unknown as { pragmas?: ReadonlyMap<string, unknown>; checkJsDirective?: { enabled: boolean } };
+  const own = [...(internal.pragmas?.keys() ?? [])].filter((k) => /^(jsx|ts-nocheck)/.test(k));
+  if (!errs.length && (own.length || internal.checkJsDirective?.enabled === false)) {
+    errs.push(new VtsError(sf, `${rel}: the comment pragma${own.length ? ` \`@${own[0]}\`` : " `@ts-nocheck`"} is not supported: it changes what TypeScript checks or what JSX means; remove it`));
+  }
+  return errs;
+}
+
 /** The Lean namespace of the module of source file `f` (also used by `vreact synth`, whose type names must match). */
 export function moduleNs(srcDir: string, f: string): string {
   const rel = path.relative(srcDir, f).replace(/\.(tsx?|jsx?)$/, "");
@@ -286,25 +410,19 @@ export function translate(cfg: Config): TranslateResult {
   }
   for (const sf of sfs) {
     const rel = path.relative(cfg.root, sf.fileName);
-    // (TypeScript reads JSX pragmas from the comments at the start of a file)
-    for (const r of ts.getLeadingCommentRanges(sf.text, 0) ?? []) {
-      if (/@jsx\w*/.test(sf.text.slice(r.pos, r.end))) res.errors.push(new VtsError(sf, `${rel}: JSX pragmas (\`@jsx\`, \`@jsxImportSource\`, \`@jsxFrag\`, \`@jsxRuntime\`) are not supported: VTS models JSX as React 18's automatic runtime`));
-    }
     if (!ts.isExternalModule(sf)) {
       res.errors.push(new VtsError(sf, `${rel} is not a module (it has no import or export): TypeScript makes the declarations of such a file global, and merges its interfaces with the libraries' (\`interface Math { … }\`); add an import or an export`));
     }
-    // TypeScript's errors are VTS's: a comment that silences them (`// @ts-ignore` above a line,
-    // `@ts-expect-error`, `// @ts-nocheck` for the file) lets through what the translation relies
-    // on TypeScript to have checked (nullish kinds, a UMD global used without an import, argument
-    // types). (Any occurrence counts, also in a string: TypeScript's own rules for where a
-    // directive takes effect are not reproduced.)
-    for (const m of sf.text.matchAll(/@ts-(ignore|expect-error|nocheck)(?![\w-])/g)) {
-      const { line, character } = sf.getLineAndCharacterOfPosition(m.index!);
-      const e = new VtsError(sf, `${rel}:${line + 1}: \`@ts-${m[1]}\` is not supported: it silences TypeScript's errors, and VTS relies on TypeScript's checks (null and undefined, the types of library and React declarations, imports); fix the error instead`);
-      e.line = line + 1;
-      e.col = character + 1;
-      res.errors.push(e);
+    res.errors.push(...commentDirectiveErrors(sf, rel));
+    // the bundler compiles a file with the settings of the tsconfig.json nearest to it (Vite's
+    // esbuild reads its jsx, jsxImportSource, verbatimModuleSyntax, …); VTS checks every source
+    // with the project's: a tsconfig.json in a source directory could make JSX another library's,
+    // or keep an import of a type
+    const nearest = ts.findConfigFile(path.dirname(sf.fileName), ts.sys.fileExists, "tsconfig.json");
+    if (nearest && path.dirname(path.resolve(nearest)) !== path.resolve(cfg.root) && !path.relative(cfg.root, nearest).startsWith("..")) {
+      res.errors.push(new VtsError(sf, `${rel}: ${path.relative(cfg.root, nearest)} is not supported: the bundler compiles ${rel} with the settings of the tsconfig.json nearest to it, but VTS checks it with the project's tsconfig.json; put the settings in the project's tsconfig.json and remove ${path.relative(cfg.root, nearest)}`));
     }
+
     // (`/// <reference path>` to anything but a VTS source is rejected above; `lib` and `types`
     // references add TypeScript's and installed libraries)
     if (sf.hasNoDefaultLib) {
@@ -517,6 +635,28 @@ export function translate(cfg: Config): TranslateResult {
       // modules' Defs) can use them through `vreact_contracts`
       const decls = sortDecls(sf, m);
       const usedInDefs = withPosts ? usedByOthers(decls, m) : new Set<ts.Node>();
+      // the facts (module-level asserts) about constants, each emitted as soon as everything
+      // it mentions is (right after its constant, unless it calls a function declared later)
+      const declSet = new Set(decls);
+      const emitted = new Set<ts.Node>();
+      const pendingFacts: { d: ts.VariableDeclaration; info: ConstInfo; k: number; deps: ts.Node[] }[] = [];
+      for (const d of decls) {
+        const g = prog.globals.get(d)!;
+        if (g.k === "const") g.info.facts.forEach((f, k) => pendingFacts.push({ d: d as ts.VariableDeclaration, info: g.info, k, deps: factDeps(f, declSet, m) }));
+      }
+      const flushFacts = () => {
+        for (let i = 0; i < pendingFacts.length; ) {
+          const p = pendingFacts[i];
+          if (!p.deps.every((x) => emitted.has(x)) || !emitted.has(p.d)) {
+            i++;
+            continue;
+          }
+          pendingFacts.splice(i, 1);
+          const { r, obs } = obsOf(() => translateFact(p.d, p.info, p.k, m));
+          defs += r + "\n";
+          modRes.constants.find((c) => c.qname === p.info.qname)!.obs.push(...obs);
+        }
+      };
       for (const d of decls) {
         const g = prog.globals.get(d)!;
         if (g.k === "const") {
@@ -535,7 +675,10 @@ export function translate(cfg: Config): TranslateResult {
           } else if (r.post) defs += r.post + "\n";
           modRes.functions.push({ name: g.info.name, qname: `${ns}.${leanIdent(g.info.name)}`, trusted: g.info.trusted, posts: r.postNames, obs, refs: itemRefs([d], d, m) });
         }
+        emitted.add(d);
+        flushFacts();
       }
+      if (pendingFacts.length) throw new Error(`facts left unemitted: ${pendingFacts.map((p) => p.info.qname).join(", ")}`);
       // components, children first
       for (const c of sortComponents(sf, m)) {
         const g = prog.globals.get(c) as { k: "comp"; info: CompInfo };
@@ -918,16 +1061,26 @@ function collect(st: ts.Statement, m: ModCtx, ns: string, res: TranslateResult) 
   if (ts.isExpressionStatement(st) && ts.isCallExpression(st.expression) && isSpecCall(st, m, "assert")) {
     const fact = st.expression.arguments[0];
     let owner: { info: { facts: ts.Expression[]; opaque: boolean } } | null = null;
+    // (the fact is a theorem of its constant's module, which cannot see this module's
+    // declarations: a constant imported from another module cannot own it)
+    let imported: ts.VariableDeclaration | null = null;
     const visit = (n: ts.Node) => {
       if (owner || isErasedType(n)) return;
       if (ts.isIdentifier(n)) {
         const d = prog.refDecl(n);
         const g = d ? prog.globals.get(d) : undefined;
-        if (g?.k === "const" && g.info.opaque) owner = g as { info: ConstInfo };
+        if (g?.k === "const" && g.info.opaque) {
+          if (d!.getSourceFile() === m.sf) owner = g as { info: ConstInfo };
+          else imported ??= d as ts.VariableDeclaration;
+        }
       }
       ts.forEachChild(n, visit);
     };
     visit(fact);
+    if (!owner && imported) {
+      const c = imported as ts.VariableDeclaration;
+      fail(st, `a module-level assert(…) about \`${(c.name as ts.Identifier).text}\`, an /** @opaque */ constant of another module (${path.basename(c.getSourceFile().fileName)}), is not supported: a fact is proved in its constant's module; state it there, or about a constant of this module`);
+    }
     if (!owner) fail(st, "a module-level assert(…) states a fact about an /** @opaque */ constant declared above it");
     (owner as { info: { facts: ts.Expression[] } }).info.facts.push(fact);
     return;
@@ -1140,11 +1293,35 @@ function translateConst(d: ts.VariableDeclaration, info: ConstInfo, m: ModCtx): 
   const v = expr(d.initializer!, env, info.type);
   const short = leanIdent((d.name as ts.Identifier).text);
   // transparent constants are unfolded by automation; @opaque ones only through their facts
-  let out = `${info.opaque ? "" : "@[vreact_simp, reducible] "}def ${short} : ${leanType(info.type)} :=\n  ${v.code}\n`;
-  info.facts.forEach((f, k) => {
-    const name = k === 0 ? `${short}.post` : `${short}.post${k + 1}`;
-    out += `\n/-- fact: ${docText(f, 80)} -/\ntheorem ${name} : ${prop(f, env)} := by\n  unfold ${short}\n  exact ${m.ob(f, "fact", `fact about ${short}: ${nodeText(f, 60)}`)}\n`;
-  });
+  return `${info.opaque ? "" : "@[vreact_simp, reducible] "}def ${short} : ${leanType(info.type)} :=\n  ${v.code}\n`;
+}
+
+/** The theorem of the `k`-th module-level assert(…) about the constant `d` (emitted once what it mentions is declared). */
+function translateFact(d: ts.VariableDeclaration, info: ConstInfo, k: number, m: ModCtx): string {
+  const env = baseEnv(m);
+  const short = leanIdent((d.name as ts.Identifier).text);
+  const f = info.facts[k];
+  const name = k === 0 ? `${short}.post` : `${short}.post${k + 1}`;
+  return `/-- fact: ${docText(f, 80)} -/\ntheorem ${name} : ${prop(f, env)} := by\n  unfold ${short}\n  exact ${m.ob(f, "fact", `fact about ${short}: ${nodeText(f, 60)}`)}\n`;
+}
+
+/**
+ * The declarations of `decls` (functions and constants of the module) that the fact `f` mentions:
+ * its theorem must come after all of them.  (A module-level assert runs after the declarations
+ * above it, and function declarations are hoisted: a fact may call a function declared below
+ * the constant it is about.)
+ */
+function factDeps(f: ts.Expression, decls: Set<ts.Node>, m: ModCtx): ts.Node[] {
+  const out: ts.Node[] = [];
+  const visit = (n: ts.Node) => {
+    if (isErasedType(n)) return;
+    if (ts.isIdentifier(n)) {
+      const dd = m.prog.refDecl(n);
+      if (dd && decls.has(dd)) out.push(dd);
+    }
+    ts.forEachChild(n, visit);
+  };
+  visit(f);
   return out;
 }
 
