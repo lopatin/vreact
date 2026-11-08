@@ -129,6 +129,15 @@ function isDiscreteProp(name: string): boolean {
 
 const RESERVED = ["E", "σ", "τ", "κ", "hpre", "hinv", "props", "ev", "acc"];
 
+/**
+ * The JSX attribute names React 18.3.1 keeps out of an element's props besides `key` and `ref`
+ * (`RESERVED_PROPS` of `React.createElement` and `react/jsx-runtime`): the development JSX
+ * transforms pass the source location and `this` under these names.  A component never
+ * receives them, and an HTML element never gets them as attributes.
+ */
+const RESERVED_PROPS = ["__self", "__source"];
+const RESERVED_WHY = (name: string) => `React 18 removes ${name} from the props of every element, like key and ref (the development JSX transform passes ${name === "__source" ? "the source location" : "`this`"} under that name): a component never receives it (props.${name} is undefined), an HTML element never gets it as an attribute`;
+
 export function baseEnv(m: ModCtx): Env {
   return { m, vars: new Map(), narrow: new Map(), scope: new Set(RESERVED), mode: "code" };
 }
@@ -146,9 +155,12 @@ export function compSignature(fn: ts.FunctionDeclaration, ns: string, module: st
     propsType = typeOfNode(p.type, m.prog.typeEnv, name + "Props");
     if (propsType.k !== "rec") fail(p, "props must be an object type");
     for (const f of m.reg.rec(propsType)) {
-      // React 18 takes `key` and `ref` out of the props: the component never receives them
-      if (f.name === "key") fail(p, `a prop named key: React uses key={…} to match list items and never passes it to the component (props.key is undefined); rename the prop (e.g. id)`);
-      if (f.name === "ref") fail(p, `a prop named ref: React 18 does not pass ref={…} to a function component (props.ref is undefined), and refs are not modelled; rename the prop`);
+      // React 18 takes `key`, `ref`, `__self` and `__source` out of the props: the component
+      // never receives them (also when the type spells the name as a string, `"key": int`)
+      const fname = /^(["'])(.*)\1$/.exec(f.name)?.[2] ?? f.name;
+      if (fname === "key") fail(p, `a prop named key: React uses key={…} to match list items and never passes it to the component (props.key is undefined); rename the prop (e.g. id)`);
+      if (fname === "ref") fail(p, `a prop named ref: React 18 does not pass ref={…} to a function component (props.ref is undefined), and refs are not modelled; rename the prop`);
+      if (RESERVED_PROPS.includes(fname)) fail(p, `a prop named ${fname}: ${RESERVED_WHY(fname)}; rename the prop`);
       if (f.type.k === "fn") {
         if (f.type.ret.k !== "void") fail(p, `callback ${f.name} must return void`);
         callbacks.push({ name: f.name, params: f.type.params });
@@ -605,7 +617,16 @@ function effectCode(c: ts.CallExpression, env: Env, info: CompInfo): string {
     if (!call) return null;
     const delay = call.arguments[1];
     if (delay && !isNumeric(typeOf(delay, e))) fail(delay, "the delay of a timer must be a number");
-    return evalArgs(delay ? [delay] : [], e, rest);
+    // `const id = setTimeout(…)`: the handle exists from here on (before, it is in its temporal
+    // dead zone, also for a cleanup returned earlier on another path)
+    const handle = (e2: Env): Env => {
+      if (!ts.isVariableStatement(s)) return e2;
+      const d = s.declarationList.declarations[0];
+      if (!(s.declarationList.flags & ts.NodeFlags.Const)) fail(s, `declare the timer handle with const: const ${nodeText(d.name)} = ${nodeText(call.expression)}(…)`);
+      if (!ts.isIdentifier(d.name)) fail(d.name, "a timer handle is bound to a name: const id = setTimeout(…)");
+      return bind(e2, symbolOf(e2, d.name)!, { k: "timer" });
+    };
+    return evalArgs(delay ? [delay] : [], e, (e2) => rest(handle(e2)));
   };
   const onCleanup = (c: ts.Expression, e: Env): string => `(let _ : Unit := ${cleanupCode(c, e)};\n${done(e)})`;
   const setup = cleanupOnly ? onCleanup(cleanupOnly, e1) : block(stmts, 0, e1, { kind: "handler", fnNode: fn, onDone: done, onCleanup, onStmt }, done);
@@ -749,17 +770,24 @@ function cleanupItems(items: readonly ts.Node[], i: number, env: Env, k: (e: Env
 
 /**
  * `id`: a timer handle, the `const` an effect binds to `setTimeout(…)` / `setInterval(…)` (not
- * a VTS value): a positive integer in browsers, never null, undefined or 0.
+ * a VTS value): a positive integer in browsers, never null, undefined or 0.  It exists only once
+ * the registration has run on the path to the cleanup's `return` (`env` binds it then, as
+ * `{ k: "timer" }`); a cleanup returned earlier — from a branch before `const id = …` — reads
+ * it in its temporal dead zone when React calls it, which throws a ReferenceError.
  */
 function timerHandle(x0: ts.Expression, env: Env): boolean {
   const x = stripParens(x0);
   if (!ts.isIdentifier(x)) return false;
   const s = symbolOf(env, x);
-  if (!s || env.vars.get(s)) return false;
+  if (!s) return false;
+  const b = env.vars.get(s);
+  if (b) return b.k === "timer";
   const d = s.valueDeclaration;
-  if (!d || !ts.isVariableDeclaration(d) || !(d.parent.flags & ts.NodeFlags.Const) || !d.initializer) return false;
+  if (!d || !ts.isVariableDeclaration(d) || !d.initializer) return false;
   const init = stripParens(d.initializer);
-  return ts.isCallExpression(init) && ts.isIdentifier(init.expression) && ["setTimeout", "setInterval"].includes(init.expression.text) && isLibGlobal(init.expression, init.expression.text, env);
+  const reg = ts.isCallExpression(init) && ts.isIdentifier(init.expression) && ["setTimeout", "setInterval"].includes(init.expression.text) && isLibGlobal(init.expression, init.expression.text, env);
+  if (reg) fail(x, `the cleanup reads \`${x.text}\` before \`const ${x.text} = ${init.expression.text}(…)\` has run on this path: when React calls the cleanup, \`${x.text}\` is still in its temporal dead zone and reading it throws a ReferenceError. Return this cleanup only after registering the timer, or do not clear it on this path`);
+  return false;
 }
 
 /** The value of a condition on a timer handle (`id !== null`, `id`, `!id`), or null if it is not one. */
@@ -1196,12 +1224,13 @@ function intrinsic(tag: string, e: ts.JsxElement | ts.JsxSelfClosingElement, kid
       continue;
     }
     if (name === "ref" || name === "dangerouslySetInnerHTML") fail(a, `${name} is not supported in VTS`);
+    if (RESERVED_PROPS.includes(name)) fail(a, `${name} is not an attribute: ${RESERVED_WHY(name)}`);
     const val = attrValue(a);
     if (/^on[A-Z]/.test(name)) {
       if (!val) fail(a, "handler attribute needs a value");
       const info = infos.get(a)!;
       const ev = info.model;
-      const h = handlerFn(val, env, info.discrete ? "discrete" : "robust", "event");
+      const h = handlerFn(val, env, info.discrete ? "discrete" : "robust", { tag, prop: name });
       const run = `(fun ${h.params[0] ?? "_"} => ${h.code})`;
       if (!info.discrete) {
         const ok = m.ob(a, "handler-robust", `${name} handler on <${tag}> (${info.why}) preserves the invariant of ${comp.info.name} from any state`);
@@ -1288,6 +1317,7 @@ function componentElement(tagNode: ts.JsxTagNameExpression, e: ts.JsxElement | t
   for (const a of attrs(e)) {
     if (ts.isJsxSpreadAttribute(a)) fail(a, "spread props are not supported");
     if (a.name.getText() === "ref") fail(a, "ref is not supported in VTS (refs are not modelled; React 18 does not pass them to function components)");
+    if (RESERVED_PROPS.includes(a.name.getText())) fail(a, `${a.name.getText()} cannot be passed as a prop: ${RESERVED_WHY(a.name.getText())}`);
     if (given.has(a.name.getText())) fail(a, `${a.name.getText()} is given twice`);
     given.set(a.name.getText(), a);
   }

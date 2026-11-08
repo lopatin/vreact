@@ -190,9 +190,15 @@ Every expression maps to a Lean term whose value is the JavaScript value.
   TypeScript AST spells raw). References that JSX compilers decode differently
   (names outside HTML 4, `&#X41;`, `&#+65;`, code points above U+10FFFF) are
   rejected, and so are JSX text that Babel's transform gives another value (tabs,
-  other whitespace than spaces at line breaks) and attribute strings spanning lines.
-* `key` and `ref` are not props in React 18 (the component never receives them):
-  a props type with a field named `key` or `ref` is rejected, and so is `ref={…}`.
+  other whitespace than spaces at line breaks) and attribute strings with a line
+  break, written as one or as a character reference (`&#10;`: Babel replaces a
+  decoded line break and the whitespace after it with a space).
+* `key`, `ref`, `__self` and `__source` are not props in React 18: `createElement`
+  and `react/jsx-runtime` take them out of every element's props
+  (`RESERVED_PROPS`), so a component never receives them and an HTML element
+  never gets them as attributes. A props type with a field of one of these names
+  (also spelled as a string, `"key": int`) is rejected, and so are `ref={…}`,
+  `__self={…}` and `__source={…}`.
 * A JSX const (`const row = <p>{e}</p>;`) is translated where it is declared —
   JS evaluates the element's attributes and `{…}` children there, whether or not
   (and wherever) it is rendered — so its obligations are checked at the
@@ -217,8 +223,25 @@ Every expression maps to a Lean term whose value is the JavaScript value.
   other function created in the handler — a functional update, which React calls
   when it processes the update and again when it rebases it, or a local helper —
   reading it (also `e.preventDefault()`) is rejected: copy the field into a `const`
-  first. A field is accepted only where TypeScript types it `string` (`boolean` for
-  `checked`): an `<li>`'s or `<progress>`'s `value` is a number.
+  first. A field is accepted only where JS reads a string there (`boolean` for
+  `checked`), which depends on the element and the handler prop the handler is
+  attached to — not on the parameter's type: React's handler types are bivariant
+  (`bivarianceHack`), so TypeScript accepts `(e: MouseEvent<HTMLInputElement>) => …`
+  as a `<div>`'s `onClick` and types `e.currentTarget.value` as a string, which is
+  undefined there (also for a handler passed by name). `e.currentTarget` is the
+  element the handler is on (react-dom's `executeDispatch`): its `value` is a
+  string on `<input>`, `<select>`, `<textarea>`, `<button>`, `<option>`,
+  `<output>` and `<data>` (undefined on most elements, a number on `<li>`,
+  `<meter>`, `<progress>`), its `checked` a boolean on `<input>` only.
+  `e.target` is the element where the native event happened (`getEventTarget`; a
+  text node's parent), any element inside the one the handler is on, so it is
+  read only where nothing inside the element can be a target: an `<input>` (void),
+  a `<textarea>` (text only), a `<select>`'s `onChange`/`onInput` (`change` and
+  `input` fire at the select). There `e.target` and `e.currentTarget` are the same
+  element, so the model's one `value` describes both. `e.key` is read only in
+  `onKeyDown`/`onKeyUp`/`onKeyPress` (a `SyntheticKeyboardEvent`, whose `key` is
+  always a string: `getEventKey`). TypeScript's type of the field must say
+  `string`/`boolean` too (it rules out a parameter annotated `any`).
 
 ### 1.3 Contracts (`vreact/spec`)
 
@@ -407,7 +430,13 @@ its obligations are checked under the facts that hold at that `return` (the
 effect's early returns and branches). A condition on a timer handle (`id !==
 null`, `id`) is decided statically: browsers return a positive integer. The
 cleanup may be returned at the end of the effect body or of a branch of it;
-statements after a `return` are rejected (JS never runs them).
+statements after a `return` are rejected (JS never runs them). A timer handle
+is the `const` a registration `const id = setTimeout(…)` declares; it is bound
+(as a handle, not a VTS value: it can only be cleared) once that statement has
+run, so a cleanup can clear it, or test it, only when it is returned after the
+registration on its path. A cleanup returned earlier — from a branch before
+`const id = …` — would read `id` in its temporal dead zone when React calls it
+(a ReferenceError; TypeScript does not flag a use inside a closure): rejected.
 Running a robust effect any number of times (StrictMode) is safe.
 
 A timer is registered only by a statement at the top level of the effect body
@@ -606,9 +635,19 @@ hook rules hold (static checks). For every function: its body is safe and its
   (tag names, whitespace of JSX text, character references), cross-checked against
   Babel's: JSX text on which the two disagree (a tab, a whitespace character other
   than a space next to a line break, a reference to whitespace there), attribute
-  strings with a line break (Babel joins the lines) and references that compilers
-  decode differently are rejected. Other compilers (esbuild, SWC) are assumed to
-  agree with them on what is accepted.
+  strings with a line break, raw or as a character reference (Babel replaces a
+  decoded line break and the whitespace after it with a space), and references
+  that compilers decode differently are rejected. Other compilers (esbuild, SWC)
+  are assumed to agree with them on what is accepted. The props React's JSX
+  runtime keeps out of an element (`key`, `ref`, `__self`, `__source`) are those
+  of react 18.3.1's `RESERVED_PROPS`.
+* **DOM event fields:** which elements have a string `value` (`<input>`,
+  `<select>`, `<textarea>`, `<button>`, `<option>`, `<output>`, `<data>`) and a
+  boolean `checked` (`<input>`), that nothing inside an `<input>`, a `<textarea>`
+  or (for `change`/`input`) a `<select>` is an event target, and that React 18.3.1
+  gives `e.currentTarget` the handler's element and `e.key` a string in keyboard
+  handlers (HTML standard; react-dom `executeDispatch`, `getEventTarget`,
+  `getEventKey`) — not TypeScript's bivariant handler types.
 * **Outside the subset:** the entry point (`main.tsx`), React itself, the DOM,
   CSS.
 * **Event bubbling, multi-handler events and activation behaviour** are handled

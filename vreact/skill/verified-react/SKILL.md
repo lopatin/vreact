@@ -126,6 +126,9 @@ export function ItemList(props: ItemListProps) {
 * Read event fields in the handler itself: `const v = e.target.value;
   setX((p) => … v …)` — a functional update runs after the event's dispatch
   (`e.currentTarget` is null then), so reading `e.…` inside it is rejected.
+  Put the handler on the control whose field it reads (`<input onChange>`:
+  `e.target.value`; `e.key` in `onKeyDown`): fields are checked against the element
+  and handler prop, not against the type annotation of `e`.
 * Invariants must not depend on props that can change (React keeps state across
   prop changes): clamp when rendering instead.
 * Lists need `key={…}` with provably distinct keys (usually from an invariant).

@@ -190,15 +190,24 @@ Order inside the body:
 
 Props: a single parameter `props: P` (or destructured `{ a, b }: P`) where `P`
 is a record whose function-typed fields are callbacks (`=> void`, required).
-`key` and `ref` are not props: React never passes them to the component
-(`props.key` is undefined), so `P` may not have fields named `key` or `ref`, and
-`ref={…}` is rejected (refs are not modelled).
+`key`, `ref`, `__self` and `__source` are not props: React 18 never passes them
+to the component (`props.key` is undefined; the development JSX transform uses
+`__self` and `__source`), so `P` may not have fields with these names, `ref={…}`
+is rejected (refs are not modelled), and so are `__self=…` / `__source=…`.
 
 Handlers (`onClick`, `onChange`, `onSubmit`, `onKeyDown`, …): arrow functions or
 local closures; the event parameter supports `e.target.value`,
-`e.target.checked`, `e.key`, `e.preventDefault()` (also `e.currentTarget.…`;
-`value` must be a string there — an input's, select's or textarea's — not the
-number an `<li>` or `<progress>` has). Read the event in the handler's own
+`e.target.checked`, `e.key`, `e.preventDefault()` (also `e.currentTarget.…`).
+Which fields exist depends on the element and the handler prop the handler is
+attached to, not on the type annotation of `e` (React's handler types are
+bivariant: TypeScript accepts `(e: ChangeEvent<HTMLInputElement>) => …` on a
+`<div>`): `e.currentTarget` is the element the handler is on, and its `value`
+is a string only on `<input>`, `<select>`, `<textarea>`, `<button>`, `<option>`,
+`<output>`, `<data>` (undefined on a `<div>`, a number on an `<li>` or
+`<progress>`), its `checked` only on `<input>`; `e.target` may be any element
+inside the one the handler is on, so `e.target.…` is accepted only on an
+`<input>`, a `<textarea>` and a `<select>`'s `onChange`/`onInput`; `e.key` only
+in `onKeyDown`/`onKeyUp`/`onKeyPress`. Read the event in the handler's own
 statements (array callbacks there may too): a function created in the handler —
 a functional update `setX(p => …)`, which React calls when it processes the
 update and again when it rebases it, or a local helper — may run after the
@@ -232,7 +241,10 @@ value); no async. A cleanup
 is an inline `() => { … }`, returned at the end of the effect body or of a branch
 of it, that only calls `clearTimeout`/`clearInterval` and makes those external
 writes, possibly under `if`/`else` (`if (id !== null) clearInterval(id)`: a timer
-handle is never null); no setters, `dispatch`, parent callbacks or local helpers:
+handle is never null). A timer handle is `const id = setTimeout(…)` and can only be
+cleared, by a cleanup returned after that statement: one returned earlier (from a
+branch before it) would read `id` in its temporal dead zone, a ReferenceError
+when React calls it. No setters, `dispatch`, parent callbacks or local helpers:
 it runs later with the values it captured. Its conditions and arguments are
 checked where the effect returns it, under the facts that hold there (the
 effect's early returns, its `if`s). Statements after the effect's `return` are
@@ -256,7 +268,9 @@ references in JSX text and attribute strings are decoded as JSX does (`&amp;`,
 `type="&#115;ubmit"` is a submit button. References that JSX compilers read
 differently (`&check;` and other names outside HTML 4, `&#X41;`, `&#+65;`, code
 points above U+10FFFF) are rejected: write the character, or `{"…"}`. So are JSX
-text with a tab (Babel makes it a space) and attribute strings spanning lines.
+text with a tab (Babel makes it a space) and attribute strings with a line break,
+written as one or as a reference (`&#10;`): Babel replaces a line break and the
+whitespace after it with a space; write `{"a\n b"}`.
 One native event may reach at most one discrete handler: an element may not
 combine handlers fired by the same native event (a checkbox's `onClick` +
 `onChange` both run on click; `onInput` + a text input's `onChange` both run on
