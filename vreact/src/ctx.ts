@@ -2,7 +2,7 @@ import ts from "typescript";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { TypeRegistry, type VType, type Param, type Field, type TypeEnv } from "./types.ts";
+import { TypeRegistry, type VType, type Param, type Field, type TypeEnv, type TParam } from "./types.ts";
 import { relLoc, nodeText, subscripted } from "./util.ts";
 
 /** A translated Lean term together with its VTS type. */
@@ -15,6 +15,8 @@ export interface Val {
 export interface FnInfo {
   qname: string;
   name: string;
+  /** type parameters (generic function): Lean binders `{T : Type}`, `[DecidableEq T]`, accessors */
+  tparams: TParam[];
   params: Param[];
   ret: VType;
   hasPre: boolean;
@@ -161,6 +163,12 @@ export interface Env {
   handler?: HandlerAcc;
   /** inside a functional update `setX(prev => …)` / reducer argument: current-state access */
   curState?: string;
+  /**
+   * Set inside a body that Lean checks for more values than JS gives it (a `for…of` body: any
+   * accumulator and element; an array-method callback: any element; a functional update: any
+   * state), naming it: `assume(…)` is rejected there (its fact would be a theorem for all of them).
+   */
+  generalized?: string;
   /** Lean hypotheses in scope that justify obligations (names only, for documentation). */
   fnName?: string;
   /** the key function of a keyed `.map`: its JSX consts are translated by the node function */

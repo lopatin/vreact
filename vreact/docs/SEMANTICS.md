@@ -37,7 +37,8 @@ exact, total meaning in Lean, while still covering what real React code uses.
 | `readonly T[]`, `T[]`                        | `List T`                                | immutable |
 | `T \| null`, `T \| undefined`, `f?: T`       | `Option T`                              | not both null and undefined |
 | `[A, B]`                                     | `A × B`                                 | |
-| `(x: A) => void` (props only)                | callback with a contract                | see §2.4 |
+| `(x: A) => void` (props only)                | callback with a contract                | see §2.4; never data (a function's parameter or result, state, a constant, a local, a hole, an array element or a non-props field: rejected) |
+| type parameter `T` of a generic function     | binder `{T : Type}` (+ constraint binders) | abstract; instantiated at each call (below) |
 
 `T | null` and `T | undefined` share the Lean type `Option T`; which nullish
 value a `none` stands for is taken from the TypeScript type of the expression
@@ -94,8 +95,57 @@ these names are own properties of every value and are accepted.
 
 Rejected: `any`, `as` casts, classes, `this` (also `this` parameters), mutation of
 objects/arrays, `==` (except `== null`), `===` on objects (reference identity),
-generics, exceptions (`try`), `var`, `while`, recursion (for now), recursive types,
+generic types, components and arrows (generic top-level functions are supported,
+below), exceptions (`try`), `var`, `while`, recursion (for now), recursive types,
 `async`.
+
+**Generic functions.** A top-level function may have type parameters; each is a
+Lean binder `{T : Type}` of the definition, abstract in its body, and its constraint
+adds what the body may do with values of `T`: an *equality constraint* (`K extends
+int | string | boolean | <string-literal enum>`) adds `[DecidableEq K]`, so `===`,
+`includes`, `indexOf` and `distinct` on `K` are Lean equality — exactly JS's `===` and
+SameValueZero on the types `K` may be instantiated with; a *field constraint* (`T
+extends { readonly id: int; … }`) adds one explicit accessor parameter per field,
+`(T_id : T → Int)`, and `x.id` on `x : T` is `T_id x` (not a type class: after a
+transparent function is unfolded at a call, the accessor `fun x => x.id` reduces to
+the record field, which the automation reasons about). The binders come first, in the
+order type binders, instance binders, accessors, then the value parameters and
+`h_pre`; every contract theorem `f.post…` has the same binders, so it is a theorem for
+every instantiation, and `vreact_contracts` applies it to the arguments of each call.
+A call passes the type arguments by name, `(f (T := X) (fun x => x.id) xs …)`: they are
+inferred by the translator from the VTS types of the arguments (TypeScript's
+inference cannot tell `int` from `number`), then from the type the context expects of
+the result, then for the arguments typed by their parameter (`[]`, `null`, literals);
+`int` and `number` join to `number`, an enum and `string` to `string`; otherwise the
+call must write them (`f<int>(…)`). Each instantiation is checked: it is closed and
+never nullable — `T | null` with `T = X | null` would be `Option (Option X)` in Lean,
+where JS has a single nullish value; so type-parameter parts of a TypeScript type
+are non-nullish for the null/undefined analysis, and `x === null` on `x : T` is
+statically false —, it is never `number` (no usable equality: `NaN`, `-0`) for an
+equality constraint, and for a field constraint it has each field (a record field,
+a union's field in every variant or its discriminant, another type parameter's
+constrained field) at exactly the constraint's type and nullish kinds. Where a
+parameter type has optional parts (`x: T | null`), the argument's must be the
+nullish value the declaration names: TypeScript accepts an `int | undefined`
+argument there (with `T = number | undefined`), whose `undefined` the body's
+`x === null` would not see. Operations that look into a value of `T` (arithmetic,
+ordering, `Math.*`, string conversion, string properties and methods, truthiness,
+object literals) are rejected also under `T extends int` or `T extends boolean`:
+Lean checks the body once for every `T`, and the translator does not take
+TypeScript's word that a value of `T` is a number (or a boolean) — every argument
+of a `Math` function must have a numeric VTS type. A `@trusted` generic function is
+rejected: its axioms would quantify over every Lean type (`decode<T>(s): T` would
+inhabit `Empty`; a contract true for the booleans `K extends boolean` admits, like
+"two of three are equal", is false at `K := Int`; an accessor parameter need not
+be a field read), which is stronger than its JS meaning, where it only runs at
+instantiations TypeScript allows. `assume(…)` in a generic body is rejected for the
+same reason: Lean keeps the assumed fact as a theorem about the function's
+parameters (§1.3), here for every Lean type (`assume(a === b || b === c || a === c)`
+under `K extends boolean` would be a theorem at `K := Int`, from which a user proof
+derives `False`); `requires(…)` states such a fact for each caller to establish at its
+own types. Verified generic functions are sound for the
+same reason the other way round: proving the body and contracts for every Lean
+type is stronger than needed.
 
 ### 1.2 Expressions and statements — semantics by translation
 
@@ -124,8 +174,9 @@ Every expression maps to a Lean term whose value is the JavaScript value.
   arguments that are not modelled (`thisArg`, `fromIndex`, string positions) are
   rejected, never ignored. `includes`, `indexOf` and key-less `distinct` compare
   with Lean equality, which is JS's SameValueZero/`===` only for primitive
-  elements (`boolean`, `int`, `string`, enums, options of these); on objects
-  (identity) and `number` (NaN) they are rejected.
+  elements (`boolean`, `int`, `string`, enums, equality-constrained type
+  parameters, options of these); on objects (identity) and `number` (NaN) they
+  are rejected.
 * String methods `trim includes startsWith endsWith slice repeat length` are
   exact on UTF-16 code units; `toLowerCase/toUpperCase` are opaque (Unicode case
   mapping is not modelled: proofs cannot depend on them). A literal is its cooked
@@ -400,14 +451,14 @@ Every expression maps to a Lean term whose value is the JavaScript value.
 | construct                         | meaning |
 |-----------------------------------|---------|
 | `requires(c)` in a function       | hypothesis parameter `(h_pre : c)`; every call site must prove it (several `requires` are conjoined in order into one `h_pre`) |
-| `ensures((r: T) => c)`            | theorem `f.post : ∀ args, h_pre → c[r := f args]` |
+| `ensures((r: T) => c)`            | theorem `f.post : ∀ args, h_pre → c[r := f args]` (a generic function's: also `∀ T` and its constraint binders) |
 | `requires(c)` in a component      | the props precondition `pre`; every `<C …/>` must prove it (several are conjoined in order, as in functions) |
 | `invariant(c)` in a component     | the state invariant `inv` (after the hooks; several are conjoined in order) |
 | `callbackRequires(cb, (…) => c)`  | the contract of a callback prop (§2.4) |
-| `assert(c)` / `assume(c)`         | obligation + fact / trusted fact (reported) |
+| `assert(c)` / `assume(c)`         | obligation + fact / trusted fact (reported): `c` whenever control reaches it, for every input the declaration's contracts allow; not in a generic function, a `for…of` body, an array-method callback or a functional update |
 | `forall exists distinct implies`  | bounded quantifiers, key uniqueness (`List.Nodup`), implication |
 | `/** @opaque */` on a function    | callers see only its `ensures` (modular verification) |
-| `/** @trusted */`                 | body not verified; contract assumed (reported, appears as a Lean axiom) |
+| `/** @trusted */`                 | body not verified; contract assumed (reported, appears as a Lean axiom); not on a generic function |
 | `hole<T>()`                       | a placeholder for `vreact synth`: `sorry`; while a function has one, its `ensures` theorems are `sorry` too (reported INCOMPLETE) |
 
 A contract is a proposition with JS's evaluation order: the right operand of
@@ -426,6 +477,29 @@ any length), `x !== null && y !== null && x + y > 0`, `!(x === null || y === nul
 every earlier operand failed (held), each test becoming a `match`. Such a compound
 guard is decomposed only when a later operand needs its narrowing; otherwise it
 stays one condition (the normal forms above).
+
+What `assume(c)` trusts is that `c` holds whenever control reaches it, for every
+input the enclosing declaration's contracts allow — a function's `requires`, a
+component's precondition and invariant (every state the invariant admits, not
+only the reachable ones), a callback's `callbackRequires` — not only for the inputs
+the program happens to pass. Its proof is `(by vreact_assume)` (VReact/Assumed.lean):
+`VReact.assumed` at `∀ hyps, c`, applied to the hypotheses in scope without a value
+(`h_pre`, `hpre`/`hinv`, the conditions of the `if`/`match` branches leading to it,
+callback-contract and membership hypotheses; proved `have`s follow from them). Lean
+keeps that proof as an auxiliary theorem (`f._proof_N`, which a user proof can name),
+so its statement must be the fact as stated: `∀ args, h_pre → path → c`. With
+`VReact.assumed` at `c` alone it would close over `c`'s variables only — `if (flag)
+assume(flag)` would become `∀ flag, flag = true`, from which a user proof derives
+`False` without naming the axiom. For the same reason `assume(…)` is rejected where
+the translation checks a body for more values than JS gives it: a `for…of` body
+(a fold step, for any accumulator and element — as its obligations are), an
+array-method callback (a function of any element: the membership `x ∈ xs` is added
+only for obligations), a functional update (a function of any state), also through a
+helper arrow inlined there — `assume(s >= 0)` on a counter would be `∀ s, s ≥ 0`;
+and in a generic function (§1.1), whose theorem would hold for every Lean type. A
+handler, effect, timer callback, callback passed to a child or keyed-list item has
+the program's context (the snapshot with the invariant, the callback contract, the
+item's membership).
 
 `assert(c)` / `assume(c)` bind the hypothesis `c` for everything after them. In an
 event handler, effect, timer callback or callback passed to a child, whose
@@ -723,6 +797,22 @@ hook rules hold (static checks). For every function: its body is safe and its
   theorems of the module's functions that no other function or constant of the
   module uses are proved after the lemmas, in `Posts.lean` (imported by the
   module's `View.lean` and the importing modules' `Defs.lean`).
+  Generated files set `autoImplicit false`, so a binder the translation failed to
+  emit is a Lean error, never an auto-bound variable.
+  For generic functions (§1.1), Lean checks that each call's type arguments and
+  accessor arguments are well-typed and proves the body and contracts for every
+  instantiation (the type parameters are abstract, so the body cannot depend on
+  what they are); what the translator alone ensures is that the parametric model
+  means what JS does at each call: the instantiation is inferred from the
+  arguments' VTS types and is never nullable, an equality-constrained one is a type
+  JS compares by value, the accessor passed for a constrained field reads that field
+  (`fun x => x.f`, a union's shared-field accessor, or a type parameter's own
+  accessor) at exactly the constraint's type and nullish kinds, and an argument for
+  a parameter with optional parts has the nullish value its declared type names.
+  No `@trusted` declaration is generic (§1.1): its axioms are about the closed VTS
+  types of its signature, all of them inhabited, so what they assume is its type
+  and contracts at those types — what the reviewer of the declaration checks. Nor
+  does a generic body `assume(…)` (its fact would be a theorem for every Lean type).
 * **The report.** Every obligation runs under `vreact_ob` (`VReact/Budget.lean`),
   with its own heartbeat budget (per obligation also under parallel elaboration:
   Lean's heartbeat counter is per thread, and an obligation runs on one thread; the
@@ -758,7 +848,8 @@ hook rules hold (static checks). For every function: its body is safe and its
   a file. Lake errors without a position (imports, build cycles) are shown and
   make the result not verified. An axiom report, the sentinel or `vreact:ok`
   counts only when Lean printed it at the
-  generator's own `#print axioms X` / sentinel line / `vreact_ob` token, as a
+  generator's own `#print axioms X` / `#vreact_assumed X` / sentinel line /
+  `vreact_ob` token, as a
   message of that generated module's own Lean run (`vreact_ob` drops `vreact:`
   messages that code running inside the obligation logs; several reports for one
   name are joined). The messages are never read from the text lake prints, where
@@ -821,6 +912,22 @@ hook rules hold (static checks). For every function: its body is safe and its
   `bv_decide`), `Lean.ofReduceBool`, `Lean.ofReduceNat`, `Lean.trustCompiler` —
   which trusts Lean's compiler instead of its kernel: the items that depend on it
   are `INCOMPLETE` and the result is NOT VERIFIED (`RlNativeAxiom`).
+  `VReact.assumed` proves anything, so it stands for the program's `assume(…)`
+  facts (`ASSUMES`) only where `#vreact_assumed X` (VReact/Assumed.lean), written
+  after each `#print axioms X`, finds in `X`'s dependency cone (in the kernel's
+  terms) no declaration outside the generated code — a user proof's, under
+  whatever spelling: the axiom's name, a renaming `open`, a wrapper definition, a
+  tactic — whose own type or value uses the axiom: such a declaration states an
+  unproved fact of the proof file, i.e. it is an axiom of its own, and the items
+  that rely on it are `TRUSTED`, with the declaration named (`assumedByProofs` in
+  `--json`). An item whose axioms include `VReact.assumed` without that report
+  (printed at the generator's `#vreact_assumed X` line) is `UNCHECKED`. A user
+  proof that uses the theorem Lean keeps of an `assume(…)` (`f._proof_N`, §1.3)
+  uses the program's fact as stated: `ASSUMES`. (This audit is a third line of
+  defence: the whitelist below rejects the identifier `assumed` and the tactic
+  `vreact_assume` in proof files, and the kernel re-check above rejects a proof
+  module with a declaration that uses `VReact.assumed` directly, which breaks every
+  module importing it — `GxAssumeInProofs`.)
 * **User proofs** (`proofs/**/*.lean`, `proofs/Base.lean`) are imported into
   generated files, so whatever they declare takes effect while the translation is
   checked. Before Lean runs, `vreact` checks every proof file against a whitelist
@@ -858,7 +965,8 @@ hook rules hold (static checks). For every function: its body is safe and its
   (also in `grind =>`/`sym =>`; they run an external SAT solver), `idbg`,
   `dbg_trace` and the `dbgTrace…` functions (they print to Lean's output), the
   identifier `assumed` (`VReact.assumed` in any spelling: the axiom behind the
-  source's `assume(…)` facts, `RejectRlAssumed`), the
+  source's `assume(…)` facts, `RejectRlAssumed`) and the tactic `vreact_assume`
+  (the translator's proof of an `assume(…)`, which applies that axiom), the
   library's test tactics and the `Lean.ofReduceBool` family. String, character
   and name literals and names may not contain line breaks or other control
   characters (also as escapes): Lean prints them in its messages, where such a
@@ -1059,8 +1167,9 @@ hook rules hold (static checks). For every function: its body is safe and its
 Lean's kernel checks every proof (once while Lean elaborates, and again in a
 fresh process after the build: the kernel re-check above); `sorry`, `@trusted` and `assume(…)`
 (`VReact.assumed`, reported `ASSUMES`; only the generated code may use it, at the
-source's `assume(…)` sites — a user proof that does is rejected) show up in the
-axiom report, so nothing unverified can be mistaken for verified.
+source's `assume(…)` sites — a user proof that does is rejected, and an item relying
+on one that got through is `TRUSTED`) show up in the axiom report, so nothing
+unverified can be mistaken for verified.
 
 `vreact synth` is not part of the trusted base: its random tests only prune
 candidates. It reports "proved by Lean" (and `--write` writes a fill) only when
@@ -1069,9 +1178,14 @@ function's obligations failed, and their axioms contain no `sorryAx` — so a
 function with several holes is proved once all are filled, a `@trusted`
 function is refused, and a failure elsewhere that keeps the function from being
 checked is reported as "not proved". The written text is the text Lean checked.
-A proof whose axioms include @trusted declarations or `assume(…)` facts is
+A proof whose axioms include @trusted declarations, `assume(…)` facts or axioms of
+user proofs (also user-proof declarations that use `VReact.assumed`) is
 reported relative to them (`--json`: `"status": "proved-relative"` and
-`relative_to`). Synth types candidates with the narrowing the translator has at
+`relative_to`). A generic function is tested at `int`/`string` instantiations (a
+witness record with the constrained fields for a field constraint; an optional
+constrained field absent as `undefined`, as TypeScript allows), and generic helpers
+are offered at instantiations from the hole's types; the tests only steer the
+search, and Lean proves the fill for every instantiation. Synth types candidates with the narrowing the translator has at
 the hole (with the variants left after exclusions, which the translator splits
 on when a fill needs them), and searches a hole once per fill of the earlier holes a call can
 also evaluate (holes in different cases or branches are searched once); both

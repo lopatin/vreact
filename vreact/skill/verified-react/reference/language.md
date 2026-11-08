@@ -102,9 +102,10 @@ compiles a file with the nearest one's settings, e.g. its `jsxImportSource`).
 | `{ readonly f: T; g?: U }`              | records (optional field = `U \| undefined`) |
 | `{ kind: "x"; … } \| { kind: "y"; … }`  | discriminated unions — any common string-literal field works |
 | `readonly T[]`, `T \| null`, `[A, B]`   | lists, options (not both null and undefined), tuples |
-| `(a: A) => void`                        | only as callback **props** |
+| `(a: A) => void`                        | only as callback **props** (a direct field of a props type); never data: not a function's parameter or result, state, a constant, a local, a hole, an array element |
 
-Not supported: `any`, generics, classes, `Map/Set/Record`, recursive types,
+Not supported: `any`, generic types (generic type aliases and interfaces; generic
+*functions* are, see Generics), classes, `Map/Set/Record`, recursive types,
 non-discriminated unions (`string | number`), `ReactNode`/`children` props,
 library types (`Date`, `HTMLElement`, …). Function types and React nodes are not
 data: a parameter, result, constant, state, local, data prop, callback parameter,
@@ -230,6 +231,16 @@ components, handlers, effects, timer callbacks). Async functions and generators
 are rejected everywhere (an async predicate returns a promise, which is always
 truthy; calling a generator does not run its body).
 
+`assume(c)` is a trusted fact (reported `ASSUMES`): that `c` holds whenever control
+reaches it, for every input the enclosing function's `requires` (a component's
+precondition and invariant) allow — not only the inputs the program passes. Lean
+keeps it in exactly that form (the precondition and the path to it as hypotheses;
+a user proof may use it). Not in generic functions (see Generics), nor inside a
+`for…of` body, an array-method callback or a functional update `setX((p) => …)`:
+Lean checks those for every value of the loop's variables, the element or the
+state, so the fact would be assumed for all of them — use `assert(…)`, or
+`requires(…)` of a helper function that takes the values as parameters.
+
 Closures and `let`: JS closures read a variable when they run. So a function
 that runs later (helper arrow, handler, callback prop, `setX(prev => …)`, effect,
 timer, cleanup, `useCallback`) may not read a `let` that is reassigned after the
@@ -278,6 +289,88 @@ it.
 Spec helpers (usable in code and contracts): `forall(lo, hi, i => …)`,
 `exists(lo, hi, i => …)`, `distinct(xs, x => key)`, `implies(a, b)`,
 `idiv(a, b)`, `range(n)`. `hole<T>()` is a synthesis placeholder.
+
+## Generics
+
+```ts
+export function firstOr<T>(xs: readonly T[], d: T): T { … }                        // no constraint
+export function countKey<K extends int | string>(xs: readonly K[], k: K): int { … } // equality
+export function byId<T extends { readonly id: int }>(xs: readonly T[], id: int): T | undefined { … } // fields
+```
+
+Top-level functions may have type parameters (exported or not, also `@opaque`;
+not `@trusted`: Lean would assume a trusted generic function's type and
+contracts for every type, also empty ones and ones with values JS never passes —
+stronger than its JS meaning, and possibly contradictory; verify it, or write one
+`@trusted` function per concrete type). For the same reason a generic function's
+body may not `assume(…)` (Lean keeps an assumed fact as a theorem about the
+function's parameters, here for every type: `assume(a === b || b === c || a === c)`
+under `K extends boolean` would be false at `Int`): state the fact as `requires(…)`,
+which each caller proves (or assumes) at its own types, or prove it with
+`assert(…)`. A type parameter may appear in parameter and return types,
+local annotations (also of helper arrows and callback parameters), `hole<T>()`,
+arrays, `T | null` and tuples — not inside object types (`{ readonly v: T }`:
+pass the value as its own parameter). At most one constraint per parameter:
+
+* **none** — values of `T` are abstract: they can be passed, stored (arrays,
+  `T | null`, tuples), returned, given to other generic functions, and used with
+  the array methods that do not compare elements (`map filter some every find
+  findIndex slice concat toReversed toSorted(cmp) with at reduce flatMap`,
+  `length`, spread, indexing).
+* **equality** — `K extends int | string | boolean | "a" | Color` (unions of
+  these; `Color` a string-literal enum type): also `===`/`!==` on `K`,
+  `includes`, `indexOf`, `distinct(xs)` and `distinct(xs, x => k)` with a `K` key.
+  `K extends number` is rejected (`NaN !== NaN`; use `int`).
+* **fields** — `T extends { readonly id: int; readonly note?: string }` (or the
+  name of a record type): `x.id` on `x: T` (an optional field is `U | undefined`).
+  Field types may not mention type parameters. Equality and fields cannot be
+  combined (no intersections).
+
+Even under `T extends int` or `T extends string` the values of `T` are abstract:
+no arithmetic, ordering, `Math.*`, string conversion (`${x}`, `+`), string
+properties or methods, truthiness (`if (x)`, `x ? … : …`, `!x`, `xs.filter((x) =>
+x)`, also under `K extends boolean`), comparison with a value of another type, and
+no object literal of type `T` (the body is checked once, for every type `T` may
+be). A generic helper cannot take a callback (`p: (x: T) => boolean`): read a
+property through a field constraint (`T extends { readonly done: boolean }`), or
+write the arrow at the call site. Null tests on `T | null`
+work (a type parameter is never instantiated with a nullable type).
+
+Calls infer the type arguments from the VTS types of the arguments (where
+TypeScript cannot tell `int` from `number`: `count(xs, 1.5)` instantiates
+`number`), then from the type the result must have (`const xs: readonly int[] =
+emptyOf()`), then for `[]`, `null` and literals; two arguments of `int` and
+`number` give `number`, an enum and a `string` give `string`. Otherwise write the
+type arguments (`emptyOf<int>()`; "cannot infer T"; an argument that cannot be
+typed reports its own error instead). Each call is checked: an
+instantiation is never nullable (`firstOr(xs, null)` with `xs: (int | null)[]` is
+rejected — give the function a `T | null` parameter instead), never `number` for
+an equality constraint, and for a field constraint is a record (or a union, in
+every variant, or another type parameter with that field) whose field has exactly
+the constraint's type and the same `null`/`undefined`. An argument for a parameter
+`T | null` must be `null` (not `undefined`) when absent, as the declared type says
+(TypeScript would absorb `undefined` into `T`); likewise for `T | undefined`.
+
+A generic function is proved once for every instantiation, and its `ensures`
+hold for every type: a contract that is true only at the module's own calls is
+not proved. Callers of an `@opaque` generic function reason with these contracts
+at whatever type they call it (also at their own type parameters).
+
+Rejected: generic type aliases and interfaces, generic components, generic
+reducers (`useReducer`), generic arrow functions, function expressions and
+function types, `@trusted` generic functions, `assume(…)` in a generic function, default type arguments (`<T =
+int>`), `const` type parameters, other constraints (`unknown`, `any`, `object`,
+`keyof`, unions of object types, intersections, constraints mentioning a type
+parameter), recursion.
+
+`vreact synth` tests a generic function with `int` and `string` values for an
+unconstrained or equality-constrained type parameter (they stand for every type,
+or every type with equality: the body cannot tell which) and with a witness record
+for a field constraint (the constrained fields, an optional one absent as
+`undefined`, and one more field); Lean proves the fill once for every
+instantiation. Generic helpers of the module are offered as calls at the hole's
+types (when the arguments determine every type parameter), and `xs.filter((x) =>
+x.f !== v)` also for elements of a field-constrained type parameter.
 
 ## Components
 
@@ -436,7 +529,9 @@ or a label (use `htmlFor`).
 | `useRef`, `useContext`, custom hooks | lift state up / pass props; inline hook calls |
 | `children` / `ReactNode` props | compose in the parent |
 | recursion, `while` | `for…of`, array methods |
-| generics | monomorphic helpers |
+| generic type aliases, interfaces, components, reducers and arrows | concrete types; generic top-level functions (see Generics) |
+| `@trusted` generic functions | verify the generic function (`@opaque` hides its body from callers), or one `@trusted` function per concrete type |
+| callbacks as parameters of top-level functions (`p: (x: T) => boolean`), functions in state, locals, holes or arrays | write the arrow at the call site (`xs.find((x) => …)`); in a generic helper, read a property through a field constraint (`T extends { readonly done: boolean }`) |
 | `async`, fetch | keep I/O in an unverified module that calls verified reducers |
 | guarded updates in `vreact synth` | write the guard by hand with a hole per branch; synth fills straight-line code (all holes of a function are proved together; a hole per `case`/branch is searched once) |
 | `vreact synth` on a function whose contract's Lean statement mentions a function that still has a hole (called in the contract, or in the body or `requires` of a function it calls; not in a `@trusted` body or a callee's `ensures`) | not searched ("the contract depends on unfinished function f"): fill or write `f` first |

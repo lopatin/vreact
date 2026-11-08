@@ -43,8 +43,9 @@ elaborated, so scoped syntax is parsed as Lean will parse it), and accepts only:
   `run_tac`, `by_elab`, `unsafe`, `include_str`, `native_decide`, `+native`, a `decide
   (config := …)` value (it can be `+native`), the `bv_decide` tactics (also of `grind =>` and
   `sym =>`), `idbg`, `dbg_trace` and the `dbgTrace…` functions (output), the library's test
-  tactics, the `Lean.ofReduceBool` family, and the identifier `assumed` (`VReact.assumed`, the
-  axiom of the source's `assume(…)` facts, in any spelling);
+  tactics, the `Lean.ofReduceBool` family, the identifier `assumed` (`VReact.assumed`, the
+  axiom of the source's `assume(…)` facts, in any spelling) and the tactic `vreact_assume` (the
+  translator's proof of an `assume(…)`, which applies that axiom; also `#vreact_assumed`);
 * string, character and name literals and names without line breaks or other control
   characters (Lean prints them in its messages, where such a line could read like a message
   about another file).
@@ -189,6 +190,9 @@ def bannedKind? (k : Name) : Option String :=
   else if (match k with | .str _ last => ["bvDecide", "bvCheck", "bvTrace", "bvDecidePush", "nativeDecide"].contains last | _ => false) then
     -- (also the `grind => …` / `sym =>` forms, `Lean.Parser.Tactic.Grind.bvDecide`, …)
     some "the bv_decide tactics run an external SAT solver and trust compiled code instead of the kernel (an axiom `…._native.…`)"
+  else if (s.splitOn "vreact_assume").length > 1 || (s.splitOn "Vreact_assume").length > 1 then
+    -- (`VReact.tacticVreact_assume`, and the `#vreact_assumed` report command)
+    some "`vreact_assume` is the translator's proof of the source's `assume(…)` facts: it applies the axiom `VReact.assumed`, which proves anything, and the report would say the result relies on `assume(…)` facts that the source does not have; prove the lemma instead (an assumption belongs in the source, as `assume(…)` or `@trusted`, where the report shows it)"
   else if (s.splitOn "vreact_test").length > 1 || (s.splitOn "Vreact_test").length > 1 || (s.splitOn "Server.Test").length > 1 then
     some "the library's test tactics are not for proofs"
   else if (s.splitOn "dbg").length > 1 || (s.splitOn "Dbg").length > 1 then

@@ -11,13 +11,14 @@
  * User lemmas in `proofs/<Mod>.lean` sit after Defs (they may mention the definitions and are
  * available to the postconditions in Posts, to every obligation of the views, and to the Defs
  * of every module importing <Mod>); `proofs/Base.lean` is imported by every Defs. Each file
- * ends with `#print axioms` for every declaration it reports and the `vreact:checked` sentinel.
+ * ends with `#print axioms` and `#vreact_assumed` for every declaration it reports and the
+ * `vreact:checked` sentinel.
  */
 import ts from "typescript";
 import fs from "node:fs";
 import path from "node:path";
 import { Program, ModCtx, SPEC_MODULE, moduleFile, isErasedType, type Obligation, type FnInfo, type CompInfo, type Global, type ConstInfo, type HoleEnv } from "./ctx.ts";
-import { T, type VType, typeOfNode, typeOfDecl, emitTypeDecl, leanType, nonValuePart, checkValueType } from "./types.ts";
+import { T, type VType, typeOfNode, typeOfDecl, emitTypeDecl, leanType, nonValuePart, checkValueType, registerTypeParams, showType } from "./types.ts";
 import { VtsError, fail, leanIdent, leanField, leanStr, paren, capitalize, nodeText, clashesWithLean } from "./util.ts";
 import { LEAN_TYPE_AUX, LEAN_ROOT_NAMES } from "./leanNames.ts";
 import { expr, prop, propAll, valueBlock, specFn, symbolOf, bindParam, typeOf, checkParamAnnotation, checkNotThisParam } from "./translate.ts";
@@ -785,19 +786,19 @@ export function translate(cfg: Config): TranslateResult {
     // every declaration's axioms are reported, in the file that declares it (so a failure in
     // a function body still leaves the other functions of the module with a real status)
     defs += `\nend ${ns}\n\n`;
-    for (const c of modRes.constants) for (const q of [c.qname, ...c.facts]) defs += `#print axioms ${q}\n`;
-    for (const f of modRes.functions) for (const q of [f.qname, ...(deferred.has(f.qname) ? [] : f.posts)]) defs += `#print axioms ${q}\n`;
+    for (const c of modRes.constants) for (const q of [c.qname, ...c.facts]) defs += axiomReport(q);
+    for (const f of modRes.functions) for (const q of [f.qname, ...(deferred.has(f.qname) ? [] : f.posts)]) defs += axiomReport(q);
     defs += `#eval "vreact:checked"\n`;
     if (deferred.size) {
       withPostsFile.add(ns);
       posts += `\nend ${ns}\n\n`;
-      for (const f of modRes.functions) if (deferred.has(f.qname)) for (const q of f.posts) posts += `#print axioms ${q}\n`;
+      for (const f of modRes.functions) if (deferred.has(f.qname)) for (const q of f.posts) posts += axiomReport(q);
       posts = header([`${ns}.Defs`, proofMod]) + posts + `#eval "vreact:checked"\n`;
     } else posts = "";
     view = header([deferred.size ? `${ns}.Posts` : `${ns}.Defs`, ...deps.map((d) => `${d}.View`), ...(proofModules.has(proofMod) ? [proofMod] : [])]) + view;
     view += `\nend ${ns}\n\n`;
-    for (const c of modRes.components) view += `#print axioms ${c.ns}.component\n`;
-    for (const c of modRes.certificates) view += `#print axioms ${c.qname}\n`;
+    for (const c of modRes.components) view += axiomReport(`${c.ns}.component`);
+    for (const c of modRes.certificates) view += axiomReport(c.qname);
     view += `#eval "vreact:checked"\n`;
     leanFiles.push({ rel: path.join(rel, "Defs.lean"), text: withBudget(defs, cfg.heartbeats) });
     if (posts) leanFiles.push({ rel: path.join(rel, "Posts.lean"), text: withBudget(posts, cfg.heartbeats) });
@@ -841,6 +842,16 @@ export function translate(cfg: Config): TranslateResult {
   if (fs.existsSync(manifest) && !manifestMatches(manifest, { VReact: cfg.leanLib })) fs.rmSync(manifest, { force: true });
   res.ok = true;
   return res;
+}
+
+/**
+ * The axiom report of a reported declaration: `#print axioms` (Lean's own), and
+ * `#vreact_assumed` (VReact/Assumed.lean), which names the declarations outside the generated
+ * code that use `VReact.assumed` — the axiom behind `assume(…)` — in its cone: the report
+ * counts `VReact.assumed` as the program's `assume(…)` facts only where that list is empty.
+ */
+function axiomReport(q: string): string {
+  return `#print axioms ${q}\n#vreact_assumed ${q}\n`;
 }
 
 /** The Lean names a module's generated files declare (see `nameClashes`). */
@@ -984,6 +995,8 @@ function header(imports: string[]): string {
     "import VReact",
     ...imports.map((i) => `import ${i}`),
     "open VReact",
+    // (a binder the translation forgot must be an error, not an auto-bound implicit)
+    "set_option autoImplicit false",
     "set_option linter.unusedVariables false",
     BUDGET_SLOT,
     "noncomputable section",
@@ -1050,22 +1063,33 @@ function collect(st: ts.Statement, m: ModCtx, ns: string, res: TranslateResult) 
     if (isAmbient(st)) fail(st, AMBIENT_MSG);
     if (!st.body) fail(st, "function overloads (declarations without a body) are not supported: declare the function once, with its body");
     if (st.asteriskToken || st.modifiers?.some((x) => x.kind === ts.SyntaxKind.AsyncKeyword)) fail(st, "async functions and generators are not supported");
-    if (st.typeParameters?.length) fail(st, "generic functions are not supported in VTS yet");
+    rejectGenericFunctionValues(st);
     const trusted = isTrusted(st);
     if (!trusted && st.body) rejectAsyncFunctions(st.body);
     if (isComponentDecl(st, prog)) {
+      if (st.typeParameters?.length) fail(st.typeParameters[0], `generic components are not supported in VTS (${st.name.text}<${st.typeParameters.map((t) => t.name.text).join(", ")}>): give the props concrete types, and move generic code into a generic top-level function`);
       const info = compSignature(st, ns, ns, m, trusted);
       prog.globals.set(st, { k: "comp", info });
       return;
     }
     if (/^use[A-Z]/.test(st.name.text)) fail(st, "custom hooks are not supported yet: inline the hook calls into the component");
     checkValueNameFree(st.name, "function", m);
+    if (trusted && st.typeParameters?.length) fail(st.typeParameters[0], TRUSTED_GENERIC_MSG(st.name.text, st.typeParameters.map((t) => t.name.text)));
+    // type parameters first: the signature refers to them
+    const tparams = registerTypeParams(st, prog.typeEnv);
     const params = st.parameters.map((p) => {
       checkNotThisParam(p);
       if (!p.type) fail(p, "parameters need type annotations");
       if (p.initializer || p.dotDotDotToken || p.questionToken) fail(p, "default/rest/optional parameters are not supported");
       if (!ts.isIdentifier(p.name)) fail(p, "destructured parameters are not supported in top-level functions");
       const t = typeOfNode(p.type, prog.typeEnv, capitalize(st.name!.text) + capitalize(p.name.text));
+      if (t.k === "fn") {
+        // (a direct callback parameter: say what to write instead)
+        const fix = `a top-level function cannot take a callback (functions are not first-class in VTS); write the arrow at the call site instead (xs.find((x) => …), xs.filter(…))`;
+        fail(p.type, st.typeParameters?.length
+          ? `parameter ${p.name.text} is a function (${nodeText(p.type, 50)}): ${fix}, or let the generic function read what it needs through a field constraint (T extends { readonly done: boolean })`
+          : `parameter ${p.name.text} has the function type ${showType(t)}, which is not data: ${fix}`);
+      }
       checkValueType(p.type, t, prog.reg, `parameter ${p.name.text}`);
       return { name: p.name.text, type: t };
     });
@@ -1073,13 +1097,14 @@ function collect(st: ts.Statement, m: ModCtx, ns: string, res: TranslateResult) 
     const ret = typeOfNode(st.type, prog.typeEnv, capitalize(st.name.text) + "Result");
     checkValueType(st.type, ret, prog.reg, `the result of ${st.name.text}`);
     const hasPre = !!st.body?.statements.some((s) => isSpecCall(s, m, "requires"));
-    const info: FnInfo = { qname: `${ns}.${leanIdent(st.name.text)}`, name: st.name.text, params, ret, hasPre, trusted, opaque: isOpaque(st), decl: st, module: ns };
+    const info: FnInfo = { qname: `${ns}.${leanIdent(st.name.text)}`, name: st.name.text, tparams, params, ret, hasPre, trusted, opaque: isOpaque(st), decl: st, module: ns };
     prog.globals.set(st, { k: "fn", info });
     return;
   }
   if (ts.isVariableStatement(st)) {
     if (isAmbient(st)) fail(st, AMBIENT_MSG);
     if (!(st.declarationList.flags & ts.NodeFlags.Const)) fail(st, "top-level variables must be const");
+    rejectGenericFunctionValues(st);
     for (const d of st.declarationList.declarations) {
       if (!ts.isIdentifier(d.name) || !d.initializer) fail(d, "top-level const needs a name and initializer");
       checkValueNameFree(d.name, "constant", m);
@@ -1255,6 +1280,31 @@ function rejectAsyncFunctions(n: ts.Node) {
   visit(n);
 }
 
+/**
+ * A `@trusted` generic function would be one Lean axiom (and one per contract) quantified over
+ * every Lean type `{T : Type}` with the constraint's binders — empty types, and types with other
+ * values than the instantiations TypeScript allows (`T extends boolean` at `Int`, an accessor
+ * that is not a field read) — which is stronger than its JS meaning and can be inconsistent
+ * (`decode<T>(s: string): T` inhabits `Empty`).  Rejected.
+ */
+const TRUSTED_GENERIC_MSG = (name: string, tps: string[]) =>
+  `a /** @trusted */ generic function (${name}<${tps.join(", ")}>) is not supported: Lean would assume its type and contracts for every type ${tps.join(", ")} (empty types, and types with values JS never passes, included), which is stronger than what it means in JavaScript and can be contradictory; verify it instead (remove @trusted; /** @opaque */ keeps its body hidden from callers), or write one @trusted function per concrete type`;
+
+/**
+ * Generic arrow functions and function expressions (`const id = <T,>(x: T) => x`): only top-level
+ * functions may have type parameters (local helpers are inlined at their calls, where their type
+ * parameters would have no binder).
+ */
+function rejectGenericFunctionValues(st: ts.Node) {
+  const visit = (n: ts.Node) => {
+    if ((ts.isArrowFunction(n) || ts.isFunctionExpression(n)) && n.typeParameters?.length) {
+      fail(n.typeParameters[0], `generic arrow functions and function expressions are not supported in VTS (type parameter ${n.typeParameters[0].name.text}): make the helper a generic top-level function`);
+    }
+    ts.forEachChild(n, visit);
+  };
+  ts.forEachChild(st, visit);
+}
+
 function isSpecCall(s: ts.Statement, m: ModCtx, name: string): boolean {
   if (!ts.isExpressionStatement(s) || !ts.isCallExpression(s.expression)) return false;
   const env = baseEnv(m);
@@ -1374,7 +1424,10 @@ function translateFact(d: ts.VariableDeclaration, info: ConstInfo, k: number, m:
   const short = leanIdent((d.name as ts.Identifier).text);
   const f = info.facts[k];
   const name = k === 0 ? `${short}.post` : `${short}.post${k + 1}`;
-  return `/-- fact: ${docText(f, 80)} -/\ntheorem ${name} : ${prop(f, env)} := by\n  unfold ${short}\n  exact ${m.ob(f, "fact", `fact about ${short}: ${nodeText(f, 60)}`)}\n`;
+  const stmt = prop(f, env);
+  // (`unfold` fails where the statement does not mention the constant)
+  const unfold = stmt.includes(info.qname) ? `\n  unfold ${short}` : "";
+  return `/-- fact: ${docText(f, 80)} -/\ntheorem ${name} : ${stmt} := by${unfold}\n  exact ${m.ob(f, "fact", `fact about ${short}: ${nodeText(f, 60)}`)}\n`;
 }
 
 /**
@@ -1409,8 +1462,31 @@ function hasHole(fn: ts.FunctionDeclaration, m: ModCtx): boolean {
 
 function translateFunction(fn: ts.FunctionDeclaration, info: FnInfo, m: ModCtx): { def: string; post: string | null; postNames: string[] } {
   let env = baseEnv(m);
+  // a generic function: its type binders, the `[DecidableEq T]` of equality constraints and the
+  // accessor parameters of field constraints come first, in this order — the same telescope for
+  // the definition and every contract theorem (`vreact_contracts` applies a theorem to a call's
+  // whole argument list).  TypeScript's type and value names are separate, Lean's are not: the
+  // value parameters and locals avoid these names (`env.scope`).
   const binders: string[] = [];
+  const typeArgs: string[] = [];
   const argNames: string[] = [];
+  if (info.tparams.length) {
+    const scope = new Set(env.scope);
+    for (const p of info.tparams) {
+      binders.push(`{${p.lean} : Type}`);
+      typeArgs.push(`(${p.lean} := ${p.lean})`);
+      scope.add(p.lean);
+    }
+    for (const p of info.tparams) if (p.eq) binders.push(`[DecidableEq ${p.lean}]`);
+    for (const p of info.tparams) {
+      for (const f of p.fields ?? []) {
+        binders.push(`(${f.acc} : ${p.lean} → ${leanType(f.type)})`);
+        argNames.push(f.acc);
+        scope.add(f.acc);
+      }
+    }
+    env = { ...env, scope };
+  }
   fn.parameters.forEach((p, i) => {
     const r = bindParam(p.name, info.params[i].type, env);
     env = r.env;
@@ -1464,7 +1540,8 @@ function translateFunction(fn: ts.FunctionDeclaration, info: FnInfo, m: ModCtx):
   let post: string | null = null;
   const postNames: string[] = [];
   if (posts.length) {
-    const call = `(${info.qname}${argNames.map((a) => " " + a).join("")}${hypNames.map((h) => " " + h).join("")})`;
+    // (type arguments by name: a type parameter may occur in the result type only)
+    const call = `(${info.qname}${[...typeArgs, ...argNames, ...hypNames].map((a) => " " + a).join("")})`;
     const kw = info.trusted ? "axiom" : "theorem";
     const parts: string[] = [];
     posts.forEach(({ lam }, k) => {
@@ -1486,7 +1563,10 @@ function translateFunction(fn: ts.FunctionDeclaration, info: FnInfo, m: ModCtx):
       // a function whose body still contains hole() has no implementation yet: contract pending
       const pending = hasHole(fn, m);
       const ob = info.trusted || pending ? "" : m.ob(lam, "postcondition", `postcondition of ${info.name}: ${nodeText(body, 70)}`);
-      const proof = info.trusted ? "" : pending ? ` :=\n  sorry /- pending: hole() -/` : info.opaque ? ` := by\n  unfold ${short}\n  exact ${ob}` : ` :=\n  ${ob}`;
+      // (`unfold` fails where the statement does not mention the function: a contract that does
+      // not use its result, e.g. a fact about the arguments)
+      const unfold = stmt.includes(call) ? `\n  unfold ${short}` : "";
+      const proof = info.trusted ? "" : pending ? ` :=\n  sorry /- pending: hole() -/` : info.opaque ? ` := by${unfold}\n  exact ${ob}` : ` :=\n  ${ob}`;
       let t = `${kw} ${name} ${binders.join(" ")} ${hyps.join(" ")} :\n    ${stmt}${proof}\n`;
       parts.push(t);
     });

@@ -9,3 +9,5 @@ import VReact.Runtime
 import VReact.SelfTest
 import VReact.Budget
 import VReact.BudgetTest
+import VReact.Assumed
+import VReact.AssumedTest

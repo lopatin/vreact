@@ -1,7 +1,8 @@
 /**
  * Report honesty: the fixture `tests/honesty/` is verified once with Lean; then Lean's
  * output is doctored (an error, a module not built, a missing or forged `#print axioms`
- * report, `sorryAx`, `VReact.assumed`, a foreign axiom, a missing or forged sentinel, a sorry
+ * report, `sorryAx`, `VReact.assumed` (with a `#vreact_assumed` report naming a user proof, a
+ * missing or forged one), a foreign axiom, a missing or forged sentinel, a sorry
  * warning, a failed build without messages, …) and the report of the doctored output must
  * never say VERIFIED — neither the verdict nor the items the doctoring concerns.
  */
@@ -51,6 +52,16 @@ export function honestyChecks(here: string, work: string, ok: (name: string, msg
   const raw = lk.raw;
   const drop = (re: RegExp) => (s: string) => s.split("\n").filter((l) => !re.test(l)).join("\n");
   const add = (...extra: string[]) => (s: string) => s + "\n" + extra.join("\n") + "\n";
+  // lines inserted right after the line `anchor` matches: inside that module's job log, where
+  // `parseMessages` takes an info line as a message of the module whose file it names (an
+  // info line `add` appends at the end is in another job's log, or after lake's summary, and is
+  // text of the message before it)
+  const addAfter = (anchor: RegExp, ...extra: string[]) => (s: string) => {
+    const ls = s.split("\n");
+    const i = ls.findIndex((l) => anchor.test(l));
+    if (i < 0) throw new Error(`honesty: ${anchor} not in lake's output`);
+    return [...ls.slice(0, i + 1), ...extra, ...ls.slice(i + 1)].join("\n");
+  };
   const replace = (re: RegExp, by: string) => (s: string) => {
     if (!re.test(s)) throw new Error(`honesty: ${re} not in lake's output`);
     return s.replace(re, by);
@@ -63,6 +74,9 @@ export function honestyChecks(here: string, work: string, ok: (name: string, msg
   const showRender = lineOf(VIEW, /^namespace Show$/) + lines(VIEW).slice(lineOf(VIEW, /^namespace Show$/)).findIndex((l) => /^def render /.test(l)) + 1;
   const incPost = markerAt(DEFS, /^theorem inc\.post/);
   const printInc = lineOf(DEFS, /^#print axioms VTS\.model\.inc$/);
+  // (the generator writes `#vreact_assumed X` right after `#print axioms X`)
+  const printIncPost = lineOf(DEFS, /^#print axioms VTS\.model\.inc\.post$/);
+  const auditIncPost = lineOf(DEFS, /^#vreact_assumed VTS\.model\.inc\.post$/);
   // `vreact_ob`'s result for inc's postcondition: at its token, 13 columns after the marker
   const incOb = `${defsP}:${incPost.line}:${incPost.col + 13}`;
   const incOk = new RegExp(`^info: ${esc(incOb)}: vreact:ok$`, "m");
@@ -101,10 +115,19 @@ export function honestyChecks(here: string, work: string, ok: (name: string, msg
     ["a missing #print axioms report", drop(axLine("VTS.model.inc")), and(never("inc"), status("inc", "unchecked"))],
     ["a forged report from a user proof (real one dropped)", (s) => add(`info: Proofs/Base.lean:2:0: 'VTS.model.inc' does not depend on any axioms`)(drop(axLine("VTS.model.inc"))(s)), and(never("inc"), status("inc", "unchecked"))],
     ["a forged report at another line of the generated file", (s) => add(`info: ${defsP}:${incDef}:0: 'VTS.model.inc' does not depend on any axioms`)(drop(axLine("VTS.model.inc"))(s)), and(never("inc"), status("inc", "unchecked"))],
-    ["a forged report for inc at the #print line of another name", (s) => add(`info: ${defsP}:${printInc + 1}:0: 'VTS.model.inc' does not depend on any axioms`)(drop(axLine("VTS.model.inc"))(s)), and(never("inc"), status("inc", "unchecked"))],
+    ["a forged report for inc at the #print line of another name", (s) => add(`info: ${defsP}:${printIncPost}:0: 'VTS.model.inc' does not depend on any axioms`)(drop(axLine("VTS.model.inc"))(s)), and(never("inc"), status("inc", "unchecked"))],
+    ["a forged report for inc at its #vreact_assumed line", (s) => addAfter(axLine("VTS.model.inc.post"), `info: ${defsP}:${printInc + 1}:0: 'VTS.model.inc' does not depend on any axioms`)(drop(axLine("VTS.model.inc"))(s)), and(never("inc"), status("inc", "unchecked"))],
     ["sorryAx in a report", replace(/'VTS\.model\.inc\.post' depends on axioms: \[propext\]/, "'VTS.model.inc.post' depends on axioms: [propext, sorryAx]"), and(never("inc"), status("inc", "incomplete"), verdict("incomplete"))],
-    ["a second, clean report after one with sorryAx", (s) => add(`info: ${defsP}:${printInc + 1}:0: 'VTS.model.inc.post' depends on axioms: [propext]`)(replace(/'VTS\.model\.inc\.post' depends on axioms: \[propext\]/, "'VTS.model.inc.post' depends on axioms: [propext, sorryAx]")(s)), and(never("inc"), status("inc", "incomplete"))],
+    ["a second, clean report after one with sorryAx", (s) => add(`info: ${defsP}:${printIncPost}:0: 'VTS.model.inc.post' depends on axioms: [propext]`)(replace(/'VTS\.model\.inc\.post' depends on axioms: \[propext\]/, "'VTS.model.inc.post' depends on axioms: [propext, sorryAx]")(s)), and(never("inc"), status("inc", "incomplete"))],
     ["VReact.assumed in a report", replace(/'VTS\.model\.inc\.post' depends on axioms: \[propext\]/, "'VTS.model.inc.post' depends on axioms: [propext, VReact.assumed]"), and(never("inc"), status("inc", "assumes"), verdict("verified-modulo-trusted"))],
+    // `VReact.assumed` is the program's assume(…) facts only with a clean `#vreact_assumed` report
+    ["VReact.assumed in a report, with a #vreact_assumed report naming a user-proof declaration", (s) => replace(/'VTS\.model\.inc\.post' uses VReact\.assumed outside the generated code: \[\]/, "'VTS.model.inc.post' uses VReact.assumed outside the generated code: [bogus]")(replace(/'VTS\.model\.inc\.post' depends on axioms: \[propext\]/, "'VTS.model.inc.post' depends on axioms: [propext, VReact.assumed]")(s)), and(never("inc"), status("inc", "trusted"), verdict("verified-modulo-trusted"), (r) => (r.assumedByProofs.includes("bogus") && (r.functions.find((f) => f.name === "inc")?.reason ?? "").includes("bogus") ? [] : ["the user-proof declaration is not named"]))],
+    ["VReact.assumed in a report without its #vreact_assumed report", (s) => drop(new RegExp(`^info: ${esc(defsP)}:${auditIncPost}:0: .*$`, "m"))(replace(/'VTS\.model\.inc\.post' depends on axioms: \[propext\]/, "'VTS.model.inc.post' depends on axioms: [propext, VReact.assumed]")(s)), and(never("inc"), status("inc", "unchecked"))],
+    ["a clean #vreact_assumed report forged by a user proof (real one dropped)", (s) => add(`info: Proofs/Base.lean:2:0: 'VTS.model.inc.post' uses VReact.assumed outside the generated code: []`)(drop(new RegExp(`^info: ${esc(defsP)}:${auditIncPost}:0: .*$`, "m"))(replace(/'VTS\.model\.inc\.post' depends on axioms: \[propext\]/, "'VTS.model.inc.post' depends on axioms: [propext, VReact.assumed]")(s))), and(never("inc"), status("inc", "unchecked"))],
+    ["a clean #vreact_assumed report at the #print axioms line (real one dropped)", (s) => addAfter(axLine("VTS.model.inc.post"), `info: ${defsP}:${printIncPost}:0: 'VTS.model.inc.post' uses VReact.assumed outside the generated code: []`)(drop(new RegExp(`^info: ${esc(defsP)}:${auditIncPost}:0: .*$`, "m"))(replace(/'VTS\.model\.inc\.post' depends on axioms: \[propext\]/, "'VTS.model.inc.post' depends on axioms: [propext, VReact.assumed]")(s))), and(never("inc"), status("inc", "unchecked"))],
+    // (an error there is an error, but it does not break the module: the other items keep their status)
+    ["an error at a #vreact_assumed line", add(`error: ${defsP}:${auditIncPost}:0: injected error`), and(never(), verdict("not-verified"), status("clamp", "verified"))],
+    ["a second #vreact_assumed report naming a user-proof declaration after a clean one", (s) => addAfter(new RegExp(`^info: ${esc(defsP)}:${auditIncPost}:0: .*$`), `info: ${defsP}:${auditIncPost}:0: 'VTS.model.inc.post' uses VReact.assumed outside the generated code: [bogus]`)(replace(/'VTS\.model\.inc\.post' depends on axioms: \[propext\]/, "'VTS.model.inc.post' depends on axioms: [propext, VReact.assumed]")(s)), and(never("inc"), status("inc", "trusted"))],
     ["an axiom declared outside the translation (even in VTS.)", replace(/'VTS\.model\.inc\.post' depends on axioms: \[propext\]/, "'VTS.model.inc.post' depends on axioms: [propext, VTS.model.helper]"), and(never("inc"), status("inc", "trusted"))],
     ["a missing sentinel", drop(new RegExp(`^info: ${esc(defsP)}:\\d+:\\d+: "vreact:checked"`)), and(never("inc", "clamp"), proved(total - 3), verdict("incomplete"))],
     ["a forged sentinel (real one dropped)", (s) => add(`info: ${defsP}:${incDef}:0: "vreact:checked"`, `info: Proofs/Base.lean:2:0: "vreact:checked"`)(drop(new RegExp(`^info: ${esc(defsP)}:\\d+:\\d+: "vreact:checked"`))(s)), and(never("inc", "clamp"), proved(total - 3))],

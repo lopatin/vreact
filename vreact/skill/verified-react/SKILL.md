@@ -80,7 +80,8 @@ change (it is incremental and usually takes seconds).
    *straight-line* expressions: field updates `{ ...s, f: e }` (one or two
    fields), record/variant literals, `[...xs, e]`, `[...xs, ...ys]`,
    `xs.filter(x => x.k !== v)`, `xs.map(x => x.k === v ? { ...x, f: e } : x)`,
-   calls of the module's total helpers, `± 1` and comparisons — smallest first,
+   calls of the module's total helpers (generic ones at the hole's types),
+   `± 1` and comparisons — smallest first,
    up to size 9. Each hole costs up to ~60 s of search plus up to 5 Lean checks
    of candidates that pass the random tests; a function with n holes takes up
    to about n times that. Guarded updates (`if … return s;`)
@@ -132,6 +133,12 @@ export function ItemList(props: ItemListProps) {
 ```
 
 * Use `int` for integers (counts, ids, cents); `number` is a float the prover knows nothing about (opaque: no arithmetic, comparison or `Math.*` facts). A division `a / b` needs a divisor that is not zero (`requires(b !== 0)` or a guard `b === 0 ? … : a / b`; a nonzero literal divisor needs nothing): `1 / -0` is `-Infinity`, and VTS values do not keep the sign of zero.
+* Helpers used at several types may be generic top-level functions:
+  `<K extends int | string>` to compare keys (`===`, `includes`, `distinct`),
+  `<T extends { readonly id: int }>` to read fields; values of a type parameter are
+  otherwise abstract. Write `f<int>(…)` when a type parameter cannot be inferred.
+  No generic type aliases, components or arrows, no `@trusted` generics, and no
+  callback parameters (`p: (x: T) => boolean`): use a field constraint.
 * State is immutable: spread, `filter`, `map`, `toSorted`, `with` — never `push`/`sort`/property assignment.
 * Handlers may call setters, `dispatch`, and **at most one** parent callback per path.
 * `setX(v)` uses the render snapshot; two of them in one handler do not compose — use
@@ -181,7 +188,10 @@ export function ItemList(props: ItemListProps) {
 
 `vreact verify` reports, per component/function (and per constant, when not
 `VERIFIED`): `VERIFIED`, `VERIFIED*` (own obligations proved, relies on
-`@trusted` contracts), `TRUSTED`, `ASSUMES` (relies on `assume(…)` facts),
+`@trusted` contracts), `TRUSTED` (`@trusted`; also an item relying on an axiom from
+outside the translation, or on a user-proof declaration that uses `VReact.assumed`
+itself, should one get past the proof checks — the `↳` line names it),
+`ASSUMES` (relies on the program's `assume(…)` facts),
 `INCOMPLETE` (a failed or unchecked obligation, `hole()`/`sorry`, a declaration
 Lean could not finish, or it relies on an item that is not verified — the line
 under it names the reason, e.g. `↳ it uses clamp (src/lib.ts), which is not

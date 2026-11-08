@@ -593,6 +593,7 @@ function stateVar(d: ts.VariableDeclaration, h: string, env: Env, m: ModCtx, pp:
   const g = sym?.declarations?.[0] ? m.prog.globals.get(sym.declarations[0]) : undefined;
   if (!g || g.k !== "fn") fail(rId, "reducer must be a verified top-level function");
   const r = g.info;
+  if (r.tparams.length) fail(rId, `a generic function (${r.name}<${r.tparams.map((p) => p.name).join(", ")}>) cannot be a reducer: React calls it with no type arguments; write a reducer with concrete state and action types (it may call the generic function)`);
   if (r.params.length !== 2) fail(rId, "a reducer takes (state, action)");
   if (r.hasPre) actionOnlyPre(r, env);
   const st = r.params[0].type;
