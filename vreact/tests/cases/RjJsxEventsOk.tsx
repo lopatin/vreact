@@ -47,5 +47,10 @@ export function RjCleanupBranchOk(props: { readonly on: boolean }) {
   // expression bodies whose value is undefined (no cleanup)
   useEffect(() => console.log("on", props.on), [props.on]);
   useEffect(() => setN((k) => k + 1), [props.on]);
+  // JSON.stringify of a VTS value cannot throw: its argument is what is checked
+  useEffect(() => {
+    localStorage.setItem("n", JSON.stringify(n));
+    return () => localStorage.setItem("last", JSON.stringify([n, n + 1], null, 2));
+  }, [n]);
   return <p>{n}</p>;
 }

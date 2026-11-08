@@ -174,7 +174,9 @@ Every expression maps to a Lean term whose value is the JavaScript value.
   the conditions and arguments of an effect cleanup — are translated as unused
   `let`s at the point where JS evaluates them, so their obligations (index,
   non-null, divisor, preconditions of called functions) are checked; their values
-  have no modelled effect.
+  have no modelled effect. Such an argument may be `JSON.stringify(v)` (also with
+  `null, indent`): on a VTS value (a tree of records, arrays and primitives, no
+  methods) it cannot throw, so evaluating it is evaluating `v`.
 * JSX tags: an identifier starting with a lower-case letter is the HTML element of
   that name (also when a variable of that name is in scope: the JSX transform
   never reads it), a capitalised one the verified component it resolves to.
@@ -187,7 +189,8 @@ Every expression maps to a Lean term whose value is the JavaScript value.
   event-layout checks of §5 (`type="&#115;ubmit"` is a submit button, which the
   TypeScript AST spells raw). References that JSX compilers decode differently
   (names outside HTML 4, `&#X41;`, `&#+65;`, code points above U+10FFFF) are
-  rejected.
+  rejected, and so are JSX text that Babel's transform gives another value (tabs,
+  other whitespace than spaces at line breaks) and attribute strings spanning lines.
 * `key` and `ref` are not props in React 18 (the component never receives them):
   a props type with a field named `key` or `ref` is rejected, and so is `ref={…}`.
 * A JSX const (`const row = <p>{e}</p>;`) is translated where it is declared —
@@ -600,10 +603,12 @@ hook rules hold (static checks). For every function: its body is safe and its
   external data is not modelled. A DOM event is an arbitrary `DomEvent`: the model
   assumes nothing about the values the user enters.
 * **The JSX transform:** the meaning of JSX is TypeScript's `react-jsx` transform
-  (tag names, whitespace of JSX text, character references); references on which
-  the common compilers (TypeScript, Babel, esbuild) disagree are rejected. Babel
-  also turns a tab inside a line of JSX text into a space; the text of rendered
-  nodes is not used by any proof.
+  (tag names, whitespace of JSX text, character references), cross-checked against
+  Babel's: JSX text on which the two disagree (a tab, a whitespace character other
+  than a space next to a line break, a reference to whitespace there), attribute
+  strings with a line break (Babel joins the lines) and references that compilers
+  decode differently are rejected. Other compilers (esbuild, SWC) are assumed to
+  agree with them on what is accepted.
 * **Outside the subset:** the entry point (`main.tsx`), React itself, the DOM,
   CSS.
 * **Event bubbling, multi-handler events and activation behaviour** are handled

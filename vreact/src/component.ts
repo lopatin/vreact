@@ -842,7 +842,7 @@ function pureCleanupExpr(n: ts.Node, env: Env) {
         const root = callee.expression;
         if (ts.isIdentifier(root)) {
           const b = env.vars.get(symbolOf(env, root)!);
-          ok = root.text === "Math" || b?.k === "val" || (!b && !!globalConst(root, env));
+          ok = root.text === "Math" || b?.k === "val" || (!b && !!globalConst(root, env)) || (callee.name.text === "stringify" && isLibGlobal(root, "JSON", env));
         } else ok = !(ts.isPropertyAccessExpression(root) && updatesState(root, env));
       }
       if (!ok) fail(x, `effect cleanups may not call \`${nodeText(callee, 40)}\` here; ${CLEANUP_RULE}`);

@@ -701,7 +701,11 @@ function expr0(e: ts.Expression, env: Env, expected?: VType): Val {
  * string (`title="a &amp; b"`), whose character references JS decodes.
  */
 export function jsxAttrText(e: ts.StringLiteralLike): string {
-  return e.parent && ts.isJsxAttribute(e.parent) ? decodeJsxEntities(e.text, e) : e.text;
+  if (!e.parent || !ts.isJsxAttribute(e.parent)) return e.text;
+  // Babel's JSX transform replaces a line break and the whitespace after it by one space
+  // (`/\n\s+/g`), TypeScript's keeps the text: the value would depend on the compiler
+  if ([...e.text].some((c) => ts.isLineBreak(c.charCodeAt(0)))) fail(e, `a line break inside a JSX attribute string: JSX compilers do not agree on its value (Babel joins the lines with a space, TypeScript keeps them); write the string on one line, or as an expression {"…"}`);
+  return decodeJsxEntities(e.text, e);
 }
 
 /** Conversion to string (template literals, JSX text, string concatenation). */
@@ -2553,13 +2557,27 @@ export function evalArgs(args: readonly ts.Expression[], env: Env, rest: (e: Env
   let lets = "";
   for (const a0 of args) {
     if (ts.isSpreadElement(a0)) fail(a0, "spread arguments are not supported here: pass the values one by one");
-    const a = stripParens(a0);
+    let a = stripParens(a0);
+    // JSON.stringify(v) (also (v, null, indent)) of a VTS value cannot throw (no cycles, BigInts
+    // or toJSON methods; NaN becomes null): evaluating it is evaluating v
+    const json = jsonStringifyArg(a, env);
+    if (json) a = json;
     if (a.kind === ts.SyntaxKind.NullKeyword || (ts.isIdentifier(a) && a.text === "undefined" && !symbolOf(env, a)?.valueDeclaration)) continue;
     if (ts.isStringLiteralLike(a) || ts.isNumericLiteral(a) || a.kind === ts.SyntaxKind.TrueKeyword || a.kind === ts.SyntaxKind.FalseKeyword) continue;
     const v = expr(a, env);
     lets += `let _${letType(v.type)} := ${v.code};\n`;
   }
   return lets ? `(${lets}${rest(env)})` : rest(env);
+}
+
+/** `JSON.stringify(v)` / `JSON.stringify(v, null, indent)` (indent a literal): `v`. */
+function jsonStringifyArg(a: ts.Expression, env: Env): ts.Expression | null {
+  if (!ts.isCallExpression(a) || !ts.isPropertyAccessExpression(a.expression) || a.expression.name.text !== "stringify" || !isLibGlobal(a.expression.expression, "JSON", env)) return null;
+  const [v, replacer, indent] = a.arguments;
+  if (!v || ts.isSpreadElement(v) || a.arguments.length > 3) fail(a, "JSON.stringify(value) or JSON.stringify(value, null, indent)");
+  if (replacer && replacer.kind !== ts.SyntaxKind.NullKeyword) fail(replacer, "a JSON.stringify replacer is not supported (pass null)");
+  if (indent && !ts.isNumericLiteral(indent) && !ts.isStringLiteral(indent)) fail(indent, "the indent of JSON.stringify must be a literal");
+  return v;
 }
 
 type UpdTarget =

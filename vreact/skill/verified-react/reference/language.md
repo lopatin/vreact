@@ -226,7 +226,9 @@ checked where the timer is registered; no further `setTimeout` arguments),
 external writes (`localStorage.setItem`, `document.title = …`, `console.*`) are
 allowed and have no modelled effect, but JS evaluates their arguments, so these
 are checked like any expression (here and in handlers, timers, cleanups, render
-and functions: `console.log(xs[i].name)` needs `i` in bounds); no async. A cleanup
+and functions: `console.log(xs[i].name)` needs `i` in bounds; an argument may be
+`JSON.stringify(v)` or `JSON.stringify(v, null, 2)`, which cannot throw on a VTS
+value); no async. A cleanup
 is an inline `() => { … }`, returned at the end of the effect body or of a branch
 of it, that only calls `clearTimeout`/`clearInterval` and makes those external
 writes, possibly under `if`/`else` (`if (id !== null) clearInterval(id)`: a timer
@@ -253,7 +255,8 @@ references in JSX text and attribute strings are decoded as JSX does (`&amp;`,
 `&#65;`, `&#x41;`, the HTML 4 entities), also for the layout checks below:
 `type="&#115;ubmit"` is a submit button. References that JSX compilers read
 differently (`&check;` and other names outside HTML 4, `&#X41;`, `&#+65;`, code
-points above U+10FFFF) are rejected: write the character, or `{"…"}`.
+points above U+10FFFF) are rejected: write the character, or `{"…"}`. So are JSX
+text with a tab (Babel makes it a space) and attribute strings spanning lines.
 One native event may reach at most one discrete handler: an element may not
 combine handlers fired by the same native event (a checkbox's `onClick` +
 `onChange` both run on click; `onInput` + a text input's `onChange` both run on

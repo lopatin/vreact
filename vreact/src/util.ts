@@ -334,9 +334,36 @@ export function decodeJsxEntities(raw: string, node: ts.Node): string {
  * The string JS gets for a JSX text child (the raw text between tags): TypeScript's
  * `fixupWhitespaceAndDecodeEntities` — whitespace next to a line break is trimmed, lines
  * that are only whitespace are dropped, the others are joined with a space, and character
- * references are decoded.  "" for whitespace that renders no text node.
+ * references are decoded.  "" for whitespace that renders no text node.  Babel's JSX
+ * transform differs on some text (it turns tabs into spaces, trims only spaces, splits only
+ * at \n and \r, and decodes references before trimming): such text is rejected, so the
+ * value does not depend on the compiler.
  */
 export function jsxTextValue(text: string, node: ts.Node): string {
+  const mine = tsJsxText(text, node);
+  const babel = babelJsxText(text, node);
+  if (mine !== babel) fail(node, `JSX compilers do not agree on this text (${JSON.stringify(mine)} in TypeScript, ${JSON.stringify(babel)} in Babel: a tab, a whitespace character other than a space, or a character reference to whitespace, inside it or next to a line break); write it with spaces, or as a string expression {"…"}`);
+  return mine;
+}
+
+/** Babel's `cleanJSXElementLiteralChild` of the decoded text (Babel decodes while parsing). */
+function babelJsxText(raw: string, node: ts.Node): string {
+  const lines = decodeJsxEntities(raw, node).split(/\r\n|\n|\r/);
+  let lastNonEmpty = 0;
+  lines.forEach((l, i) => {
+    if (/[^ \t]/.test(l)) lastNonEmpty = i;
+  });
+  let str = "";
+  lines.forEach((line, i) => {
+    let t = line.replace(/\t/g, " ");
+    if (i !== 0) t = t.replace(/^[ ]+/, "");
+    if (i !== lines.length - 1) t = t.replace(/[ ]+$/, "");
+    if (t) str += i !== lastNonEmpty ? t + " " : t;
+  });
+  return str;
+}
+
+function tsJsxText(text: string, node: ts.Node): string {
   let acc: string | undefined;
   let first = 0;
   let last = -1;
