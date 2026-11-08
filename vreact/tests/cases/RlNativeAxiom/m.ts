@@ -1,4 +1,4 @@
-// expect: status verdict=not-verified errors=proof pow10=verified plusOne=incomplete why.plusOne=native~evaluation proved=1
+// expect: status verdict=not-verified errors=proof pow10=verified plusOne=incomplete why.plusOne=native~evaluation proved=0 unchecked=1
 // A proof by native evaluation (round-1 finding r4-lean-native-config). smuggled/m.lean (put in
 // place after the translation: the whitelist rejects it, RejectRlKernel) proves pow10's value
 // with `decide (config := ⟨false, true, true, false⟩)`, i.e. `decide +native`: Lean admits the

@@ -397,9 +397,11 @@ export function reportFrom(cfg: Config, tr: TranslateResult, messages: LeanMessa
     if (!mine.length) continue;
     const missing = it.axiomNames.find((q) => !v.axioms.has(q));
     const sorry = it.axiomNames.find((q) => v.axioms.get(q)?.includes("sorryAx"));
+    const native = it.axiomNames.find((q) => v.axioms.get(q)?.some(isNativeAxiom));
     const why =
       missing !== undefined ? `Lean reported no axioms for ${missing}, so it may not have been added`
       : sorry !== undefined && !proofTrouble && !cone(it).some((x) => troubled.has(x.key)) ? `${sorry} depends on sorryAx, but Lean reported no failure or sorry it could come from`
+      : native !== undefined ? `${native} depends on ${v.axioms.get(native)!.find(isNativeAxiom)}, an axiom of native evaluation (it trusts Lean's compiler instead of its kernel)`
       : undefined;
     if (why === undefined) continue;
     for (const ob of mine) {

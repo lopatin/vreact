@@ -122,8 +122,8 @@ const isFileOf = (file: string, mod: string) => {
   const own = mod.split(".").join("/") + ".lean";
   return f === own || f === "./" + own || (f.startsWith("/") && f.endsWith("/" + own));
 };
-/** A module name as lake prints it, without Lean's `«…»` escapes. */
-const plainModule = (name: string) => name.replace(/[«»]/g, "");
+/** The module a job name names (`VTS.m.Defs`, also as `vts/+VTS.m.Defs:leanArts`), without Lean's `«…»` escapes. */
+const plainModule = (name: string) => name.replace(/^[^/\s]*\/\+?/, "").replace(/:[\w.]+$/, "").replace(/[«»]/g, "");
 
 /**
  * Lean's messages in lake's output. Lake prints the log of each job (a module's elaboration)

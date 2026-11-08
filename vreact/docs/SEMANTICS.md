@@ -134,7 +134,7 @@ Every expression maps to a Lean term whose value is the JavaScript value.
   `distinct` (SameValueZero), keys — except a division *by* a zero: `1 / 0` is
   `Infinity`, `1 / -0` is `-Infinity`. So `a / b` carries the obligation that the
   divisor is not zero (`JS.Num.divInt a b (h : b ≠ 0)` for an int divisor,
-  `JS.Num.divNum a b (h : JS.Num.eq b 0 = false)`, i.e. `b !== 0`, for a number),
+  `JS.Num.divNum a b (h : JS.Num.eq b (JS.Num.ofInt 0) = false)`, i.e. `b !== 0`, for a number),
   unless the divisor is a nonzero numeric literal (possibly negated, or a `const`
   initialised with one), in code and contracts alike. (Before, `1 / -x > 0` and
   `1 / x > 0` were one Lean term for `x = 0`, and an ensures comparing them was
