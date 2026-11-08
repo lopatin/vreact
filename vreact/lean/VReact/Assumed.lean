@@ -19,8 +19,9 @@ Lean keeps every nested proof of a definition as an auxiliary theorem of its own
 `if (flag)` and the function's `requires` — a stronger statement than the program's, false
 even when the `assume` is (`if (flag) assume(flag)` would become `∀ flag, flag = true`).
 `vreact_assume` assumes `c` under every hypothesis in scope — the function's precondition
-`h_pre`, the conditions of the `if`/`match` branches leading to it, a callback's membership
-facts, … (the local proofs without a value; proved `have`s follow from them) — and applies
+`h_pre`, a component's `hpre`/`hinv`, the conditions of the `if`/`match` branches leading to
+it, a callback's contract, a keyed-list item's membership, … (the local proofs without a value;
+proved `have`s follow from them) — and applies
 the result to them: the auxiliary theorem is `∀ args, h_pre → path → c`, the fact as the
 program states it: `c` holds whenever control reaches the `assume`, for every input the
 function's contracts allow. The translator rejects `assume` where the context is more general
@@ -36,7 +37,8 @@ through a renaming `open`, an auxiliary definition, a tactic, a term built by me
 keyword. `#vreact_assumed X` lists the declarations in the dependency cone of `X` (through types
 and values, as `#print axioms` follows them) whose own type or value mentions `VReact.assumed`
 and that are not generated: they come from an imported module outside `VTS.*` (a user proof
-`Proofs.*`; the VReact library mentions the axiom nowhere else, AssumedTest.lean checks that).
+`Proofs.*`; the rest of the VReact library mentions the axiom only in AssumedTest.lean's tests,
+for true facts, and that file checks that the others do not).
 Declarations of the current file are generated, since the generator writes this command only
 at the end of its own files. It reads the kernel's environment, as `#print axioms` does, and
 always prints (the report needs it as evidence whenever the axioms of `X` include

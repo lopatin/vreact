@@ -607,8 +607,8 @@ hook rules hold (static checks). For every function: its body is safe and its
   left for items Lean never got to: lake or import errors, an error that stopped
   a file. Lake errors without a position (imports, build cycles) are shown and
   make the result not verified. An axiom report, the sentinel or `vreact:ok`
-  counts only when Lean printed it at the
-  generator's own `#print axioms X` / `#vreact_assumed X` / sentinel line / `vreact_ob` token (a user
+  counts only when Lean printed it at the generator's own `#print axioms X` /
+  `#vreact_assumed X` / sentinel line / `vreact_ob` token (a user
   proof printing the same text is ignored, and `vreact_ob` drops `vreact:`
   messages that code running inside the obligation logs; several reports for
   one name are joined). A generated declaration

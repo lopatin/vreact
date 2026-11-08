@@ -197,8 +197,9 @@ function brokenCones(tr: TranslateResult, v: Verdict, all: Item[]): Map<string, 
   const brokenMods = new Map<string, string>();
   const modOf = (file: string) => "VTS." + file.split(/[\\/]/).slice(1, -1).join(".");
   for (const b of v.brokenDecls) {
-    // (a failing `#print axioms` defines nothing: its constant is missing, see above)
-    if (b.kind === "#print") continue;
+    // (a failing `#print axioms` / `#vreact_assumed` defines nothing: its constant is missing,
+    // see above, or its item lacks the report and is not checked)
+    if (b.kind === "#print" || b.kind === "#vreact_assumed") continue;
     const it = b.name ? all.find((x) => x.owns(b.name!)) : undefined;
     if (it) {
       if (!own.has(it.key)) own.set(it.key, why(b));
