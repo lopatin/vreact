@@ -29,7 +29,7 @@ synthesis, top-down App with trusted stubs, bugs caught, final certificate) is
 
 ```bash
 bash <skill>/scripts/setup.sh                 # checks Node ≥ 22.6, Lean 4 (elan), builds the Lean library
-bash <skill>/scripts/setup.sh /path/to/app    # also: npm i the tool into the app, write vreact.json
+bash <skill>/scripts/setup.sh /path/to/app    # also: npm i the tool into the app, write vreact.json, Lean editor files
 ```
 
 Installing Lean (elan, ~400 MB) changes the user's machine: ask first if it is
@@ -37,6 +37,23 @@ missing. All the app needs from npm is that `vreact` (and `react`, `@types/react
 resolve from its folder — `npm i <tool>` or a symlinked `node_modules` both work. The app needs `"strict": true` and `"lib": ["ES2023", "DOM"]` in tsconfig and `vreact.json`
 (`{"src":"src","exclude":["main.tsx"],"proofs":"proofs","out":".vreact"}`).
 Keep `main.tsx` (createRoot) outside the verified program.
+
+Lean editors (WebStorm/IntelliJ with `lean4ij`, VS Code with the Lean 4 extension):
+`setup.sh /path/to/app` and every `vreact verify` write `lean-toolchain` (the tool's Lean
+version) and a `lakefile.toml` that requires the generated `.vreact/` project into the app
+folder, and add `.lake/` and `lake-manifest.json` to its `.gitignore`. Run `vreact verify` once,
+then open the **app folder** as the editor's project: `proofs/*.lean` get live checking, with
+`import VTS.<Module>.Defs` resolved against the last `vreact verify` (re-run it after changing
+the TypeScript). From a shell, `lake lean proofs/<Module>.lean` in the app folder checks one
+proof file the same way. The editor is a convenience: `vreact verify` stays the source of truth.
+Let `vreact verify` finish before opening a proof file: when `.vreact/` is newer than its build
+(after `vreact translate`, or a verify that was interrupted), the editor first builds the
+imported `VTS.<Module>.Defs` itself, proving that module's obligations, which can take minutes
+behind a bare progress bar. Do not run `vreact verify` while the editor is doing that (both build
+`.vreact/`). `lake build` in the app folder builds nothing (the app's package has no targets).
+vreact keeps its own `lakefile.toml` (first line `# vreact: Lean editor support`) and
+`lean-toolchain` up to date, and never writes either over a `lakefile.toml` without that line
+or a `lakefile.lean` (the user's own Lean project).
 
 ## The workflow
 

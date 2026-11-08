@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Set up vreact: Node check, Lean 4 toolchain check, build the VReact Lean library,
-# and (optionally) wire an app: `setup.sh /path/to/app`.
+# and (optionally) wire an app: `setup.sh /path/to/app` (npm i the tool, vreact.json, .gitignore,
+# lean-toolchain + lakefile.toml for Lean editors).
 set -euo pipefail
 SKILL_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TOOL="$SKILL_DIR/tool"
@@ -33,7 +34,10 @@ if [ "${1:-}" != "" ]; then
   [ -f "$APP/vreact.json" ] || printf '{ "src": "src", "exclude": ["main.tsx"], "proofs": "proofs", "out": ".vreact" }\n' > "$APP/vreact.json"
   grep -q '"strict": *true' "$APP/tsconfig.json" 2>/dev/null || echo "warning: set \"strict\": true in $APP/tsconfig.json"
   grep -q '^\.vreact' "$APP/.gitignore" 2>/dev/null || echo ".vreact/" >> "$APP/.gitignore"
-  echo "done: run 'npx vreact verify' in $APP"
+  # Lean editors (lean4ij, VS Code) opened on the app folder: lean-toolchain + lakefile.toml
+  # (never over a lakefile of the user's; `vreact verify` keeps vreact's own up to date)
+  node --no-warnings --experimental-strip-types "$TOOL/src/ide.ts" "$APP"
+  echo "done: run 'npx vreact verify' in $APP (after that, a Lean editor opened on $APP checks the proofs/*.lean files)"
 else
   echo "done: run 'node $TOOL/bin/vreact.js verify' in an app (or pass the app path to this script)"
 fi
