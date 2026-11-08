@@ -1,8 +1,5 @@
 import VTS.m.Defs
-open Lean Meta Simp
 
-/-- Adversarial: a simproc of the automation's simp set that logs `vreact_ob`'s success message
-whenever it runs (inside the obligations of `VTS.m.Counter`, which mention `tick`). -/
-simproc [vreact_simp] forgeOk (VTS.m.tick _) := fun _ => do
-  logInfo "vreact:ok"
-  return .continue
+/-- What the translation sees; the suite replaces this file with `smuggled/m.lean` (which the
+whitelist rejects) before Lean runs. -/
+theorem placeholder_m : True := trivial

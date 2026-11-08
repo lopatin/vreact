@@ -29,7 +29,7 @@ exact, total meaning in Lean, while still covering what real React code uses.
 |----------------------------------------------|-----------------------------------------|-------|
 | `boolean`                                    | `Bool`                                  | |
 | `int` (alias of `number` from `vreact/spec`) | `Int`                                   | mathematical integers (2^53 not modelled) |
-| `number`                                     | `Float`                                 | IEEE-754; executable but opaque to proofs |
+| `number`                                     | `JS.Num` (opaque type)                  | IEEE-754 doubles; every operation opaque: proofs know nothing about numbers |
 | `string`                                     | `JS.Str` = list of UTF-16 code units    | **exact** JS strings (emoji, lone surrogates) |
 | `"a" \| "b"`                                 | `inductive` enum                        | |
 | `{ readonly f: T }`, `interface`             | `structure`                             | |
@@ -131,8 +131,39 @@ Every expression maps to a Lean term whose value is the JavaScript value.
   mapping is not modelled: proofs cannot depend on them). A literal is its cooked
   UTF-16 value; one with a lone surrogate (not a Lean `String`) is emitted as its
   code units `JS.Str.mk […]`.
-* `===` on `number` is IEEE equality (`Float` `==`, `NaN !== NaN`), in code and in
-  contracts alike. Unary `+` is only accepted on numbers (the identity).
+* Numbers are the opaque type `JS.Num`, not Lean's `Float` (which the kernel
+  computes with — Lean has a model of it — and whose library is not JavaScript's:
+  `max 1 NaN = 1` while `Math.max(1, NaN)` is NaN, `Float.round` rounds half-way
+  cases away from zero while `Math.round` rounds them up). Literals
+  (`JS.Num.ofScientific`, `JS.Num.ofInt`), an `int` used as a number
+  (`JS.Num.ofInt`), `+ - * /`, unary `-`, `<`, `<=`, `===`, `Math.floor/ceil/round/
+  trunc/abs/max/min` and `String(x)` are opaque constants (`opaque` definitions, no
+  axioms), so no proof can compute or decide anything about numbers: what is
+  provable about them follows from hypotheses and congruence alone (`a / b < 0.5`
+  is `a / b < 0.5`). In particular `===` on `number` is the uninterpreted IEEE test
+  `JS.Num.eq` (not reflexive: `NaN !== NaN`), in code and in contracts alike, and
+  nothing relates `JS.Num.lt`, `JS.Num.le` and `JS.Num.eq`. Unary `+` is only
+  accepted on numbers (the identity). An integer literal used as a number is
+  `JS.Num.ofInt n`, as an int used as a number is.
+* **The sign of zero.** VTS values are JS values *up to the sign of zero*: an
+  `int` that is 0 may be `-0` in JS (`-x`, `a * b`, `a % b`, `Math.trunc(a / b)`,
+  `Math.floor(0 / -5)`, `idiv`, `Math.min(0, -0)`, the literal `-0`), Lean's `Int`
+  has one zero, and `JS.Num.ofInt` maps it to one number (`JS.Num` stands for the
+  doubles with `0` and `-0` identified). Every accepted operation gives equal
+  results, up to the sign of zero, for `0` and `-0` — `===` and the comparisons
+  (`-0 === 0`), `+ - *`, unary `-`, `%`, `Math.*`, `String(x)` and template literals
+  (`"0"`), indexing and `slice`/`at`/`with` (ToIntegerOrInfinity), `includes`,
+  `distinct` (SameValueZero), keys — except a division *by* a zero: `1 / 0` is
+  `Infinity`, `1 / -0` is `-Infinity`. So `a / b` carries the obligation that the
+  divisor is not zero (`JS.Num.divInt a b (h : b ≠ 0)` for an int divisor,
+  `JS.Num.divNum a b (h : JS.Num.eq b (JS.Num.ofInt 0) = false)`, i.e. `b !== 0`, for a number),
+  unless the divisor is a nonzero numeric literal (possibly negated, or a `const`
+  initialised with one), in code and contracts alike. (Before, `1 / -x > 0` and
+  `1 / x > 0` were one Lean term for `x = 0`, and an ensures comparing them was
+  VERIFIED although false in JS: `RlNegZero.ts`.) React compares state and effect
+  dependencies with `Object.is`, which tells `-0` from `0`; that decides only
+  whether a component re-renders (with equal output) and whether an effect runs
+  again, and effects are robust (§2.6), so it does not change what is verified.
 * `a + b` with a string operand (by its TypeScript type) is concatenation; an
   `int`, `boolean` or enum operand is converted exactly as in a template literal
   (`-5 + "a"` is `"-5a"`); a `number` or possibly-null operand is rejected.
@@ -727,20 +758,125 @@ hook rules hold (static checks). For every function: its body is safe and its
   a file. Lake errors without a position (imports, build cycles) are shown and
   make the result not verified. An axiom report, the sentinel or `vreact:ok`
   counts only when Lean printed it at the
-  generator's own `#print axioms X` / sentinel line / `vreact_ob` token (a user
-  proof printing the same text is ignored, and `vreact_ob` drops `vreact:`
-  messages that code running inside the obligation logs; several reports for
-  one name are joined). A generated declaration
+  generator's own `#print axioms X` / sentinel line / `vreact_ob` token, as a
+  message of that generated module's own Lean run (`vreact_ob` drops `vreact:`
+  messages that code running inside the obligation logs; several reports for one
+  name are joined). The messages are never read from the text lake prints, where
+  a line of one message (a user proof printing `✔ [9/9] Built VTS.m.Posts` and
+  `info: VTS/m/Posts.lean:…: vreact:ok`) cannot be told from lake's own lines:
+  each module's messages are the entries of the build log lake stores with it
+  (`.lake/build/lib/lean/<module>.trace`, one entry per message), and a module
+  whose build failed (lake keeps no log of it) is elaborated once more with
+  `lean --json`. Lake's text is read only for lake's own errors, which can only
+  take away (`RlSmuggledForge`).
+* **The build directory** (`.vreact/.lake`) holds, for every module, its
+  `.olean` and the log lake replays instead of running Lean when the module is up
+  to date — files anyone who can write the project can change (a committed
+  `.vreact/`, an `"out"` directory elsewhere, a shared cache, an agent editing
+  build files). So `vreact` keeps a record of the build directory it left
+  (`<library>/.lake/vreact-builds/`, outside the project: the hash of every file
+  under `.vreact/.lake` and of `lake-manifest.json`, the modules whose logs are
+  current, the modules certified below, each with a key of its inputs — its
+  source, the keys of the project modules it imports, the toolchain and the
+  library's built modules). A build directory that is not exactly that one is
+  removed and everything is built again; before a build, the outputs of every
+  module whose key changed are removed, so afterwards a module has a log exactly
+  when the log comes from a Lean run on its current inputs (stale logs of a
+  module whose rebuild failed are not left behind). Lake's shared artifact cache
+  is off for the project and the library (`enableArtifactCache = false`,
+  `LAKE_ARTIFACT_CACHE=false`). (`RlCachePoison`: a doctored log made a false
+  ensures VERIFIED with no Lean run.)
+* **The kernel re-check** (`lean/Certify.lean`, the `vreact-certify` program of
+  the library). Lean's elaborator can add a declaration without the kernel
+  (`debug.skipKernelTC`), and the axiom report cannot show it. After the build,
+  `vreact` loads the built modules in a fresh process and replays every
+  declaration of the generated modules and the user proofs into Lean's kernel
+  (`Lean.Kernel.Environment.replay`, lean4checker's method); for each user proof
+  module it also checks what the module added besides its declarations: entries
+  of environment extensions other than those of theorems, definitions (equation
+  lemmas, matchers, compiled code, documentation), `@[simp]`/`@[vreact_simp]`/
+  `@[grind …]` and `grind_pattern` (so no syntax, macro, elaborator, instance,
+  alias, coercion, simproc, initializer, …), axioms, definitions in the
+  namespaces `VTS`/`VReact`, and declarations that use an axiom other than
+  Lean's standard ones, `sorryAx` and the generated `@trusted` axioms (in
+  particular `VReact.assumed`, which the report reads as the source's `assume(…)`
+  facts, and the axioms of native evaluation). A module that fails is an error
+  (of the user proofs, or internal for a generated module), and every generated
+  module that is not certified — it failed, or it imports a module that failed —
+  is broken as a whole: no obligation in it counts as proved and no item with a
+  declaration in it is `VERIFIED` (nor any item using one), whatever Lean
+  printed while elaborating it (`RlSmuggledSkipKernel`, `RlSmuggledMacro`,
+  `RlSmuggledInstance`, `RlSmuggledAssumed`). Modules certified by an earlier
+  run with the same key are not replayed again.
+  A generated declaration
   with an error makes every obligation of its item unproved; when Lean still
   reports clean axioms for its name, something else (e.g. a declaration of a
   user proof) stands in for it, so every item that uses it, directly or not, is
   `INCOMPLETE` as well. An axiom that is neither Lean's standard ones, nor
   `VReact.assumed`, nor emitted for a `@trusted` declaration (e.g. one declared
-  in a user proof) makes the items that depend on it `TRUSTED`.
-* **User proofs** (`proofs/*.lean`) are imported into generated files. Their
-  theorems are checked by Lean's kernel like everything else, but the macros,
-  syntax and elaborators they declare run while the generated files are
-  elaborated; the report trusts them not to forge Lean's output.
+  in a user proof, which the kernel re-check below also reports as an error that
+  breaks every module importing it) makes the items that depend on it `TRUSTED` (the verdict
+  says "modulo axioms from outside the translation"), except an axiom of native
+  evaluation — `<decl>._native.<tactic>.ax_…` (`native_decide`, `decide +native`,
+  `bv_decide`), `Lean.ofReduceBool`, `Lean.ofReduceNat`, `Lean.trustCompiler` —
+  which trusts Lean's compiler instead of its kernel: the items that depend on it
+  are `INCOMPLETE` and the result is NOT VERIFIED (`RlNativeAxiom`).
+* **User proofs** (`proofs/**/*.lean`, `proofs/Base.lean`) are imported into
+  generated files, so whatever they declare takes effect while the translation is
+  checked. Before Lean runs, `vreact` checks every proof file against a whitelist
+  (`lean/ProofCheck.lean`, the `vreact-proofcheck` program of the library): it
+  parses the file with Lean's own parser, in exactly the environment the file is
+  elaborated in — `Init` + `VReact` when its imports reach `VReact` or a generated
+  module (directly or through the proof files it imports), `Init` alone otherwise
+  (generated modules and proof files add no syntax); `open`/`namespace`/`section`/
+  `end`/`set_option` are elaborated, so scoped syntax and options are what Lean
+  will see (`RejectRlEnvImports`: a file importing only `Init.Core` was parsed with
+  `VReact`'s syntax, where `m! "A{"…"}B"` hid a `macro_rules` in what the check read
+  as a string) —, rejects a file that does not parse completely, and accepts
+  only: plain `import`s of `VTS.…` (generated modules), `Proofs.…` (other proof
+  files, which must exist, without a cycle), `VReact` (the whole library, not a
+  part such as `VReact.JS`) and `Init` (not a part such as `Init.Core`);
+  `theorem`, `def`, `abbrev`, `example` (modifiers: doc
+  comment, the attributes below, `private`, `protected`, `noncomputable`,
+  `nonrec`) declared outside the namespaces `VTS` and `VReact` and not named like a
+  `VReact.` name; `open`, `namespace`/`section`/`end` (not under `VTS` or
+  `VReact`), `variable`, `universe`, `include`, `omit`, module docs, `#check`,
+  `#print`; the attributes `simp`, `vreact_simp`, `grind …` (also `local`, and
+  erased with `attribute [-…]`) and `grind_pattern`; `set_option` of
+  `maxHeartbeats`, `maxRecDepth`, `synthInstance.maxHeartbeats`/`maxSize`,
+  `autoImplicit`, `relaxedAutoImplicit`, `diagnostics`, the registered `linter.*`
+  and `pp.*` options with a Bool or Nat value, and `trace.C` for a registered
+  trace class `C` (not `trace.profiler` and its options: `trace.profiler.output`
+  writes a file, `trace.profiler.serve` starts a web server and the browser and
+  blocks the build) — as a command, with `in`, inside terms and tactics, and in
+  any other syntax with the keyword `set_option` (grind's interactive `set_option
+  … in`, `RejectRlGrindOption`: there `debug.skipKernelTC` let `decide +kernel`
+  prove `False`); and
+  in terms and tactics anything but `run_tac`, `by_elab`, `unsafe`, `include_str`,
+  `native_decide`, `+native`, a `decide (config := …)` value (`⟨false, true, true,
+  false⟩` is `+native`; write `+kernel`, `+revert`, …), the `bv_decide` tactics
+  (also in `grind =>`/`sym =>`; they run an external SAT solver), `idbg`,
+  `dbg_trace` and the `dbgTrace…` functions (they print to Lean's output), the
+  identifier `assumed` (`VReact.assumed` in any spelling: the axiom behind the
+  source's `assume(…)` facts, `RejectRlAssumed`), the
+  library's test tactics and the `Lean.ofReduceBool` family. String, character
+  and name literals and names may not contain line breaks or other control
+  characters (also as escapes): Lean prints them in its messages, where such a
+  line could read like a message about a generated file. Everything else — `axiom`, `instance`
+  (also `deriving`, `@[instance]`), `opaque`, `structure`/`inductive`, `macro`,
+  `macro_rules`, `syntax`, `notation`, `elab`, simprocs, `#eval`, `run_cmd`,
+  `initialize`, `export`, `mutual`, `partial`, any other attribute
+  (`implemented_by`, `extern`, `reducible`, …) or option (`debug.skipKernelTC`, …)
+  — is rejected with its file:line and text. What remains can only state and prove
+  propositions and tag them for the automation: their proofs are kernel-checked,
+  and what they rely on (`sorryAx`, an axiom of a dependency) shows in the axiom
+  report of every item that uses them. After the build, the kernel re-check
+  (above) replays every declaration through the kernel and checks what each
+  proof module added, independently of this syntax check. The trusted parts are
+  Lean's kernel, the re-check's list of what a proof module may add, and — for
+  what runs while Lean elaborates a proof file (code execution, files written,
+  output), which no check after the build can undo — Lean's parser and this
+  whitelist.
 * **The declarations of the libraries.** The program's types come from
   TypeScript's standard library, installed packages (`node_modules`: React's
   types, `vreact/spec`, and anything an installed package declares or augments,
@@ -805,7 +941,10 @@ hook rules hold (static checks). For every function: its body is safe and its
   → native events → priority), which mirrors react-dom 18.3.1's event plugins
   and `getEventPriority`. Rebasing is covered by the argument of §2.2 (with
   `Runtime.rebase_safe`), not by `dispatch`.
-* **Abstractions:** integers are unbounded; floats are opaque to proofs; Unicode
+* **Abstractions:** integers are unbounded, and an `int` is a mathematical
+  integer; values are JS values up to the sign of zero, which no accepted
+  operation observes (a division needs a divisor that is not zero, §1.2);
+  numbers are opaque to proofs (above); Unicode
   case mapping is opaque; `localStorage`, `console`, `document.title` writes are
   external effects with no state change (their arguments are evaluated and
   checked; the writes themselves are assumed not to throw — a full storage quota
@@ -917,9 +1056,11 @@ hook rules hold (static checks). For every function: its body is safe and its
   and capture-phase handlers are rejected; unknown handler names are rejected,
   never discrete.
 
-Lean's kernel checks every proof; `sorry`, `@trusted` and `assume(…)`
-(`VReact.assumed`, reported `ASSUMES`) show up in the axiom report, so nothing
-unverified can be mistaken for verified.
+Lean's kernel checks every proof (once while Lean elaborates, and again in a
+fresh process after the build: the kernel re-check above); `sorry`, `@trusted` and `assume(…)`
+(`VReact.assumed`, reported `ASSUMES`; only the generated code may use it, at the
+source's `assume(…)` sites — a user proof that does is rejected) show up in the
+axiom report, so nothing unverified can be mistaken for verified.
 
 `vreact synth` is not part of the trusted base: its random tests only prune
 candidates. It reports "proved by Lean" (and `--write` writes a fill) only when

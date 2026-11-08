@@ -34,8 +34,9 @@ import VReact.Simprocs
 The normalisation set is the simp attribute `vreact_simp` (so a typo in a lemma
 name is a build error of this library, never a silent weakening of the tactic).
 Users extend the automation by tagging their lemmas `@[vreact_simp]` (rewrite
-rules) or `@[grind]`/`grind_pattern` (E-matching facts), or by adding
-`macro_rules` for `vreact_auto`.
+rules) or `@[grind]`/`grind_pattern` (E-matching facts). (Not with `macro_rules`
+for `vreact_auto` or other syntax: user proof files may contain only lemmas, see
+`ProofCheck.lean`.)
 -/
 namespace VReact
 
@@ -47,6 +48,7 @@ attribute [vreact_simp] JS.lt_iff JS.le_iff JS.eq_iff JS.nodupB_iff JS.lt_false 
   JS.nodupB_false
 attribute [vreact_simp] JS.len_eq JS.strLen_eq JS.Str.ofString_empty JS.Str.units_append JS.rem
   JS.floorDiv JS.truncDiv JS.strSlice JS.slice_length JS.relIndex JS.distinct JS.get_eq JS.mem_rangeFrom JS.mem_range JS.abs JS.sign
+  JS.Num.divInt JS.Num.divNum
 -- Logic / Bool / lists.
 attribute [vreact_simp] dite_eq_ite List.foldl_cons List.foldl_nil decide_eq_true_eq decide_eq_false_iff_not
   Bool.and_eq_true Bool.or_eq_true Bool.not_eq_true' Bool.not_eq_eq_eq_not Bool.not_true ne_eq

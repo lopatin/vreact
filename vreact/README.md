@@ -49,10 +49,11 @@ vreact translate                          # only generate .vreact/
 |------|------|
 | `src/` | the translator (TypeScript compiler API → Lean), CLI, synthesizer |
 | `spec/` | `vreact/spec`: `requires ensures invariant callbackRequires assert assume forall exists distinct implies idiv range hole` and `type int` |
-| `lean/VReact/JS.lean` | exact model of the JS operations VTS allows (UTF-16 strings, `slice`, `%`, …) |
+| `lean/VReact/JS.lean` | exact model of the JS operations VTS allows (UTF-16 strings, `slice`, `%`, …); numbers are an opaque type |
 | `lean/VReact/Core.lean` | the React model: update queues, outcomes, proof-carrying `VNode`, `Spec`, `Component` |
 | `lean/VReact/Runtime.lean` | lifecycle semantics (mount, reconcile, dispatch, effects, timers) and `run_allInv` |
 | `lean/VReact/Tactic.lean`, `Contracts.lean`, `Lists.lean`, `Simprocs.lean` | `vreact_auto`: simp normalisation + per-call contract instantiation + `grind` |
+| `lean/ProofCheck.lean` | `vreact-proofcheck`: the whitelist user proof files (`proofs/`) must pass before Lean elaborates them |
 | `docs/SEMANTICS.md` | the formal model, obligations, soundness theorem, trusted base |
 | `skill/verified-react/` | the Claude Code skill (SKILL.md, references, setup script) |
 | `tests/` | regression suite (`run.ts`: semantic, rejection and report-honesty cases), synthesis test, sample apps |

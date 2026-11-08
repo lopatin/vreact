@@ -1,5 +1,6 @@
 /** Running Lean on the generated project and mapping results back to TypeScript. */
 import { spawnSync } from "node:child_process";
+import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -17,6 +18,11 @@ export interface LeanMessage {
   decl?: string | null;
   /** classification of an unattributed error (set by `judge`) */
   cause?: ErrorCause;
+  /**
+   * an error about the whole file (a generated module the kernel re-check did not certify,
+   * `runLake`): every declaration in it is broken; not itself listed (its cause is)
+   */
+  wholeFile?: boolean;
 }
 
 /**
@@ -40,14 +46,474 @@ export function leanBin(): string {
   return fs.existsSync(path.join(elan, "lake")) ? elan : "";
 }
 
-export function runLake(outDir: string): { messages: LeanMessage[]; raw: string; status: number } {
+/** A command of a user proof file that the whitelist rejects (`lean/ProofCheck.lean`). */
+export interface ProofIssue {
+  /** the file's path relative to the proofs directory */
+  file: string;
+  line: number;
+  col: number;
+  msg: string;
+}
+
+/** Libraries this process has built (`buildLeanLib`). */
+const builtLibs = new Set<string>();
+
+/**
+ * Build the VReact library and vreact's Lean programs (`vreact-proofcheck`, `vreact-certify`)
+ * once per process (lake is quick when they are up to date); returns the environment to run
+ * them in (Lake's shared artifact cache off: see `runLake`).
+ */
+function buildLeanLib(leanLib: string): NodeJS.ProcessEnv {
   const bin = leanBin();
-  const env = { ...process.env, PATH: bin ? `${bin}:${process.env.PATH}` : process.env.PATH };
+  const env = { ...process.env, PATH: bin ? `${bin}:${process.env.PATH}` : process.env.PATH, LAKE_ARTIFACT_CACHE: "false" };
+  if (builtLibs.has(leanLib)) return env;
+  const build = spawnSync("lake", ["build"], { cwd: leanLib, env, encoding: "utf8", maxBuffer: 64 * 1024 * 1024 });
+  if (build.error) throw new Error(`could not run lake (is Lean installed? see SKILL.md): ${build.error.message}`);
+  if (build.status !== 0) throw new Error(`could not build the VReact Lean library in ${leanLib}:\n${((build.stdout ?? "") + (build.stderr ?? "")).trim().split("\n").slice(-12).join("\n")}`);
+  builtLibs.add(leanLib);
+  return env;
+}
+
+/** Results of `checkProofFiles` by input (the check runs Lean: `vreact synth` translates often). */
+const proofCheckCache = new Map<string, ProofIssue[]>();
+
+/**
+ * The whitelist check of user proof files, before Lean elaborates them (they are imported by
+ * the generated files, so whatever they declare — syntax, instances, options, code — takes
+ * effect while the translation is checked). Runs `vreact-proofcheck` (`lean/ProofCheck.lean`),
+ * which parses each file with Lean's parser and accepts only lemma-like commands; the library
+ * (and the checker) are built first if needed.
+ */
+export function checkProofFiles(leanLib: string, files: { name: string; text: string }[]): ProofIssue[] {
+  if (!files.length) return [];
+  const input = JSON.stringify(files);
+  const cached = proofCheckCache.get(input);
+  if (cached) return cached;
+  const env = buildLeanLib(leanLib);
+  const exe = path.join(leanLib, ".lake", "build", "bin", "vreact-proofcheck");
+  const r = spawnSync("lake", ["env", exe], { cwd: leanLib, env, input, encoding: "utf8", maxBuffer: 64 * 1024 * 1024 });
+  if (r.error) throw new Error(`could not run the proof file check ${exe}: ${r.error.message}`);
+  let out: ProofIssue[] | null = null;
+  try {
+    const parsed: unknown = JSON.parse(r.stdout ?? "");
+    if (Array.isArray(parsed)) out = parsed as ProofIssue[];
+  } catch {
+    out = null;
+  }
+  // never "no objections" from a check that did not run to the end
+  if (r.status !== 0 || out === null) throw new Error(`the proof file check failed (exit ${r.status}${r.signal ? `, ${r.signal}` : ""}):\n${((r.stdout ?? "") + (r.stderr ?? "")).trim().split("\n").slice(-12).join("\n")}`);
+  proofCheckCache.set(input, out);
+  return out;
+}
+
+/** A Lean module of the generated project: generated (`VTS…`) or a user proof (`Proofs…`). */
+interface ProjectModule {
+  name: string;
+  /** its source, relative to the project (`VTS/m/Defs.lean`) */
+  rel: string;
+  text: string;
+  /** the modules it imports */
+  imports: string[];
+}
+
+/** `VTS/m/Defs.lean` → `VTS.m.Defs` (and back): lake's module names, without Lean's `«…»` escapes. */
+const modOfRel = (rel: string) => rel.replace(/\.lean$/, "").split(/[\\/]/).join(".");
+const relOfMod = (mod: string) => mod.split(".").join("/") + ".lean";
+
+/** The modules a Lean file's header imports (the generator writes one `import` per line; proof files are checked to have plain imports only). */
+function headerImports(text: string): string[] {
+  const code = text.replace(/\/-[\s\S]*?-\//g, " ").replace(/--.*$/gm, "");
+  const out: string[] = [];
+  for (const line of code.split("\n")) {
+    const m = /^\s*import\s+(.*)$/.exec(line);
+    if (m) out.push(...m[1].trim().split(/\s+/).filter(Boolean).map((x) => x.replace(/[«»]/g, "")));
+    else if (line.trim()) break;
+  }
+  return out;
+}
+
+/** The generated modules and the user proofs of a generated project. */
+function projectModules(outDir: string): ProjectModule[] {
+  const out: ProjectModule[] = [];
+  const add = (rel: string) => {
+    const text = fs.readFileSync(path.join(outDir, rel), "utf8");
+    out.push({ name: modOfRel(rel), rel: rel.split(path.sep).join("/"), text, imports: headerImports(text) });
+  };
+  const walk = (dir: string) => {
+    const d = path.join(outDir, dir);
+    if (!fs.existsSync(d)) return;
+    for (const f of fs.readdirSync(d).sort()) {
+      const rel = path.join(dir, f);
+      if (fs.statSync(path.join(outDir, rel)).isDirectory()) walk(rel);
+      else if (f.endsWith(".lean")) add(rel);
+    }
+  };
+  if (fs.existsSync(path.join(outDir, "VTS.lean"))) add("VTS.lean");
+  walk("VTS");
+  walk("Proofs");
+  return out;
+}
+
+const sha256 = (data: string | Buffer) => crypto.createHash("sha256").update(data).digest("hex");
+
+/** The files of a directory tree (relative paths); null if it holds anything but files and directories (a link, …). */
+function treeFiles(root: string): string[] | null {
+  const out: string[] = [];
+  let odd = false;
+  const walk = (rel: string) => {
+    for (const f of fs.readdirSync(path.join(root, rel))) {
+      const r = rel ? path.join(rel, f) : f;
+      const st = fs.lstatSync(path.join(root, r));
+      if (st.isDirectory()) walk(r);
+      else if (st.isFile()) out.push(r);
+      else odd = true;
+    }
+  };
+  walk("");
+  return odd ? null : out.sort();
+}
+
+/**
+ * What the library and the toolchain contribute to every module's build: the toolchain, the
+ * library's built modules and the project's lakefile. A module's key (`moduleKeys`) changes
+ * with any of them.
+ */
+function libraryFingerprint(leanLib: string, outDir: string): string {
+  const h = crypto.createHash("sha256");
+  h.update(fs.readFileSync(path.join(leanLib, "lean-toolchain")));
+  for (const f of ["lakefile.toml", "lean-toolchain"]) {
+    const p = path.join(outDir, f);
+    h.update(f + "\0" + (fs.existsSync(p) ? fs.readFileSync(p, "utf8") : "") + "\0");
+  }
+  const lib = path.join(leanLib, ".lake", "build", "lib", "lean");
+  for (const f of treeFiles(lib) ?? []) if (/^VReact\b/.test(f) && f.endsWith(".olean")) h.update(f + "\0").update(fs.readFileSync(path.join(lib, f)));
+  return h.digest("hex");
+}
+
+/**
+ * A key of everything a module's Lean run depends on: its source, the keys of the project
+ * modules it imports, and the library/toolchain fingerprint. Lean is deterministic, so two runs
+ * with one key print the same messages.
+ */
+function moduleKeys(mods: ProjectModule[], fingerprint: string): Map<string, string> {
+  const byName = new Map(mods.map((m) => [m.name, m]));
+  const keys = new Map<string, string>();
+  const key = (m: ProjectModule, seen: Set<string>): string => {
+    const k = keys.get(m.name);
+    if (k) return k;
+    if (seen.has(m.name)) return "cycle";
+    seen.add(m.name);
+    const deps = m.imports.map((i) => `${i}=${byName.has(i) ? key(byName.get(i)!, seen) : "-"}`).sort();
+    const out = sha256([fingerprint, m.name, m.text, ...deps].join("\0"));
+    keys.set(m.name, out);
+    return out;
+  };
+  for (const m of mods) key(m, new Set());
+  return keys;
+}
+
+/**
+ * vreact's record of the build directory it left behind (kept outside the project, next to the
+ * library's own build): the hash of every file under `<out>/.lake` (and of `lake-manifest.json`),
+ * the modules whose build log was current, and the modules the kernel re-check certified, each
+ * with its key.
+ */
+interface BuildRecord {
+  files: Record<string, string>;
+  current: Record<string, string>;
+  certified: Record<string, string>;
+}
+
+const recordPath = (leanLib: string, outDir: string) => path.join(leanLib, ".lake", "vreact-builds", sha256(fs.realpathSync(outDir)).slice(0, 40) + ".json");
+
+/** The hashes of the files Lake keeps in the project: its build directory and its manifest (null: something there is not a plain file). */
+function buildFiles(outDir: string): Record<string, string> | null {
+  const out: Record<string, string> = {};
+  const lake = path.join(outDir, ".lake");
+  if (fs.existsSync(lake) || isLink(lake)) {
+    if (!fs.lstatSync(lake).isDirectory()) return null;
+    const files = treeFiles(lake);
+    if (!files) return null;
+    for (const f of files) out[path.join(".lake", f).split(path.sep).join("/")] = sha256(fs.readFileSync(path.join(lake, f)));
+  }
+  const manifest = path.join(outDir, "lake-manifest.json");
+  if (isLink(manifest)) return null;
+  if (fs.existsSync(manifest)) out["lake-manifest.json"] = sha256(fs.readFileSync(manifest));
+  return out;
+}
+
+function isLink(p: string): boolean {
+  try {
+    return fs.lstatSync(p).isSymbolicLink();
+  } catch {
+    return false;
+  }
+}
+
+function readRecord(p: string): BuildRecord | null {
+  try {
+    const r = JSON.parse(fs.readFileSync(p, "utf8")) as BuildRecord;
+    return r && typeof r.files === "object" && typeof r.current === "object" && typeof r.certified === "object" ? r : null;
+  } catch {
+    return null;
+  }
+}
+
+function writeRecord(p: string, r: BuildRecord) {
+  fs.mkdirSync(path.dirname(p), { recursive: true });
+  const tmp = `${p}.${process.pid}.tmp`;
+  fs.writeFileSync(tmp, JSON.stringify(r));
+  fs.renameSync(tmp, p);
+}
+
+const sameFiles = (a: Record<string, string>, b: Record<string, string>) => {
+  const ka = Object.keys(a);
+  return ka.length === Object.keys(b).length && ka.every((k) => b[k] === a[k]);
+};
+
+/** Lake's outputs of a module (`.olean`, `.ilean`, `.trace`, hashes, `.c`, …). */
+function removeOutputs(outDir: string, mod: string) {
+  const parts = mod.split(".");
+  const last = parts[parts.length - 1];
+  for (const base of [path.join(outDir, ".lake", "build", "lib", "lean"), path.join(outDir, ".lake", "build", "ir")]) {
+    const dir = path.join(base, ...parts.slice(0, -1));
+    if (!fs.existsSync(dir)) continue;
+    for (const f of fs.readdirSync(dir)) if (f.startsWith(last + ".")) fs.rmSync(path.join(dir, f), { force: true });
+  }
+}
+
+const oleanOf = (outDir: string, mod: string) => path.join(outDir, ".lake", "build", "lib", "lean", ...mod.split(".")) + ".olean";
+const traceOf = (outDir: string, mod: string) => path.join(outDir, ".lake", "build", "lib", "lean", ...mod.split(".")) + ".trace";
+
+/** A message as lake logs it (`<file>:<line>:<col>: <text>`) with its level, for module `rel`. */
+function logEntryMessage(level: string, message: string, rel: string): LeanMessage | null {
+  const severity = level === "error" ? "error" : level === "warning" ? "warning" : level === "info" ? "info" : null;
+  if (!severity) return null;
+  const m = /^(.+?\.lean):(\d+):(\d+): ?([\s\S]*)$/.exec(message);
+  // a message of Lean has the position of the module's own file; anything else (lake's
+  // `stdout:`/`stderr:` captures of the process) is no evidence, but an error stays an error
+  if (!m || m[1].split("\\").join("/") !== rel) return severity === "info" ? null : { severity, file: rel, line: 0, col: 0, text: message };
+  return { severity, file: rel, line: +m[2], col: +m[3], text: m[4] };
+}
+
+/** The messages of a module's own Lean run, from the build log lake stored with it. */
+function traceMessages(outDir: string, mod: ProjectModule): LeanMessage[] {
+  let log: { level?: string; message?: string }[] = [];
+  try {
+    const t = JSON.parse(fs.readFileSync(traceOf(outDir, mod.name), "utf8")) as { log?: unknown };
+    if (Array.isArray(t.log)) log = t.log as typeof log;
+  } catch {
+    return [{ severity: "error", file: mod.rel, line: 0, col: 0, text: `the build log of ${mod.name} could not be read` }];
+  }
+  return log.flatMap((e) => {
+    const m = typeof e?.message === "string" && typeof e?.level === "string" ? logEntryMessage(e.level, e.message, mod.rel) : null;
+    return m ? [m] : [];
+  });
+}
+
+/** Elaborate a module once more with `lean --json` (one whose build failed: lake keeps no log of it), for its structured messages. */
+function rerunMessages(outDir: string, mod: ProjectModule, env: NodeJS.ProcessEnv): LeanMessage[] {
+  const r = spawnSync("lake", ["env", "lean", "--json", mod.rel], { cwd: outDir, env, encoding: "utf8", maxBuffer: 256 * 1024 * 1024 });
+  if (r.error) throw new Error(`could not run lean: ${r.error.message}`);
+  const out: LeanMessage[] = [];
+  for (const line of (r.stdout ?? "").split("\n")) {
+    if (!line.trim()) continue;
+    let j: { severity?: string; pos?: { line?: number; column?: number }; data?: string; caption?: string; isSilent?: boolean } | null = null;
+    try {
+      j = JSON.parse(line);
+    } catch {
+      j = null;
+    }
+    if (!j || typeof j.data !== "string" || !j.pos) {
+      out.push({ severity: "error", file: mod.rel, line: 0, col: 0, text: `lean printed: ${line.slice(0, 300)}` });
+      continue;
+    }
+    if (j.isSilent) continue;
+    const severity = j.severity === "error" ? "error" : j.severity === "warning" ? "warning" : "info";
+    const text = j.caption?.trim() ? `${j.caption.trim()}:\n${j.data.trim()}` : j.data.trim();
+    out.push({ severity, file: mod.rel, line: j.pos.line ?? 0, col: j.pos.column ?? 0, text });
+  }
+  if (r.status !== 0 && !out.some((m) => m.severity === "error")) out.push({ severity: "error", file: mod.rel, line: 0, col: 0, text: `lean exited with code ${r.status}${r.signal ? ` (${r.signal})` : ""}: ${(r.stderr ?? "").trim().split("\n").slice(-6).join("\n")}` });
+  return out;
+}
+
+/** Modules lake reports as failed: `✖ [i/n] Building M` and the closing list of failed targets. */
+function failedModules(raw: string): Set<string> {
+  const out = new Set<string>();
+  let list = false;
+  for (const line of raw.split("\n")) {
+    const j = /^✖ \[\d+\/\d+\] \S+ (\S+)/.exec(line);
+    if (j) out.add(plainModule(j[1]));
+    if (/^Some required targets logged failures:/.test(line)) list = true;
+    else if (list && /^- \S+/.test(line)) out.add(plainModule(line.slice(2).trim()));
+    else list = false;
+  }
+  return out;
+}
+
+/** The result of the kernel re-check (`lean/Certify.lean`). */
+interface Certificate {
+  certified: string[];
+  failed: { module: string; reason: string }[];
+  issues: { module: string; decl: string; msg: string }[];
+}
+
+/** Run `vreact-certify` on the built modules `check` (in import order), with `base` imported as they are. */
+function runCertify(outDir: string, leanLib: string, env: NodeJS.ProcessEnv, base: string[], check: string[]): Certificate {
+  const exe = path.join(leanLib, ".lake", "build", "bin", "vreact-certify");
+  const r = spawnSync("lake", ["env", exe], { cwd: outDir, env, input: JSON.stringify({ base, check }), encoding: "utf8", maxBuffer: 64 * 1024 * 1024 });
+  if (r.error) throw new Error(`could not run the kernel re-check ${exe}: ${r.error.message}`);
+  let out: Certificate | null = null;
+  try {
+    const p = JSON.parse(r.stdout ?? "") as Certificate;
+    if (Array.isArray(p?.certified) && Array.isArray(p?.failed) && Array.isArray(p?.issues)) out = p;
+  } catch {
+    out = null;
+  }
+  // never "certified" by a check that did not run to the end
+  if (r.status !== 0 || !out) {
+    return { certified: [], failed: check.map((module) => ({ module, reason: "the kernel re-check did not run to the end" })), issues: [{ module: "", decl: "", msg: `the kernel re-check failed (exit ${r.status}${r.signal ? `, ${r.signal}` : ""}): ${((r.stdout ?? "") + (r.stderr ?? "")).trim().split("\n").slice(-8).join("\n")}` }] };
+  }
+  return out;
+}
+
+/** The line of declaration `decl` in a Lean file (private names without their `_private.<module>.0.` prefix), 1 if not found. */
+function declLine(outDir: string, rel: string, decl: string): number {
+  if (!decl) return 1;
+  const plain = decl.replace(/^_private\.(?:[^.]+\.)*?0\./, "");
+  try {
+    const d = leanDecls(fs.readFileSync(path.join(outDir, rel), "utf8"), rel).find((x) => x.name === plain || (x.name !== null && plain.startsWith(x.name + ".")));
+    return d?.start ?? 1;
+  } catch {
+    return 1;
+  }
+}
+
+/** The result of `runLake`. */
+export interface LakeRun {
+  /** Lean's messages about the project's modules (from their own Lean runs) and lake's own errors */
+  messages: LeanMessage[];
+  /** the same messages as lake-style text (`lakeMessages` reads it back; the regression suite doctors it) */
+  raw: string;
+  status: number;
+  /** what lake printed */
+  lakeOutput: string;
+}
+
+/**
+ * Build the generated project with lake and collect Lean's messages about it.
+ *
+ * The report counts only evidence from Lean runs that vreact itself started on this machine:
+ *  - the build directory (`<out>/.lake`, with every module's `.olean` and the build log lake
+ *    replays for a module that is up to date) must be exactly the one vreact's last build left
+ *    behind (`BuildRecord`, kept next to the library's build, outside the project): otherwise —
+ *    a project copied with its `.vreact/`, a shared cache, an edited log — it is removed and
+ *    everything is built again. Lake's shared artifact cache is off (`enableArtifactCache`).
+ *  - before the build, the outputs of every module whose inputs changed since that build are
+ *    removed, so afterwards a module has a build log (`.trace`) and an `.olean` exactly when its
+ *    log comes from a Lean run on its current inputs (in this build, or an earlier one lake
+ *    replays): its messages are read from that log, entry by entry — never from lake's printed
+ *    text, where a message's lines cannot be told from another module's messages.
+ *  - a module whose build failed (lake keeps no log of it) is elaborated once more with
+ *    `lean --json` for its messages; a module that was not built has none (its obligations are
+ *    not checked).
+ *  - the built modules are re-checked by Lean's kernel in a fresh process (`vreact-certify`,
+ *    `lean/Certify.lean`), and the user proofs inspected for what they added; a rejection is an
+ *    error at the declaration, and every module importing a module that failed is broken.
+ * Lake's printed text is used only for lake's own errors (which can only take away).
+ */
+export function runLake(outDir: string, leanLib: string): LakeRun {
+  const env = buildLeanLib(leanLib);
+  const mods = projectModules(outDir);
+  const byName = new Map(mods.map((m) => [m.name, m]));
+  const keys = moduleKeys(mods, libraryFingerprint(leanLib, outDir));
+  const recPath = recordPath(leanLib, outDir);
+  let rec = readRecord(recPath);
+  const before = buildFiles(outDir);
+  if (!rec || !before || !sameFiles(rec.files, before)) {
+    fs.rmSync(path.join(outDir, ".lake"), { recursive: true, force: true });
+    fs.rmSync(path.join(outDir, "lake-manifest.json"), { force: true });
+    rec = null;
+  }
+  for (const m of mods) if (rec?.current[m.name] !== keys.get(m.name)) removeOutputs(outDir, m.name);
   const r = spawnSync("lake", ["build"], { cwd: outDir, env, encoding: "utf8", maxBuffer: 256 * 1024 * 1024 });
   if (r.error) throw new Error(`could not run lake (is Lean installed? see SKILL.md): ${r.error.message}`);
-  const raw = (r.stdout ?? "") + (r.stderr ?? "");
+  const lakeOutput = (r.stdout ?? "") + (r.stderr ?? "");
   const status = r.status ?? 1;
-  return { messages: lakeMessages(raw, status, r.signal), raw, status };
+  const current = new Set(mods.filter((m) => fs.existsSync(oleanOf(outDir, m.name)) && fs.existsSync(traceOf(outDir, m.name))).map((m) => m.name));
+  const failed = failedModules(lakeOutput);
+  // messages, module by module
+  const perModule: { mod: ProjectModule; ok: boolean; messages: LeanMessage[] }[] = [];
+  for (const m of mods) {
+    if (current.has(m.name)) perModule.push({ mod: m, ok: true, messages: traceMessages(outDir, m) });
+    else if (failed.has(m.name) && m.imports.every((i) => !byName.has(i) || current.has(i))) perModule.push({ mod: m, ok: false, messages: rerunMessages(outDir, m, env) });
+  }
+  // lake's own errors (no position in a module: imports, cycles, the lakefile, crashes)
+  const lakeErrors = parseMessages(lakeOutput).filter((x) => x.severity === "error" && (!x.line || !x.file || !byName.has(modOfRel(x.file))));
+  // the kernel re-check of the modules built from current inputs
+  const certified = new Set(mods.filter((m) => current.has(m.name) && rec?.certified[m.name] === keys.get(m.name)).map((m) => m.name));
+  const order: string[] = [];
+  const visit = (n: string, seen: Set<string>) => {
+    if (seen.has(n) || !current.has(n) || certified.has(n)) return;
+    seen.add(n);
+    for (const i of byName.get(n)!.imports) if (byName.has(i)) visit(i, seen);
+    order.push(n);
+  };
+  const seen = new Set<string>();
+  for (const m of mods) visit(m.name, seen);
+  const certMessages: LeanMessage[] = [];
+  /** modules the re-check failed, with the reason */
+  const uncertified = new Map<string, string>();
+  if (order.length) {
+    const cert = runCertify(outDir, leanLib, env, [...certified], order);
+    for (const c of cert.certified) certified.add(c);
+    for (const i of cert.issues) {
+      const rel = i.module ? relOfMod(i.module) : "";
+      certMessages.push({ severity: "error", file: rel, line: rel ? declLine(outDir, rel, i.decl) : 0, col: 0, text: `${i.module ? `${i.module}${i.decl ? ` (${i.decl})` : ""}: ` : ""}${i.msg}` });
+    }
+    for (const f of cert.failed) uncertified.set(f.module, f.reason);
+  }
+  // A generated module elaborated but not certified is broken as a whole: one the re-check
+  // failed (its replay stops at the first declaration the kernel rejects, and a module importing
+  // a failed one is not checked), and one whose build failed (no `.olean`: never certified, its
+  // messages from `lean --json`) that imports a module the re-check failed.
+  for (const p of perModule) {
+    const m = p.mod.name;
+    if (!m.startsWith("VTS.")) continue;
+    let why = uncertified.get(m);
+    if (why === undefined && !p.ok) {
+      const up = p.mod.imports.find((i) => uncertified.has(i));
+      if (up !== undefined) why = `it imports ${up}, which failed the check: ${uncertified.get(up)!.replace(/^it imports \S+, which failed the check: /, "")}`;
+    }
+    if (why === undefined) continue;
+    const line = p.mod.text.split("\n").findIndex((l) => /^import /.test(l)) + 1 || 1;
+    certMessages.push({ severity: "error", file: p.mod.rel, line, col: 0, text: `the kernel re-check did not certify ${m}: ${why}`, wholeFile: true });
+  }
+  const messages = [...perModule.flatMap((p) => p.messages), ...lakeErrors, ...certMessages];
+  if (status !== 0 && !messages.some((m) => m.severity === "error")) {
+    const tail = lakeOutput.trim().split("\n").slice(-12).join("\n");
+    messages.push({ severity: "error", file: "", line: 0, col: 0, text: `lake build failed (exit ${status}${r.signal ? `, ${r.signal}` : ""})${tail ? ":\n" + tail : ""}` });
+  }
+  // the record of this build directory, for the next build
+  const after = buildFiles(outDir);
+  if (after) {
+    const cur: Record<string, string> = {};
+    const cer: Record<string, string> = {};
+    for (const m of mods) {
+      if (current.has(m.name)) cur[m.name] = keys.get(m.name)!;
+      if (certified.has(m.name)) cer[m.name] = keys.get(m.name)!;
+    }
+    writeRecord(recPath, { files: after, current: cur, certified: cer });
+  } else fs.rmSync(recPath, { force: true });
+  // the same messages as lake-style text
+  const lines: string[] = [];
+  perModule.forEach((p, i) => {
+    lines.push(`${p.ok ? "✔" : "✖"} [${i + 1}/${perModule.length}] ${p.ok ? "Built" : "Building"} ${p.mod.name}`);
+    for (const x of p.messages) lines.push(`${x.severity}: ${x.file}${x.line ? `:${x.line}:${x.col}` : ""}: ${x.text}`);
+  });
+  for (const x of [...lakeErrors, ...certMessages]) lines.push(`error: ${x.file ? `${x.file}${x.line ? `:${x.line}:${x.col}` : ""}: ` : ""}${x.text}`);
+  lines.push(status === 0 ? "Build completed successfully." : "error: build failed");
+  return { messages, raw: lines.join("\n") + "\n", status, lakeOutput };
 }
 
 /** Lean's messages in lake's output; a failed build is never read as "nothing to report". */
@@ -66,16 +532,56 @@ const HEAD_NOPOS = /^error: (?:(.+?\.lean): )?(.*)$/;
 /** Crashes of the Lean process itself. */
 const PANIC = /^(PANIC|INTERNAL PANIC|uncaught exception|libc\+\+abi|Stack overflow|Segmentation fault)\b/;
 const STOP = /^(error|warning|info|trace|✖|⚠|✔|ℹ|Some required targets|Build completed|- )/;
+/** The line with which lake starts the log of a job: `✔ [4/9] Built VTS.m.Defs (1.2s)`, `ℹ [5/9] Replayed …`, `✖ [6/9] Building Proofs.m`. */
+const JOB = /^[✔✖⚠ℹ] \[\d+\/\d+\] \S+ (\S+)/;
+/** Lake's closing summary (after the last job's log). */
+const SUMMARY = /^(Some required targets logged failures:|Build completed|error: build failed)/;
 
+/** Whether `file` (as Lean names it: relative to the project, or absolute) is module `mod`'s source, `VTS/m/Defs.lean` for `VTS.m.Defs`. */
+const isFileOf = (file: string, mod: string) => {
+  const f = file.split("\\").join("/");
+  const own = mod.split(".").join("/") + ".lean";
+  return f === own || f === "./" + own || (f.startsWith("/") && f.endsWith("/" + own));
+};
+/** The module a job name names (`VTS.m.Defs`, also as `vts/+VTS.m.Defs:leanArts`), without Lean's `«…»` escapes. */
+const plainModule = (name: string) => name.replace(/^[^/\s]*\/\+?/, "").replace(/:[\w.]+$/, "").replace(/[«»]/g, "");
+
+/**
+ * Lean's messages in lake's output. Lake prints the log of each job (a module's elaboration)
+ * after a line `✔ [i/n] Built M` (`Replayed`, `✖ … Building`, …), a message per line `info:
+ * <file>:<line>:<col>: <text>` with any further lines of its text as they are. So a message's
+ * text could contain a line that reads like a message of another file (a user proof printing
+ * "…\ninfo: VTS/m/Posts.lean:14:16: vreact:ok"). The positive evidence the report counts — infos
+ * (`vreact:ok`, the sentinel, axiom reports) — is therefore taken only from the log of the job of
+ * the module whose file it names: an info line naming another file belongs to the text of the
+ * message before it. (Errors and warnings are taken wherever they appear: they can only take
+ * away from the verdict. User proofs may not contain line breaks in literals or names at all,
+ * `ProofCheck.lean`.)
+ */
 export function parseMessages(raw: string): LeanMessage[] {
   const out: LeanMessage[] = [];
   let cur: LeanMessage | null = null;
   let generic: LeanMessage | null = null;
+  /** the module whose job log the current line is in (null: outside any job's log) */
+  let job: string | null = null;
   for (const line of raw.split("\n")) {
+    const j = JOB.exec(line);
+    if (j) {
+      if (cur) out.push(cur);
+      cur = null;
+      job = plainModule(j[1]);
+      continue;
+    }
+    if (SUMMARY.test(line)) job = null;
     const m = HEAD.exec(line);
-    if (m) {
+    if (m && (m[1] !== "info" || (job !== null && isFileOf(m[2], job)))) {
       if (cur) out.push(cur);
       cur = { severity: m[1] as LeanMessage["severity"], file: m[2], line: +m[3], col: +m[4], text: m[5] };
+      continue;
+    }
+    if (m) {
+      // an info line in another module's log (or outside any): text of the message before it
+      if (cur) cur.text += "\n" + line;
       continue;
     }
     const n = HEAD_NOPOS.exec(line) ?? (PANIC.test(line) ? [line, undefined, line] : null);
@@ -282,8 +788,11 @@ export function builtModules(raw: string): Set<string> {
  * `sorryAx` in them is explained by a reported failure or sorry; see `reportFrom`.)
  * Lake errors without a position are kept as `build` errors. Evidence, axiom reports and the
  * sentinel count only when Lean printed them at the generator's marker / `#print axioms X` /
- * sentinel position in a generated file (a user proof cannot fake them by printing the same
- * text); a result at the marker of no known obligation is not an obligation's.
+ * sentinel position in a generated file, as infos `parseMessages` took from the job log of that
+ * generated module: a user proof printing the same text prints it at its own position, and a
+ * line of its message that reads like a generated file's message is text of that message
+ * (proof files may not contain line breaks in literals and names either: `ProofCheck.lean`); a
+ * result at the marker of no known obligation is not an obligation's.
  */
 export function judge(obligations: Obligation[], messages: LeanMessage[], markers: Marker[], outDir: string, _built?: Set<string>): Verdict {
   const decls = findDecls(outDir);
@@ -375,6 +884,16 @@ export function judge(obligations: Obligation[], messages: LeanMessage[], marker
       if (generated(rel) && /declaration uses [`']sorry[`']/.test(msg.text)) sorries.push(msg);
       continue;
     }
+    if (msg.wholeFile) {
+      // every declaration of the file is broken (its obligations are not counted; an error of
+      // its own, processed before, stays its first), the error itself is not listed: its cause is
+      for (const x of decls.get(rel) ?? []) {
+        if (!x.name) continue;
+        badOf(x).errs.push(msg);
+        if (!declErrors.has(x.name)) declErrors.set(x.name, msg.text);
+      }
+      continue;
+    }
     if (generated(rel) && msg.line && (firstErr.get(rel)?.line ?? Infinity) > msg.line) firstErr.set(rel, msg);
     if (d?.name && !declErrors.has(d.name)) declErrors.set(d.name, msg.text);
     const mk = markerOf(rel, msg);
@@ -388,7 +907,7 @@ export function judge(obligations: Obligation[], messages: LeanMessage[], marker
   }
   // classify the unattributed errors
   for (const msg of internal) {
-    msg.cause =
+    msg.cause ??=
       PANIC.test(msg.text) ? "internal"
       : !msg.file || !msg.line || (BUILD.test(msg.text) && !msg.decl) ? "build"
       : msg.file.startsWith("Proofs" + path.sep) || msg.file.startsWith("Proofs/") ? "proof"
@@ -459,11 +978,17 @@ export function judge(obligations: Obligation[], messages: LeanMessage[], marker
   // obligations of declarations that failed for a reason Lean did not report at a marker
   for (const [d, obs] of pending) {
     const b = bad.get(d)!;
-    const err = b.errs[0];
+    // (an error of the declaration itself before the re-check's verdict on its whole file)
+    const err = b.errs.find((e) => !e.wholeFile) ?? b.errs[0];
     const why = err ? err.text.split("\n")[0] : "a runtime limit aborted the declaration";
     const where = err ? `${err.file}:${err.line}:${err.col}` : d.file;
     const dn = d.name ?? `the declaration at ${d.file}:${d.start}`;
-    if (obs.length === 1 && b.failedObs === 0 && err) failed.push({ ob: obs[0], message: `error in the declaration of this obligation (${dn}) at ${where}:\n${err.text}` });
+    if (err?.wholeFile)
+      for (const ob of obs) {
+        unchecked.push(ob);
+        reasons.set(ob.id, `${why}, so this obligation is not counted as proved`);
+      }
+    else if (obs.length === 1 && b.failedObs === 0 && err) failed.push({ ob: obs[0], message: `error in the declaration of this obligation (${dn}) at ${where}:\n${err.text}` });
     else
       for (const ob of obs) {
         unchecked.push(ob);

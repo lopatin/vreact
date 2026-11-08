@@ -10,6 +10,12 @@ here (or to a core Lean operation with identical semantics).  The guiding rule:
 * If JS semantics are too irregular to model faithfully (Unicode case mapping,
   float formatting) the operation is `opaque`: proofs may not rely on its result.
 * Integers (`int`) are mathematical integers; we do not model the 2^53 limit.
+* Numbers (`number`) are an opaque type `Num` with opaque operations (not Lean's
+  `Float`, which the kernel can compute with and whose library differs from JS):
+  proofs cannot compute or decide anything about them.
+* Values are JS values up to the sign of zero (`-0` is `0`): the only accepted
+  operation that tells them apart, a division by a zero, carries the obligation
+  that its divisor is not zero (`Num.divInt`, `Num.divNum`).
 * Strings are sequences of Unicode scalar values.  `length` is modelled exactly
   (UTF-16 code units); slicing works on code points, which coincides with JS for
   strings without astral characters (documented abstraction).
@@ -91,10 +97,6 @@ instance : ToJS Int := ⟨fun i => Str.ofString (toString i)⟩
 instance : ToJS Nat := ⟨fun i => Str.ofString (toString i)⟩
 instance : ToJS Bool := ⟨fun b => if b then Str.ofString "true" else Str.ofString "false"⟩
 
-/-- JS number formatting (shortest round-trip) is not modelled: opaque. -/
-opaque numToString : Float → Str
-instance : ToJS Float := ⟨numToString⟩
-
 def str {α} [ToJS α] (a : α) : Str := ToJS.str a
 
 /-! ## Integers (the `int` type of VTS) -/
@@ -165,10 +167,94 @@ def abs (a : Int) : Int := if a < 0 then -a else a
 /-- `Math.sign` -/
 def sign (a : Int) : Int := if a < 0 then -1 else if a = 0 then 0 else 1
 
-/-! ## Floats (the `number` type of VTS): IEEE-754 doubles, executable but proof-opaque. -/
+/-! ## Numbers (the `number` type of VTS): opaque to proofs
 
-/-- `Math.round` rounds half-way cases towards +∞. -/
-def mathRound (x : Float) : Float := Float.floor (x + 0.5)
+A JS number is an IEEE-754 double. Lean's `Float` is not used for them: the kernel can
+compute with it (Lean has a model of `Float`: `decide` proves facts about float arithmetic
+and literals), and its library is not JavaScript's (`max` is `maxOfLe`, so `max 1 NaN = 1`
+where `Math.max(1, NaN)` is NaN; `Float.round` rounds half-way cases away from zero,
+`Math.round` towards +∞; …). VTS numbers are the type `Num`, and every operation on them
+— literals, arithmetic, comparisons, `===`, `Math.*`, conversion to a string — is an opaque
+constant: the kernel never unfolds them, so a proof can use hypotheses and congruence about
+numbers but can neither compute nor decide anything about them. In particular `===` is the
+uninterpreted IEEE test `Num.eq` (not reflexive: `NaN !== NaN`), and nothing relates
+`Num.lt`, `Num.le` and `Num.eq`. No axioms: these are `opaque` definitions (of a nonempty
+type, through `Classical.choice`), so they are noncomputable — Lean never runs the app. -/
+
+/-- The representation of JS numbers: some nonempty type, nothing else is known. -/
+opaque NumRepr : NonemptyType.{0}
+
+/-- A JS `number` (IEEE-754 double). -/
+def Num : Type := NumRepr.type
+
+instance : Nonempty Num := NumRepr.property
+
+namespace Num
+/-- An `int` as a number (an int-valued number is the same JS value). -/
+noncomputable opaque ofInt : Int → Num
+/-- A numeric literal `m × 10^(±e)` (Lean's `OfScientific`): the double JS reads it as. -/
+noncomputable opaque ofScientific : Nat → Bool → Nat → Num
+/-- `a + b` -/
+noncomputable opaque add : Num → Num → Num
+/-- `a - b` -/
+noncomputable opaque sub : Num → Num → Num
+/-- `a * b` -/
+noncomputable opaque mul : Num → Num → Num
+/-- `a / b` -/
+noncomputable opaque div : Num → Num → Num
+/-- `-a` -/
+noncomputable opaque neg : Num → Num
+/-- `a < b` (false when either is NaN) -/
+noncomputable opaque lt : Num → Num → Bool
+/-- `a <= b` (false when either is NaN) -/
+noncomputable opaque le : Num → Num → Bool
+/-- `a === b`: IEEE equality (`NaN !== NaN`, `0 === -0`) -/
+noncomputable opaque eq : Num → Num → Bool
+/-- `Math.floor` -/
+noncomputable opaque floor : Num → Num
+/-- `Math.ceil` -/
+noncomputable opaque ceil : Num → Num
+/-- `Math.round` (half-way cases towards +∞) -/
+noncomputable opaque round : Num → Num
+/-- `Math.trunc` -/
+noncomputable opaque trunc : Num → Num
+/-- `Math.abs` -/
+noncomputable opaque abs : Num → Num
+/-- `Math.max(a, b)` (NaN if either is NaN; `+0` above `-0`) -/
+noncomputable opaque max : Num → Num → Num
+/-- `Math.min(a, b)` -/
+noncomputable opaque min : Num → Num → Num
+/-- `String(a)` (Number::toString, shortest round-trip form) -/
+noncomputable opaque toStr : Num → Str
+end Num
+
+noncomputable instance (n : Nat) : OfNat Num n := ⟨Num.ofInt n⟩
+noncomputable instance : OfScientific Num := ⟨Num.ofScientific⟩
+noncomputable instance : Add Num := ⟨Num.add⟩
+noncomputable instance : Sub Num := ⟨Num.sub⟩
+noncomputable instance : Mul Num := ⟨Num.mul⟩
+noncomputable instance : Div Num := ⟨Num.div⟩
+noncomputable instance : Neg Num := ⟨Num.neg⟩
+noncomputable instance : ToJS Num := ⟨Num.toStr⟩
+/-- (Generated records derive `Repr`; a number is not printed.) -/
+instance : Repr Num := ⟨fun _ _ => "«number»"⟩
+
+/-! ### Division: a divisor that is not zero
+
+VTS values are JS values *up to the sign of zero*: an `int` that is 0 may be `-0` in JS (`-x`,
+`a * b`, `a % b`, `Math.trunc(a / b)`, `Math.floor(0 / -5)`, `Math.min(0, -0)` give `-0`), Lean's
+`Int` has one zero, and `Num.ofInt` maps it to one number. Every operation VTS accepts gives
+equal results (up to the sign of zero) for `0` and `-0` — comparisons and `===` (`-0 === 0`),
+`+ - *`, unary `-`, `Math.*`, `String(x)`, indexing — except a division *by* a zero: `1 / 0` is
+`Infinity`, `1 / -0` is `-Infinity`. So a number division carries the obligation that its divisor
+is not zero (as an int: `b ≠ 0`; as a number: `b !== 0`, i.e. neither `0` nor `-0`; a nonzero
+literal divisor needs none), and then the Lean term denotes the JS value. -/
+
+/-- `a / b` with an int divisor `b ≠ 0`. -/
+noncomputable def Num.divInt (a : Num) (b : Int) (_h : b ≠ 0) : Num := a / Num.ofInt b
+/-- `a / b` with a number divisor that is not zero (`b !== 0`: neither `0` nor `-0`; the
+literal `0` as the translation writes it, `Num.ofInt 0`). -/
+noncomputable def Num.divNum (a b : Num) (_h : Num.eq b (Num.ofInt 0) = false) : Num := a / b
 
 /-! ## Arrays (immutable `readonly T[]`, modelled as `List`) -/
 

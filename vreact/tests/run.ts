@@ -9,15 +9,17 @@
  * A directory `cases/<Name>/` is a multi-file case with its own project: its .ts/.tsx files
  * and subdirectories go to src/, `proofs/` and `vreact.json` are copied, `_node_modules/` becomes
  * the project's `node_modules/` (installed libraries), `tsconfig.json` replaces the default
- * one (a file `NO_TSCONFIG` means none); the header of its first source file applies.
+ * one (a file `NO_TSCONFIG` means none); the header of its first source file applies. Files in
+ * `smuggled/` replace the proof files of the same name in the generated project after the
+ * translation (a proof the whitelist would reject: the report must stay honest regardless).
  */
 import fs from "node:fs";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { loadConfig, verify, CAUSE_LABEL, type Report } from "../src/cli.ts";
+import { loadConfig, verify, reportFrom, CAUSE_LABEL, type Report } from "../src/cli.ts";
 import { translate, moduleNs } from "../src/module.ts";
-import { parseMessages, judge, findMarkers, leanDecls, leanBin } from "../src/lean.ts";
+import { parseMessages, judge, findMarkers, leanDecls, leanBin, runLake } from "../src/lean.ts";
 import { editorProject, LAKEFILE_MARKER } from "../src/ide.ts";
 import { honestyChecks } from "./honesty.ts";
 
@@ -97,6 +99,37 @@ if (r === null) {
   console.log(`  (${r.obligations.total} obligations in the batch: ${r.obligations.proved} proved, ${r.obligations.failed} failed)`);
 }
 
+/**
+ * Doctor the build logs lake stored with the generated modules (`<out>/.lake/build/…/VTS/**.trace`,
+ * which lake replays as Lean's output when a module is up to date) so that they claim success:
+ * `vreact:` failures become `vreact:ok`, `sorry` warnings go, axiom reports with `sorryAx` become
+ * clean (round-2 finding r4-lean-r2-cache-poison). Returns the number of entries changed.
+ */
+function poisonTraces(outDir: string): number {
+  let n = 0;
+  const walk = (d: string) => {
+    if (!fs.existsSync(d)) return;
+    for (const f of fs.readdirSync(d)) {
+      const p = path.join(d, f);
+      if (fs.statSync(p).isDirectory()) walk(p);
+      else if (f.endsWith(".trace")) {
+        const t = JSON.parse(fs.readFileSync(p, "utf8")) as { log?: { level: string; message: string }[] };
+        if (!Array.isArray(t.log)) continue;
+        t.log = t.log
+          .filter((e) => !/declaration uses .sorry./.test(e.message) || (n++, false))
+          .map((e) => {
+            if (e.level === "warning" && /: vreact: /.test(e.message)) return n++, { level: "info", message: e.message.replace(/: vreact: [\s\S]*$/, ": vreact:ok") };
+            if (/depends on axioms: \[[^\]]*sorryAx[^\]]*\]/.test(e.message)) return n++, { ...e, message: e.message.replace(/depends on axioms: \[[^\]]*\]/, "does not depend on any axioms") };
+            return e;
+          });
+        fs.writeFileSync(p, JSON.stringify(t));
+      }
+    }
+  };
+  walk(path.join(outDir, ".lake", "build", "lib", "lean", "VTS"));
+  return n;
+}
+
 /** Report checks of `key=value` expectation tokens; returns what did not hold. */
 function checkReport(r: Report, files: string[], expect: string[], whole: boolean): string[] {
   const why: string[] = [];
@@ -162,14 +195,19 @@ console.log("message attribution (judge)");
     `info: ${at(2)}: vreact:ok`,
     "error: VTS/m/View.lean:10:23: Unknown identifier `render`",
     `info: ${at(5)}: vreact:ok`,
-    // ob6: a forged `vreact:ok` next to a failure; ob7: no result of its own, only a forged
-    // `vreact:ok` from a user proof at its position; ob8: proved
+    // ob6: a forged `vreact:ok` next to a failure; ob7: no result of its own, only forged
+    // `vreact:ok`s from a user proof (at its position in the proof file, and as a line of a
+    // message the proof printed: `#print "x\ninfo: <ob7's position>: vreact:ok"`, which lake
+    // prints in the proof's job log); ob8: proved
     `info: ${at(6)}: vreact:ok`,
     `warning: ${at(6)}: vreact: \`grind\` failed`,
     "⊢ False",
     `info: ${at(8)}: vreact:ok`,
-    `info: Proofs/m.lean:${at(7).split(":").slice(1).join(":")}: vreact:ok`,
     "info: VTS/m/View.lean:16:0: \"vreact:checked\"",
+    "✔ [4/9] Built Proofs.m",
+    `info: Proofs/m.lean:${at(7).split(":").slice(1).join(":")}: vreact:ok`,
+    "info: Proofs/m.lean:3:0: x",
+    `info: ${at(7)}: vreact:ok`,
     "error: Proofs/m.lean: bad import 'VTS.mm.Defs'",
     "error: build cycle detected:",
     "  vts/+VTS.m.View:leanArts",
@@ -190,6 +228,13 @@ console.log("message attribution (judge)");
   else bad("judge failure text", JSON.stringify(f6));
   if (causes === "timeout,internal,follow-on,build,build") ok("judge: error causes", causes);
   else bad("judge causes", `expected timeout,internal,follow-on,build,build, got ${causes}`);
+  // (round-1 finding r4-lean-forge-print) an info naming a generated file counts only in the
+  // job log of that file's module: in the proof's log it is a line of the proof's message
+  const [f7, l7, c7] = at(7).split(":");
+  const forged = msgs.filter((x) => x.file === f7 && x.line === +l7 && x.col === +c7);
+  const host = msgs.find((x) => x.file === "Proofs/m.lean" && x.line === 3);
+  if (!forged.length && host?.text === `x\ninfo: ${at(7)}: vreact:ok`) ok("parseMessages: a user proof's message line that reads like a generated file's message stays in the proof's message (RlForgedPrint)");
+  else bad("parseMessages job logs", `forged: ${JSON.stringify(forged)}, proof message: ${JSON.stringify(host?.text)}`);
   if (v.declErrors.has("VTS.m.f.post") && v.declErrors.has("VTS.m.render") && !v.declErrors.has("VTS.m.g.post") && !v.declErrors.has("VTS.m.k.post")) ok("judge: declarations with errors (a `vreact_ob` failure is not one)");
   else bad("judge declErrors", [...v.declErrors.keys()].join(","));
 }
@@ -218,26 +263,55 @@ for (const name of dirCases) {
   fs.rmSync(dir, { recursive: true, force: true });
   fs.mkdirSync(path.join(dir, "src"), { recursive: true });
   for (const f of files) fs.copyFileSync(path.join(src, f), path.join(dir, "src", f));
-  // subdirectories other than proofs/ and _node_modules/ are source directories (nested modules);
-  // _node_modules/ is the project's node_modules/ (installed libraries, e.g. type declarations)
-  for (const f of fs.readdirSync(src)) if (f !== "proofs" && f !== "_node_modules" && fs.statSync(path.join(src, f)).isDirectory()) fs.cpSync(path.join(src, f), path.join(dir, "src", f), { recursive: true });
+  // subdirectories other than proofs/, smuggled/ and _node_modules/ are source directories (nested
+  // modules); _node_modules/ is the project's node_modules/ (installed libraries, e.g. type declarations)
+  for (const f of fs.readdirSync(src)) if (f !== "proofs" && f !== "smuggled" && f !== "_node_modules" && fs.statSync(path.join(src, f)).isDirectory()) fs.cpSync(path.join(src, f), path.join(dir, "src", f), { recursive: true });
   if (fs.existsSync(path.join(src, "_node_modules"))) fs.cpSync(path.join(src, "_node_modules"), path.join(dir, "node_modules"), { recursive: true });
   if (fs.existsSync(path.join(src, "proofs"))) fs.cpSync(path.join(src, "proofs"), path.join(dir, "proofs"), { recursive: true });
   if (fs.existsSync(path.join(src, "vreact.json"))) fs.copyFileSync(path.join(src, "vreact.json"), path.join(dir, "vreact.json"));
   if (fs.existsSync(path.join(src, "tsconfig.json"))) fs.copyFileSync(path.join(src, "tsconfig.json"), path.join(dir, "tsconfig.json"));
   else if (!fs.existsSync(path.join(src, "NO_TSCONFIG"))) fs.writeFileSync(path.join(dir, "tsconfig.json"), tsconfig);
   if (expect[0] === "reject") {
+    // several expected messages are separated by ` ;; `; a message is also matched with its
+    // location (`proofs/m.lean:4:1: …`, relative to the case's project)
     const tr = translate(loadConfig(dir));
-    const want = expect.slice(1).join(" ");
-    const msgs = [...tr.tsDiagnostics, ...tr.errors.map((e) => e.message)];
-    if (!tr.ok && msgs.some((x) => x.includes(want))) ok(name, `"${want}"`);
-    else bad(name, `expected rejection containing "${want}", got: ${msgs.join(" | ") || "accepted"}`);
+    const wants = expect.slice(1).join(" ").split(" ;; ");
+    const msgs = [...tr.tsDiagnostics, ...tr.errors.map((e) => `${e.file ? path.relative(dir, e.file).split(path.sep).join("/") : "?"}:${e.line}:${e.col}: ${e.message}`)];
+    const missing = wants.filter((w) => !msgs.some((x) => x.includes(w)));
+    if (!tr.ok && !missing.length) ok(name, wants.length > 1 ? `${wants.length} rejections` : `"${wants[0]}"`);
+    else bad(name, `expected rejection containing "${missing.join('" and "')}", got: ${msgs.join(" | ") || "accepted"}`);
     continue;
   }
-  const rr = verify(loadConfig(dir), { json: true });
+  // `smuggled/<P>.lean` replaces the (whitelisted) `proofs/<P>.lean` in the generated project
+  // after the translation: the report must stay honest also about a proof file that got past
+  // the whitelist check (defense in depth; the whitelist itself is tested by Rl* cases)
+  const smuggled = path.join(src, "smuggled");
+  let rr: Report;
+  if (fs.existsSync(smuggled)) {
+    const cfg = loadConfig(dir);
+    const tr = translate(cfg);
+    if (!tr.ok) {
+      bad(name, `translation failed: ${[...tr.tsDiagnostics, ...tr.errors.map((e) => e.message)].join(" | ")}`);
+      continue;
+    }
+    for (const f of fs.readdirSync(smuggled)) fs.copyFileSync(path.join(smuggled, f), path.join(cfg.outDir, "Proofs", f));
+    rr = reportFrom(cfg, tr, runLake(cfg.outDir, cfg.leanLib).messages).report;
+  } else rr = verify(loadConfig(dir), { json: true });
   if (rr.stage !== "lean") {
     bad(name, rr.errors.join("\n"));
     continue;
+  }
+  // a file `POISON` in the case: after the first verify, the build logs lake keeps in the
+  // project's `.vreact/.lake` are doctored to claim success, and the project is verified again;
+  // both reports must meet the expectations (the second must not take the doctored logs)
+  if (fs.existsSync(path.join(src, "POISON"))) {
+    const n = poisonTraces(loadConfig(dir).outDir);
+    const again = verify(loadConfig(dir), { json: true });
+    const why2 = n ? checkReport(again, files, expect, true) : ["nothing to doctor in the build logs"];
+    if (why2.length) {
+      bad(name, `after doctoring the build logs: ${why2.join("; ")}`);
+      continue;
+    }
   }
   const kinds = [...new Set(rr.failures.map((f) => f.kind))].sort();
   const why = checkReport(rr, files, expect, true);

@@ -1,9 +1,13 @@
-// expect: fail precondition verdict=not-verified bump=incomplete twice=incomplete keep=verified proved=1 failed=1 unchecked=6
-// proofs/Base.lean makes `bump` a keyword: Lean cannot parse `def bump …` and skips it up to
+// expect: fail precondition verdict=not-verified bump=incomplete twice=incomplete keep=incomplete why.keep=kernel~re-check proved=0 failed=1 unchecked=7
+// smuggled/Base.lean (a proof file the whitelist rejects, put in place after the translation)
+// makes `bump` a keyword: Lean cannot parse `def bump …` and skips it up to
 // the next command, so it is never added (its markers lie in the skipped text, where Lean
 // reports nothing); every later use of bump fails, and `twice` is added with `sorry`. No
 // obligation of bump or twice may count as proved (before: twice's postcondition, whose own
 // theorem has no error, counted as proved about the broken twice); keep is unaffected.
+// Round 2 (r4-lean-r2): the kernel re-check finds the syntax in Proofs.Base; every module
+// importing it is not certified, so keep (VERIFIED before: the old expectation was wrong) is not
+// either — it was parsed with a token a user proof added.
 import { ensures, requires, type int } from "vreact/spec";
 export function bump(xs: readonly int[]): int {
   requires(xs.length > 1);

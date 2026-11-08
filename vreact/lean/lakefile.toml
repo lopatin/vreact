@@ -1,6 +1,23 @@
 name = "VReact"
 version = "0.1.0"
-defaultTargets = ["VReact"]
+defaultTargets = ["VReact", "vreact-proofcheck", "vreact-certify"]
+# the library is part of what vreact trusts: always built here, never taken from Lake's shared
+# artifact cache (which other projects, or a shared CI cache, can write)
+enableArtifactCache = false
 
 [[lean_lib]]
 name = "VReact"
+
+# the whitelist check of user proof files (see ProofCheck.lean); run by `vreact` before Lean
+# elaborates them
+[[lean_exe]]
+name = "vreact-proofcheck"
+root = "ProofCheck"
+supportInterpreter = true
+
+# the kernel re-check of a built project (see Certify.lean); run by `vreact` after Lean built
+# the generated modules and the user proofs
+[[lean_exe]]
+name = "vreact-certify"
+root = "Certify"
+supportInterpreter = true

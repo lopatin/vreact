@@ -232,4 +232,39 @@ example : True := by
   vreact_fails_showing_goal (∀ (o : Box2), o.b.c = .red ∨ o.b.c = .green)
   trivial
 
+-- round 4 (Rl): numbers are opaque — congruence works, nothing is computed or decided
+example (x : JS.Num) (k : Int) :
+    JS.eq (JS.Num.lt x (JS.Num.ofInt k)) (JS.Num.lt x (JS.Num.ofInt k)) = true := by vreact_auto
+example (x y : JS.Num) (h : JS.Num.lt x y = true) : JS.Num.lt x y = true := by vreact_auto
+example : True := by
+  -- `===` is not reflexive (NaN)
+  vreact_fails_showing_goal (∀ (x : JS.Num), JS.Num.eq x x = true)
+  -- `Math.max(1, NaN)` is NaN (Lean's `max` on Float is 1)
+  vreact_fails_showing_goal (JS.Num.eq (JS.Num.max 1 (JS.Num.ofInt 0 / JS.Num.ofInt 0)) 1 = true)
+  -- no arithmetic on literals
+  vreact_fails_showing_goal (JS.Num.eq ((0.1 : JS.Num) + 0.2) 0.30000000000000004 = true)
+  vreact_fails_showing_goal ((0.1 : JS.Num) + 0.2 = 0.30000000000000004)
+  -- `<`, `<=`, `===` are unrelated; rounding functions are unrelated
+  vreact_fails_showing_goal (∀ (x y : JS.Num), JS.Num.lt x y = true → JS.Num.le x y = true)
+  vreact_fails_showing_goal (∀ (x : JS.Num), JS.Num.round x = JS.Num.floor (x + 0.5))
+  vreact_fails_showing_goal (∀ (x : JS.Num), JS.Num.trunc x = JS.Num.round x)
+  trivial
+
+-- round 4, round 1 (Rl): a division's divisor is not zero; the proofs that it is do not
+-- matter (congruence), and a zero divisor is not provably non-zero
+example (a : JS.Num) (b c : Int) (h₁ : b ≠ 0) (h₂ : c ≠ 0) (e : b = c) :
+    JS.Num.divInt a b h₁ = JS.Num.divInt a c h₂ := by vreact_auto
+example (a b : JS.Num) (h₁ h₂ : JS.Num.eq b (JS.Num.ofInt 0) = false) :
+    JS.Num.lt (JS.Num.divNum a b h₁) 1 = JS.Num.lt (JS.Num.divNum a b h₂) 1 := by vreact_auto
+-- the guard `b === 0 ? … : a / b` and the precondition `b !== 0`
+example (b : JS.Num) (h : ¬JS.Num.eq b (JS.Num.ofInt 0) = true) : JS.Num.eq b (JS.Num.ofInt 0) = false := by vreact_auto
+example (b : JS.Num) (h : (!JS.Num.eq b (JS.Num.ofInt 0)) = true) : JS.Num.eq b (JS.Num.ofInt 0) = false := by vreact_auto
+example : True := by
+  vreact_fails_showing_goal (∀ (x : Int), x = 0 → x ≠ 0)
+  vreact_fails_showing_goal (JS.Num.eq (-JS.Num.ofInt 0) (JS.Num.ofInt 0) = false)
+  vreact_fails_showing_goal (JS.Num.eq (1e-400 : JS.Num) (JS.Num.ofInt 0) = false)
+  -- nothing relates `<` and `===`: `0 < b` does not make `b` non-zero
+  vreact_fails_showing_goal (∀ (b : JS.Num), JS.Num.lt (JS.Num.ofInt 0) b = true → JS.Num.eq b (JS.Num.ofInt 0) = false)
+  trivial
+
 end VReact.SelfTest

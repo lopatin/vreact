@@ -1,6 +1,6 @@
 // expect: verified
 // Unary + on numbers is the identity; int contracts use mathematical equality.
-import { ensures, type int } from "vreact/spec";
+import { ensures, requires, type int } from "vreact/spec";
 
 export function plus(x: int): int {
   ensures((r: int) => r === x);
@@ -13,6 +13,8 @@ export function neg(): int {
   return k ?? 0;
 }
 
+// (a division needs a divisor that is not zero: 1 / 0 is Infinity, 1 / -0 is -Infinity)
 export function ratio(a: int, b: int): number {
+  requires(b !== 0);
   return +(a / b);
 }

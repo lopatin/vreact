@@ -97,7 +97,7 @@ compiles a file with the nearest one's settings, e.g. its `jsxImportSource`).
 | write                                   | notes |
 |-----------------------------------------|-------|
 | `boolean`, `string`, `int`              | `int` = integers (`import { type int } from "vreact/spec"`) |
-| `number`                                | IEEE float: allowed, but proofs cannot reason about values |
+| `number`                                | IEEE float: allowed, but opaque — proofs know nothing about numbers (no arithmetic facts, `===` is an uninterpreted IEEE test); a division needs a divisor that is not zero |
 | `"a" \| "b" \| "c"`                     | string-literal enums (`switch` on them is exhaustive) |
 | `{ readonly f: T; g?: U }`              | records (optional field = `U \| undefined`) |
 | `{ kind: "x"; … } \| { kind: "y"; … }`  | discriminated unions — any common string-literal field works |
@@ -124,6 +124,14 @@ inherited member, not `undefined`. Such names are fine for required fields.
   `int`, then wrapped); `/` produces `number`; use `idiv(a, b)` or
   `Math.floor(a / b)` for integer division (obligation: `b !== 0`); `%` (obligation).
   Unary `+` only on numbers (`+s` on a string is rejected: ToNumber is not modelled).
+* `a / b` (a `number`) has the obligation that the divisor is not zero, unless it is
+  a nonzero literal (`x / 2`, `x / -0.5`, or a `const` initialised with one): VTS
+  values are JS values up to the sign of zero (an int that is 0 may be `-0` in JS:
+  `-x`, `a * b`, `a % b`, `Math.trunc(a / b)` give `-0`), and only a division by a
+  zero tells the two apart (`1 / 0` is `Infinity`, `1 / -0` is `-Infinity`). Prove it
+  with `requires(b !== 0)` (or `b > 0` for an int) or a guard
+  `b === 0 ? … : a / b`; for a `number` divisor only `b !== 0` / `b === 0` help
+  (nothing relates `<` and `===` on numbers).
 * Comparisons `< <= > >= === !==`. `===` on objects/arrays (also `T | null` of
   them) is rejected (identity); compare keys/fields. `===` on `number` is IEEE
   (`NaN !== NaN`), in code and contracts. `== null` / `!= null` allowed.
@@ -178,7 +186,10 @@ inherited member, not `undefined`. Such names are fine for required fields.
   including literals with lone surrogates (`"\uD800"`). No position arguments:
   `s.includes(t, p)` / `s.startsWith(t, p)` → `s.slice(p).includes(t)` (`p >= 0`),
   `s.endsWith(t, e)` → `s.slice(0, e).endsWith(t)`.
-* `Math.max/min/abs/sign/floor/trunc/round/ceil`, `String(x)`.
+* `Math.max/min/abs/sign/floor/trunc/round/ceil`, `String(x)`. On ints they are exact
+  (`Math.floor(a / b)` and `idiv` are integer division); on numbers they are opaque,
+  like every number operation: a contract about numbers is provable only by
+  congruence (`r === (a / b < 0.5)` for `return a / b < 0.5`), never by computing.
 * Names: any identifier works. Ones that are Lean keywords or root names
   (`matches`, `rec`, `show`, `max`, `List`, …) get a `'` in Lean (`VTS.m.max'`),
   also components (`function Type()` → `VTS.m.Type'`); names shaped like Lean's

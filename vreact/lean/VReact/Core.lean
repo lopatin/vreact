@@ -75,7 +75,7 @@ inductive AttrVal where
   | str (s : JS.Str)
   | int (i : Int)
   | bool (b : Bool)
-  | num (f : Float)
+  | num (f : JS.Num)
   | none
 
 structure Attr where

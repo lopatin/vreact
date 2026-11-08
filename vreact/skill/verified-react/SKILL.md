@@ -51,7 +51,9 @@ Let `vreact verify` finish before opening a proof file: when `.vreact/` is newer
 (after `vreact translate`, or a verify that was interrupted), the editor first builds the
 imported `VTS.<Module>.Defs` itself, proving that module's obligations, which can take minutes
 behind a bare progress bar. Do not run `vreact verify` while the editor is doing that (both build
-`.vreact/`). `lake build` in the app folder builds nothing (the app's package has no targets).
+`.vreact/`); a build the editor made is not evidence for `vreact verify`, which then removes it and
+builds `.vreact/` again (it counts only builds it made itself). `lake build` in the app folder
+builds nothing (the app's package has no targets).
 vreact keeps its own `lakefile.toml` (first line `# vreact: Lean editor support`) and
 `lean-toolchain` up to date, and never writes either over a `lakefile.toml` without that line
 or a `lakefile.lean` (the user's own Lean project).
@@ -129,7 +131,7 @@ export function ItemList(props: ItemListProps) {
 }
 ```
 
-* Use `int` for integers (counts, ids, cents); `number` is a float the prover cannot reason about.
+* Use `int` for integers (counts, ids, cents); `number` is a float the prover knows nothing about (opaque: no arithmetic, comparison or `Math.*` facts). A division `a / b` needs a divisor that is not zero (`requires(b !== 0)` or a guard `b === 0 ? … : a / b`; a nonzero literal divisor needs nothing): `1 / -0` is `-Infinity`, and VTS values do not keep the sign of zero.
 * State is immutable: spread, `filter`, `map`, `toSorted`, `with` — never `push`/`sort`/property assignment.
 * Handlers may call setters, `dispatch`, and **at most one** parent callback per path.
 * `setX(v)` uses the render snapshot; two of them in one handler do not compose — use
@@ -225,8 +227,8 @@ postcondition, root-precondition, unreachable, assert).
 2. Split work: make a large function `@opaque` with precise `ensures`.
 3. Add an intermediate fact: `assert(cond)` (proved, then available).
 4. Write a Lean lemma in `proofs/<Module>.lean` (`import VTS.<Module>.Defs`);
-   tag it `@[vreact_simp]` if it is a rewrite rule. It helps the module's
-   component obligations, the `ensures` of the module's functions that no other
+   tag it `@[vreact_simp]` if it is a rewrite rule (or `@[grind …]`). The lemma
+   helps the module's component obligations, the `ensures` of the module's functions that no other
    function or constant of the module uses (they are proved after it, in
    `Posts.lean`), and everything (functions, contracts, components) in the
    modules that import `<Module>`. It does not help function bodies of
@@ -234,7 +236,13 @@ postcondition, root-precondition, unreachable, assert).
    constant of `<Module>` calls (those are proved in `Defs.lean`, before it,
    so the caller can use them). For such a lemma: state it generically in
    `proofs/Base.lean` (imported everywhere), or move the function that needs
-   it to a module that imports `<Module>`. See `reference/obligations.md`.
+   it to a module that imports `<Module>`. Proof files may contain only lemmas
+   (`theorem`/`def`/`abbrev`/`example`, `open`, `namespace`/`section`, the
+   attributes `simp`/`vreact_simp`/`grind`, `grind_pattern`, resource options) and
+   import only `VReact` (the whole library), `VTS.…`, `Proofs.…`:
+   `vreact` rejects anything else — macros, `macro_rules`, instances, axioms,
+   `VReact.assumed`, `#eval`, other options — before Lean runs, and re-checks what
+   they added with Lean's kernel after the build. See `reference/obligations.md`.
 5. Never use `assume(…)` or `@trusted` to make a failure go away without telling
    the user; both are reported and keep the result from being `VERIFIED`.
 

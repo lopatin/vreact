@@ -21,7 +21,7 @@ first one that fails.
 | `callback` | the function you pass as a child's callback keeps **your** invariant, assuming the child's `callbackRequires` | strengthen the child's contract, or guard in your handler |
 | `callback-contract` | this call of a callback prop satisfies its `callbackRequires` | the arguments you pass (e.g. trim/validate first) |
 | `index` | `xs[i]` / `xs.with(i, …)` is in bounds | guard `i < xs.length` (in contracts too: `i < xs.length && xs[i] > 0`, `forall(0, xs.length, (i) => …)`), or carry bounds in an invariant |
-| `nonzero-divisor` | `%`, `idiv`, `Math.floor(a/b)` divisor ≠ 0 | guard (`total === 0 ? 0 : …`) |
+| `nonzero-divisor` | `%`, `idiv`, `Math.floor(a/b)` divisor ≠ 0; a number division `a / b` (unless `b` is a nonzero literal): `b` not 0 (VTS values do not keep the sign of zero, which `1 / -0` would show) | guard (`total === 0 ? 0 : …`), `requires(b !== 0)` |
 | `non-null` | `x!` is not null | narrow with `!== null` instead |
 | `precondition` | a called function's `requires` holds; at a `dispatch(a)`, the reducer's `requires` about the action | establish it (validate before dispatching, or rely on a child's `callbackRequires`), or make the callee total |
 | `postcondition` | a function's `ensures` holds | the body; or the ensures is false (too strong) |
@@ -109,9 +109,64 @@ xs.length) console.log(xs[i].name)`).
 
    (A `proofs/A.lean` that itself imports `VTS.B.…` of a module `B` importing
    `A` would form an import cycle; `B` then sees only `A`'s definitions.)
-   Declare lemmas outside the generated names: a user declaration named like a
-   generated one (`VTS.A.f`, `VTS.A.f.post`) keeps the generated one out of
-   Lean, and then `f` and everything that uses it is `INCOMPLETE`.
+
+   **What a proof file may contain.** Proof files are imported by the generated
+   Lean, so `vreact` checks each one before Lean runs (it parses it with Lean's
+   parser) and rejects, with file:line and the command, anything but:
+   * `import`s of `VTS.…` (generated modules), `Proofs.…` (other proof files),
+     `VReact` (the whole library: not a part such as `VReact.JS`) and `Init` (or no
+     import at all; not a part such as `Init.Core`) — the file is checked in the
+     environment of its imports;
+   * `theorem`, `def`, `abbrev`, `example` (with a doc comment, `private`,
+     `protected`, `noncomputable`), named outside the namespaces `VTS` and
+     `VReact` (those hold the generated declarations and the library: a lemma
+     there could replace or extend a translated declaration) and not like a
+     `VReact.` name;
+   * `open`, `namespace`/`section`/`end` (not `VTS…`/`VReact…`; `noncomputable
+     section` too), `variable`, `universe`, `include`, `omit`, `/-! … -/`,
+     `#check`, `#print`, and `open … in` / `set_option … in` before one of these
+     or a declaration (not before `namespace`/`section`/`end`);
+   * the attributes `simp`, `vreact_simp`, `grind` (`grind =`, `grind →`, …), also
+     `local` and erased (`attribute [-simp] f`), and `grind_pattern`: this is how
+     the automation is extended (there is no `macro_rules` for `vreact_auto`);
+   * `set_option` of `maxHeartbeats`, `maxRecDepth`, `synthInstance.maxHeartbeats`,
+     `synthInstance.maxSize`, `autoImplicit`, `relaxedAutoImplicit`,
+     `diagnostics`, the `linter.*` and `pp.*` options, and `trace.C` for a trace
+     class `C` (`trace.Meta.Tactic.simp`, `trace.grind.ematch`, …; not
+     `trace.profiler…`, which writes files or starts a web server) — also `… in`, in
+     tactics and in grind's `grind => set_option … in …`;
+   * any term or tactic except `run_tac`, `by_elab`, `unsafe`, `include_str`,
+     `native_decide`/`+native`, `decide (config := …)` (write `decide +kernel` etc.),
+     the `bv_decide` tactics, `Lean.ofReduceBool`, `dbg_trace`/`dbgTrace…` (they
+     print to Lean's output) and `assumed`/`VReact.assumed` (the axiom behind the
+     source's `assume(…)`: a lemma proved with it proves anything, and the report
+     would blame `assume(…)` facts the source does not have);
+   * strings, characters and names on one line: no line breaks (or other control
+     characters, also as escapes `\n`) in literals and `«…»` names — Lean prints them
+     in messages, where a line could read like a message about a generated file.
+
+   Rejected, with the reason: `axiom` (an unproved assumption: use `assume(…)` or
+   `@trusted` in the source, which the report shows), `instance` and `deriving`
+   (they change which `==`, `DecidableEq` or string conversion the generated code
+   uses), `macro`, `macro_rules`, `syntax`, `notation`, `elab`, simprocs (they change
+   how the generated code and the tactics parse and run), `#eval`, `run_cmd`,
+   `initialize` (they run code), `opaque`, `structure`, `inductive`, `partial`,
+   `export`, other attributes (`implemented_by`, `extern`, `reducible`, `instance`,
+   …) and options (`debug.skipKernelTC`, …). A lemma admitted with `sorry` is
+   accepted but shows as `sorryAx` in the axioms of everything that uses it
+   (`INCOMPLETE`); an axiom of native evaluation (`…._native.…`,
+   `Lean.ofReduceBool`) wherever it shows makes the result NOT VERIFIED.
+
+   After the build, `vreact` re-checks every declaration of the generated modules
+   and the proof files with Lean's kernel in a fresh process, and checks that each
+   proof module added only theorems, definitions and simp/grind attributes (no
+   syntax, macro, instance, alias, option, axiom, definition in `VTS…`/`VReact…`,
+   nor a declaration using `VReact.assumed`). A proof module that fails this is an
+   error of the user proofs, and no generated module importing it is `VERIFIED`:
+   whatever was elaborated after it is not trusted. Lean's build files in
+   `.vreact/.lake` are not evidence either: `vreact` removes a build directory it
+   did not leave behind itself and builds everything again (so do not commit or
+   share `.vreact/`; it is a cache).
 5. **Large constants.** Transparent constants (`@[vreact_simp, reducible]` in
    the generated Lean) are unfolded into every goal that mentions them; a list
    literal of dozens of records turns into long disjunctions. Mark such constants

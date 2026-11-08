@@ -1,3 +1,3 @@
-/-- Adversarial: `bump` becomes a token, so the generated declarations named `bump` no
-longer parse (Lean skips them up to the next command). -/
-syntax "bump" : term
+/-- What the translation sees; the suite replaces this file with `smuggled/Base.lean` (which
+the whitelist rejects) before Lean runs. -/
+theorem placeholder_base : True := trivial

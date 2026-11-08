@@ -22,7 +22,7 @@ import { VtsError, fail, leanIdent, leanField, leanStr, paren, capitalize, nodeT
 import { LEAN_TYPE_AUX, LEAN_ROOT_NAMES } from "./leanNames.ts";
 import { expr, prop, propAll, valueBlock, specFn, symbolOf, bindParam, typeOf, checkParamAnnotation, checkNotThisParam } from "./translate.ts";
 import { translateComponent, compSignature, baseEnv } from "./component.ts";
-import { leanDecls } from "./lean.ts";
+import { leanDecls, checkProofFiles } from "./lean.ts";
 import { manifestMatches } from "./ide.ts";
 
 export interface Config {
@@ -632,6 +632,20 @@ export function translate(cfg: Config): TranslateResult {
     };
     walk(cfg.proofsDir);
   }
+  // user proofs are imported by the generated files, so what they declare takes effect while
+  // the translation is checked: only lemma-like commands may pass (lean/ProofCheck.lean)
+  const proofIssues = checkProofFiles(
+    cfg.leanLib,
+    leanFiles.map((f) => ({ name: path.relative("Proofs", f.rel).split(path.sep).join("/"), text: f.text })),
+  );
+  for (const i of proofIssues) {
+    const e = new VtsError(undefined, i.msg);
+    e.file = path.join(cfg.proofsDir, ...i.file.split("/"));
+    e.line = i.line;
+    e.col = i.col;
+    res.errors.push(e);
+  }
+  if (res.errors.length) return res;
   /** the Lean names each module generates, for `nameClashes` */
   const declared = new Map<ts.SourceFile, GeneratedNames>();
   // the user lemmas about a module's functions (proofs/<Up>.lean) are imported into the Defs of
@@ -799,7 +813,9 @@ export function translate(cfg: Config): TranslateResult {
   leanFiles.push({ rel: "VTS.lean", text: rootImports + "\n" });
   const libs = [`[[lean_lib]]\nname = "VTS"\n`];
   if (proofModules.size) libs.push(`[[lean_lib]]\nname = "Proofs"\n`);
-  const lakefile = `name = "vts"\ndefaultTargets = ["VTS"]\n\n[[require]]\nname = "VReact"\npath = ${JSON.stringify(cfg.leanLib)}\n\n${libs.join("\n")}`;
+  // (no shared artifact cache: every module is built here, by a Lean run vreact starts — see
+  // `runLake` — never taken from a cache another project or machine can write)
+  const lakefile = `name = "vts"\ndefaultTargets = ["VTS"]\nenableArtifactCache = false\n\n[[require]]\nname = "VReact"\npath = ${JSON.stringify(cfg.leanLib)}\n\n${libs.join("\n")}`;
   leanFiles.push({ rel: "lakefile.toml", text: lakefile });
   leanFiles.push({ rel: "lean-toolchain", text: fs.readFileSync(path.join(cfg.leanLib, "lean-toolchain"), "utf8") });
   // backstop: no two generated files may share a path (also on case-insensitive disks)
