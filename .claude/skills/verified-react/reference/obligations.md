@@ -19,7 +19,7 @@ hypotheses often *are* a counterexample.
 | `index` | `xs[i]` / `xs.with(i, …)` is in bounds | guard `i < xs.length`, or carry bounds in an invariant |
 | `nonzero-divisor` | `%`, `idiv`, `Math.floor(a/b)` divisor ≠ 0 | guard (`total === 0 ? 0 : …`) |
 | `non-null` | `x!` is not null | narrow with `!== null` instead |
-| `precondition` | a called function's `requires` holds | establish it, or make the callee total |
+| `precondition` | a called function's `requires` holds; at a `dispatch(a)`, the reducer's `requires` about the action | establish it (validate before dispatching, or rely on a child's `callbackRequires`), or make the callee total |
 | `postcondition` | a function's `ensures` holds | the body; or the ensures is false (too strong) |
 | `root-precondition` | the root component can be mounted | root `requires` must hold for its (empty) props |
 | `unreachable` | a `throw` can never execute | guard; or prove the case impossible via invariant |

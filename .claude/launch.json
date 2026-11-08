@@ -30,6 +30,21 @@
         "--strictPort"
       ],
       "port": 5175
+    },
+    {
+      "name": "options-chain",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": [
+        "run",
+        "dev",
+        "--prefix",
+        "examples/options-chain",
+        "--",
+        "--port",
+        "5176",
+        "--strictPort"
+      ],
+      "port": 5176
     }
   ]
 }

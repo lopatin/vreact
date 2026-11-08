@@ -13,6 +13,7 @@ import { fileURLToPath } from "node:url";
 import { translate, type Config, type TranslateResult } from "./module.ts";
 import { runLake, findMarkers, judge, summarizeLeanError, type Verdict, type ErrorCause, type LeanMessage } from "./lean.ts";
 import { VtsError } from "./util.ts";
+import { editorProject } from "./ide.ts";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const LEAN_LIB = path.resolve(here, "..", "lean");
@@ -71,6 +72,19 @@ const C = process.stdout.isTTY
 
 function relp(root: string, f: string) {
   return path.relative(root, f);
+}
+
+/**
+ * lean-toolchain and lakefile.toml in the app folder for Lean editors (ide.ts), once the
+ * generated project is written; a failure is reported, never a reason to stop verifying.
+ */
+function editorFiles(cfg: Config, print: boolean) {
+  try {
+    const r = editorProject(cfg.root, cfg.outDir, cfg.proofsDir, cfg.leanLib);
+    if (print) for (const n of r.notes) console.log(C.d(n));
+  } catch (e) {
+    if (print) console.log(C.y(`could not write the Lean editor files (lakefile.toml, lean-toolchain): ${e instanceof Error ? e.message : e}`));
+  }
 }
 
 function printTranslationErrors(tr: TranslateResult, root: string) {
@@ -299,6 +313,7 @@ export function verify(cfg: Config, opts: { json?: boolean; quiet?: boolean; ful
     if (!opts.json) printTranslationErrors(tr, cfg.root);
     return report;
   }
+  editorFiles(cfg, !opts.json && !opts.quiet);
   if (!opts.json && !opts.quiet) console.log(C.d(`translated ${tr.modules.length} module(s), ${tr.obligations.length} proof obligation(s) → ${relp(cfg.root, cfg.outDir)}/ ; checking with Lean…`));
   const lk = runLake(cfg.outDir);
   const { report: r, v } = reportFrom(cfg, tr, lk.messages);
@@ -626,6 +641,7 @@ async function main(argv: string[]) {
         process.exitCode = 1;
         return;
       }
+      editorFiles(cfg, true);
       console.log(`wrote ${tr.modules.length} module(s), ${tr.obligations.length} obligation(s) to ${relp(root, cfg.outDir)}/`);
       return;
     }

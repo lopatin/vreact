@@ -1,6 +1,6 @@
 // The chain's UI state, its invariant, and a total reducer over a discriminated-union action.
-import { ensures, implies, distinct, type int } from "vreact/spec";
-import { type StrikeFilter, type Ticket, type Order, validOrder, validQty } from "./model";
+import {ensures, implies, distinct, type int, requires} from "vreact/spec";
+import {type StrikeFilter, type Ticket, type Order, validOrder, validQty, openQty, MAX_OPEN} from "./model";
 
 export const MAX_HEAT: int = 5;
 
@@ -23,7 +23,8 @@ export function wellFormed(u: ChainUi): boolean {
     1 <= u.heat &&
     u.heat <= MAX_HEAT &&
     distinct(u.orders, (o) => o.id) &&
-    u.orders.every((o) => validOrder(o) && o.id < u.nextId)
+    u.orders.every((o) => validOrder(o) && o.id < u.nextId) &&
+    openQty(u.orders) <= MAX_OPEN
   );
 }
 
@@ -166,17 +167,25 @@ export function setHeat(u: ChainUi, t: int): ChainUi {
 }
 
 /**
- * Place an order for a ticket (ignored unless the quantity and the price are valid).
- * @opaque
+ * The orders `place` accepts: a valid quantity, a positive price, and working orders that stay
+ * within MAX_OPEN lots in total. This is the rule itself: the guard and the contract of `place`
+ * both refer to it, so a new rule is added here only.
  */
+export function accepts(u: ChainUi, qty: int, price: int): boolean {
+  return validQty(qty) && price > 0 && openQty(u.orders) + qty <= MAX_OPEN;
+}
+
+/** Place an order for a ticket if it is accepted; otherwise nothing changes. @opaque */
 export function place(u: ChainUi, t: Ticket, qty: int, price: int): ChainUi {
+  requires(validQty(qty));
   ensures((r: ChainUi) => implies(wellFormed(u), wellFormed(r)));
-  // a valid order is added exactly as the ticket says, under the next id ...
-  ensures((r: ChainUi) => implies(validQty(qty) && price > 0, r.orders.some((o) => orderFor(o, u.nextId, t, qty, price))));
-  // ... and nothing else changes: one order more (none for an invalid one), the others kept
-  ensures((r: ChainUi) => r.orders.length === (validQty(qty) && price > 0 ? u.orders.length + 1 : u.orders.length));
+  // an accepted order is added exactly as the ticket says, under the next id ...
+  ensures((r: ChainUi) => implies(accepts(u, qty, price), r.orders.some((o) => orderFor(o, u.nextId, t, qty, price))));
+  // ... and nothing else changes: one order more (none for a rejected one), the others kept
+  ensures((r: ChainUi) => r.orders.length === (accepts(u, qty, price) ? u.orders.length + 1 : u.orders.length));
   ensures((r: ChainUi) => keepsOrders(u, r) && keepsAllHolds(u, r) && sameView(u, r));
-  if (!validQty(qty) || price <= 0) return u;
+  // the limit depends on the current state, so it is checked here, not at the dispatch site
+  if (!accepts(u, qty, price)) return u;
   const o: Order = { id: u.nextId, expiry: t.expiry, leg: t.leg, strike: t.strike, buy: t.side === "ask", qty: qty, price: price };
   return { ...u, orders: [...u.orders, o], nextId: u.nextId + 1 };
 }
@@ -203,8 +212,17 @@ export type Action =
   | { readonly kind: "place"; readonly ticket: Ticket; readonly qty: int; readonly price: int }
   | { readonly kind: "cancel"; readonly id: int };
 
-/** Total: no precondition, every action keeps the invariant. */
+/** What every dispatched action must satisfy: an order is for a valid quantity. */
+export function validAction(a: Action): boolean {
+  return a.kind === "place" ? validQty(a.qty) : true;
+}
+
+/**
+ * Total over states: every valid action keeps the invariant. Validity of the action is a
+ * precondition, so it is proved at every dispatch(…) site, not checked at run time.
+ */
 export function chainReducer(u: ChainUi, a: Action): ChainUi {
+  requires(validAction(a));
   ensures((r: ChainUi) => implies(wellFormed(u), wellFormed(r)));
   switch (a.kind) {
     case "toggle":

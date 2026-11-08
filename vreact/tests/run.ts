@@ -15,8 +15,9 @@ import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { loadConfig, verify, CAUSE_LABEL, type Report } from "../src/cli.ts";
-import { translate } from "../src/module.ts";
-import { parseMessages, judge, findMarkers, leanDecls } from "../src/lean.ts";
+import { translate, moduleNs } from "../src/module.ts";
+import { parseMessages, judge, findMarkers, leanDecls, leanBin } from "../src/lean.ts";
+import { editorProject, LAKEFILE_MARKER } from "../src/ide.ts";
 import { honestyChecks } from "./honesty.ts";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -25,7 +26,7 @@ const work = path.join(here, ".work");
 const tsconfig = fs.readFileSync(path.join(here, "todo", "tsconfig.json"), "utf8");
 
 // `node tests/run.ts Gx Mx`: only the cases (files and directories) whose names start with one
-// of the given prefixes; the command-line and honesty checks run only on a full run
+// of the given prefixes; the command-line, Lean editor file and honesty checks run only on a full run
 const only = process.argv.slice(2);
 const selected = (name: string) => only.length === 0 || only.some((p) => name.startsWith(p));
 
@@ -273,6 +274,77 @@ if (r && !only.length) {
   }
   if (parsed && p.stdout.length > 65536 && p.status === (parsed.ok ? 0 : 1) && parsed.obligations.total === r.obligations.total) ok(`command line: verify --json through a pipe is complete (${p.stdout.length} bytes)`);
   else bad("verify --json through a pipe", `exit ${p.status}, ${p.stdout.length} bytes, ${parsed ? "parsed" : "not valid JSON"}${parsed && p.stdout.length <= 65536 ? " (too small to test a pipe buffer)" : ""}`);
+}
+
+// Lean editor support (src/ide.ts): `verify` writes lean-toolchain and vreact's lakefile.toml into
+// the app folder, where `lake lean` (what an editor's `lake serve` does per file) resolves
+// `import VTS.<module>.Defs` through the generated project; vreact keeps both files in step with the
+// library and "out", and never writes them next to a lakefile of the user's (not per-case: only
+// on a full run, like the command-line and honesty checks)
+console.log("Lean editor files");
+if (r && !only.length) {
+  const lib = path.join(here, "..", "lean");
+  const toolchain = fs.readFileSync(path.join(lib, "lean-toolchain"), "utf8");
+  const read = (d: string, f: string) => (fs.existsSync(path.join(d, f)) ? fs.readFileSync(path.join(d, f), "utf8") : null);
+  const lakefileOk = (d: string, out: string) => !!read(d, "lakefile.toml")?.startsWith(LAKEFILE_MARKER) && read(d, "lakefile.toml")!.includes(`\npath = ${JSON.stringify(out)}\n`);
+  // the semantic batch's folder, written by its `verify` above
+  if (read(dir, "lean-toolchain") === toolchain && lakefileOk(dir, ".vreact")) ok("editor files: verify wrote lean-toolchain (the library's) and lakefile.toml (requires .vreact)");
+  else bad("editor files after verify", `lean-toolchain ${JSON.stringify(read(dir, "lean-toolchain"))}, lakefile.toml ${JSON.stringify(read(dir, "lakefile.toml"))}`);
+  // a proof-like file in the app folder (outside proofs/, which the next run would copy) importing
+  // the Defs of a verified case
+  const vcase = sem.find((c) => c.expect[0] === "verified" && !r.failures.some((f) => f.where.startsWith(`src/${c.file}:`)));
+  if (r.stage === "lean" && vcase) {
+    const mod = `${moduleNs(path.join(dir, "src"), path.join(dir, "src", vcase.file))}.Defs`;
+    const check = path.join(dir, "EditorCheck.lean");
+    fs.writeFileSync(check, `import ${mod}\nexample : (1 : Nat) + 1 = 2 := rfl\n`);
+    const bin = leanBin();
+    const p = spawnSync("lake", ["lean", "EditorCheck.lean"], { cwd: dir, encoding: "utf8", env: { ...process.env, PATH: bin ? `${bin}:${process.env.PATH}` : process.env.PATH }, maxBuffer: 64 * 1024 * 1024 });
+    fs.rmSync(check, { force: true });
+    const out = `${p.stdout ?? ""}${p.stderr ?? ""}`;
+    if (p.status === 0 && !/^error/m.test(out)) ok(`editor files: lake lean in the app folder resolves import ${mod}`);
+    else bad("lake lean in the app folder", `exit ${p.status}${p.error ? ` (${p.error.message})` : ""}: ${out.split("\n").filter((l) => /error/.test(l)).slice(0, 5).join(" | ")}`);
+  } else bad("lake lean in the app folder", "no verified case in the semantic batch to import");
+  // what is (re)written, without Lean
+  const d = path.join(work, "editor-files");
+  const reset = () => {
+    fs.rmSync(d, { recursive: true, force: true });
+    fs.mkdirSync(d, { recursive: true });
+  };
+  const ed = (out = ".vreact") => editorProject(d, path.join(d, out), path.join(d, "proofs"), lib);
+  const why: string[] = [];
+  reset();
+  fs.writeFileSync(path.join(d, ".gitignore"), "node_modules/\n/.lake");
+  const first = ed();
+  if (!lakefileOk(d, ".vreact") || read(d, "lean-toolchain") !== toolchain) why.push("a fresh folder did not get both files");
+  if (read(d, ".gitignore") !== "node_modules/\n/.lake\nlake-manifest.json\n") why.push(`.gitignore: ${JSON.stringify(read(d, ".gitignore"))}`);
+  if (!first.notes.length) why.push("no note for the files written");
+  if (ed().notes.length) why.push("a second run rewrote up-to-date files");
+  fs.writeFileSync(path.join(d, "lean-toolchain"), "leanprover/lean4:v4.0.0\n");
+  fs.writeFileSync(path.join(d, ".gitignore"), "");
+  fs.writeFileSync(path.join(d, "lake-manifest.json"), JSON.stringify({ packages: [{ name: "vts", dir: ".vreact" }, { name: "VReact", dir: "/no/such/VReact" }] }));
+  ed("gen");
+  if (read(d, "lean-toolchain") !== toolchain) why.push("a stale lean-toolchain was not updated");
+  if (!lakefileOk(d, "gen")) why.push(`vreact's lakefile.toml does not follow "out": ${JSON.stringify(read(d, "lakefile.toml"))}`);
+  if (fs.existsSync(path.join(d, "lake-manifest.json"))) why.push("a manifest naming another VReact was kept");
+  if (read(d, ".gitignore") !== "") why.push("the .gitignore entries were added again to an existing lakefile's folder");
+  for (const [f, text] of [["lakefile.toml", 'name = "mine"\n'], ["lakefile.lean", "import Lake\n"]]) {
+    reset();
+    fs.writeFileSync(path.join(d, f), text);
+    fs.writeFileSync(path.join(d, "lean-toolchain"), "leanprover/lean4:v4.0.0\n");
+    const res = ed();
+    if (res.userLakefile !== f || res.notes.length || read(d, f) !== text || read(d, "lean-toolchain") !== "leanprover/lean4:v4.0.0\n" || (f === "lakefile.lean" && fs.existsSync(path.join(d, "lakefile.toml"))))
+      why.push(`a user's ${f} or its lean-toolchain was written`);
+  }
+  reset();
+  ed(".");
+  if (fs.readdirSync(d).length) why.push(`"out": "." (the generated project is the folder) got editor files: ${fs.readdirSync(d).join(", ")}`);
+  // setup.sh runs ide.ts as a script through the skill's `tool` symlink
+  reset();
+  fs.writeFileSync(path.join(d, "vreact.json"), '{ "out": "build/lean" }\n');
+  const sp = spawnSync(process.execPath, ["--no-warnings", "--experimental-strip-types", path.join(here, "..", "skill", "verified-react", "tool", "src", "ide.ts"), d], { encoding: "utf8" });
+  if (sp.status !== 0 || !lakefileOk(d, "build/lean") || read(d, "lean-toolchain") !== toolchain) why.push(`setup.sh's ide.ts step (exit ${sp.status}): ${sp.stdout}${sp.stderr}`);
+  if (!why.length) ok("editor files: written fresh, idempotent, follow the library and \"out\", stale manifest removed, a user's lakefile.toml/lakefile.lean untouched, setup.sh's script step");
+  else bad("editor files", why.join("; "));
 }
 
 // the report of doctored Lean output of a verified fixture never says VERIFIED (tests/honesty.ts)

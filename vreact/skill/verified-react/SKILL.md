@@ -29,7 +29,7 @@ synthesis, top-down App with trusted stubs, bugs caught, final certificate) is
 
 ```bash
 bash <skill>/scripts/setup.sh                 # checks Node ≥ 22.6, Lean 4 (elan), builds the Lean library
-bash <skill>/scripts/setup.sh /path/to/app    # also: npm i the tool into the app, write vreact.json
+bash <skill>/scripts/setup.sh /path/to/app    # also: npm i the tool into the app, write vreact.json, Lean editor files
 ```
 
 Installing Lean (elan, ~400 MB) changes the user's machine: ask first if it is
@@ -37,6 +37,23 @@ missing. All the app needs from npm is that `vreact` (and `react`, `@types/react
 resolve from its folder — `npm i <tool>` or a symlinked `node_modules` both work. The app needs `"strict": true` and `"lib": ["ES2023", "DOM"]` in tsconfig and `vreact.json`
 (`{"src":"src","exclude":["main.tsx"],"proofs":"proofs","out":".vreact"}`).
 Keep `main.tsx` (createRoot) outside the verified program.
+
+Lean editors (WebStorm/IntelliJ with `lean4ij`, VS Code with the Lean 4 extension):
+`setup.sh /path/to/app` and every `vreact verify` write `lean-toolchain` (the tool's Lean
+version) and a `lakefile.toml` that requires the generated `.vreact/` project into the app
+folder, and add `.lake/` and `lake-manifest.json` to its `.gitignore`. Run `vreact verify` once,
+then open the **app folder** as the editor's project: `proofs/*.lean` get live checking, with
+`import VTS.<Module>.Defs` resolved against the last `vreact verify` (re-run it after changing
+the TypeScript). From a shell, `lake lean proofs/<Module>.lean` in the app folder checks one
+proof file the same way. The editor is a convenience: `vreact verify` stays the source of truth.
+Let `vreact verify` finish before opening a proof file: when `.vreact/` is newer than its build
+(after `vreact translate`, or a verify that was interrupted), the editor first builds the
+imported `VTS.<Module>.Defs` itself, proving that module's obligations, which can take minutes
+behind a bare progress bar. Do not run `vreact verify` while the editor is doing that (both build
+`.vreact/`). `lake build` in the app folder builds nothing (the app's package has no targets).
+vreact keeps its own `lakefile.toml` (first line `# vreact: Lean editor support`) and
+`lean-toolchain` up to date, and never writes either over a `lakefile.toml` without that line
+or a `lakefile.lean` (the user's own Lean project).
 
 ## The workflow
 
@@ -47,8 +64,10 @@ change (it is incremental and usually takes seconds).
    `wellFormed(b)`) and pure operations in a `.ts` module. Give operations
    contracts before bodies:
    * reducers and anything called from a functional update or `dispatch` must be
-     **total** — no `requires`; state invariant preservation as
-     `ensures((r: T) => implies(inv(s), inv(r)))`;
+     **total in the state** — no `requires` about it; state invariant preservation as
+     `ensures((r: T) => implies(inv(s), inv(r)))`. A reducer may have a `requires`
+     about the **action** alone (`requires(validAction(a))`): it is proved at every
+     `dispatch(…)` site, so bad actions are ruled out statically, not guarded at run time;
    * add **functional** postconditions (what the operation achieves), not only
      invariant preservation — otherwise `return s` satisfies the spec;
    * mark big operations `/** @opaque */` so callers reason by contract.
@@ -74,8 +93,9 @@ change (it is incremental and usually takes seconds).
    that still has a hole (through calls, their bodies and `requires`; not
    through `@trusted` bodies) is reported as such: fill that function first. Synth never edits the
    file while searching; `--write` writes only proved fills.
-3. **Reducer** — a total `switch` over a discriminated-union action type,
-   delegating to the model; `ensures` that it preserves the invariant.
+3. **Reducer** — a `switch` over a discriminated-union action type, total in the
+   state (a `requires` on the action is checked at each dispatch), delegating to
+   the model; `ensures` that it preserves the invariant.
 4. **Components top-down.** Write the root for real; stub children as
    `/** @trusted */` with only their props type and contracts (`requires`,
    `callbackRequires`) and a placeholder body. Verify: the root becomes

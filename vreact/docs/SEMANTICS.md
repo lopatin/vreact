@@ -236,7 +236,11 @@ processes the queue after the handler. One setter call is an `Update S := S → 
 * `setX(v)` ↦ `fun st => {st with x := v}` — `v` was computed from the **render
   snapshot** (the closure's values);
 * `setX(f)` ↦ `fun st => {st with x := f st.x}` — functional update;
-* `dispatch(a)` ↦ `fun st => {st with r := reducer st.r a}`.
+* `dispatch(a)` ↦ `fun st => {st with r := reducer st.r a h}`. A reducer's
+  `requires` may mention only the action, so its proof `h` is made at the dispatch
+  site from the snapshot, and it holds for every state `st` React applies the
+  action to: React keeps the dispatched action in the queue and passes that same
+  value to each reducer call (rebasing, StrictMode replays).
 
 `Outcome.apply` folds the queue over the state — exactly React's batching.
 Consequently (proved in `Runtime.lean`): `setN(n+1); setN(n+1)` increments once,

@@ -255,6 +255,13 @@ export function validOrder(o: Order): boolean {
   return validQty(o.qty) && o.price > 0;
 }
 
+export const MAX_OPEN: int = 1000;
+
+/** Total quantity of the working orders. @opaque */
+export function openQty(os: readonly Order[]): int {
+  return os.reduce((n, o) => n + o.qty, 0);
+}
+
 /** A price in ticks of 0.05 as text, e.g. 2048 → "102.40". */
 export function fmtPrice(t: int): string {
   const c = t * 5;

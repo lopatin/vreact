@@ -115,6 +115,7 @@ export function stepFeed(f: Feed): Feed {
 export function App() {
   const [feed, setFeed] = useState<Feed>({ offset: 0, seed: 1 });
   const [paused, setPaused] = useState<boolean>(false);
+  const [rally, setRally] = useState<boolean>(false);
   invariant(validFeed(feed));
   // every 0.8 s the futures move by -2..+2 ticks; the update reads the state it is applied to
   useEffect(() => {
@@ -122,6 +123,14 @@ export function App() {
     const id = setInterval(() => setFeed((f) => stepFeed(f)), 800);
     return () => clearInterval(id);
   }, [paused]);
+  // rally: the futures also climb one tick every 0.2 s, up to the top of the band. The limit is
+  // checked inside the update, on the state it is applied to: a tick can run after the feed
+  // interval (or an earlier tick) has moved the offset, before this effect is re-run.
+  useEffect(() => {
+    if (!rally || feed.offset >= MAX_MOVE) return;
+    const id = setInterval(() => setFeed((f) => (f.offset < MAX_MOVE ? { ...f, offset: f.offset + 1 } : f)), 200);
+    return () => clearInterval(id);
+  }, [rally, feed]);
   const offset = feed.offset;
   const expiries = moveFutures(EXPIRIES, offset);
   return (
@@ -134,6 +143,7 @@ export function App() {
           {offset} ticks
         </p>
         <button onClick={() => setPaused(!paused)}>{paused ? "Resume feed" : "Pause feed"}</button>
+        <button onClick={() => setRally(!rally)}>{rally ? "Stop rally" : "Rally"}</button>
       </header>
       <OptionsChain expiries={expiries} />
     </div>

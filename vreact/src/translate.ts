@@ -2499,9 +2499,13 @@ function handlerEffect(t: UpdTarget, c: ts.CallExpression, env: Env, rest: (e: E
   }
   if (t.k === "dispatch") {
     const sv = t.sv;
+    const r = sv.reducer!;
     const a = expr(c.arguments[0], env, sv.actionType);
-    m.deps.add(sv.reducer!.qname);
-    const upd = `(fun τ => { τ with ${leanField(sv.field)} := ${sv.reducer!.qname} τ.${leanField(sv.field)} ${paren(a.code)} })`;
+    m.deps.add(r.qname);
+    // A reducer's requires is about the action alone (component.ts, actionOnlyPre): proved here,
+    // where the action is built from the snapshot, and it holds for whichever state τ React applies it to.
+    const ob = r.hasPre ? " " + m.ob(c, "precondition", `precondition of ${r.name}(…, ${nodeText(c.arguments[0], 40)})`) : "";
+    const upd = `(fun τ => { τ with ${leanField(sv.field)} := ${r.qname} τ.${leanField(sv.field)} ${paren(a.code)}${ob} })`;
     return rest({ ...env, handler: { ...h, updates: [...h.updates, upd] } });
   }
   // callback
