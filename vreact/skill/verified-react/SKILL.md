@@ -34,7 +34,8 @@ bash <skill>/scripts/setup.sh /path/to/app    # also: npm i the tool into the ap
 
 Installing Lean (elan, ~400 MB) changes the user's machine: ask first if it is
 missing. All the app needs from npm is that `vreact` (and `react`, `@types/react`)
-resolve from its folder — `npm i <tool>` or a symlinked `node_modules` both work. The app needs `"strict": true` and `"lib": ["ES2023", "DOM"]` in tsconfig and `vreact.json`
+resolve from its folder — `npm i <tool>` or a symlinked `node_modules` both work. The app needs `"strict": true`, `"jsx": "react-jsx"` and `"lib": ["ES2023", "DOM"]` in tsconfig (no other
+`jsxImportSource`, no JSX pragmas, no `@ts-ignore`/`@ts-expect-error`/`@ts-nocheck` in verified files) and `vreact.json`
 (`{"src":"src","exclude":["main.tsx"],"proofs":"proofs","out":".vreact"}`).
 Keep `main.tsx` (createRoot) outside the verified program.
 

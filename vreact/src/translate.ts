@@ -11,7 +11,7 @@
  * duplicate the continuation; `for…of` loops become folds.
  */
 import ts from "typescript";
-import { T, type VType, type Field, type Param, sameType, showType, leanType, sharedFields, type Variant, typeOfNode, kindsOfType, nullShape } from "./types.ts";
+import { T, type VType, type Field, type Param, sameType, showType, leanType, sharedFields, type Variant, typeOfNode, kindsOfType, nullShape, propertyName } from "./types.ts";
 import { type Env, type Val, ModCtx, type Binding, type StateVar, type CompCtx, type HandlerAcc, type FnInfo, type CompInfo, type Global, type Narrowed, type DomSite, bind, extend, freshLocal } from "./ctx.ts";
 import { VtsError, fail, leanField, leanAccessor, leanIdent, leanStr, jsStr, leanInt, paren, nodeText, capitalize, decodeJsxEntities } from "./util.ts";
 
@@ -493,6 +493,7 @@ function showWithKinds(vt: VType, t: ts.Type | null, env: Env): string {
  */
 export function checkParamAnnotation(p: ts.ParameterDeclaration, real: VType, realTs: ts.Type | null, env: Env) {
   const pname = p.name.getText();
+  checkNotThisParam(p);
   if (p.dotDotDotToken) fail(p, `rest parameters are not supported`);
   if (p.initializer) fail(p.initializer, `a default value for parameter \`${pname}\` is not supported (JS uses it when the argument is undefined)`);
   if (p.questionToken) fail(p, `optional parameter \`${pname}?\` is not supported`);
@@ -514,6 +515,34 @@ export function checkParamAnnotation(p: ts.ParameterDeclaration, real: VType, re
   const a = nullShape(ck.getTypeFromTypeNode(p.type), real, ck);
   const b = nullShape(realTs, real, ck);
   if (a === null || b === null || a !== b) reject();
+}
+
+/**
+ * TypeScript's `this` parameter (`function (this: T, x) {…}`) is not a parameter: it types the
+ * receiver, and the arguments go to the parameters after it.  VTS binds parameters to arguments
+ * by position, so it would give `x` the second argument where JS gives it the first.
+ */
+export function checkNotThisParam(p: ts.ParameterDeclaration) {
+  if (ts.isIdentifier(p.name) && p.name.text === "this") {
+    fail(p, "a `this` parameter is not supported: it is not a parameter (it types the receiver, and JS passes the arguments to the parameters after it); remove it");
+  }
+}
+
+/**
+ * The parameters of a function VTS binds to the arguments by position (a local helper inlined
+ * at its calls, a callback, an event handler, a component): a `this` parameter (not a
+ * parameter), a rest parameter (an array of the remaining arguments), a default value (used
+ * when the argument is undefined) and an optional parameter (`x?: T` receives `T | undefined`)
+ * would each give a parameter another value than the argument at its position.
+ */
+export function checkPlainParams(ps: readonly ts.ParameterDeclaration[], what: string) {
+  for (const p of ps) {
+    checkNotThisParam(p);
+    const pname = p.name.getText();
+    if (p.dotDotDotToken) fail(p, `a rest parameter \`...${pname}\` of ${what} is not supported (JS collects the remaining arguments into an array): take an array parameter instead`);
+    if (p.initializer) fail(p.initializer, `a default value for parameter \`${pname}\` of ${what} is not supported (JS uses it when the argument is undefined): pass the value at every call`);
+    if (p.questionToken) fail(p, `optional parameter \`${pname}?\` of ${what} is not supported: declare it \`${pname}: T | undefined\` and pass it at every call`);
+  }
 }
 
 /**
@@ -852,6 +881,7 @@ function checkEventSite(pa: ts.PropertyAccessExpression, site: DomSite, which: "
     if (!KEY_HANDLERS.includes(site.prop)) fail(pa, `\`${nodeText(pa)}\` is undefined in ${on}: only keyboard events (onKeyDown, onKeyUp, onKeyPress) have a key (React's handler types are bivariant, so TypeScript accepts a keyboard handler for any event)`);
     return;
   }
+  if (!site.html) fail(pa, `\`${nodeText(pa)}\` in ${on}: this <${site.tag}> is inside an <svg> or <math> element, so React creates it as an SVG (MathML) element, which has no ${field}`);
   const self = site.tag === "input" || site.tag === "textarea" || (site.tag === "select" && (site.prop === "onChange" || site.prop === "onInput"));
   if (which === "target" && !self) {
     fail(pa, `\`${nodeText(pa)}\` in ${on}: e.target is the element where the event happened, which may be another element inside <${site.tag}> (with another ${field}, or none); put the handler on the control itself and read e.currentTarget.${field} there`);
@@ -1218,7 +1248,11 @@ function objectLiteral(o: ts.ObjectLiteralExpression, env: Env, expected?: VType
   const props = new Map<string, ts.Expression | ts.ShorthandPropertyAssignment>();
   let spread: ts.Expression | null = null;
   for (const p of o.properties) {
-    if (ts.isPropertyAssignment(p)) props.set(p.name.getText().replace(/^["']|["']$/g, ""), p.initializer);
+    if (ts.isPropertyAssignment(p)) {
+      if (ts.isComputedPropertyName(p.name) && !ts.isStringLiteralLike(p.name.expression)) fail(p.name, "computed property names are not supported in object literals: write the field name");
+      if (props.has(propertyName(p.name))) fail(p.name, `${propertyName(p.name)} is given twice (JS keeps the last value)`);
+      props.set(propertyName(p.name), p.initializer);
+    }
     else if (ts.isShorthandPropertyAssignment(p)) props.set(p.name.text, p);
     else if (ts.isSpreadAssignment(p)) {
       if (spread || props.size) fail(p, "a spread must come first in an object literal ({ ...x, f: v })");
@@ -1335,6 +1369,7 @@ export function lambda(
   const typed: string[] = [];
   fn.parameters.forEach((p, i) => {
     const t = paramTypes[i];
+    checkNotThisParam(p);
     if (!t) fail(p, "unexpected extra lambda parameter");
     if (p.dotDotDotToken || p.initializer || p.questionToken) fail(p, "rest, default and optional lambda parameters are not supported");
     const r = bindParam(p.name, t, e2, paramTs?.[i]);
@@ -1361,6 +1396,7 @@ export function lambda(
  */
 export function bindParam(name: ts.BindingName, t: VType, env: Env, realTs?: ts.Type | null | "declared"): { env: Env; binder: string } {
   const p = name.parent;
+  if (ts.isParameter(p)) checkNotThisParam(p);
   if (realTs !== "declared" && ts.isParameter(p) && (ts.isArrowFunction(p.parent) || ts.isFunctionExpression(p.parent))) {
     const fn = p.parent;
     const real = realTs !== undefined ? realTs : (contextualParamTsTypes(fn, env)?.[fn.parameters.indexOf(p)] ?? null);
@@ -1380,7 +1416,7 @@ export function bindParam(name: ts.BindingName, t: VType, env: Env, realTs?: ts.
     const fields = env.m.reg.rec(t);
     for (const el of name.elements) {
       if (el.dotDotDotToken || el.initializer || !ts.isIdentifier(el.name)) fail(el, "only simple destructuring { a, b } is supported");
-      const fname = el.propertyName ? el.propertyName.getText() : el.name.text;
+      const fname = el.propertyName ? propertyName(el.propertyName) : el.name.text;
       const f = fields.find((f) => f.name === fname);
       if (!f) fail(el, `no field ${fname}`);
       e2 = bind(e2, symbolOf(env, el.name)!, { k: "val", code: `${ln}.${leanField(fname)}`, type: f.type });
@@ -2307,6 +2343,7 @@ function varDecls(decls: ts.NodeArray<ts.VariableDeclaration>, j: number, env: E
   const declT = d.type ? typeOfNode(d.type, env.m.prog.typeEnv, ts.isIdentifier(d.name) ? capitalize(d.name.text) : "Local") : undefined;
   // local arrow function: a closure (inlined at use sites)
   if ((ts.isArrowFunction(init) || ts.isFunctionExpression(init)) && ts.isIdentifier(d.name)) {
+    checkPlainParams(init.parameters, `the local function ${d.name.text}`);
     return next(bind(env, symbolOf(env, d.name)!, { k: "closure", fn: init, env }));
   }
   // useMemo / useCallback: only as top-level hook declarations of a component (Rules of Hooks:
@@ -2319,6 +2356,7 @@ function varDecls(decls: ts.NodeArray<ts.VariableDeclaration>, j: number, env: E
   if (ts.isCallExpression(init) && hookName(env, init.expression) === "useCallback" && ts.isIdentifier(d.name)) {
     const fn = init.arguments[0];
     if (!fn || !(ts.isArrowFunction(fn) || ts.isFunctionExpression(fn))) fail(init, "useCallback needs an inline function");
+    checkPlainParams(fn.parameters, `the local function ${d.name.text}`);
     checkDeps(fn, init.arguments[1], env, "useCallback");
     return next(bind(env, symbolOf(env, d.name)!, { k: "closure", fn, env }));
   }
@@ -2989,6 +3027,13 @@ export function handlerFn(fnExpr: ts.Expression, env: Env, kind: "discrete" | "r
     if (fnExpr.parameters.length > 1) fail(fnExpr, "DOM event handlers take at most one parameter (the event)");
     const p = fnExpr.parameters[0];
     if (p) {
+      // React calls the handler with the event as its one argument: only a plain parameter is it
+      // (`(...e) => e.key` reads the key of the array [event]: undefined)
+      checkNotThisParam(p);
+      const pname = p.name.getText();
+      if (p.dotDotDotToken) fail(p, `a rest parameter \`...${pname}\` is the array of the handler's arguments ([event]), not the event (\`${pname}.key\` is undefined in JS): write (${pname}) => …`);
+      if (p.initializer) fail(p.initializer, `a default value for the event parameter \`${pname}\` is not supported (React always passes the event): write (${pname}) => …`);
+      if (p.questionToken) fail(p, `the event parameter \`${pname}?\` is not optional (React always passes the event): write (${pname}) => …`);
       if (!ts.isIdentifier(p.name)) fail(p, "destructuring the event object is not supported");
       const r = freshLocal(e1, leanIdent(p.name.text));
       e1 = bind(r.env, symbolOf(env, p.name)!, { k: "event", leanVar: r.name, fn: fnExpr, site: argTypes });

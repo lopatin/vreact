@@ -37,10 +37,15 @@ export interface CallbackInfo {
   params: Param[];
 }
 
-/** Where a DOM event handler is attached: the prop `prop` (`onClick`) of the HTML element `<tag>`. */
+/**
+ * Where a DOM event handler is attached: the prop `prop` (`onClick`) of the element `<tag>`, an
+ * HTML element when `html` (else an SVG or MathML element of that name: inside `<svg>`, an
+ * `<input>` has no value).
+ */
 export interface DomSite {
   tag: string;
   prop: string;
+  html: boolean;
 }
 
 /** What a parent needs to know about a child component. */

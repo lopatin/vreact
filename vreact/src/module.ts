@@ -20,7 +20,7 @@ import { Program, ModCtx, type Obligation, type FnInfo, type CompInfo, type Glob
 import { T, type VType, typeOfNode, typeOfDecl, emitTypeDecl, leanType } from "./types.ts";
 import { VtsError, fail, leanIdent, leanField, leanStr, paren, capitalize, nodeText, clashesWithLean } from "./util.ts";
 import { LEAN_TYPE_AUX, LEAN_ROOT_NAMES } from "./leanNames.ts";
-import { expr, prop, propAll, valueBlock, specFn, symbolOf, bindParam, typeOf, checkParamAnnotation } from "./translate.ts";
+import { expr, prop, propAll, valueBlock, specFn, symbolOf, bindParam, typeOf, checkParamAnnotation, checkNotThisParam } from "./translate.ts";
 import { translateComponent, compSignature, baseEnv } from "./component.ts";
 import { leanDecls } from "./lean.ts";
 
@@ -108,6 +108,7 @@ function loadProgram(cfg: Config): { program: ts.Program; diags: string[] } {
   // (without noImplicitAny an unannotated parameter is `any`: TypeScript checks nothing about it,
   // in particular not whether it is null or undefined)
   if (!(options.noImplicitAny ?? options.strict)) diags.push("tsconfig: VTS requires \"strict\": true, with noImplicitAny (TypeScript checks nothing about an implicitly-any value)");
+  diags.push(...jsxConfigProblems(options));
   const program = ts.createProgram(cfg.files, options, cfg.overrides ? overrideHost(options, cfg.overrides) : undefined);
   const host: ts.FormatDiagnosticsHost = {
     getCanonicalFileName: (f) => f,
@@ -120,10 +121,83 @@ function loadProgram(cfg: Config): { program: ts.Program; diags: string[] } {
       diags.push(`cannot load ${f}`);
       continue;
     }
+    const rt = jsxRuntimeProblem(sf, options, cfg.root);
+    if (rt) diags.push(rt);
     const ds = ts.getPreEmitDiagnostics(program, sf).filter((d) => d.category === ts.DiagnosticCategory.Error);
     for (const d of ds) diags.push(ts.formatDiagnostic(d, host).trim());
   }
   return { program, diags };
+}
+
+/**
+ * What JSX means is configured: VTS models JSX as TypeScript's `react-jsx` transform, which
+ * compiles `<p>…</p>` to a call of `jsx` from React 18's automatic runtime `react/jsx-runtime`
+ * (or `jsxDEV` from `react/jsx-dev-runtime` under `react-jsxdev`).  Another `jsx` mode
+ * (`preserve`: the bundler decides; `react`: the classic `React.createElement` factory or a
+ * `jsxFactory`), another `jsxImportSource` (`preact`, a local `../rt`, whose `jsx` may do
+ * anything with the element, e.g. call a button's onClick twice) would make each element mean
+ * another function's result.  esbuild and Babel read these options from the tsconfig too.
+ */
+function jsxConfigProblems(options: ts.CompilerOptions): string[] {
+  const out: string[] = [];
+  if (options.jsx !== undefined && options.jsx !== ts.JsxEmit.ReactJSX && options.jsx !== ts.JsxEmit.ReactJSXDev) {
+    out.push(`tsconfig: VTS requires "jsx": "react-jsx" (JSX is modelled as React 18's automatic runtime, react/jsx-runtime; "${ts.JsxEmit[options.jsx]}" makes JSX call another factory, or leaves it to the bundler)`);
+  }
+  if (options.jsxImportSource !== undefined && options.jsxImportSource !== "react") {
+    out.push(`tsconfig: "jsxImportSource" must be "react" or absent (JSX is modelled as React 18's react/jsx-runtime; "${options.jsxImportSource}" makes every element the result of that library's jsx function)`);
+  }
+  for (const k of ["jsxFactory", "jsxFragmentFactory", "reactNamespace"] as const) {
+    if (options[k] !== undefined) out.push(`tsconfig: "${k}" is not supported (JSX is modelled as React 18's automatic runtime, react/jsx-runtime, not a factory)`);
+  }
+  return out;
+}
+
+/**
+ * The module the JSX of `sf` calls (`react/jsx-runtime`, imported implicitly by the transform)
+ * must be React's: tsconfig `paths` (which esbuild and bundler plugins honour too) could map it
+ * to a file of the project.  (TypeScript reports a missing runtime itself.)
+ */
+function jsxRuntimeProblem(sf: ts.SourceFile, options: ts.CompilerOptions, root: string): string | null {
+  if (sf.languageVariant !== ts.LanguageVariant.JSX) return null;
+  const spec = `react/${options.jsx === ts.JsxEmit.ReactJSXDev ? "jsx-dev-runtime" : "jsx-runtime"}`;
+  const r = ts.resolveModuleName(spec, sf.fileName, options, ts.sys).resolvedModule;
+  if (!r) return null;
+  let file = r.resolvedFileName;
+  try {
+    file = fs.realpathSync(file);
+  } catch {
+    // keep the resolved name
+  }
+  if (/[\\/]node_modules[\\/](@types[\\/])?react[\\/][^\\/]+$/.test(file)) return null;
+  return `${path.relative(root, sf.fileName)}: its JSX calls ${spec}, which resolves to ${path.relative(root, file)}, not to React's (tsconfig "paths" or another setting redirects it): VTS models JSX as React 18's automatic runtime`;
+}
+
+/**
+ * Comments in a verified source that change how it is compiled or checked.  `@ts-ignore`,
+ * `@ts-expect-error` and `@ts-nocheck` silence TypeScript's errors, on which VTS relies (an
+ * unknown element `<bUTTON>` — a <button> once the HTML document lower-cases it —, null
+ * safety, argument and prop types).  A JSX pragma (`@jsx`, `@jsxFrag`, `@jsxImportSource`,
+ * `@jsxRuntime`) gives the file another JSX runtime or factory than React's (TypeScript reads
+ * it in the comments at the top of the file, Babel and esbuild in any comment).  Any
+ * occurrence counts, also in a string or JSX text: where each tool takes it into account is not
+ * reproduced.
+ */
+function directiveProblems(sf: ts.SourceFile): VtsError[] {
+  const out: VtsError[] = [];
+  const at = (index: number, msg: string) => {
+    const { line, character } = sf.getLineAndCharacterOfPosition(index);
+    const e = new VtsError(sf, msg);
+    e.line = line + 1;
+    e.col = character + 1;
+    out.push(e);
+  };
+  for (const m of sf.text.matchAll(/@ts-(ignore|expect-error|nocheck)(?![\w-])/g)) {
+    at(m.index!, `\`@ts-${m[1]}\` is not supported: it silences TypeScript's errors, and VTS relies on TypeScript's checks (element and attribute names, null and undefined, argument and prop types); fix the error instead`);
+  }
+  for (const m of sf.text.matchAll(/@jsx(Frag|ImportSource|Runtime)?(?![\w-])/g)) {
+    at(m.index!, `JSX pragmas (\`@jsx${m[1] ?? ""}\`) are not supported: VTS models JSX as React 18's automatic runtime (react/jsx-runtime), and a pragma makes this file's JSX call another function`);
+  }
+  return out;
 }
 
 /** The Lean namespace of the module of source file `f` (also used by `vreact synth`, whose type names must match). */
@@ -172,6 +246,8 @@ export function translate(cfg: Config): TranslateResult {
   prog.holeEnvs = cfg.holeEnvs;
   const sfs = cfg.files.map((f) => program.getSourceFile(f)!);
   const counter = { n: 0 };
+  for (const sf of sfs) res.errors.push(...directiveProblems(sf));
+  if (res.errors.length) return res;
 
   // ---- one Lean module per source file: two files whose names map to the same Lean
   // namespace (e.g. limits.ts / limits.tsx, my-limits.ts / my_limits.ts), or to output
@@ -679,6 +755,7 @@ function collect(st: ts.Statement, m: ModCtx, ns: string, res: TranslateResult) 
     }
     if (/^use[A-Z]/.test(st.name.text)) fail(st, "custom hooks are not supported yet: inline the hook calls into the component");
     const params = st.parameters.map((p) => {
+      checkNotThisParam(p);
       if (!p.type) fail(p, "parameters need type annotations");
       if (p.initializer || p.dotDotDotToken || p.questionToken) fail(p, "default/rest/optional parameters are not supported");
       if (!ts.isIdentifier(p.name)) fail(p, "destructured parameters are not supported in top-level functions");

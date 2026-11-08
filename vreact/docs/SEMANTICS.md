@@ -182,7 +182,55 @@ Every expression maps to a Lean term whose value is the JavaScript value.
   never reads it), a capitalised one the verified component it resolves to.
   Member-expression tags (`<props.as>`: a dynamic element type), namespaced tags
   and custom elements (`<my-el>`, whose behaviour is defined by script outside the
-  program) are rejected. JSX text and attribute strings have the value TypeScript's
+  program) are rejected, and so is `<script>` (inside `<svg>` React inserts a
+  script that runs). An HTML element's tag must be ASCII lower-case: the document
+  lower-cases names, so `<bUTTON>` would be a `<button>` the layout checks (which
+  compare names) would not see. Elements have the namespace react-dom 18.3.1 gives
+  them (`getIntrinsicNamespace`/`getChildNamespace`): below `<svg>` (`<math>`)
+  every element is an SVG (MathML) element, except below a `<foreignObject>`,
+  whose children are HTML. Such an element named like an HTML control (`input`,
+  `button`, `select`, `textarea`, `option`, `label`, `form`, `details`, …) has
+  none of its behaviour — no value or type, no activation, no form — and react-dom
+  still applies its input/select/textarea wrappers by name (a `<select value>`
+  there throws on mount): these are rejected; other foreign elements are plain
+  content for the event-layout checks of §5 (an SVG `<a href>` is not interactive
+  content), have no `value`/`checked`, and a user component inside `<svg>` is
+  rejected (it is checked as an HTML tree). Keywords of enumerated attributes
+  (`type`) are compared after ASCII lower-casing, as HTML does — not
+  `toLowerCase()`, which maps U+212A KELVIN SIGN to `k` (`type="chec&#8490;box"`
+  is an invalid type: a text input).
+* Elements and attributes react-dom or the DOM reject while rendering are
+  rejected: children of a void element (`voidElementTags`: `<input>`, `<br>`,
+  `<hr>`, `<img>`, …; even `{false}`, since React tests `children != null`),
+  children of a `<textarea>` (with a `defaultValue` React throws; otherwise they are
+  its initial value, not elements), a `children` attribute (it is the element's
+  children), and `value`/`defaultValue` other than `""` on an `<input>` whose type
+  may be `"file"` (its static type, both branches of a conditional, or an enum's
+  members; any other expression may be) — setting a file input's value throws.
+  Also rejected: `contentEditable` (and `suppressContentEditableWarning`): the user
+  could delete nodes React rendered, and React's next commit would throw; `is=…`
+  (a customized built-in element, defined by script outside the program); a
+  literal `javascript:` URL in `href`, `src`, `action`, `formAction`, `data`,
+  `xlinkHref`; `srcDoc` (a document with this page's origin, whose scripts reach
+  `parent.document`). Other attributes are data of the element (`VNode.elem`).
+* The parameters of a translated function (component, callback, DOM handler,
+  array callback, functional update, local helper, top-level function) are bound
+  to the arguments by position: a `this` parameter (TypeScript's annotation of the
+  receiver, after which the arguments start), a rest parameter (the array of the
+  remaining arguments: a DOM handler `(...e) => e.key` reads the key of
+  `[event]`, undefined), a default value and an optional parameter are rejected.
+* JSX means TypeScript's `react-jsx` transform with React's runtime: the tsconfig
+  must have `"jsx": "react-jsx"` (or `"react-jsxdev"`), no `jsxImportSource` other
+  than `"react"`, no `jsxFactory`/`jsxFragmentFactory`/`reactNamespace`, and
+  `react/jsx-runtime` must resolve into `node_modules/react` or
+  `node_modules/@types/react` (tsconfig `"paths"` could redirect it, and esbuild
+  honours `"paths"`); verified files may not contain a JSX pragma (`@jsx`,
+  `@jsxFrag`, `@jsxImportSource`, `@jsxRuntime`: TypeScript reads them at the top
+  of a file, Babel and esbuild in any comment) nor `@ts-ignore`,
+  `@ts-expect-error`, `@ts-nocheck` (VTS relies on TypeScript's errors: element
+  and attribute names, null safety, argument types). Both are matched anywhere in
+  the text, conservatively.
+* JSX text and attribute strings have the value TypeScript's
   JSX transform gives them: text lines are trimmed at line breaks and joined with
   a space (`fixupWhitespaceAndDecodeEntities`), and the character references
   `&#DDD;`, `&#xHHH;` and the HTML 4 entities `&name;` are decoded, also for the
@@ -196,9 +244,11 @@ Every expression maps to a Lean term whose value is the JavaScript value.
 * `key`, `ref`, `__self` and `__source` are not props in React 18: `createElement`
   and `react/jsx-runtime` take them out of every element's props
   (`RESERVED_PROPS`), so a component never receives them and an HTML element
-  never gets them as attributes. A props type with a field of one of these names
-  (also spelled as a string, `"key": int`) is rejected, and so are `ref={…}`,
-  `__self={…}` and `__source={…}`.
+  never gets them as attributes. A props type with a property of one of these
+  names (by the checker's property name, however the type spells it: `"key"`,
+  `["key"]`, `k\u0065y`) is rejected, and so are `ref={…}`, `__self={…}` and
+  `__source={…}`. (Record fields are named by their property names in general:
+  `"b": int` and `["c"]: int` are the fields `b` and `c`.)
 * A JSX const (`const row = <p>{e}</p>;`) is translated where it is declared —
   JS evaluates the element's attributes and `{…}` children there, whether or not
   (and wherever) it is rendered — so its obligations are checked at the
@@ -640,16 +690,34 @@ hook rules hold (static checks). For every function: its body is safe and its
   that compilers decode differently are rejected. Other compilers (esbuild, SWC)
   are assumed to agree with them on what is accepted. The props React's JSX
   runtime keeps out of an element (`key`, `ref`, `__self`, `__source`) are those
-  of react 18.3.1's `RESERVED_PROPS`.
+  of react 18.3.1's `RESERVED_PROPS`. The configuration is checked (tsconfig
+  `jsx`/`jsxImportSource`/`jsxFactory`/`reactNamespace`, the resolution of
+  `react/jsx-runtime`, JSX pragmas in verified files); the bundler is assumed to
+  compile JSX as that tsconfig says (esbuild and Vite read it; a Babel
+  configuration of its own, e.g. a classic-runtime preset, is not checked).
 * **DOM event fields:** which elements have a string `value` (`<input>`,
   `<select>`, `<textarea>`, `<button>`, `<option>`, `<output>`, `<data>`) and a
   boolean `checked` (`<input>`), that nothing inside an `<input>`, a `<textarea>`
   or (for `change`/`input`) a `<select>` is an event target, and that React 18.3.1
   gives `e.currentTarget` the handler's element and `e.key` a string in keyboard
   handlers (HTML standard; react-dom `executeDispatch`, `getEventTarget`,
-  `getEventKey`) — not TypeScript's bivariant handler types.
+  `getEventKey`) — not TypeScript's bivariant handler types. These are HTML
+  elements: the namespace of each element is react-dom 18.3.1's
+  (`getChildNamespace`: SVG below `<svg>`, MathML below `<math>`, HTML again below
+  an SVG `<foreignObject>`), and a component's root is assumed to be mounted in an
+  HTML container (`createRoot` in `main.tsx`, outside the program).
+* **Elements and attributes:** the elements and attributes react-dom 18.3.1
+  rejects while rendering are those of `assertValidProps` (`voidElementTags`,
+  `dangerouslySetInnerHTML`, `style`) and of its textarea wrapper, and the only
+  DOM setter React calls that throws is a file input's `value`. An attribute
+  other than those rejected (§1.2) is data with no behaviour the model needs; in
+  particular what a link, an `<iframe>`, `<object>` or `<embed>` loads is assumed
+  not to run script in this page — a `javascript:` URL built at run time, or a
+  same-origin frame, could change the DOM React manages.
 * **Outside the subset:** the entry point (`main.tsx`), React itself, the DOM,
-  CSS.
+  CSS. No other script, browser extension or user edit changes the DOM React
+  manages (the user cannot: `contentEditable` is rejected; an extension that
+  rewrites text nodes, e.g. a page translator, makes React's updates throw).
 * **Event bubbling, multi-handler events and activation behaviour** are handled
   by a static restriction rather than modelled: the runtime runs one handler per
   event, and VTS rejects every layout in which one event — one native dispatch

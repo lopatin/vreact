@@ -250,6 +250,15 @@ export function capitalize(s: string): string {
   return s.charAt(0).toUpperCase() + s.slice(1);
 }
 
+/**
+ * HTML's "ASCII lowercase": the case-insensitive match of attribute names and of the keywords of
+ * enumerated attributes (`type="CheckBox"` is a checkbox).  Not `toLowerCase()`, which also maps
+ * U+212A KELVIN SIGN to `k`: `type="chec&#8490;box"` is not a checkbox (an invalid type: a text input).
+ */
+export function asciiLower(s: string): string {
+  return s.replace(/[A-Z]/g, (c) => String.fromCharCode(c.charCodeAt(0) + 32));
+}
+
 /* ───────────────────── JSX text and attribute strings ───────────────────── */
 
 /** The HTML 4 character entities, as in the JSX transforms of TypeScript (5.6), Babel and esbuild. */

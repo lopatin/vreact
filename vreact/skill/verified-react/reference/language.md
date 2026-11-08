@@ -18,6 +18,13 @@ case, are rejected (`module name clash`): e.g. `limits.ts` + `limits.tsx`,
 
 The tsconfig needs `"strict": true` (with `strictNullChecks` and `noImplicitAny`) and `"lib": ["ES2023", "DOM"]` (for
 `toSorted`/`toReversed`/`with`); without a tsconfig, vreact uses these defaults.
+JSX is React's automatic runtime: `"jsx": "react-jsx"` (or `"react-jsxdev"`), no
+`jsxImportSource` other than `"react"`, no `jsxFactory`/`jsxFragmentFactory`/
+`reactNamespace`, `react/jsx-runtime` resolving to React's (not redirected by
+`"paths"`), and no JSX pragmas (`@jsx`, `@jsxImportSource`, `@jsxFrag`,
+`@jsxRuntime`) in a verified file. VTS relies on TypeScript's errors, so
+`@ts-ignore`, `@ts-expect-error` and `@ts-nocheck` are rejected in verified
+files (anywhere in the text, also in a string).
 
 ## Types
 
@@ -192,8 +199,19 @@ Props: a single parameter `props: P` (or destructured `{ a, b }: P`) where `P`
 is a record whose function-typed fields are callbacks (`=> void`, required).
 `key`, `ref`, `__self` and `__source` are not props: React 18 never passes them
 to the component (`props.key` is undefined; the development JSX transform uses
-`__self` and `__source`), so `P` may not have fields with these names, `ref={…}`
-is rejected (refs are not modelled), and so are `__self=…` / `__source=…`.
+`__self` and `__source`), so `P` may not have fields with these names (however
+spelled: `key`, `"key"`, `["key"]`), `ref={…}` is rejected (refs are not
+modelled), and so are `__self=…` / `__source=…`. In any record type, a field
+written as a string or a computed string (`"b": int`, `["c"]: int`) is the
+property `b` (`c`) everywhere:
+`r.b`, `{ b: 1 }`, `{ "b": z } = r`; other computed names are rejected.
+
+Parameters are bound to arguments by position, so functions VTS translates
+(components, callbacks, handlers, array callbacks, local helpers, top-level
+functions) may not have a `this` parameter (`function (this: T, x) …`: it types the
+receiver, `x` is the first argument), a rest parameter, a default value or an
+optional parameter. A DOM handler's one parameter is the event: `(e) => …`, never
+`(...e) => …` (`e` would be the array `[event]`, `e.key` undefined).
 
 Handlers (`onClick`, `onChange`, `onSubmit`, `onKeyDown`, …): arrow functions or
 local closures; the event parameter supports `e.target.value`,
@@ -204,7 +222,7 @@ bivariant: TypeScript accepts `(e: ChangeEvent<HTMLInputElement>) => …` on a
 `<div>`): `e.currentTarget` is the element the handler is on, and its `value`
 is a string only on `<input>`, `<select>`, `<textarea>`, `<button>`, `<option>`,
 `<output>`, `<data>` (undefined on a `<div>`, a number on an `<li>` or
-`<progress>`), its `checked` only on `<input>`; `e.target` may be any element
+`<progress>`; HTML elements only, never inside `<svg>`), its `checked` only on `<input>`; `e.target` may be any element
 inside the one the handler is on, so `e.target.…` is accepted only on an
 `<input>`, a `<textarea>` and a `<select>`'s `onChange`/`onInput`; `e.key` only
 in `onKeyDown`/`onKeyUp`/`onKeyPress`. Read the event in the handler's own
@@ -262,7 +280,28 @@ not at all (JS evaluates it there); JSX only appears in a component's render.
 Tags are plain names: a lower-case one is always the HTML element (`<p>` even
 where a variable `p` exists), a capitalised one a verified component. Rejected:
 member-expression tags (`<props.as>`, `<ui.Button>`: a dynamic element type),
-namespaced tags (`<svg:rect>`) and custom elements (`<my-el>`). Character
+namespaced tags (`<svg:rect>`), custom elements (`<my-el>`) and `<script>`. An
+HTML tag is ASCII lower-case letters and digits (the document lower-cases names:
+`<bUTTON>` would be a `<button>`; `<foreignObject>` outside `<svg>` is rejected).
+Inside `<svg>` (and `<math>`) React creates SVG (MathML) elements, except inside a
+`<foreignObject>`, whose children are HTML again: there an `<input>`, `<button>`,
+`<select>`, `<textarea>`, `<label>`, `<form>`, … is rejected (it would be an SVG
+element with no value, type or activation), other elements count as plain content
+for the layout checks below (an SVG `<a href>` does not stop a label), and user
+components are rejected. React throws while rendering children of a void element
+(`<input>`, `<br>`, `<hr>`, `<img>`, …, even `{false}`) and a `<textarea>` with
+children: both are rejected (a textarea's text is `value`/`defaultValue`). Also
+rejected: a `children=` attribute (it is the element's children), `contentEditable`
+(the user could delete nodes React rendered: React's next update throws),
+`suppressContentEditableWarning`, `is=` (a customized built-in element), a
+`javascript:` URL written in `href`/`src`/`action`/`formAction`/`data`, `srcDoc`
+(a same-origin document whose scripts reach this page), and
+`value`/`defaultValue` other than `""` on an `<input>` that may be `type="file"`
+(setting a file input's value throws): its `type` must be a string, a choice
+between strings (`show ? "text" : "password"`) or an enum, without `"file"`.
+Type keywords are matched ASCII-case-insensitively, as HTML does
+(`type="CheckBox"` is a checkbox, `type="chec&#8490;box"` with a Kelvin sign is
+not: a text input). Character
 references in JSX text and attribute strings are decoded as JSX does (`&amp;`,
 `&#65;`, `&#x41;`, the HTML 4 entities), also for the layout checks below:
 `type="&#115;ubmit"` is a submit button. References that JSX compilers read
