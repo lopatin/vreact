@@ -133,13 +133,19 @@ export function simReducer(s: Sim, a: SimAction): Sim {
   ensures((r: Sim) => implies(s.paused, sameFeed(r.feed, s.feed)));
   // ... and while running, a tick is one step of the random walk (so "never move" is not a fix)
   ensures((r: Sim) => implies(!s.paused && a.kind === "tick", sameFeed(r.feed, stepFeed(s.feed))));
-  // `paused` is checked here, on the state the action is applied to: a tick dispatched just
-  // before the pause can still arrive after it, and the rally has its own interval
+  // a rally tick moves the feed only while a rally is on ...
+  ensures((r: Sim) => implies(a.kind === "rallyTick" && !s.rally, sameFeed(r.feed, s.feed)));
+  // ... and then it climbs one tick, up to the top of the band
+  ensures((r: Sim) =>
+    implies(a.kind === "rallyTick" && s.rally && !s.paused && s.feed.offset < MAX_MOVE, r.feed.offset === s.feed.offset + 1),
+  );
+  // The rules live only here, checked on the state the action is applied to: App's intervals
+  // tick unconditionally, and a tick may arrive after a pause or after the rally is stopped.
   switch (a.kind) {
     case "tick":
       return s.paused ? s : { ...s, feed: stepFeed(s.feed) };
     case "rallyTick":
-      return s.paused || s.feed.offset >= MAX_MOVE ? s : { ...s, feed: { ...s.feed, offset: s.feed.offset + 1 } };
+      return !s.rally || s.paused || s.feed.offset >= MAX_MOVE ? s : { ...s, feed: { ...s.feed, offset: s.feed.offset + 1 } };
     case "togglePause":
       return { ...s, paused: !s.paused };
     case "toggleRally":
@@ -150,19 +156,17 @@ export function simReducer(s: Sim, a: SimAction): Sim {
 export function App() {
   const [sim, dispatch] = useReducer(simReducer, { feed: { offset: 0, seed: 1 }, paused: false, rally: false });
   invariant(validFeed(sim.feed));
-  // every 0.8 s the futures move by -2..+2 ticks
+  // Two clocks for the whole lifetime of the app. They only say "time passed": whether a tick
+  // moves the feed (paused? rally on? at the top of the band?) is decided, and proved, in
+  // simReducer. A tick that changes nothing returns the same state, so React skips the update.
   useEffect(() => {
-    if (sim.paused) return;
     const id = setInterval(() => dispatch({ kind: "tick" }), 800);
     return () => clearInterval(id);
-  }, [sim.paused]);
-  // rally: the futures also climb one tick every 0.2 s, up to the top of the band (no interval
-  // while paused; simReducer ignores a late tick anyway)
+  }, []);
   useEffect(() => {
-    if (!sim.rally || sim.paused || sim.feed.offset >= MAX_MOVE) return;
     const id = setInterval(() => dispatch({ kind: "rallyTick" }), 200);
     return () => clearInterval(id);
-  }, [sim.rally, sim.paused, sim.feed.offset]);
+  }, []);
   const feed = sim.feed;
   const offset = feed.offset;
   const expiries = moveFutures(EXPIRIES, offset);
