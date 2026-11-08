@@ -785,7 +785,7 @@ function gen(t: VType, prog: Program, pools: Pools, depth = 0, inst?: Inst): unk
       const o: Record<string, unknown> = {};
       for (const f of t.fields ?? []) o[f.name] = gen(f.type, prog, pools, depth + 1, inst);
       // (a field the constraint does not name: a fill that rebuilds the value loses it)
-      o.witness$ = pick(BASE_STRS);
+      if (!("witness$" in o)) o.witness$ = pick(BASE_STRS);
       return o;
     }
     case "int":
@@ -823,7 +823,7 @@ function gen(t: VType, prog: Program, pools: Pools, depth = 0, inst?: Inst): unk
       const n = depth > 2 ? 0 : rnd(4);
       const xs = Array.from({ length: n }, () => gen(t.elem, prog, pools, depth + 1, inst));
       // favour distinct ids (common invariant)
-      if (t.elem.k === "rec" && xs.length) {
+      if ((t.elem.k === "rec" || (t.elem.k === "tvar" && t.elem.fields)) && xs.length) {
         const ids = [-3, -2, -1, 0, 1, 2, 3, 4, 5, 6].sort(() => Math.random() - 0.5);
         xs.forEach((x, i) => {
           if (x && typeof x === "object" && "id" in (x as object) && Math.random() < 0.9) (x as Record<string, unknown>).id = ids[i];

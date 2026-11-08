@@ -556,7 +556,7 @@ function annotationFits(ann: VType, real: VType): boolean {
 /** `distinct(xs, key)` compares keys with SameValueZero (a JS Set): keys must be ints or strings (or enums, or an equality-constrained type parameter). */
 function checkDistinctKey(node: ts.Node, t: VType) {
   if (t.k === "tvar" && !t.eq) fail(node, noEqMsg(t, "distinct (keys compared with SameValueZero)"));
-  if (t.k !== "int" && t.k !== "str" && t.k !== "enum" && t.k !== "tvar") fail(node, `distinct keys must be int or string (got ${showType(t)})`);
+  if (!isEqType(t) || t.k === "bool") fail(node, `distinct keys must be int or string (got ${showType(t)})`);
 }
 
 /** Exact arity of a modelled library call (extra arguments would be silently ignored otherwise). */
