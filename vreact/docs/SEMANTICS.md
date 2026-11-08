@@ -549,18 +549,64 @@ hook rules hold (static checks). For every function: its body is safe and its
   a file. Lake errors without a position (imports, build cycles) are shown and
   make the result not verified. An axiom report, the sentinel or `vreact:ok`
   counts only when Lean printed it at the
-  generator's own `#print axioms X` / sentinel line / `vreact_ob` token, in the
-  log lake prints for that generated module's job: lake prints each message as
-  text, so a line of another message (a user proof's `#print "…\ninfo: VTS/…"`)
-  stays text of that message (and `vreact_ob` drops `vreact:` messages that code
-  running inside the obligation logs; several reports for one name are joined).
+  generator's own `#print axioms X` / sentinel line / `vreact_ob` token, as a
+  message of that generated module's own Lean run (`vreact_ob` drops `vreact:`
+  messages that code running inside the obligation logs; several reports for one
+  name are joined). The messages are never read from the text lake prints, where
+  a line of one message (a user proof printing `✔ [9/9] Built VTS.m.Posts` and
+  `info: VTS/m/Posts.lean:…: vreact:ok`) cannot be told from lake's own lines:
+  each module's messages are the entries of the build log lake stores with it
+  (`.lake/build/lib/lean/<module>.trace`, one entry per message), and a module
+  whose build failed (lake keeps no log of it) is elaborated once more with
+  `lean --json`. Lake's text is read only for lake's own errors, which can only
+  take away (`RlSmuggledForge`).
+* **The build directory** (`.vreact/.lake`) holds, for every module, its
+  `.olean` and the log lake replays instead of running Lean when the module is up
+  to date — files anyone who can write the project can change (a committed
+  `.vreact/`, an `"out"` directory elsewhere, a shared cache, an agent editing
+  build files). So `vreact` keeps a record of the build directory it left
+  (`<library>/.lake/vreact-builds/`, outside the project: the hash of every file
+  under `.vreact/.lake` and of `lake-manifest.json`, the modules whose logs are
+  current, the modules certified below, each with a key of its inputs — its
+  source, the keys of the project modules it imports, the toolchain and the
+  library's built modules). A build directory that is not exactly that one is
+  removed and everything is built again; before a build, the outputs of every
+  module whose key changed are removed, so afterwards a module has a log exactly
+  when the log comes from a Lean run on its current inputs (stale logs of a
+  module whose rebuild failed are not left behind). Lake's shared artifact cache
+  is off for the project and the library (`enableArtifactCache = false`,
+  `LAKE_ARTIFACT_CACHE=false`). (`RlCachePoison`: a doctored log made a false
+  ensures VERIFIED with no Lean run.)
+* **The kernel re-check** (`lean/Certify.lean`, the `vreact-certify` program of
+  the library). Lean's elaborator can add a declaration without the kernel
+  (`debug.skipKernelTC`), and the axiom report cannot show it. After the build,
+  `vreact` loads the built modules in a fresh process and replays every
+  declaration of the generated modules and the user proofs into Lean's kernel
+  (`Lean.Kernel.Environment.replay`, lean4checker's method); for each user proof
+  module it also checks what the module added besides its declarations: entries
+  of environment extensions other than those of theorems, definitions (equation
+  lemmas, matchers, compiled code, documentation), `@[simp]`/`@[vreact_simp]`/
+  `@[grind …]` and `grind_pattern` (so no syntax, macro, elaborator, instance,
+  alias, coercion, simproc, initializer, …), axioms, definitions in the
+  namespaces `VTS`/`VReact`, and declarations that use an axiom other than
+  Lean's standard ones, `sorryAx` and the generated `@trusted` axioms (in
+  particular `VReact.assumed`, which the report reads as the source's `assume(…)`
+  facts, and the axioms of native evaluation). A module that fails is an error
+  (of the user proofs, or internal for a generated module), and every generated
+  module that is not certified — it failed, or it imports a module that failed —
+  is broken as a whole: no obligation in it counts as proved and no item with a
+  declaration in it is `VERIFIED` (nor any item using one), whatever Lean
+  printed while elaborating it (`RlSmuggledSkipKernel`, `RlSmuggledMacro`,
+  `RlSmuggledInstance`, `RlSmuggledAssumed`). Modules certified by an earlier
+  run with the same key are not replayed again.
   A generated declaration
   with an error makes every obligation of its item unproved; when Lean still
   reports clean axioms for its name, something else (e.g. a declaration of a
   user proof) stands in for it, so every item that uses it, directly or not, is
   `INCOMPLETE` as well. An axiom that is neither Lean's standard ones, nor
   `VReact.assumed`, nor emitted for a `@trusted` declaration (e.g. one declared
-  in a user proof) makes the items that depend on it `TRUSTED` (the verdict
+  in a user proof, which the kernel re-check below also reports as an error that
+  breaks every module importing it) makes the items that depend on it `TRUSTED` (the verdict
   says "modulo axioms from outside the translation"), except an axiom of native
   evaluation — `<decl>._native.<tactic>.ax_…` (`native_decide`, `decide +native`,
   `bv_decide`), `Lean.ofReduceBool`, `Lean.ofReduceNat`, `Lean.trustCompiler` —
@@ -570,12 +616,18 @@ hook rules hold (static checks). For every function: its body is safe and its
   generated files, so whatever they declare takes effect while the translation is
   checked. Before Lean runs, `vreact` checks every proof file against a whitelist
   (`lean/ProofCheck.lean`, the `vreact-proofcheck` program of the library): it
-  parses the file with Lean's own parser, in the environment the file is
-  elaborated in (`Init` alone for a file without imports, otherwise `VReact`;
-  `open`/`namespace`/`section`/`end`/`set_option` are elaborated, so scoped syntax
-  and options are what Lean will see), rejects a file that does not parse
-  completely, and accepts only: plain `import`s of `VTS.…`, `Proofs.…`, `VReact`
-  and `Init` modules; `theorem`, `def`, `abbrev`, `example` (modifiers: doc
+  parses the file with Lean's own parser, in exactly the environment the file is
+  elaborated in — `Init` + `VReact` when its imports reach `VReact` or a generated
+  module (directly or through the proof files it imports), `Init` alone otherwise
+  (generated modules and proof files add no syntax); `open`/`namespace`/`section`/
+  `end`/`set_option` are elaborated, so scoped syntax and options are what Lean
+  will see (`RejectRlEnvImports`: a file importing only `Init.Core` was parsed with
+  `VReact`'s syntax, where `m! "A{"…"}B"` hid a `macro_rules` in what the check read
+  as a string) —, rejects a file that does not parse completely, and accepts
+  only: plain `import`s of `VTS.…` (generated modules), `Proofs.…` (other proof
+  files, which must exist, without a cycle), `VReact` (the whole library, not a
+  part such as `VReact.JS`) and `Init` (not a part such as `Init.Core`);
+  `theorem`, `def`, `abbrev`, `example` (modifiers: doc
   comment, the attributes below, `private`, `protected`, `noncomputable`,
   `nonrec`) declared outside the namespaces `VTS` and `VReact` and not named like a
   `VReact.` name; `open`, `namespace`/`section`/`end` (not under `VTS` or
@@ -587,11 +639,17 @@ hook rules hold (static checks). For every function: its body is safe and its
   and `pp.*` options with a Bool or Nat value, and `trace.C` for a registered
   trace class `C` (not `trace.profiler` and its options: `trace.profiler.output`
   writes a file, `trace.profiler.serve` starts a web server and the browser and
-  blocks the build) — as a command, with `in`, and inside terms and tactics; and
+  blocks the build) — as a command, with `in`, inside terms and tactics, and in
+  any other syntax with the keyword `set_option` (grind's interactive `set_option
+  … in`, `RejectRlGrindOption`: there `debug.skipKernelTC` let `decide +kernel`
+  prove `False`); and
   in terms and tactics anything but `run_tac`, `by_elab`, `unsafe`, `include_str`,
   `native_decide`, `+native`, a `decide (config := …)` value (`⟨false, true, true,
   false⟩` is `+native`; write `+kernel`, `+revert`, …), the `bv_decide` tactics
-  (also in `grind =>`/`sym =>`; they run an external SAT solver), `idbg`, the
+  (also in `grind =>`/`sym =>`; they run an external SAT solver), `idbg`,
+  `dbg_trace` and the `dbgTrace…` functions (they print to Lean's output), the
+  identifier `assumed` (`VReact.assumed` in any spelling: the axiom behind the
+  source's `assume(…)` facts, `RejectRlAssumed`), the
   library's test tactics and the `Lean.ofReduceBool` family. String, character
   and name literals and names may not contain line breaks or other control
   characters (also as escapes): Lean prints them in its messages, where such a
@@ -603,10 +661,13 @@ hook rules hold (static checks). For every function: its body is safe and its
   — is rejected with its file:line and text. What remains can only state and prove
   propositions and tag them for the automation: their proofs are kernel-checked,
   and what they rely on (`sorryAx`, an axiom of a dependency) shows in the axiom
-  report of every item that uses them. The trusted parts are Lean's parser and
-  this whitelist. (For an independent replay of every generated and proof
-  declaration through the kernel, run `lake env leanchecker VTS Proofs` in
-  `.vreact/`.)
+  report of every item that uses them. After the build, the kernel re-check
+  (above) replays every declaration through the kernel and checks what each
+  proof module added, independently of this syntax check. The trusted parts are
+  Lean's kernel, the re-check's list of what a proof module may add, and — for
+  what runs while Lean elaborates a proof file (code execution, files written,
+  output), which no check after the build can undo — Lean's parser and this
+  whitelist.
 * **The JS runtime model** (`JS.lean`): e.g. that `Array.prototype.slice` behaves
   like `JS.slice`. Definitions follow ECMA-262 directly; where ECMA-262 leaves a
   result implementation-defined (`toSorted` with an inconsistent comparator) the
@@ -693,9 +754,11 @@ hook rules hold (static checks). For every function: its body is safe and its
   and capture-phase handlers are rejected; unknown handler names are rejected,
   never discrete.
 
-Lean's kernel checks every proof; `sorry`, `@trusted` and `assume(…)`
-(`VReact.assumed`, reported `ASSUMES`) show up in the axiom report, so nothing
-unverified can be mistaken for verified.
+Lean's kernel checks every proof (once while Lean elaborates, and again in a
+fresh process after the build: the kernel re-check above); `sorry`, `@trusted` and `assume(…)`
+(`VReact.assumed`, reported `ASSUMES`; only the generated code may use it, at the
+source's `assume(…)` sites — a user proof that does is rejected) show up in the
+axiom report, so nothing unverified can be mistaken for verified.
 
 `vreact synth` is not part of the trusted base: its random tests only prune
 candidates. It reports "proved by Lean" (and `--write` writes a fill) only when

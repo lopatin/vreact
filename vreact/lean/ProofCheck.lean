@@ -13,12 +13,14 @@ generated files or the report). The axiom report catches `sorry` and new axioms,
 these.
 
 So, before Lean runs, `vreact` hands every proof file to this program, which **parses** it
-with Lean's own parser (in the environment the file will be elaborated in: `Init` alone for a
-file without imports, otherwise `import VReact`; scope commands `open`/`namespace`/`section`/
-`end` are elaborated, so scoped syntax is parsed as Lean will parse it) and accepts only:
+with Lean's own parser, in exactly the environment the file will be elaborated in (`envFor`:
+`Init` + `VReact` when its imports reach `VReact` or a generated module, also through the proof
+files it imports; `Init` alone otherwise; scope commands `open`/`namespace`/`section`/`end` are
+elaborated, so scoped syntax is parsed as Lean will parse it), and accepts only:
 
-* the header: plain `import`s of `VTS.*` (generated modules), `Proofs.*` (other proof files),
-  `VReact` / `VReact.*` and `Init` / `Init.*`;
+* the header: plain `import`s of `VTS.*` (generated modules), `Proofs.*` (other proof files:
+  existing ones, without a cycle), `VReact` and `Init` — not a part of the library or of `Init`
+  (`VReact.JS`, `Init.Core`), whose syntax differs from both environments;
 * `theorem`, `def`, `abbrev`, `example` (modifiers: doc comment, the attributes below,
   `private`, `protected`, `noncomputable`, `nonrec`), named outside the namespaces `VTS` and
   `VReact` (the generated declarations and the library) and not named like a `VReact.` name
@@ -34,17 +36,25 @@ file without imports, otherwise `import VReact`; scope commands `open`/`namespac
   `synthInstance.maxSize`, `autoImplicit`, `relaxedAutoImplicit`, `diagnostics`,
   `diagnostics.threshold`, the registered `linter.*` and `pp.*` options with a Bool or Nat
   value, and `trace.C` for a registered trace class `C` — not `trace.profiler` and its
-  options, which write files or start a web server and a browser (as a command, `… in`, or
-  inside terms and tactics);
+  options, which write files or start a web server and a browser (as a command, `… in`, inside
+  terms and tactics, and in any other syntax with the keyword `set_option`, e.g. grind's
+  interactive `set_option … in`: `setsOption`);
 * inside terms and tactics anything except code execution and trusted evaluation:
   `run_tac`, `by_elab`, `unsafe`, `include_str`, `native_decide`, `+native`, a `decide
   (config := …)` value (it can be `+native`), the `bv_decide` tactics (also of `grind =>` and
-  `sym =>`), `idbg`, the library's test tactics, and the `Lean.ofReduceBool` family;
+  `sym =>`), `idbg`, `dbg_trace` and the `dbgTrace…` functions (output), the library's test
+  tactics, the `Lean.ofReduceBool` family, and the identifier `assumed` (`VReact.assumed`, the
+  axiom of the source's `assume(…)` facts, in any spelling);
 * string, character and name literals and names without line breaks or other control
   characters (Lean prints them in its messages, where such a line could read like a message
   about another file).
 
-Usage: the files arrive on stdin as a JSON array `[{"name": …, "text": …}]` (`name` is used in
+This check is what stops code from running while Lean elaborates a proof file; after the build,
+`vreact-certify` (`Certify.lean`) re-checks every declaration with the kernel and what each
+proof module added, independently of how it was written.
+
+Usage: the files arrive on stdin as a JSON array `[{"name": …, "text": …}]` (`name`, the path
+relative to the proofs directory, names the module, `sub/x.lean` is `Proofs.sub.x`, and is used in
 the messages); the result is a JSON array `[{"file", "line", "col", "msg"}]` on stdout (lines
 1-based, columns 1-based), empty when every file is acceptable. Exit code 0 unless the
 program itself failed.
@@ -90,8 +100,13 @@ def erasableAttrs : List Name := [`simp, `vreact_simp, `grind]
 
 def reservedRoots : List Name := [`VTS, `VReact]
 
+/-- The imports a proof file may have: the generated modules, other proof files, the whole
+library and `Init`. A *part* of the library or of `Init` (`VReact.JS`, `Init.Core`) is not
+allowed: a file is parsed in the environment of its imports (see `envFor`), which is `Init`
+or `Init` + `VReact` only with these imports (a file importing `VReact.JS` alone has neither
+`Init`'s nor `VReact`'s syntax: e.g. `m!` is a token in `VReact`, an identifier in `Init.Core`). -/
 def allowedImport (m : Name) : Bool :=
-  m == `VReact || m == `Init || [`VTS, `Proofs, `VReact, `Init].contains m.getRoot && !m.isAtomic
+  m == `VReact || m == `Init || [`VTS, `Proofs].contains m.getRoot && !m.isAtomic
 
 /-- Constants whose use trusts compiled code instead of the kernel. -/
 def trustedEval : List String := ["ofReduceBool", "ofReduceNat", "reduceBool", "reduceNat", "trustCompiler"]
@@ -176,7 +191,23 @@ def bannedKind? (k : Name) : Option String :=
     some "the bv_decide tactics run an external SAT solver and trust compiled code instead of the kernel (an axiom `…._native.…`)"
   else if (s.splitOn "vreact_test").length > 1 || (s.splitOn "Vreact_test").length > 1 || (s.splitOn "Server.Test").length > 1 then
     some "the library's test tactics are not for proofs"
+  else if (s.splitOn "dbg").length > 1 || (s.splitOn "Dbg").length > 1 then
+    -- (`dbg_trace` as a tactic, a term and a `do` element)
+    some "`dbg_trace` prints to Lean's output while the proofs are checked"
   else none
+
+/-- Identifiers a proof file may not use (by their last component, so also qualified, with
+`_root_`, `@`, `«…»`, in `open … (…)`/`renaming`, `attribute […]`). -/
+def bannedIdent? (n : Name) : Option String :=
+  match n with
+  | .str _ last =>
+    if last == "assumed" then
+      some "`VReact.assumed` is the axiom behind the source's `assume(…)` facts: a proof that uses it proves anything, and the report would say the result relies on `assume(…)` facts that the source does not have; prove the lemma instead (an assumption belongs in the source, as `assume(…)` or `@trusted`, where the report shows it); a local name `assumed` must be renamed"
+    else if ["dbgTrace", "dbgTraceIfShared", "dbgTraceVal", "dbgSleep", "dbgStackTrace", "dbgStackTraceIf",
+        "dbgShowTokens", "dbgTraceStateFn", "dbgToString", "dbgFormatAsyncState", "dbgFormatCheckedSyncState"].contains last then
+      some s!"`{last}` is one of Lean's debugging functions (it prints to Lean's output or waits while the proofs are checked)"
+    else none
+  | _ => none
 
 def bannedAtom? (a : String) : Option String :=
   if a == "unsafe" then some "`unsafe` code is not checked by the kernel"
@@ -200,9 +231,28 @@ partial def atomsOf (stx : Syntax) : Array String :=
   | .node _ _ args => args.flatMap atomsOf
   | _ => #[]
 
-/-- Check a `set_option` node (command, term or tactic): its option name is child 1. -/
+/-- Whether `stx` is a syntax node that sets an option: it has the keyword `set_option` as one
+of its own tokens (a command, `… in` as a term or a tactic, grind's interactive `set_option …
+in` — `Lean.Parser.Tactic.Grind.setOption` —, and any other mode's), or its kind is named
+like an option setter. -/
+def setsOption (stx : Syntax) : Bool :=
+  match stx with
+  | .node _ k args =>
+    let s := k.toString
+    let has (p : String) := (s.splitOn p).length > 1
+    args.any (fun a => match a with | .atom _ v => v.trimAscii == "set_option" | _ => false) ||
+      has "set_option" || has "setOption" || has "SetOption" || has "withOption" || has "with_option"
+  | _ => false
+
+/-- Check a node that sets an option (`setsOption`): the option is named by its first
+identifier (child 1 in every such syntax of Lean 4.35, which the elaborators read with
+`stx[1].getId`); one without an identifier there is not understood, so it is rejected. -/
 def checkSetOption (stx : Syntax) : M Unit := do
-  let n := stx[1].getId
+  let id := stx[1]
+  if !id.isIdent || (stx.getArgs.findIdx? (·.isIdent)) != some 1 then
+    report stx s!"`{← excerpt stx}` is not allowed in a proof file: an option can only be set with `set_option <name> <value>`"
+    return
+  let n := id.getId
   unless ← optionAllowed n do report stx (optionMsg n)
 
 /-- Characters that may not occur in a literal or a name of a proof file: line breaks (and the
@@ -233,7 +283,7 @@ partial def walk (stx : Syntax) : M Unit := do
     if let some why := bannedKind? k then
       report stx s!"`{← excerpt stx}` is not allowed in a proof file: {why}"
       return
-    if k == ``Lean.Parser.Command.set_option || k == ``Lean.Parser.Term.set_option || k == ``Lean.Parser.Tactic.set_option then
+    if setsOption stx then
       checkSetOption stx
     if k == ``Lean.Parser.Term.attrInstance then
       -- attrKind (scoped/local), then the attribute itself
@@ -267,6 +317,8 @@ partial def walk (stx : Syntax) : M Unit := do
   | .ident _ raw n _ =>
     if raw.toString.any badChar || n.components.any (fun c => (c.toString (escape := false)).any badChar) then
       report stx (lineBreakMsg "a name")
+    if let some why := bannedIdent? n then
+      report stx s!"`{n}` is not allowed in a proof file: {why}"
     if let .str _ last := n then
       if trustedEval.contains last then
         report stx s!"`{n}` is not allowed in a proof file: it trusts compiled code instead of the kernel"
@@ -337,13 +389,17 @@ partial def checkCommand (stx : Syntax) : M Unit := do
   else
     report stx (commandMsg k (← excerpt stx))
 
-/-- The environment a file is parsed in: what its imports would give (for the token table and
-the parsers). Generated modules and other proof files add no syntax (the latter are checked
-too), so `VReact` stands for any of them. -/
-def envFor (imports : Array Import) (cache : IO.Ref (Option Environment × Option Environment))
+/-- The environment a file is parsed in: exactly the syntax its imports give Lean (the token
+table and the parsers). Its imports are `Init`, `VReact`, generated modules (`VTS.…`, which
+import `VReact`) and other proof files (`Proofs.…`); generated modules and proof files add no
+syntax (the latter are checked too, in the environment of *their* imports), and `VReact`'s
+imports contain `Init`. So the environment is `Init` + `VReact` when the file's imports reach
+`VReact` or a generated module (directly or through the proof files it imports: `withLib`),
+and `Init` alone otherwise. -/
+def envFor (withLib : Bool) (cache : IO.Ref (Option Environment × Option Environment))
     (enableInit : IO Unit) : IO Environment := do
   let (init?, vr?) ← cache.get
-  if imports.all (fun i => i.module == `Init) then
+  if !withLib then
     if let some e := init? then return e
     enableInit
     let e ← importModules #[{ module := `Init }] {} (loadExts := true)
@@ -360,7 +416,33 @@ def posOf (fm : FileMap) (p : String.Pos.Raw) : Nat × Nat :=
   let q := fm.toPosition p
   (q.line, q.column + 1)
 
-def checkFile (name text : String) (cache : IO.Ref (Option Environment × Option Environment))
+/-- The module a proof file is (`sub/x.lean` is `Proofs.sub.x`, as `vreact` names it). -/
+def moduleOfFile (name : String) : Name :=
+  ("Proofs." ++ ((name.dropEnd 5).toString.replace "/" ".")).toName
+
+/-- The imports of a proof file's header, with their positions (none if it does not parse). -/
+def headerImports (name text : String) : IO (Array (Name × String.Pos.Raw)) := do
+  let inputCtx := Parser.mkInputContext text name
+  let (header, _, msgs) ← Parser.parseHeader inputCtx
+  if msgs.hasErrors then return #[]
+  return header.raw[2].getArgs.map fun imp => (imp[4].getId, imp.getPos?.getD 0)
+
+/-- Whether a proof module's imports reach `VReact` (directly, through a generated module or
+through the proof files it imports), and the problems of its own imports of proof files: one
+that does not exist, or a cycle (Lean rejects both; the check reports them before Lean runs). -/
+partial def reachesLib (imports : Std.HashMap Name (Array (Name × String.Pos.Raw))) (m : Name)
+    (visiting : List Name := []) : Bool :=
+  (imports.getD m #[]).any fun (i, _) =>
+    i == `VReact || i.getRoot == `VTS ||
+      (i.getRoot == `Proofs && !visiting.contains i && imports.contains i && reachesLib imports i (m :: visiting))
+
+/-- Whether proof module `m` is on an import cycle (through `i`, one of its imports). -/
+partial def onCycle (imports : Std.HashMap Name (Array (Name × String.Pos.Raw))) (m i : Name)
+    (seen : List Name := []) : Bool :=
+  i == m || (!seen.contains i && (imports.getD i #[]).any fun (j, _) => onCycle imports m j (i :: seen))
+
+def checkFile (name text : String) (withLib : Bool) (proofMods : Std.HashMap Name (Array (Name × String.Pos.Raw)))
+    (cache : IO.Ref (Option Environment × Option Environment))
     (enableInit : IO Unit) : IO (Array (Nat × Nat × String)) := do
   let inputCtx := Parser.mkInputContext text name
   let fm := inputCtx.fileMap
@@ -374,17 +456,21 @@ def checkFile (name text : String) (cache : IO.Ref (Option Environment × Option
   let h := header.raw
   if !h[0].isNone || !h[1].isNone then
     out := out.push (1, 1, "`module` and `prelude` are not allowed in a proof file")
-  let mut imports : Array Import := #[]
   for imp in h[2].getArgs do
     let n := imp[4].getId
     let (l, c) := posOf fm (imp.getPos?.getD 0)
     if !imp[0].isNone || !imp[1].isNone || !imp[3].isNone then
       out := out.push (l, c, s!"`{n}`: only plain `import` is allowed in a proof file (no public/meta/all)")
     else if !allowedImport n then
-      out := out.push (l, c, s!"`import {n}` is not allowed in a proof file: proof files may import the generated modules (VTS.…), other proof files (Proofs.…) and the library (VReact, VReact.…)")
-    imports := imports.push { module := n }
+      let part := [`VReact, `Init].contains n.getRoot
+      out := out.push (l, c, s!"`import {n}` is not allowed in a proof file: proof files may import the generated modules (VTS.…), other proof files (Proofs.…), the library (`import VReact`) and Init" ++
+        (if part then s!"; not a part of the library or of Init (a file is checked in the environment of its imports, and {n} alone has the syntax of neither): write `import VReact`, or no import for Init alone" else ""))
+    else if n.getRoot == `Proofs && !proofMods.contains n then
+      out := out.push (l, c, s!"`import {n}`: there is no proof file proofs/{".".intercalate (n.components.drop 1 |>.map (·.toString (escape := false)))}.lean")
+    else if n.getRoot == `Proofs && onCycle proofMods (moduleOfFile name) n then
+      out := out.push (l, c, s!"`import {n}`: the proof files import each other in a cycle")
   unless out.isEmpty do return out
-  let env ← envFor imports cache enableInit
+  let env ← envFor withLib cache enableInit
   let cmdCtx : Command.Context := { fileName := name, fileMap := fm, snap? := none, cancelTk? := none }
   let mut cmdState := Command.mkState env {} {}
   let mut pstate := pstate
@@ -431,10 +517,16 @@ unsafe def main (_args : List String) : IO UInt32 := do
     | .error e => throw <| IO.userError s!"vreact-proofcheck: bad input: {e}"
   let cache ← IO.mkRef ((none, none) : Option Environment × Option Environment)
   let mut out : Array Json := #[]
+  let mut inputs : Array (String × String) := #[]
+  let mut proofMods : Std.HashMap Name (Array (Name × String.Pos.Raw)) := {}
   for f in files do
     let name ← IO.ofExcept (f.getObjValAs? String "name")
     let text ← IO.ofExcept (f.getObjValAs? String "text")
-    for (l, c, msg) in ← checkFile name text cache enableInitializersExecution do
+    inputs := inputs.push (name, text)
+    proofMods := proofMods.insert (moduleOfFile name) (← headerImports name text)
+  for (name, text) in inputs do
+    let withLib := reachesLib proofMods (moduleOfFile name)
+    for (l, c, msg) in ← checkFile name text withLib proofMods cache enableInitializersExecution do
       out := out.push (Json.mkObj [("file", name), ("line", l), ("col", c), ("msg", msg)])
   IO.println (Json.arr out).compress
   return 0

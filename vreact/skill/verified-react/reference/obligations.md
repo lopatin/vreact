@@ -106,7 +106,9 @@ first one that fails.
    Lean, so `vreact` checks each one before Lean runs (it parses it with Lean's
    parser) and rejects, with file:line and the command, anything but:
    * `import`s of `VTS.…` (generated modules), `Proofs.…` (other proof files),
-     `VReact`/`VReact.…`;
+     `VReact` (the whole library: not a part such as `VReact.JS`) and `Init` (or no
+     import at all; not a part such as `Init.Core`) — the file is checked in the
+     environment of its imports;
    * `theorem`, `def`, `abbrev`, `example` (with a doc comment, `private`,
      `protected`, `noncomputable`), named outside the namespaces `VTS` and
      `VReact` (those hold the generated declarations and the library: a lemma
@@ -123,11 +125,14 @@ first one that fails.
      `synthInstance.maxSize`, `autoImplicit`, `relaxedAutoImplicit`,
      `diagnostics`, the `linter.*` and `pp.*` options, and `trace.C` for a trace
      class `C` (`trace.Meta.Tactic.simp`, `trace.grind.ematch`, …; not
-     `trace.profiler…`, which writes files or starts a web server) — also `… in` and
-     in tactics;
+     `trace.profiler…`, which writes files or starts a web server) — also `… in`, in
+     tactics and in grind's `grind => set_option … in …`;
    * any term or tactic except `run_tac`, `by_elab`, `unsafe`, `include_str`,
      `native_decide`/`+native`, `decide (config := …)` (write `decide +kernel` etc.),
-     the `bv_decide` tactics and `Lean.ofReduceBool`;
+     the `bv_decide` tactics, `Lean.ofReduceBool`, `dbg_trace`/`dbgTrace…` (they
+     print to Lean's output) and `assumed`/`VReact.assumed` (the axiom behind the
+     source's `assume(…)`: a lemma proved with it proves anything, and the report
+     would blame `assume(…)` facts the source does not have);
    * strings, characters and names on one line: no line breaks (or other control
      characters, also as escapes `\n`) in literals and `«…»` names — Lean prints them
      in messages, where a line could read like a message about a generated file.
@@ -143,6 +148,17 @@ first one that fails.
    accepted but shows as `sorryAx` in the axioms of everything that uses it
    (`INCOMPLETE`); an axiom of native evaluation (`…._native.…`,
    `Lean.ofReduceBool`) wherever it shows makes the result NOT VERIFIED.
+
+   After the build, `vreact` re-checks every declaration of the generated modules
+   and the proof files with Lean's kernel in a fresh process, and checks that each
+   proof module added only theorems, definitions and simp/grind attributes (no
+   syntax, macro, instance, alias, option, axiom, definition in `VTS…`/`VReact…`,
+   nor a declaration using `VReact.assumed`). A proof module that fails this is an
+   error of the user proofs, and no generated module importing it is `VERIFIED`:
+   whatever was elaborated after it is not trusted. Lean's build files in
+   `.vreact/.lake` are not evidence either: `vreact` removes a build directory it
+   did not leave behind itself and builds everything again (so do not commit or
+   share `.vreact/`; it is a cache).
 5. **Large constants.** Transparent constants (`@[vreact_simp, reducible]` in
    the generated Lean) are unfolded into every goal that mentions them; a list
    literal of dozens of records turns into long disjunctions. Mark such constants

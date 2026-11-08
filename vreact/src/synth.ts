@@ -1157,7 +1157,7 @@ export async function synthCommand(root: string, files: string[], opts: { write?
       const tr = translate({ ...cfg, overrides: new Map([[target, text]]) } as Config);
       if (!tr.ok) c = { tr, v: null, diag: [...tr.tsDiagnostics, ...tr.errors.map(fmtErr)].join("; ") };
       else {
-        const lk = runLake(cfg.outDir);
+        const lk = runLake(cfg.outDir, cfg.leanLib);
         c = { tr, v: judge(tr.obligations, lk.messages, findMarkers(cfg.outDir), cfg.outDir), diag: "" };
       }
       checks.set(text, c);

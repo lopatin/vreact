@@ -195,9 +195,11 @@ postcondition, root-precondition, unreachable, assert).
    `proofs/Base.lean` (imported everywhere), or move the function that needs
    it to a module that imports `<Module>`. Proof files may contain only lemmas
    (`theorem`/`def`/`abbrev`/`example`, `open`, `namespace`/`section`, the
-   attributes `simp`/`vreact_simp`/`grind`, `grind_pattern`, resource options):
+   attributes `simp`/`vreact_simp`/`grind`, `grind_pattern`, resource options) and
+   import only `VReact` (the whole library), `VTS.…`, `Proofs.…`:
    `vreact` rejects anything else — macros, `macro_rules`, instances, axioms,
-   `#eval`, other options — before Lean runs. See `reference/obligations.md`.
+   `VReact.assumed`, `#eval`, other options — before Lean runs, and re-checks what
+   they added with Lean's kernel after the build. See `reference/obligations.md`.
 5. Never use `assume(…)` or `@trusted` to make a failure go away without telling
    the user; both are reported and keep the result from being `VERIFIED`.
 

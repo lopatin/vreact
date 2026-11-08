@@ -440,7 +440,9 @@ export function translate(cfg: Config): TranslateResult {
   leanFiles.push({ rel: "VTS.lean", text: rootImports + "\n" });
   const libs = [`[[lean_lib]]\nname = "VTS"\n`];
   if (proofModules.size) libs.push(`[[lean_lib]]\nname = "Proofs"\n`);
-  const lakefile = `name = "vts"\ndefaultTargets = ["VTS"]\n\n[[require]]\nname = "VReact"\npath = ${JSON.stringify(cfg.leanLib)}\n\n${libs.join("\n")}`;
+  // (no shared artifact cache: every module is built here, by a Lean run vreact starts — see
+  // `runLake` — never taken from a cache another project or machine can write)
+  const lakefile = `name = "vts"\ndefaultTargets = ["VTS"]\nenableArtifactCache = false\n\n[[require]]\nname = "VReact"\npath = ${JSON.stringify(cfg.leanLib)}\n\n${libs.join("\n")}`;
   leanFiles.push({ rel: "lakefile.toml", text: lakefile });
   leanFiles.push({ rel: "lean-toolchain", text: fs.readFileSync(path.join(cfg.leanLib, "lean-toolchain"), "utf8") });
   // backstop: no two generated files may share a path (also on case-insensitive disks)

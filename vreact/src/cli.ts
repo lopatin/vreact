@@ -196,7 +196,9 @@ function items(tr: TranslateResult, root: string): { comps: Item[]; certs: Item[
  * breaks its whole module and the modules importing it.
  */
 function brokenCones(tr: TranslateResult, v: Verdict, all: Item[]): Map<string, string> {
-  const why = (b: Verdict["brokenDecls"][number]) => `${b.name ?? `the command at ${b.file}`} did not elaborate (${b.error.slice(0, 120)})`;
+  // (a module the kernel re-check did not certify: its reason as it stands)
+  const why = (b: Verdict["brokenDecls"][number]) =>
+    b.error.startsWith("the kernel re-check") ? b.error.slice(0, 200) : `${b.name ?? `the command at ${b.file}`} did not elaborate (${b.error.slice(0, 120)})`;
   const own = new Map<string, string>();
   /** broken items whose breakage dependents cannot see in their axioms */
   const hidden = new Map<string, string>();
@@ -285,7 +287,8 @@ export const CAUSE_LABEL: Record<ErrorCause, string> = {
 
 function errorWhere(i: LeanMessage): string {
   const pos = i.line ? `:${i.line}:${i.col}` : "";
-  if (i.cause === "proof") return i.file ? `user proof proofs/${i.file.replace(/^Proofs[\\/]/, "")}${pos}` : "user proofs";
+  // (a generated module that a user proof broke: named as it is)
+  if (i.cause === "proof") return !i.file ? "user proofs" : /^Proofs[\\/]/.test(i.file) ? `user proof proofs/${i.file.replace(/^Proofs[\\/]/, "")}${pos}` : `user proof (it affects ${i.file}${pos})`;
   return `${CAUSE_LABEL[i.cause ?? "internal"]}${i.file ? " " + i.file + pos : ""}${i.decl ? ` (in ${i.decl})` : ""}`;
 }
 
@@ -313,7 +316,7 @@ export function verify(cfg: Config, opts: { json?: boolean; quiet?: boolean; ful
     return report;
   }
   if (!opts.json && !opts.quiet) console.log(C.d(`translated ${tr.modules.length} module(s), ${tr.obligations.length} proof obligation(s) → ${relp(cfg.root, cfg.outDir)}/ ; checking with Lean…`));
-  const lk = runLake(cfg.outDir);
+  const lk = runLake(cfg.outDir, cfg.leanLib);
   const { report: r, v } = reportFrom(cfg, tr, lk.messages);
   if (!opts.json) printReport(r, tr, v, cfg, Date.now() - t0, !!opts.full);
   return r;
@@ -544,7 +547,7 @@ function printReport(r: Report, tr: TranslateResult, v: Verdict, cfg: Config, ms
       if (!msgs.length) continue;
       console.log(C.r(`\n${title}`));
       for (const i of msgs.slice(0, 8)) {
-        const loc = cause === "proof" ? (i.file ? `proofs/${i.file.replace(/^Proofs[\\/]/, "")}:${i.line}:${i.col}` : "proofs") : i.file ? `${i.file}${i.line ? `:${i.line}:${i.col}` : ""}` : "lake";
+        const loc = cause === "proof" && /^Proofs[\\/]/.test(i.file) ? `proofs/${i.file.replace(/^Proofs[\\/]/, "")}:${i.line}:${i.col}` : cause === "proof" && !i.file ? "proofs" : i.file ? `${i.file}${i.line ? `:${i.line}:${i.col}` : ""}` : "lake";
         console.log(`  ${loc}${i.decl ? ` (in ${i.decl})` : ""}: ${i.text.split("\n").slice(0, 10).join("\n    ")}`);
       }
       if (msgs.length > 8) console.log(`  … ${msgs.length - 8} more (--json lists all)`);

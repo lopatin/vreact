@@ -25,7 +25,7 @@ export function honestyChecks(here: string, work: string, ok: (name: string, msg
   const cfg = loadConfig(dir);
   const tr = translate(cfg);
   if (!tr.ok) return bad("honesty fixture", [...tr.tsDiagnostics, ...tr.errors.map((e) => e.message)].join(" | "));
-  const lk = runLake(cfg.outDir);
+  const lk = runLake(cfg.outDir, cfg.leanLib);
   const report = (raw: string, status = 0) => reportFrom(cfg, tr, lakeMessages(raw, status)).report;
   const base = report(lk.raw, lk.status);
   if (base.verdict !== "verified" || !base.ok) return bad("honesty fixture", `expected the fixture to verify, got ${base.verdict}: ${base.errors.join(" | ")} ${base.notChecked.map((n) => n.reason).join(" | ")}`);

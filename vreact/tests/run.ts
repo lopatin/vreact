@@ -97,6 +97,37 @@ if (r === null) {
   console.log(`  (${r.obligations.total} obligations in the batch: ${r.obligations.proved} proved, ${r.obligations.failed} failed)`);
 }
 
+/**
+ * Doctor the build logs lake stored with the generated modules (`<out>/.lake/build/…/VTS/**.trace`,
+ * which lake replays as Lean's output when a module is up to date) so that they claim success:
+ * `vreact:` failures become `vreact:ok`, `sorry` warnings go, axiom reports with `sorryAx` become
+ * clean (round-2 finding r4-lean-r2-cache-poison). Returns the number of entries changed.
+ */
+function poisonTraces(outDir: string): number {
+  let n = 0;
+  const walk = (d: string) => {
+    if (!fs.existsSync(d)) return;
+    for (const f of fs.readdirSync(d)) {
+      const p = path.join(d, f);
+      if (fs.statSync(p).isDirectory()) walk(p);
+      else if (f.endsWith(".trace")) {
+        const t = JSON.parse(fs.readFileSync(p, "utf8")) as { log?: { level: string; message: string }[] };
+        if (!Array.isArray(t.log)) continue;
+        t.log = t.log
+          .filter((e) => !/declaration uses .sorry./.test(e.message) || (n++, false))
+          .map((e) => {
+            if (e.level === "warning" && /: vreact: /.test(e.message)) return n++, { level: "info", message: e.message.replace(/: vreact: [\s\S]*$/, ": vreact:ok") };
+            if (/depends on axioms: \[[^\]]*sorryAx[^\]]*\]/.test(e.message)) return n++, { ...e, message: e.message.replace(/depends on axioms: \[[^\]]*\]/, "does not depend on any axioms") };
+            return e;
+          });
+        fs.writeFileSync(p, JSON.stringify(t));
+      }
+    }
+  };
+  walk(path.join(outDir, ".lake", "build", "lib", "lean", "VTS"));
+  return n;
+}
+
 /** Report checks of `key=value` expectation tokens; returns what did not hold. */
 function checkReport(r: Report, files: string[], expect: string[], whole: boolean): string[] {
   const why: string[] = [];
@@ -260,11 +291,23 @@ for (const name of dirCases) {
       continue;
     }
     for (const f of fs.readdirSync(smuggled)) fs.copyFileSync(path.join(smuggled, f), path.join(cfg.outDir, "Proofs", f));
-    rr = reportFrom(cfg, tr, runLake(cfg.outDir).messages).report;
+    rr = reportFrom(cfg, tr, runLake(cfg.outDir, cfg.leanLib).messages).report;
   } else rr = verify(loadConfig(dir), { json: true });
   if (rr.stage !== "lean") {
     bad(name, rr.errors.join("\n"));
     continue;
+  }
+  // a file `POISON` in the case: after the first verify, the build logs lake keeps in the
+  // project's `.vreact/.lake` are doctored to claim success, and the project is verified again;
+  // both reports must meet the expectations (the second must not take the doctored logs)
+  if (fs.existsSync(path.join(src, "POISON"))) {
+    const n = poisonTraces(loadConfig(dir).outDir);
+    const again = verify(loadConfig(dir), { json: true });
+    const why2 = n ? checkReport(again, files, expect, true) : ["nothing to doctor in the build logs"];
+    if (why2.length) {
+      bad(name, `after doctoring the build logs: ${why2.join("; ")}`);
+      continue;
+    }
   }
   const kinds = [...new Set(rr.failures.map((f) => f.kind))].sort();
   const why = checkReport(rr, files, expect, true);
