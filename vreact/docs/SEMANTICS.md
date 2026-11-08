@@ -29,7 +29,7 @@ exact, total meaning in Lean, while still covering what real React code uses.
 |----------------------------------------------|-----------------------------------------|-------|
 | `boolean`                                    | `Bool`                                  | |
 | `int` (alias of `number` from `vreact/spec`) | `Int`                                   | mathematical integers (2^53 not modelled) |
-| `number`                                     | `Float`                                 | IEEE-754; executable but opaque to proofs |
+| `number`                                     | `JS.Num` (opaque type)                  | IEEE-754 doubles; every operation opaque: proofs know nothing about numbers |
 | `string`                                     | `JS.Str` = list of UTF-16 code units    | **exact** JS strings (emoji, lone surrogates) |
 | `"a" \| "b"`                                 | `inductive` enum                        | |
 | `{ readonly f: T }`, `interface`             | `structure`                             | |
@@ -109,8 +109,19 @@ Every expression maps to a Lean term whose value is the JavaScript value.
   mapping is not modelled: proofs cannot depend on them). A literal is its cooked
   UTF-16 value; one with a lone surrogate (not a Lean `String`) is emitted as its
   code units `JS.Str.mk […]`.
-* `===` on `number` is IEEE equality (`Float` `==`, `NaN !== NaN`), in code and in
-  contracts alike. Unary `+` is only accepted on numbers (the identity).
+* Numbers are the opaque type `JS.Num`, not Lean's `Float` (which the kernel
+  computes with — Lean has a model of it — and whose library is not JavaScript's:
+  `max 1 NaN = 1` while `Math.max(1, NaN)` is NaN, `Float.round` rounds half-way
+  cases away from zero while `Math.round` rounds them up). Literals
+  (`JS.Num.ofScientific`, `JS.Num.ofInt`), an `int` used as a number
+  (`JS.Num.ofInt`), `+ - * /`, unary `-`, `<`, `<=`, `===`, `Math.floor/ceil/round/
+  trunc/abs/max/min` and `String(x)` are opaque constants (`opaque` definitions, no
+  axioms), so no proof can compute or decide anything about numbers: what is
+  provable about them follows from hypotheses and congruence alone (`a / b < 0.5`
+  is `a / b < 0.5`). In particular `===` on `number` is the uninterpreted IEEE test
+  `JS.Num.eq` (not reflexive: `NaN !== NaN`), in code and in contracts alike, and
+  nothing relates `JS.Num.lt`, `JS.Num.le` and `JS.Num.eq`. Unary `+` is only
+  accepted on numbers (the identity).
 * `a + b` with a string operand (by its TypeScript type) is concatenation; an
   `int`, `boolean` or enum operand is converted exactly as in a template literal
   (`-5 + "a"` is `"-5a"`); a `number` or possibly-null operand is rejected.
@@ -528,10 +539,39 @@ hook rules hold (static checks). For every function: its body is safe and its
   `INCOMPLETE` as well. An axiom that is neither Lean's standard ones, nor
   `VReact.assumed`, nor emitted for a `@trusted` declaration (e.g. one declared
   in a user proof) makes the items that depend on it `TRUSTED`.
-* **User proofs** (`proofs/*.lean`) are imported into generated files. Their
-  theorems are checked by Lean's kernel like everything else, but the macros,
-  syntax and elaborators they declare run while the generated files are
-  elaborated; the report trusts them not to forge Lean's output.
+* **User proofs** (`proofs/**/*.lean`, `proofs/Base.lean`) are imported into
+  generated files, so whatever they declare takes effect while the translation is
+  checked. Before Lean runs, `vreact` checks every proof file against a whitelist
+  (`lean/ProofCheck.lean`, the `vreact-proofcheck` program of the library): it
+  parses the file with Lean's own parser, in the environment the file is
+  elaborated in (`Init` alone for a file without imports, otherwise `VReact`;
+  `open`/`namespace`/`section`/`end`/`set_option` are elaborated, so scoped syntax
+  and options are what Lean will see), rejects a file that does not parse
+  completely, and accepts only: plain `import`s of `VTS.…`, `Proofs.…`, `VReact`
+  and `Init` modules; `theorem`, `def`, `abbrev`, `example` (modifiers: doc
+  comment, the attributes below, `private`, `protected`, `noncomputable`,
+  `nonrec`) declared outside the namespaces `VTS` and `VReact` and not named like a
+  `VReact.` name; `open`, `namespace`/`section`/`end` (not under `VTS` or
+  `VReact`), `variable`, `universe`, `include`, `omit`, module docs, `#check`,
+  `#print`; the attributes `simp`, `vreact_simp`, `grind …` (also `local`, and
+  erased with `attribute [-…]`) and `grind_pattern`; `set_option` of
+  `maxHeartbeats`, `maxRecDepth`, `synthInstance.maxHeartbeats`/`maxSize`,
+  `autoImplicit`, `relaxedAutoImplicit`, `diagnostics`, `linter.*`, `pp.*`,
+  `trace.*` (as a command, with `in`, and inside terms and tactics); and in terms
+  and tactics anything but `run_tac`, `by_elab`, `unsafe`, `include_str`,
+  `native_decide`, `+native`, `bv_decide`, `idbg`, the library's test tactics and
+  the `Lean.ofReduceBool` family. Everything else — `axiom`, `instance`
+  (also `deriving`, `@[instance]`), `opaque`, `structure`/`inductive`, `macro`,
+  `macro_rules`, `syntax`, `notation`, `elab`, simprocs, `#eval`, `run_cmd`,
+  `initialize`, `export`, `mutual`, `partial`, any other attribute
+  (`implemented_by`, `extern`, `reducible`, …) or option (`debug.skipKernelTC`, …)
+  — is rejected with its file:line and text. What remains can only state and prove
+  propositions and tag them for the automation: their proofs are kernel-checked,
+  and what they rely on (`sorryAx`, an axiom of a dependency) shows in the axiom
+  report of every item that uses them. The trusted parts are Lean's parser and
+  this whitelist. (For an independent replay of every generated and proof
+  declaration through the kernel, run `lake env leanchecker VTS Proofs` in
+  `.vreact/`.)
 * **The JS runtime model** (`JS.lean`): e.g. that `Array.prototype.slice` behaves
   like `JS.slice`. Definitions follow ECMA-262 directly; where ECMA-262 leaves a
   result implementation-defined (`toSorted` with an inconsistent comparator) the
@@ -542,7 +582,10 @@ hook rules hold (static checks). For every function: its body is safe and its
   → native events → priority), which mirrors react-dom 18.3.1's event plugins
   and `getEventPriority`. Rebasing is covered by the argument of §2.2 (with
   `Runtime.rebase_safe`), not by `dispatch`.
-* **Abstractions:** integers are unbounded; floats are opaque to proofs; Unicode
+* **Abstractions:** integers are unbounded, and an `int` is a mathematical
+  integer: JavaScript's `-0` is `0` (the sign of a zero int is observable only
+  through a number division by it: `1 / -0` is `-Infinity`); numbers are opaque
+  to proofs (above); Unicode
   case mapping is opaque; `localStorage`, `console`, `document.title` writes are
   external effects with no state change; reading external data is not modelled.
 * **Outside the subset:** the entry point (`main.tsx`), React itself, the DOM,

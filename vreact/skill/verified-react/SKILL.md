@@ -108,7 +108,7 @@ export function ItemList(props: ItemListProps) {
 }
 ```
 
-* Use `int` for integers (counts, ids, cents); `number` is a float the prover cannot reason about.
+* Use `int` for integers (counts, ids, cents); `number` is a float the prover knows nothing about (opaque: no arithmetic, comparison or `Math.*` facts).
 * State is immutable: spread, `filter`, `map`, `toSorted`, `with` — never `push`/`sort`/property assignment.
 * Handlers may call setters, `dispatch`, and **at most one** parent callback per path.
 * `setX(v)` uses the render snapshot; two of them in one handler do not compose — use
@@ -184,8 +184,8 @@ postcondition, root-precondition, unreachable, assert).
 2. Split work: make a large function `@opaque` with precise `ensures`.
 3. Add an intermediate fact: `assert(cond)` (proved, then available).
 4. Write a Lean lemma in `proofs/<Module>.lean` (`import VTS.<Module>.Defs`);
-   tag it `@[vreact_simp]` if it is a rewrite rule. It helps the module's
-   component obligations, the `ensures` of the module's functions that no other
+   tag it `@[vreact_simp]` if it is a rewrite rule (or `@[grind …]`). The lemma
+   helps the module's component obligations, the `ensures` of the module's functions that no other
    function or constant of the module uses (they are proved after it, in
    `Posts.lean`), and everything (functions, contracts, components) in the
    modules that import `<Module>`. It does not help function bodies of
@@ -193,7 +193,11 @@ postcondition, root-precondition, unreachable, assert).
    constant of `<Module>` calls (those are proved in `Defs.lean`, before it,
    so the caller can use them). For such a lemma: state it generically in
    `proofs/Base.lean` (imported everywhere), or move the function that needs
-   it to a module that imports `<Module>`. See `reference/obligations.md`.
+   it to a module that imports `<Module>`. Proof files may contain only lemmas
+   (`theorem`/`def`/`abbrev`/`example`, `open`, `namespace`/`section`, the
+   attributes `simp`/`vreact_simp`/`grind`, `grind_pattern`, resource options):
+   `vreact` rejects anything else — macros, `macro_rules`, instances, axioms,
+   `#eval`, other options — before Lean runs. See `reference/obligations.md`.
 5. Never use `assume(…)` or `@trusted` to make a failure go away without telling
    the user; both are reported and keep the result from being `VERIFIED`.
 

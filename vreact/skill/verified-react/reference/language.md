@@ -24,7 +24,7 @@ The tsconfig needs `"strict": true` (with `strictNullChecks` and `noImplicitAny`
 | write                                   | notes |
 |-----------------------------------------|-------|
 | `boolean`, `string`, `int`              | `int` = integers (`import { type int } from "vreact/spec"`) |
-| `number`                                | IEEE float: allowed, but proofs cannot reason about values |
+| `number`                                | IEEE float: allowed, but opaque — proofs know nothing about numbers (no arithmetic facts, `===` is an uninterpreted IEEE test) |
 | `"a" \| "b" \| "c"`                     | string-literal enums (`switch` on them is exhaustive) |
 | `{ readonly f: T; g?: U }`              | records (optional field = `U \| undefined`) |
 | `{ kind: "x"; … } \| { kind: "y"; … }`  | discriminated unions — any common string-literal field works |
@@ -94,7 +94,10 @@ non-discriminated unions (`string | number`), `ReactNode`/`children` props.
   including literals with lone surrogates (`"\uD800"`). No position arguments:
   `s.includes(t, p)` / `s.startsWith(t, p)` → `s.slice(p).includes(t)` (`p >= 0`),
   `s.endsWith(t, e)` → `s.slice(0, e).endsWith(t)`.
-* `Math.max/min/abs/sign/floor/trunc/round/ceil`, `String(x)`.
+* `Math.max/min/abs/sign/floor/trunc/round/ceil`, `String(x)`. On ints they are exact
+  (`Math.floor(a / b)` and `idiv` are integer division); on numbers they are opaque,
+  like every number operation: a contract about numbers is provable only by
+  congruence (`r === (a / b < 0.5)` for `return a / b < 0.5`), never by computing.
 * Names: any identifier works. Ones that are Lean keywords or root names
   (`matches`, `rec`, `show`, `max`, `List`, …) get a `'` in Lean (`VTS.m.max'`),
   also components (`function Type()` → `VTS.m.Type'`); names shaped like Lean's

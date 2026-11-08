@@ -5,7 +5,7 @@ import { fail, leanField, leanAccessor, leanIdent, leanStr, jsStr, capitalize, s
  * VTS types.  Every TypeScript type accepted by the subset maps to one of these,
  * and each of these maps to a Lean type:
  *
- *   boolean → Bool, int → Int, number → Float, string → String,
+ *   boolean → Bool, int → Int, number → VReact.JS.Num (opaque), string → VReact.JS.Str,
  *   "a" | "b" (string literal union) → inductive enum,
  *   { … } / interface → structure,
  *   discriminated union of objects → inductive with one constructor per variant,
@@ -245,7 +245,7 @@ export function leanType(t: VType): string {
     case "int":
       return "Int";
     case "num":
-      return "Float";
+      return "VReact.JS.Num";
     case "str":
       return "VReact.JS.Str";
     case "unit":
@@ -268,7 +268,7 @@ export function leanType(t: VType): string {
   }
 }
 
-/** Whether Lean can derive `DecidableEq` (Floats and functions cannot). */
+/** Whether Lean can derive `DecidableEq` (numbers — opaque, `===` is IEEE — and functions cannot). */
 export function hasDecEq(t: VType, reg: TypeRegistry, seen = new Set<string>()): boolean {
   switch (t.k) {
     case "num":

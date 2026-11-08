@@ -416,7 +416,7 @@ function isPrimitiveEq(t: VType): boolean {
 
 /** Element comparisons of `includes`/`indexOf`/`distinct` are by value only for primitive elements. */
 function checkPrimitiveElems(node: ts.Node, arr: ts.Expression, elem: VType, what: string, env: Env) {
-  if (elem.k === "num") fail(node, `${what} on number elements is not supported (JS compares with SameValueZero/===, NaN and -0 differ from Lean's Float equality); use ints`);
+  if (elem.k === "num") fail(node, `${what} on number elements is not supported (JS compares the elements with SameValueZero or ===, where NaN and -0 are special; numbers are opaque in VTS); use ints`);
   if (!isPrimitiveEq(elem)) {
     fail(node, `${what} on ${showType(elem)} elements compares object identity in JS (a copy is never found): compare keys instead, e.g. xs.some((x) => x.id === v.id)`);
   }
@@ -565,7 +565,7 @@ export function coerce(v: Val, expected: VType | undefined, node: ts.Node, env: 
  */
 function widen(v: Val, t: VType, env: Env): Val | null {
   if (sameType(v.type, t)) return v;
-  if (t.k === "num" && v.type.k === "int") return { code: `(Float.ofInt ${paren(v.code)})`, type: T.num };
+  if (t.k === "num" && v.type.k === "int") return { code: `(VReact.JS.Num.ofInt ${paren(v.code)})`, type: T.num };
   // a string-literal enum member is its string (the `ToJS` instance of the enum maps each
   // constructor to its literal)
   if (t.k === "str" && v.type.k === "enum") return { code: `(VReact.JS.str ${paren(v.code)})`, type: T.str };
@@ -605,7 +605,7 @@ function expr0(e: ts.Expression, env: Env, expected?: VType): Val {
     case ts.SyntaxKind.NumericLiteral: {
       // literals are always type-ascribed: a bare Lean numeral defaults to Nat (truncated subtraction)
       const text = (e as ts.NumericLiteral).text;
-      if (expected?.k === "num" || /[.eE]/.test(text)) return { code: `(${text} : Float)`, type: T.num };
+      if (expected?.k === "num" || /[.eE]/.test(text)) return { code: `(${text} : VReact.JS.Num)`, type: T.num };
       return { code: leanInt(BigInt(text)), type: T.int };
     }
     case ts.SyntaxKind.StringLiteral:
@@ -947,7 +947,8 @@ function binary(b: ts.BinaryExpression, env: Env, expected?: VType): Val {
       return { code: neg ? `(Option.isSome ${paren(nt.v.code)})` : `(Option.isNone ${paren(nt.v.code)})`, type: T.bool };
     }
     const { l, r } = eqOperands(b, env);
-    const eq = l.type.k === "num" ? `(${paren(l.code)} == ${paren(r.code)})` : `(VReact.JS.eq ${paren(l.code)} ${paren(r.code)})`;
+    // number equality is the opaque IEEE test (NaN !== NaN, 0 === -0)
+    const eq = l.type.k === "num" ? `(VReact.JS.Num.eq ${paren(l.code)} ${paren(r.code)})` : `(VReact.JS.eq ${paren(l.code)} ${paren(r.code)})`;
     return { code: neg ? `(!${eq})` : eq, type: T.bool };
   }
   const cmp: Record<number, string> = {
@@ -964,8 +965,14 @@ function binary(b: ts.BinaryExpression, env: Env, expected?: VType): Val {
     if (l.type.k === "str") fail(b, "string ordering comparisons are not supported (use localeCompare-free logic)");
     // instance-free Bool comparisons (simp rewrites their arguments freely; see JS.lt_iff)
     const fn = { "<": ["lt", false], "≤": ["le", false], ">": ["lt", true], "≥": ["le", true] }[cmp[op]] as [string, boolean];
+    // numbers: the opaque comparisons of `VReact.JS.Num` (NaN compares false)
+    const num = l.type.k === "num" || r.type.k === "num";
+    if (num) {
+      l = coerce(l, T.num, b, env);
+      r = coerce(r, T.num, b, env);
+    }
     const [a, bb] = fn[1] ? [r.code, l.code] : [l.code, r.code];
-    return { code: `(VReact.JS.${fn[0]} ${paren(a)} ${paren(bb)})`, type: T.bool };
+    return { code: `(VReact.JS.${num ? "Num." : ""}${fn[0]} ${paren(a)} ${paren(bb)})`, type: T.bool };
   }
   // arithmetic is computed at the numeric type; an optional expected type (`int | null`)
   // applies to the result only (expr() wraps it in `some`)
@@ -1366,24 +1373,30 @@ function mathCall(name: string, c: ts.CallExpression, env: Env, expected?: VType
     }
     const v = expr(args[0], env);
     if (v.type.k === "int") return v;
-    return { code: `(Float.${name === "floor" ? "floor" : "round"} ${paren(v.code)})`, type: T.num };
+    // numbers: opaque (`Math.trunc` is not Lean's `Float.round`, nor any rounding Lean computes)
+    return { code: `(VReact.JS.Num.${name} ${paren(v.code)})`, type: T.num };
   }
   if ((name === "round" || name === "ceil") && args.length === 1) {
     const v = expr(args[0], env);
     if (v.type.k === "int") return v;
-    return { code: name === "round" ? `(VReact.JS.mathRound ${paren(v.code)})` : `(Float.ceil ${paren(v.code)})`, type: T.num };
+    // `Math.round` rounds half-way cases towards +∞ (Lean's `Float.round` away from zero, and
+    // `floor(x + 0.5)` is wrong for 0.49999999999999994 and -0.5): opaque
+    return { code: `(VReact.JS.Num.${name} ${paren(v.code)})`, type: T.num };
   }
   if ((name === "max" || name === "min") && args.length >= 2) {
     let vs = args.map((a) => expr(a, env, expected?.k === "num" ? T.num : undefined));
     const anyNum = vs.some((v) => v.type.k === "num");
     if (anyNum) vs = vs.map((v, i) => coerce(v, T.num, args[i], env));
+    // on numbers the opaque `Math.max`/`Math.min` (NaN if any argument is NaN, +0 above -0; Lean's
+    // `max` on Float is `maxOfLe`); folding the binary one is the n-ary one
+    const fn = anyNum ? `VReact.JS.Num.${name}` : name;
     let code = vs[0].code;
-    for (const v of vs.slice(1)) code = `(${name} ${paren(code)} ${paren(v.code)})`;
+    for (const v of vs.slice(1)) code = `(${fn} ${paren(code)} ${paren(v.code)})`;
     return { code, type: anyNum ? T.num : T.int };
   }
   if (name === "abs" && args.length === 1) {
     const v = expr(args[0], env);
-    return v.type.k === "int" ? { code: `(VReact.JS.abs ${paren(v.code)})`, type: T.int } : { code: `(Float.abs ${paren(v.code)})`, type: T.num };
+    return v.type.k === "int" ? { code: `(VReact.JS.abs ${paren(v.code)})`, type: T.int } : { code: `(VReact.JS.Num.abs ${paren(v.code)})`, type: T.num };
   }
   if (name === "sign" && args.length === 1) {
     const v = expr(args[0], env, T.int);
@@ -1891,8 +1904,9 @@ export function prop(e0: ts.Expression, env: Env): string {
         return `((${isNeqOp(op) ? "Option.isSome" : "Option.isNone"} ${paren(nl.v.code)}) = true)`;
       }
       const { l, r } = eqOperands(e, env);
-      // number equality is IEEE (NaN !== NaN), exactly as in code; Lean's `=` would be reflexive
-      if (l.type.k === "num") return `((${paren(l.code)} == ${paren(r.code)}) = ${isNeqOp(op) ? "false" : "true"})`;
+      // number equality is IEEE (NaN !== NaN), exactly as in code: the opaque test; Lean's `=`
+      // would be reflexive
+      if (l.type.k === "num") return `((VReact.JS.Num.eq ${paren(l.code)} ${paren(r.code)}) = ${isNeqOp(op) ? "false" : "true"})`;
       return `(${l.code} ${isNeqOp(op) ? "≠" : "="} ${r.code})`;
     }
     const cmp: Record<number, string> = { [K.LessThanToken]: "<", [K.LessThanEqualsToken]: "≤", [K.GreaterThanToken]: ">", [K.GreaterThanEqualsToken]: "≥" };
@@ -1901,6 +1915,13 @@ export function prop(e0: ts.Expression, env: Env): string {
       let r = expr(e.right, env, l.type);
       if (l.type.k === "int" && r.type.k === "num") l = coerce(l, T.num, e, env);
       if (!isNumeric(l.type)) fail(e, "ordering comparison on non-numbers");
+      if (l.type.k === "num" || r.type.k === "num") {
+        // numbers: the opaque comparisons (NaN compares false)
+        l = coerce(l, T.num, e, env);
+        r = coerce(r, T.num, e, env);
+        const [f, a, bb] = ({ "<": ["lt", l, r], "≤": ["le", l, r], ">": ["lt", r, l], "≥": ["le", r, l] } as Record<string, [string, Val, Val]>)[cmp[op]];
+        return `((VReact.JS.Num.${f} ${paren(a.code)} ${paren(bb.code)}) = true)`;
+      }
       return `(${l.code} ${cmp[op]} ${r.code})`;
     }
   }
@@ -2366,7 +2387,7 @@ function exprStatement(e: ts.Expression, env: Env, bc: BlockCtx, rest: (e: Env) 
     const op = e.operator === ts.SyntaxKind.PlusPlusToken ? "+" : "-";
     return assignLocal(e.operand, (old) => {
       if (!isNumeric(old.type)) fail(e, `++/-- on ${showType(old.type)}`);
-      const one = old.type.k === "num" ? "(1 : Float)" : leanInt(1);
+      const one = old.type.k === "num" ? "(1 : VReact.JS.Num)" : leanInt(1);
       return { code: `(${old.code} ${op} ${one})`, type: old.type };
     }, env, rest, e);
   }
@@ -2548,9 +2569,9 @@ function caseTest(dv: Val, l: CaseLabel, discNode: ts.Expression, env: Env): str
     return `VReact.JS.eq ${paren(dv.code)} ${leanInt(BigInt(value))}`;
   }
   if (t.k === "num") {
-    // IEEE equality, as === (NaN matches nothing, -0 matches 0)
+    // IEEE equality, as === (NaN matches nothing, -0 matches 0): the opaque test
     const v = expr(e, env, T.num);
-    return `(${paren(dv.code)} == ${paren(v.code)})`;
+    return `(VReact.JS.Num.eq ${paren(dv.code)} ${paren(v.code)})`;
   }
   if (t.k !== "int" && t.k !== "str" && t.k !== "bool") fail(discNode, `switch on a value of type ${showType(t)} is not supported (only ints, strings, booleans, string-literal enums and discriminants x.kind)`);
   const v = expr(e, env, t);
