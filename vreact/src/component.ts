@@ -561,7 +561,11 @@ function effectCode(c: ts.CallExpression, env: Env, info: CompInfo): string {
   const tasks: string[] = [];
   const sync: ts.Statement[] = [];
   const timerCb = (e: ts.Expression): ts.Expression | null => {
-    if (ts.isCallExpression(e) && ts.isIdentifier(e.expression) && ["setInterval", "setTimeout"].includes(e.expression.text)) return e.arguments[0];
+    if (ts.isCallExpression(e) && ts.isIdentifier(e.expression) && ["setInterval", "setTimeout"].includes(e.expression.text)) {
+      // the delay (and any further argument) is evaluated by JS but not translated: data only
+      for (const a of e.arguments.slice(1)) pureCleanupExpr(a, env, TIMER_ARG_RULE, "a timer's delay");
+      return e.arguments[0];
+    }
     return null;
   };
   // the path condition of the timers registered so far down the effect body (`timerGuard`)
@@ -662,6 +666,7 @@ function guardedTimer(guards: TimerGuard[], i: number, env: Env, body: (e: Env) 
   return g.holds ? branch(g.cond, env, next, () => skip) : branch(g.cond, env, () => skip, next);
 }
 
+const TIMER_ARG_RULE = "the delay of setTimeout/setInterval is evaluated but not translated, so it must be data (a literal, a constant, props or state, pure functions of them): no casts, `arguments`, `any`, setters or helpers";
 const CLEANUP_RULE = "effect cleanups may only clear timers (clearTimeout/clearInterval) and make external writes (console.*, localStorage.*, document.title = …), possibly under if/else: React runs a cleanup later, with the props and state of the render that created it, and the cleanup is not verified";
 
 /**
@@ -725,7 +730,7 @@ function updatesState(callee: ts.Expression, env: Env): boolean {
 }
 
 /** Arguments inside a cleanup: data only (no state updates, callbacks, helpers or unknown calls). */
-function pureCleanupExpr(n: ts.Node, env: Env) {
+function pureCleanupExpr(n: ts.Node, env: Env, rule = CLEANUP_RULE, who = "effect cleanups") {
   const visit = (x: ts.Node) => {
     if (ts.isCallExpression(x)) {
       const callee = x.expression;
@@ -742,19 +747,19 @@ function pureCleanupExpr(n: ts.Node, env: Env) {
           ok = root.text === "Math" || b?.k === "val" || (!b && !!globalConst(root, env));
         } else ok = !(ts.isPropertyAccessExpression(root) && updatesState(root, env));
       }
-      if (!ok) fail(x, `effect cleanups may not call \`${nodeText(callee, 40)}\` here; ${CLEANUP_RULE}`);
+      if (!ok) fail(x, `${who} may not call \`${nodeText(callee, 40)}\` here; ${rule}`);
     }
-    if (ts.isNewExpression(x) || ts.isAwaitExpression(x) || ts.isDeleteExpression(x)) fail(x, CLEANUP_RULE);
-    // the cleanup is not translated, so its static types are all that stands for what it can
+    if (ts.isNewExpression(x) || ts.isAwaitExpression(x) || ts.isDeleteExpression(x)) fail(x, rule);
+    // the code is not translated, so its static types are all that stands for what it can
     // reach: no cast (`(m as any).clear()`), no `arguments`, nothing typed `any`
-    if ((ts.isAsExpression(x) && x.type.getText() !== "const") || ts.isTypeAssertionExpression(x)) fail(x, `type assertions are not allowed in VTS (they are unchecked casts); ${CLEANUP_RULE}`);
-    if (ts.isIdentifier(x) && x.text === "arguments" && !(ts.isPropertyAccessExpression(x.parent) && x.parent.name === x)) fail(x, `\`arguments\` is not allowed in VTS; ${CLEANUP_RULE}`);
-    if (ts.isBinaryExpression(x) && x.operatorToken.kind >= ts.SyntaxKind.FirstAssignment && x.operatorToken.kind <= ts.SyntaxKind.LastAssignment) fail(x, CLEANUP_RULE);
-    if ((ts.isPrefixUnaryExpression(x) || ts.isPostfixUnaryExpression(x)) && (x.operator === ts.SyntaxKind.PlusPlusToken || x.operator === ts.SyntaxKind.MinusMinusToken)) fail(x, CLEANUP_RULE);
+    if ((ts.isAsExpression(x) && x.type.getText() !== "const") || ts.isTypeAssertionExpression(x)) fail(x, `type assertions are not allowed in VTS (they are unchecked casts); ${rule}`);
+    if (ts.isIdentifier(x) && x.text === "arguments" && !(ts.isPropertyAccessExpression(x.parent) && x.parent.name === x)) fail(x, `\`arguments\` is not allowed in VTS; ${rule}`);
+    if (ts.isBinaryExpression(x) && x.operatorToken.kind >= ts.SyntaxKind.FirstAssignment && x.operatorToken.kind <= ts.SyntaxKind.LastAssignment) fail(x, rule);
+    if ((ts.isPrefixUnaryExpression(x) || ts.isPostfixUnaryExpression(x)) && (x.operator === ts.SyntaxKind.PlusPlusToken || x.operator === ts.SyntaxKind.MinusMinusToken)) fail(x, rule);
     ts.forEachChild(x, visit);
     // (after the parts, so that a cast is reported as one)
     if (ts.isExpression(x) && !(ts.isIdentifier(x) && ts.isPropertyAccessExpression(x.parent) && x.parent.name === x) && env.m.checker.getTypeAtLocation(x).flags & (ts.TypeFlags.Any | ts.TypeFlags.Unknown)) {
-      fail(x, `\`${nodeText(x, 40)}\` has type any or unknown here, so VTS cannot tell what it does; ${CLEANUP_RULE}`);
+      fail(x, `\`${nodeText(x, 40)}\` has type any or unknown here, so VTS cannot tell what it does; ${rule}`);
     }
   };
   visit(n);
@@ -1266,7 +1271,9 @@ function keyedMap(c: ts.CallExpression, env: Env): string {
   const asKey = (kv: { code: string; type: VType }): string => {
     if (kv.type.k === "int") return `VReact.Key.int ${paren(kv.code)}`;
     if (kv.type.k === "str") return `VReact.Key.str ${paren(kv.code)}`;
-    fail(keyE, "keys must be int or string");
+    // an enum member is its string (React sees exactly that string), as in `${k}`
+    if (kv.type.k === "enum") return `VReact.Key.str (VReact.JS.str ${paren(kv.code)})`;
+    fail(keyE, "keys must be int, string or a string-literal enum");
   };
   const keyCode = ts.isBlock(fn.body)
     ? asKey(valueBlock(fn.body.statements.slice(0, -1).concat([ts.factory.createReturnStatement(keyE)]) as unknown as ts.Statement[], { ...kEnvR.env, keyFn: true }, undefined, fn))

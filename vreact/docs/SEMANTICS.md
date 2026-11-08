@@ -128,7 +128,13 @@ Every expression maps to a Lean term whose value is the JavaScript value.
   (`-5 + "a"` is `"-5a"`); a `number` or possibly-null operand is rejected.
   Bitwise operators (`~ & | ^ << >> >>>`, also as `&=` …) are rejected (ToInt32 is
   not modelled), as are compound assignments other than `+=` and `-=`.
-* `x!` carries the obligation `x ≠ null`; `?.` and `??` map to `Option.map/getD`.
+* `x!` carries the obligation `x ≠ null`; `??` maps to `Option.getD`. An optional chain
+  short-circuits as in JS: when the base before a `?.` is null/undefined, the whole rest of the
+  chain is skipped and the chain is `undefined` (`a?.b.c`, `m.get(k)?.has(x)`,
+  `g.get(r)?.get(c)`, `xs?.[i]`); it is a `match` on the base, `some v => some (rest v)` /
+  `none => none` (a rest that is itself optional is not wrapped again; the match hypothesis is
+  in scope for the rest's obligations). Optional calls `f?.(…)` are rejected; in `a?.b!` the
+  `!` asserts the chain's value (TypeScript's reading).
 * Maps and Sets (`lean/VReact/JSMap.lean`) are values: `JS.JSMap K V` is the list of entries in
   insertion order with distinct keys, `JS.JSSet T` the list of elements; Lean `=` on them is
   equality of these lists, i.e. observational equality (JS `===`, identity, is rejected). The
@@ -148,14 +154,23 @@ Every expression maps to a Lean term whose value is the JavaScript value.
   its fold). A static check of each body (`checkCollectionMutation`) guarantees that no other
   reference to that object exists while a mutation can still run: no mutation of parameters,
   props, state, constants, `let`s or values read from elsewhere; no mutation inside an
-  expression (including arguments that are not translated, such as `console.log(…)`'s); no
-  mutation from a nested function (a callback's mutation would be lost, and it may run later); a
-  use of the local other than a read (`size`, `get`, `has`, an iteration consumed at once, a
-  copy) — storing, passing, rendering, returning from a callback — must not be followed by a
-  mutation (later in the code or in a later iteration of an enclosing loop; the function's own
-  `return` ends it); a function that runs later may not refer to the local when a mutation can
-  follow its creation; and a `for…of` over the local may not mutate it (JS would visit the added
-  entries).
+  expression; no mutation from a nested function (a callback's mutation would be lost, and it
+  may run later); a use of the local other than a read (`size`, `get`, `has`, an iteration
+  consumed at once, a copy) — storing, passing, rendering, returning it from a callback (a
+  `return` of an array callback or a `useMemo` callback hands it back to the function) — must
+  not be followed by a mutation (later in the code or in a later iteration of an enclosing
+  loop; a `return` statement of the declaring function itself ends it); a function that runs
+  later may not refer to the local when a mutation can follow its creation; and a `for…of`
+  over the local may not mutate it (JS would visit the added entries). The check recognises a
+  mutation in the form `x.set(…)` (`add`, `delete`, `clear`); every other way to reach a
+  mutating method of the library's Map/Set — an index (`m["clear"]()`; Maps and Sets are never
+  indexed), the prototype (`Map.prototype.set.call(m, …)`, `Reflect.apply(Set.prototype.add,
+  …)`), a method value (`m.set.bind(m)`, `(m.set)(k, v)`) — is rejected wherever it is written.
+  The arguments of external writes (`console.*(…)`, `localStorage.setItem(…)`, the value of
+  `document.title = …`), whose values are not modelled, are translated for these checks (casts,
+  `eval`, `arguments` and the like are rejected there as anywhere); an effect cleanup, which is
+  not translated, rejects casts, `arguments` and `any`-typed expressions, so its static types
+  show every Map/Set it can reach.
 * Narrowing (`x !== null`, `x.kind === "add"`, `switch (x.kind)`, early
   `return`) is compiled to Lean `match`, so the narrowed facts are available to
   every obligation in the branch. The complement of a tag test is narrowed too
@@ -352,7 +367,8 @@ function returning a view tree in which
 * every event handler stores the proof that its outcome is safe (§2.2),
 * every child element `<C …/>` stores the proof of `C.pre`,
 * every keyed list stores the proof that its keys are pairwise distinct
-  (React's reconciliation requirement; `int` and `string` keys never mix),
+  (React's reconciliation requirement; `int` and `string` keys never mix; a string-literal
+  enum key is its string, `Key.str (JS.str k)`),
 * every expression JavaScript evaluates during render is kept in the term with
   its obligations, including `key={…}` outside lists (`VNode.withKey`; a key
   change remounts, which is covered because both keeping the state and
@@ -503,7 +519,11 @@ hook rules hold (static checks). For every function: its body is safe and its
 * **The translation** from TypeScript to Lean (≈3k lines of TypeScript). It is
   structural and syntax-directed; the regression suite pins its behaviour. The
   value model of Maps and Sets relies on its alias analysis (§1.2): that a mutated Map or
-  Set is referenced by nothing else while it can still change. Its
+  Set is referenced by nothing else while it can still change, and that every mutation is
+  written `x.set(…)`/`add`/`delete`/`clear` (other routes to the library's mutating methods are
+  rejected syntactically, by their TypeScript symbol; in code that is not translated — the
+  arguments of external writes are, cleanups are not — the static checks rely on TypeScript's
+  types, with casts, `arguments` and `any` rejected). Its
   name escaping relies on `src/leanNames.ts` (Lean tokens and root names),
   generated from the Lean environment by `lean/scripts/GenNames.lean`; regenerate
   it when the Lean toolchain or the VReact library changes.

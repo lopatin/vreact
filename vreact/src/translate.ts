@@ -844,6 +844,9 @@ export function expr(e: ts.Expression, env: Env, expected?: VType): Val {
 
 function expr0(e: ts.Expression, env: Env, expected?: VType): Val {
   const m = env.m;
+  // the base of an optional chain's `?.`, bound to its present value (see `optionalChain`)
+  const bound = chainBound.get(e);
+  if (bound) return bound;
   // narrowed path? (a variant narrowing replaces a `some` one: `s: T | null` tested non-null,
   // then to be a variant, is that present value)
   const key = pathKey(env, e);
@@ -851,6 +854,8 @@ function expr0(e: ts.Expression, env: Env, expected?: VType): Val {
     const n = env.narrow.get(key);
     if (n && (n.kind === "some" || n.kind === "variant")) return { code: n.code, type: n.type };
   }
+  const chain = optionalChain(e, env);
+  if (chain) return chain;
   switch (e.kind) {
     case ts.SyntaxKind.ParenthesizedExpression:
       return expr((e as ts.ParenthesizedExpression).expression, env, expected);
@@ -948,6 +953,69 @@ function expr0(e: ts.Expression, env: Env, expected?: VType): Val {
     default:
       fail(e, `expression not supported in VTS: ${nodeText(e)}`);
   }
+}
+
+/**
+ * The bases of the `?.` links being translated (`optionalChain`), bound to their present
+ * values: the rest of the chain is translated with the base replaced by its value.
+ */
+const chainBound = new Map<ts.Node, Val>();
+
+/**
+ * An optional chain (`x?.f`, `a?.f.g`, `m.get(k)?.has(x)`, `g.get(r)?.get(c)`, `xs?.[i]`,
+ * `a?.b.c?.d(x)`): when the base before the first `?.` is null/undefined, JS skips the whole
+ * rest of the chain and gives `undefined`.  Translated as a match on the base,
+ * `(match h : base with | some v => some rest(v) | none => none)` (the rest's own `?.` links
+ * nest the same way; `h` is there for the rest's obligations).  Returns null for an expression
+ * that is not the end of such a chain; `a?.b!` is translated by the non-null assertion
+ * (TypeScript's `!` asserts the whole chain, `propertyAccess` translates its `a?.b`).
+ */
+function optionalChain(e: ts.Expression, env: Env): Val | null {
+  if (!ts.isOptionalChain(e) || ts.isNonNullExpression(e)) return null;
+  // (a link inside a longer chain is translated as part of that chain)
+  const p = e.parent;
+  if (ts.isOptionalChain(p) && (p as ts.PropertyAccessExpression | ts.ElementAccessExpression | ts.CallExpression | ts.NonNullExpression).expression === e) return null;
+  // the first `?.` whose base is not bound yet
+  let link: ts.PropertyAccessExpression | ts.ElementAccessExpression | ts.CallExpression | null = null;
+  for (let n: ts.Expression = e; ts.isOptionalChain(n); ) {
+    const x = n as ts.PropertyAccessExpression | ts.ElementAccessExpression | ts.CallExpression | ts.NonNullExpression;
+    if (chainBound.has(x.expression)) break;
+    if (!ts.isNonNullExpression(x) && x.questionDotToken) link = x;
+    n = x.expression;
+  }
+  if (!link) return null;
+  if (ts.isCallExpression(link)) fail(link, `an optional call \`${nodeText(link.expression, 30)}?.(…)\` is not supported (functions are never optional in VTS): call it directly`);
+  const baseE = link.expression;
+  const base = expr(baseE, env);
+  if (base.type.k !== "opt" && !isPresentValue(base.type)) fail(link, "?. on a non-optional value");
+  const present = base.type.k === "opt" ? base.type.elem : base.type;
+  const { env: e1, name: v } = base.type.k === "opt" ? freshLocal(env, "v") : { env, name: base.code };
+  chainBound.set(baseE, { code: base.type.k === "opt" ? v : base.code, type: present });
+  let rest: Val;
+  try {
+    rest = expr(e, e1);
+  } finally {
+    chainBound.delete(baseE);
+  }
+  if (base.type.k !== "opt") return rest; // `?.` on a present (e.g. narrowed) value: nothing to skip
+  const t = rest.type.k === "opt" ? rest.type : T.opt(rest.type);
+  const h = env.m.fresh("h");
+  const some = rest.type.k === "opt" ? rest.code : `some ${paren(rest.code)}`;
+  return { code: `(match ${h} : ${base.code} with\n  | some ${v} => ${paren(some)}\n  | none => (none : ${leanType(t)}))`, type: t };
+}
+
+/**
+ * The advice for a property or method used on a possibly-null value `x` (the receiver
+ * expression): the nullish value TypeScript gives it (`m.get(k)` is `undefined`, never `null`).
+ */
+function narrowAdvice(x: ts.Expression | undefined, env: Env): string {
+  const k = x ? nullishKinds(x, env) : null;
+  const test = !k ? "!= null" : k.null && k.undef ? "!= null" : k.undef ? "!== undefined" : "!== null";
+  const what = x ? nodeText(x, 30) : "x";
+  const simple = !!x && (ts.isIdentifier(stripParens(x)) || ts.isPropertyAccessExpression(stripParens(x)));
+  return simple
+    ? `narrow it with ${what} ${test} first, or use ?. (${what}?.… ?? default)`
+    : `use ?. (${what}?.… ?? default), or name it and narrow: const v = ${what}; if (v ${test}) …`;
 }
 
 /** Conversion to string (template literals, JSX text, string concatenation). */
@@ -1080,7 +1148,7 @@ function fieldOf(base: Val, name: string, node: ts.Node, env: Env): Val {
     fail(node, `field ${name} is not present in every variant of ${showType(t)}${has.length ? ` (only in ${has.join(", ")})` : ""}: narrow first with a test on x.${u.tag} (if/else, early return, ?:, &&/||, switch) of this value — not through an alias (const isX = …) or \`in\`, and anew after reassigning a \`let\``);
   }
   if (t.k === "tuple") fail(node, "use index access t[0] on tuples");
-  if (t.k === "opt") fail(node, `\`${name}\` accessed on a possibly-null value: narrow with !== null first`);
+  if (t.k === "opt") fail(node, `\`${name}\` accessed on a possibly-null value: ${narrowAdvice(ts.isPropertyAccessExpression(node) ? node.expression : undefined, env)}`);
   fail(node, `property ${name} not supported on ${showType(t)}`);
 }
 
@@ -1552,6 +1620,7 @@ function newCollection(ne: ts.NewExpression, env: Env, expected?: VType): Val {
     const exp = expected?.k === "opt" ? expected.elem : expected;
     if (exp?.k === kind) t = exp;
   }
+  if (!t && kind === "map" && args.length === 1) t = literalPairsType(stripParens(args[0]), ne, env) ?? undefined;
   // without type arguments and a type to infer them from, TypeScript types it Map<any, any> /
   // Set<any> and checks nothing about what goes in (with an expected type, e.g. a `useState<T>`
   // argument, the translation types it, and checks the argument, at that type)
@@ -1583,6 +1652,56 @@ function newCollection(ne: ts.NewExpression, env: Env, expected?: VType): Val {
   }
   const w = coerce(v, T.arr(elemOf(t)), a, env);
   return { code: `(VReact.JS.${J}.ofList ${paren(w.code)})`, type: t };
+}
+
+/**
+ * The type of `new Map(a)` without type arguments or an expected type, from its argument `a`
+ * when that is built of `[key, value]` array literals.  TypeScript infers `Map<number, …>` for
+ * `new Map([[1, "a"]])`, which cannot tell `int` from `number`, so VTS reads the types off the
+ * pairs: a literal of pair literals takes the types of its first pair (`int` for an integer
+ * literal, as in a `const`); pairs computed by a callback (`xs.map((x) => [x.id, x])`) are
+ * rejected with the fix (their array literals would otherwise be read as arrays, not pairs).
+ * Null for any other argument (a Map, entries, an array of tuples: their own types).
+ */
+function literalPairsType(a: ts.Expression, ne: ts.NewExpression, env: Env): VType | null {
+  const NEED = `write the types: new Map<K, V>(…) (TypeScript infers number for an integer, which cannot tell int from number)`;
+  if (ts.isArrayLiteralExpression(a)) {
+    const pairs = a.elements.map(stripParens);
+    if (!pairs.length || !pairs.every((p) => ts.isArrayLiteralExpression(p))) return null;
+    const bad = pairs.find((p) => (p as ts.ArrayLiteralExpression).elements.length !== 2 || (p as ts.ArrayLiteralExpression).elements.some(ts.isSpreadElement));
+    if (bad) fail(bad, `new Map(…) takes [key, value] pairs: this one has ${(bad as ts.ArrayLiteralExpression).elements.length === 2 ? "a spread" : `${(bad as ts.ArrayLiteralExpression).elements.length} elements`}`);
+    const [k, v] = (pairs[0] as ts.ArrayLiteralExpression).elements;
+    let kt: VType | undefined;
+    let vt: VType | undefined;
+    try {
+      env.m.dryRun(() => {
+        kt = expr(k, env).type;
+        vt = expr(v, env).type;
+      });
+    } catch (err) {
+      if (!(err instanceof VtsError)) throw err;
+      fail(ne, `the types of this Map are not known from its first pair (${nodeText(pairs[0], 30)}): ${NEED}`);
+    }
+    return mapType(kt!, vt!, ne);
+  }
+  // pairs computed by a callback that returns an array literal
+  const returnsArrayLiteral = (f: ts.Expression): boolean => {
+    f = stripParens(f);
+    if (!ts.isArrowFunction(f) && !ts.isFunctionExpression(f)) return false;
+    if (!ts.isBlock(f.body)) return ts.isArrayLiteralExpression(stripParens(f.body));
+    let found = false;
+    const visit = (n: ts.Node) => {
+      if (ts.isFunctionLike(n)) return;
+      if (ts.isReturnStatement(n) && n.expression && ts.isArrayLiteralExpression(stripParens(n.expression))) found = true;
+      ts.forEachChild(n, visit);
+    };
+    ts.forEachChild(f.body, visit);
+    return found;
+  };
+  if (ts.isCallExpression(a) && a.arguments.some(returnsArrayLiteral)) {
+    fail(ne, `new Map(…) of [key, value] pairs computed by a callback: ${NEED}`);
+  }
+  return null;
 }
 
 /** A method call on a Map / Set value `c` (receiver expression `recvE`). */
@@ -1826,7 +1945,7 @@ function call(c: ts.CallExpression, env: Env, expected?: VType): Val {
     if (obj.type.k === "arr") return arrayMethod(mname, obj, c, env, expected);
     if (obj.type.k === "str") return stringMethod(mname, obj, c, env);
     if (obj.type.k === "map" || obj.type.k === "set") return collectionMethod(mname, obj, objE, c, env);
-    if (obj.type.k === "opt") fail(c, `method call on a possibly-null value: narrow with !== null first`);
+    if (obj.type.k === "opt") fail(c, `method call on a possibly-null value: ${narrowAdvice(objE, env)}`);
     fail(c, `method ${mname} not supported on ${showType(obj.type)}`);
   }
   fail(c, `unsupported call ${nodeText(c)}`);
@@ -3003,6 +3122,11 @@ function checkExternalArgs(args: readonly ts.Expression[], env: Env) {
         }
       }
       if (isNullLit(a)) continue;
+      // reading a variable or a field path runs no code (VTS objects have no getters; the
+      // event object, `props`, a Map are fine to log whole)
+      let p: ts.Expression = a;
+      while (ts.isPropertyAccessExpression(p)) p = stripParens(p.expression);
+      if (ts.isIdentifier(p)) continue;
       expr(a, env);
     }
   });

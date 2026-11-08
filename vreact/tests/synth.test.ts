@@ -298,6 +298,14 @@ const cases: Record<string, () => Promise<void>> = {
     check("Mx-update: counterexamples show Maps", /postcondition fails on \[\{"Map":\[/.test(out), out.split("\n").find((l) => l.includes("postcondition fails on")) ?? "(no counterexample)");
     check("Mx-update: written program translates", translate(loadConfig(dir)).ok);
   },
+  // random records keep their field types: an enum or string `id` is not overwritten by a key / an int
+  async "Mx-ids"() {
+    const dir = project("Mx-ids");
+    const { by } = await synth(dir, "src/m.ts");
+    check("Mx-ids: allRed (enum id in Map values)", solutions(by("allRed"))[0] === "true", String(solutions(by("allRed"))[0]));
+    check("Mx-ids: allNamed (string id in an array)", solutions(by("allNamed"))[0] === "true", String(solutions(by("allNamed"))[0]));
+    check("Mx-ids: nValues", solutions(by("nValues"))[0] === "m.size", String(solutions(by("nValues"))[0]));
+  },
 };
 
 for (const [name, run] of Object.entries(cases)) {

@@ -71,7 +71,9 @@ non-discriminated unions (`string | number`), `ReactNode`/`children` props.
   (`return k;`, `k === s`). The same inline object type or string-literal union
   in one module is one type (e.g. `hole<{ readonly v: int }>()` returned from a
   function declared to return `{ readonly v: int }`).
-* `&& || ! ?: ?? ?.` (also `a ?? b ?? 0`) and template literals.
+* `&& || ! ?: ?? ?.` (also `a ?? b ?? 0`) and template literals. `?.` skips the whole rest
+  of the chain, as in JS: `x?.tags.length ?? 0`, `m.get(k)?.has(id) ?? false`,
+  `grid.get(r)?.get(c) ?? 0`, `xs?.[0]` (optional calls `f?.()` are rejected).
 * `xs[i]` (obligation: `0 <= i < xs.length`), `t[0]` on tuples, `x!` (obligation).
 * Arrays: `length map filter some every find findIndex includes indexOf slice
   concat join reduce(f, init) toSorted(cmp) toReversed with at flatMap`, spread.
@@ -132,11 +134,14 @@ appear: parameters, results, state, props, record fields, array elements, reduce
 * Create: `new Map<K, V>()`, or `new Map()` where the type is known (an annotation,
   `useState<T>(…)`, a parameter, the return type) — never with neither (TypeScript types it
   `Map<any, any>`); `new Map(m)` (a copy), `new Map(pairs)` (`[k, v]` pairs: a literal,
-  `new Map<int, Item>(xs.map((x: Item) => [x.id, x]))`), `new Set(xs)`, `new Set(s)`.
-  `new Set(string)` is rejected (it iterates code points).
-* Read: `m.get(k)` (`V | undefined`: `m.get(k) ?? d`, `m.get(k)!` with an obligation, or
-  `const v = m.get(k); if (v !== undefined) …` — a call is not narrowed), `m.has(k)`, `m.size`,
-  `s.has(x)`, `s.size`.
+  `new Map<int, Item>(xs.map((x: Item) => [x.id, x]))`), `new Set(xs)`, `new Set(s)`. A
+  literal of pairs needs no type arguments: its types are those of its first pair
+  (`new Map([["a", 1]])` is a `Map<string, int>`); pairs computed by a callback do
+  (`new Map<int, Item>(…)`: TypeScript infers `number` for an integer, which cannot tell `int`
+  from `number`). `new Set(string)` is rejected (it iterates code points).
+* Read: `m.get(k)` (`V | undefined`: `m.get(k) ?? d`, `m.get(k)?.f`, `m.get(k)!` with an
+  obligation, or `const v = m.get(k); if (v !== undefined) …` — a call is not narrowed),
+  `m.has(k)`, `m.size`, `s.has(x)`, `s.size`.
 * Iterate where the iteration is consumed at once: `[...m]` / `[...m.entries()]` (`[k, v]`
   pairs), `[...m.keys()]`, `[...m.values()]`, `[...s]`, `Array.from(it)` (one argument),
   `for (const [k, v] of m)`, `for (const k of m.keys())`, `for (const x of s)`, and the argument
@@ -156,8 +161,12 @@ appear: parameters, results, state, props, record fields, array elements, reduce
   expression (`if (n.delete(k))`, `console.log(m.set(…))`); mutating from inside a callback or
   helper; using `n` — storing it, passing it to a function, setter or child, rendering it,
   capturing it in a handler or helper — when a mutation of `n` follows (later in the code, or in
-  a later loop iteration; a `return n` is fine): mutate first, or pass a copy `new Map(n)`;
-  mutating `n` in a `for…of` over `n` itself (iterate `[...n]`).
+  a later loop iteration; the function's own `return n` is fine, a callback's `return n` is
+  not — it hands `n` back to the function, which goes on): mutate first, or pass a copy
+  `new Map(n)`; mutating `n` in a `for…of` over `n` itself (iterate `[...n]`). The mutating
+  methods are only called directly, `n.set(…)`: not through an index (`m["clear"]()`), as a
+  value (`const f = n.set`, `n.set.bind(n)`) or via the prototype (`Map.prototype.set.call(m, …)`),
+  and a Map or Set is never indexed (`m[k]`: use `m.get(k)`).
 * Not supported: `===` on Maps/Sets (identity: compare the contents), truthiness (`if (m)` is
   always true: test `m.size > 0`), `forEach` (use `for…of`), `entries()` of a Set, `WeakMap`,
   `WeakSet`, `Map.groupBy`, the ES2025 Set methods, a Map or Set as a JSX child or a string.
@@ -167,10 +176,16 @@ appear: parameters, results, state, props, record fields, array elements, reduce
   `[...m.keys()].every((j) => j === k || r.get(j) === m.get(j))`, order
   `[...r.keys()].indexOf(k) === m.size`. The automation knows `get`/`has`/`size` after
   `set`/`delete`, that keys are distinct (keyed lists by the keys, or by the values' `id` when an
-  invariant states `[...m.entries()].every(([k, v]) => k === v.id)`), the position of a set or
-  re-set key, `new Map`/`new Set` of literals, and the loops `for (const x of xs) n.set(f(x), g(x))`
-  / `n.add(f(x))`. Lean lemmas for `proofs/` (e.g. `JSMap.keys_set`, `JSMap.get_set`,
-  `JSMap.entries_set`) are in `VReact/JSMap.lean`.
+  invariant states `[...m.entries()].every(([k, v]) => k === v.id)`), that a value read with
+  `m.get(k)` is the value of `k`'s entry (so such an invariant applies to it), the position of a
+  set or re-set key, the entries and values of `new Map(pairs)`, of `new Map` of a filtered
+  `[...m]` and of the loops `for (const x of xs) n.set(f(x), g(x))` / `n.add(f(x))` (they come
+  from the pairs), `new Map`/`new Set` of literals, `[...m].length === m.size` (also
+  `[...m.values()]`), `new Set(xs).size <= xs.length` (`===` when `distinct(xs)`), the size of
+  `new Map(pairs)` with distinct keys, and membership in a Set after `add`/`delete` (also a Set
+  stored in a Map). Other loops (a loop of `delete`s, a sum over `m.values()`) need a lemma, as
+  for arrays. Lean lemmas for `proofs/` (e.g. `JSMap.keys_set`, `JSMap.get_set`,
+  `JSMap.entries_set`, `JSMap.mem_entries_of_get`) are in `VReact/JSMap.lean`.
 
 ## Statements
 
@@ -268,7 +283,8 @@ register them at the top level of the effect body; a timer's callback may use th
 early returns `if (c) return;` and the `assert`/`assume` before it, as in
 `if (left <= 0) return; setTimeout(() => setLeft(left - 1), 1000)`),
 external writes (`localStorage.setItem`, `document.title = …`, `console.*`) are
-allowed and have no modelled effect; no async. A cleanup is an inline
+allowed and have no modelled effect (their arguments must be VTS expressions: no casts,
+`eval`, `arguments`, `m["clear"]()`; `JSON.stringify(v)` is fine); no async. A cleanup is an inline
 `() => { … }` that only calls `clearTimeout`/`clearInterval` and makes those
 external writes, possibly under `if`/`else` (`if (id !== null) clearInterval(id)`;
 no setters, `dispatch`, parent callbacks or local helpers: it runs later with a
@@ -277,7 +293,7 @@ stale render's values and is not verified).
 JSX: intrinsic elements with string/int/bool/enum attributes (`className`,
 `value`, `checked`, `disabled`, `placeholder`, `type`, …; no `style`, `ref`,
 spread), child components with all their props, `{cond && <X/>}`, ternaries,
-`xs.map(x => <El key={…}/>)` (keys `int` or `string`, distinct), text from
+`xs.map(x => <El key={…}/>)` (keys `int`, `string` or a string-literal enum, distinct), text from
 strings/ints/enums (booleans render nothing, but are checked). `key={…}` outside
 lists is checked too (JS evaluates it). A JSX const (`const row = <p>{e}</p>;`)
 is checked where it is declared, even if it is rendered only under a condition or

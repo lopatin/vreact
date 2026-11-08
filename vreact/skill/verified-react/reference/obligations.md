@@ -148,10 +148,17 @@ first one that fails.
    distinct keys (`[...m.keys()]`, `[...m.entries()]` keyed by `k`; `[...m.values()]` keyed by
    `v.id` when an invariant says `[...m.entries()].every(([k, v]) => k === v.id)`), the position
    of a key after `set` (`[...r.keys()].indexOf(k)`: kept for a present key, last for a new one),
-   every value after a `set` (`[...r.values()].every(…)`), `new Map`/`new Set` of literals, and
-   the loops `for (const x of xs) n.set(f(x), g(x))` / `n.add(f(x))` (as `new Map`/`new Set` of
-   the mapped list). Facts about other loops over Maps need a lemma, as for arrays; the model's
-   lemmas (`JSMap.keys_set`, `JSMap.entries_set`, `JSMap.get_set`, …) are in
+   every value after a `set` (`[...r.values()].every(…)`), that a value read with `m.get(k)` is
+   the value of `k`'s entry (an invariant over `[...m.entries()]` applies to it), the entries and
+   values of `new Map`/`new Set` of literals, of `new Map(pairs)` (also of a filtered `[...m]`)
+   and of the loops `for (const x of xs) n.set(f(x), g(x))` / `n.add(f(x))` (as `new Map`/`new
+   Set` of the mapped list: every entry is one of the pairs), `[...m].length` and
+   `[...m.values()].length` as `m.size` (so `[...m][0]` under `m.size > 0`), `new Set(xs).size
+   <= xs.length` (`===` under `distinct(xs)`), `new Map(pairs).size === pairs.length` under
+   distinct keys, and membership in a Set after `add`/`delete`, also of a Set stored in a Map
+   (`r.get(k)!.has(x)`). Facts about other loops over Maps (a loop of `delete`s, a sum over
+   `m.values()`) need a lemma, as for arrays; the model's lemmas (`JSMap.keys_set`,
+   `JSMap.entries_set`, `JSMap.get_set`, `JSMap.mem_entries_of_get`, …) are in
    `VReact/JSMap.lean`.
 9. **Bounded quantifiers.** `forall(lo, hi, i => …)` and guarded `&&` in
    hypotheses are split and instantiated at the indices of the goal, also

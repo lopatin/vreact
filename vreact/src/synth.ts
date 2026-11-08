@@ -37,7 +37,7 @@ import { loadConfig } from "./cli.ts";
 import { translate, overrideHost, moduleNs, type Config, type TranslateResult } from "./module.ts";
 import { runLake, findMarkers, judge, type Verdict } from "./lean.ts";
 import { Program, ModCtx, type HoleEnv } from "./ctx.ts";
-import { type VType, type Field, T, typeOfNode, typeOfDecl, showType, sharedFields, collectionTypeArgs } from "./types.ts";
+import { type VType, type Field, T, typeOfNode, typeOfDecl, showType, sharedFields, collectionTypeArgs, sameType } from "./types.ts";
 import { specFn, narrowingAt, remainingAt } from "./translate.ts";
 import { baseEnv } from "./component.ts";
 import { VtsError, capitalize } from "./util.ts";
@@ -820,6 +820,12 @@ function rnd(n: number) {
 }
 const pick = <A>(xs: A[]): A => xs[rnd(xs.length)];
 
+/** The type of the `id` field of a record type (null for other types or without one). */
+function idField(t: VType, prog: Program): VType | null {
+  if (t.k !== "rec") return null;
+  return prog.reg.rec(t).find((f) => f.name === "id")?.type ?? null;
+}
+
 function gen(t: VType, prog: Program, pools: Pools, depth = 0): unknown {
   const reg = prog.reg;
   switch (t.k) {
@@ -857,11 +863,12 @@ function gen(t: VType, prog: Program, pools: Pools, depth = 0): unknown {
     case "arr": {
       const n = depth > 2 ? 0 : rnd(4);
       const xs = Array.from({ length: n }, () => gen(t.elem, prog, pools, depth + 1));
-      // favour distinct ids (common invariant)
-      if (t.elem.k === "rec" && xs.length) {
+      // favour distinct ids (common invariant), when the records' `id` is an int (a value of
+      // another type, e.g. an enum or a string, would not be a value of the parameter's type)
+      if (idField(t.elem, prog)?.k === "int" && xs.length) {
         const ids = [-3, -2, -1, 0, 1, 2, 3, 4, 5, 6].sort(() => Math.random() - 0.5);
         xs.forEach((x, i) => {
-          if (x && typeof x === "object" && "id" in (x as object) && Math.random() < 0.9) (x as Record<string, unknown>).id = ids[i];
+          if (x && typeof x === "object" && Math.random() < 0.9) (x as Record<string, unknown>).id = ids[i];
         });
       }
       return xs;
@@ -874,8 +881,10 @@ function gen(t: VType, prog: Program, pools: Pools, depth = 0): unknown {
         const k = gen(t.key, prog, pools, depth + 1);
         if (m.has(k)) continue;
         const v = gen(t.val, prog, pools, depth + 1);
-        // values keyed by their own id (a common invariant: m.get(k).id === k)
-        if (v && typeof v === "object" && "id" in (v as object) && typeof (v as Record<string, unknown>).id === typeof k && Math.random() < 0.9) (v as Record<string, unknown>).id = k;
+        // values keyed by their own id (a common invariant: m.get(k).id === k), when the id has
+        // the key's type (so that the key is a value of the field's type)
+        const idT = idField(t.val, prog);
+        if (idT && sameType(idT, t.key) && v && typeof v === "object" && Math.random() < 0.9) (v as Record<string, unknown>).id = k;
         m.set(k, v);
       }
       // sometimes move an entry to the end (delete then set), so the order is not the key order
