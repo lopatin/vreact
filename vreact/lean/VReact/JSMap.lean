@@ -439,6 +439,7 @@ attribute [grind →] JSMap.get_of_mem_entries JSMap.mem_values_of_mem_delete JS
   JSMap.mem_keys_of_get
 grind_pattern JSMap.keys_nodup => m.keys
 grind_pattern JSMap.size_nonneg => m.size
+grind_pattern JSMap.size_eq_length_keys => m.size
 grind_pattern JSMap.get_eq_none_iff => m.get k
 grind_pattern JSMap.nodup_entries_fst => m.entries
 grind_pattern JSMap.nodup_map_values_of_key => (List.map f (JSMap.values m)).Nodup

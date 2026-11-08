@@ -374,6 +374,36 @@ theorem getElem_indexOf {α} [BEq α] [LawfulBEq α] (xs : List α) (x : α) (h0
   simpa [indexOf] using hp
 grind_pattern getElem_indexOf => xs[(indexOf xs x).toNat]
 
+/-- `findIndex` of a concatenation: in the first part, else shifted in the second. -/
+theorem findIndex_append {α} (l r : List α) (p : α → Bool) :
+    findIndex (l ++ r) p = if l.any p then findIndex l p else if r.any p then l.length + findIndex r p else -1 := by
+  have hl := @List.findIdx?_isSome _ l p
+  have hr := @List.findIdx?_isSome _ r p
+  unfold findIndex
+  rw [List.findIdx?_append]
+  cases h1 : l.findIdx? p with
+  | some i =>
+    have hl' : l.any p = true := by simpa [h1] using hl.symm
+    simp [hl']
+  | none =>
+    have hl' : l.any p = false := by simpa [h1] using hl.symm
+    cases h2 : r.findIdx? p with
+    | some j =>
+      have hr' : r.any p = true := by simpa [h2] using hr.symm
+      simp [hl', hr']; omega
+    | none =>
+      have hr' : r.any p = false := by simpa [h2] using hr.symm
+      simp [hl', hr']
+
+/-- `indexOf` of a concatenation (e.g. the keys of a Map after appending a new key). -/
+theorem indexOf_append {α} [BEq α] [LawfulBEq α] (l r : List α) (x : α) :
+    indexOf (l ++ r) x = if x ∈ l then indexOf l x else if x ∈ r then l.length + indexOf r x else -1 := by
+  unfold indexOf; rw [findIndex_append]; simp [List.any_eq_true]
+
+theorem indexOf_singleton_self {α} [BEq α] [LawfulBEq α] (x : α) : indexOf [x] x = 0 := by
+  simp [indexOf, findIndex]
+attribute [grind =] indexOf_append indexOf_singleton_self
+
 theorem getElem_findIndex {α} (xs : List α) (p : α → Bool) (h0 : 0 ≤ findIndex xs p)
     (h : (findIndex xs p).toNat < xs.length) : p xs[(findIndex xs p).toNat] = true := by
   obtain ⟨_, hp⟩ := findIndex_spec xs p h0

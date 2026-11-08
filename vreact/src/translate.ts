@@ -194,6 +194,12 @@ const MUTATORS = new Set(["set", "add", "delete", "clear"]);
  */
 const freshMutable = new WeakSet<ts.Node>();
 
+/** Whether an expression is a Map or a Set by its TypeScript type (also for an unannotated `ensures` parameter: see `tsTypeOf`). */
+function collKindOf(x: ts.Expression, env: Env): "map" | "set" | null {
+  const t = tsTypeOf(x, env);
+  return t ? collectionKind(env.m.checker.getNonNullableType(t), env.m.prog.typeEnv) : null;
+}
+
 /** `new Map(…)` / `new Set(…)` of the library (not a user class of that name): its kind, else null. */
 function newKind(ne: ts.NewExpression, ck: ts.TypeChecker, tenv: TypeEnv): "map" | "set" | null {
   const callee = stripParens(ne.expression);
@@ -293,7 +299,7 @@ function checkCollectionMutation(body: ts.Node, env: Env) {
               : !isConst
                 ? "is declared with `let` (it may hold a shared object): declare the copy with `const`"
                 : "is not initialised with a fresh new Map(…) / new Set(…) (it may be shared with whatever it was read from)";
-            fail(n, `${what}.${name}(…) mutates ${what}, which ${why}; mutate a fresh copy instead: const n = new ${Name}(${what}); n.${name}(…);${name === "set" || name === "add" ? ` (or, in an expression, new ${Name}(${what}).${name}(…))` : ""}`);
+            fail(n, `${what}.${name}(…) mutates ${what}, which ${why}; mutate a fresh copy instead: const next = new ${Name}(${what}); next.${name}(…);${name === "set" || name === "add" ? ` (or, in an expression, new ${Name}(${what}).${name}(…))` : ""}`);
           }
           muts.set(sym, [...(muts.get(sym) ?? []), n]);
         } else if (!((name === "set" || name === "add") && isFreshCollection(recv, ck, tenv))) {
@@ -1445,7 +1451,7 @@ function iterated(e: ts.Expression, env: Env, expectedArr?: VType): { v: Val; co
   const m = env.m;
   const ck = m.checker;
   const e0 = stripParens(e);
-  const kindOf = (x: ts.Expression) => collectionKind(ck.getNonNullableType(ck.getTypeAtLocation(x)), m.prog.typeEnv);
+  const kindOf = (x: ts.Expression) => collKindOf(x, env);
   const ofColl = (c: Val, at: ts.Expression, method: string | null): { v: Val; coll?: Val } => {
     const C = paren(c.code);
     if (c.type.k === "opt") fail(at, `\`${nodeText(at, 30)}\` may be null or undefined (iterating it throws in JS): narrow it first`);
@@ -1468,8 +1474,9 @@ function iterated(e: ts.Expression, env: Env, expectedArr?: VType): { v: Val; co
       arity(e0, name, 0, 0);
       return ofColl(expr(recvE, env), recvE, name);
     }
-    const rt = ck.getNonNullableType(ck.getTypeAtLocation(recvE));
-    if (ck.isArrayType(rt) || ck.isTupleType(rt)) fail(e0, `array iterators (keys/values/entries) are not modelled: use the array itself, or xs.map((x, i) => …) for the indices`);
+    const rt0 = tsTypeOf(recvE, env);
+    const rt = rt0 && ck.getNonNullableType(rt0);
+    if (rt && (ck.isArrayType(rt) || ck.isTupleType(rt))) fail(e0, `array iterators (keys/values/entries) are not modelled: use the array itself, or xs.map((x, i) => …) for the indices`);
   }
   if (kindOf(e0)) return ofColl(expr(e0, env), e0, null);
   const v = expr(e0, env, expectedArr);
@@ -1776,8 +1783,9 @@ function call(c: ts.CallExpression, env: Env, expected?: VType): Val {
     }
     // an iterator (`m.keys()`, `s.values()`, …) is only consumed at once (see `iterated`)
     if (ITER_METHODS.has(mname)) {
-      const rt = m.checker.getNonNullableType(m.checker.getTypeAtLocation(objE));
-      if (collectionKind(rt, m.prog.typeEnv) || m.checker.isArrayType(rt) || m.checker.isTupleType(rt)) fail(c, ITER_MSG(nodeText(c, 40)));
+      const rt0 = tsTypeOf(objE, env);
+      const rt = rt0 && m.checker.getNonNullableType(rt0);
+      if (rt && (collectionKind(rt, m.prog.typeEnv) || m.checker.isArrayType(rt) || m.checker.isTupleType(rt))) fail(c, ITER_MSG(nodeText(c, 40)));
     }
     const obj = expr(objE, env);
     if (obj.type.k === "arr") return arrayMethod(mname, obj, c, env, expected);
@@ -2921,8 +2929,9 @@ function exprStatement(e: ts.Expression, env: Env, bc: BlockCtx, rest: (e: Env) 
     }
   }
   // `n.set(k, v)` / `n.add(x)` / `n.delete(k)` / `n.clear()` on a fresh local Map / Set
-  if (ts.isPropertyAccessExpression(callee) && MUTATORS.has(callee.name.text)) {
+  if (ts.isPropertyAccessExpression(callee) && (MUTATORS.has(callee.name.text) || callee.name.text === "forEach")) {
     const kind = collectionKind(m.checker.getNonNullableType(m.checker.getTypeAtLocation(callee.expression)), m.prog.typeEnv);
+    if (kind && callee.name.text === "forEach") fail(e, `${kind === "map" ? "Map" : "Set"}.forEach is not supported: write for (const ${kind === "map" ? "[k, v]" : "x"} of ${nodeText(callee.expression, 30)}) { … }`);
     if (kind) return mutateLocal(e, callee, kind, env, rest);
   }
   if (ts.isPropertyAccessExpression(callee) && ["push", "pop", "shift", "unshift", "splice", "sort", "reverse", "fill", "copyWithin", "set", "delete", "add", "clear"].includes(callee.name.text)) {

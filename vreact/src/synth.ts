@@ -37,7 +37,7 @@ import { loadConfig } from "./cli.ts";
 import { translate, overrideHost, moduleNs, type Config, type TranslateResult } from "./module.ts";
 import { runLake, findMarkers, judge, type Verdict } from "./lean.ts";
 import { Program, ModCtx, type HoleEnv } from "./ctx.ts";
-import { type VType, type Field, T, typeOfNode, typeOfDecl, showType, sharedFields } from "./types.ts";
+import { type VType, type Field, T, typeOfNode, typeOfDecl, showType, sharedFields, collectionTypeArgs } from "./types.ts";
 import { specFn, narrowingAt, remainingAt } from "./translate.ts";
 import { baseEnv } from "./component.ts";
 import { VtsError, capitalize } from "./util.ts";
@@ -128,7 +128,7 @@ function isAtomic(code: string): boolean {
   const e = st.expression.expression;
   if (e.getText(sf) !== code) return false;
   const K = ts.SyntaxKind;
-  return [K.Identifier, K.PropertyAccessExpression, K.ElementAccessExpression, K.CallExpression, K.NumericLiteral, K.StringLiteral, K.NoSubstitutionTemplateLiteral, K.ArrayLiteralExpression, K.TrueKeyword, K.FalseKeyword, K.NullKeyword, K.ParenthesizedExpression].includes(e.kind);
+  return [K.Identifier, K.PropertyAccessExpression, K.ElementAccessExpression, K.CallExpression, K.NewExpression, K.NumericLiteral, K.StringLiteral, K.NoSubstitutionTemplateLiteral, K.ArrayLiteralExpression, K.TrueKeyword, K.FalseKeyword, K.NullKeyword, K.ParenthesizedExpression].includes(e.kind);
 }
 
 /** The text that replaces a hole: the candidate, parenthesized when precedence requires it. */
@@ -226,6 +226,13 @@ function annotateOpt(t: VType, tt: ts.Type | undefined, checker: ts.TypeChecker,
     annotateOpt(t.elem, checker.getNonNullableType(tt), checker);
   } else if (t.k === "arr") {
     annotateOpt(t.elem, checker.getIndexTypeOfType(tt, ts.IndexKind.Number), checker);
+  } else if (t.k === "map") {
+    // (keys are never optional; a value may have optional parts)
+    const args = collectionTypeArgs(tt, checker);
+    if (args?.length === 2) annotateOpt(t.val, args[1], checker);
+  } else if (t.k === "tuple" && checker.isTupleType(tt)) {
+    const args = checker.getTypeArguments(tt as ts.TypeReference);
+    t.elems.forEach((e, i) => annotateOpt(e, args[i], checker));
   }
 }
 
@@ -482,6 +489,16 @@ class Enumerator {
     if (t.k === "union") for (const v of reg.union(t).variants) for (const f of v.fields) this.register(f.type);
     if (t.k === "arr" || t.k === "opt") this.register(t.elem);
     if (t.k === "arr") this.register(T.int);
+    // Map / Set: their keys, values and elements, `size` and `has`
+    if (t.k === "map") {
+      this.register(t.key);
+      this.register(t.val);
+    }
+    if (t.k === "set") this.register(t.elem);
+    if (t.k === "map" || t.k === "set") {
+      this.register(T.int);
+      this.register(T.bool);
+    }
   }
   terms(t: VType, size: number): Atom[] {
     const k = key(t);
@@ -520,6 +537,11 @@ class Enumerator {
       }
       case "arr":
         return ["[]"];
+      // (typed by the hole's context: its expected type, which TypeScript infers the arguments from)
+      case "map":
+        return ["new Map()"];
+      case "set":
+        return ["new Set()"];
       default:
         return [];
     }
@@ -570,6 +592,7 @@ class Enumerator {
         }
         for (const [i, j] of splits(size - 1, 2)) for (const a of this.terms(T.int, i)) for (const b of this.terms(T.int, j)) if (a.code < b.code) push(`${a.code} + ${b.code}`);
         for (const [tk, tt] of this.types) if (tt.k === "arr") for (const a of this.terms(tt, size - 1)) if (!a.code.includes("=>")) push(`${a.code}.length`);
+        for (const [, tt] of this.types) if (tt.k === "map" || tt.k === "set") for (const a of this.terms(tt, size - 1)) push(`${wrap(a.code)}.size`);
         break;
       }
       case "bool": {
@@ -582,6 +605,11 @@ class Enumerator {
               if (pt.k === "int") push(`${wrap(a.code)} < ${wrap(b.code)}`);
             }
           }
+          // m.has(k), s.has(x)
+          for (const [, tt] of this.types) {
+            if (tt.k !== "map" && tt.k !== "set") continue;
+            for (const c of this.terms(tt, i)) for (const k of this.terms(tt.k === "map" ? tt.key : tt.elem, j)) push(`${wrap(c.code)}.has(${k.code})`);
+          }
         }
         break;
       }
@@ -591,6 +619,33 @@ class Enumerator {
       }
       case "opt": {
         for (const a of this.terms(t.elem, size - 1)) push(a.code);
+        // m.get(k): undefined for a missing key
+        if ((t as OptT).absent !== "null") {
+          for (const [, tt] of this.types) {
+            if (tt.k !== "map" || key(tt.val) !== key(t.elem)) continue;
+            for (const [i, j] of splits(size - 1, 2)) for (const m of this.terms(tt, i)) for (const k of this.terms(tt.key, j)) push(`${wrap(m.code)}.get(${k.code})`);
+          }
+        }
+        break;
+      }
+      case "map": {
+        // a pure update of a fresh copy: new Map(m).set(k, v)
+        for (const [i, j, l] of splits(size - 1, 3)) {
+          for (const m of this.terms(t, i)) {
+            if (m.code.startsWith("new Map()")) continue;
+            for (const k of this.terms(t.key, j)) for (const v of this.terms(t.val, l)) push(`new Map(${m.code}).set(${k.code}, ${v.code})`);
+          }
+        }
+        break;
+      }
+      case "set": {
+        // new Set(s).add(x)
+        for (const [i, j] of splits(size - 1, 2)) {
+          for (const s of this.terms(t, i)) {
+            if (s.code.startsWith("new Set()")) continue;
+            for (const x of this.terms(t.elem, j)) push(`new Set(${s.code}).add(${x.code})`);
+          }
+        }
         break;
       }
       case "rec": {
@@ -671,6 +726,14 @@ class Enumerator {
         }
         // [e]
         for (const e of this.terms(E, size - 1)) push(`[${e.code}]`);
+        // [...m.keys()], [...m.values()], [...s]
+        for (const [, tt] of this.types) {
+          if (tt.k === "map") {
+            if (key(tt.key) === key(E)) for (const m of this.terms(tt, size - 1)) push(`[...${wrap(m.code)}.keys()]`);
+            if (key(tt.val) === key(E)) for (const m of this.terms(tt, size - 1)) push(`[...${wrap(m.code)}.values()]`);
+          }
+          if (tt.k === "set" && key(tt.elem) === key(E)) for (const s of this.terms(tt, size - 1)) push(`[...${s.code}]`);
+        }
         if (E.k === "rec" && this.lambdaDepth === 0) {
           const fields = reg.rec(E);
           const keys = fields.filter((f) => ["int", "str", "enum"].includes(f.type.k));
@@ -803,9 +866,45 @@ function gen(t: VType, prog: Program, pools: Pools, depth = 0): unknown {
       }
       return xs;
     }
+    case "map": {
+      // distinct keys (SameValueZero, as the Map compares them), in a random insertion order
+      const m = new Map<unknown, unknown>();
+      const n = depth > 2 ? 0 : rnd(4);
+      for (let i = 0; i < n * 2 && m.size < n; i++) {
+        const k = gen(t.key, prog, pools, depth + 1);
+        if (m.has(k)) continue;
+        const v = gen(t.val, prog, pools, depth + 1);
+        // values keyed by their own id (a common invariant: m.get(k).id === k)
+        if (v && typeof v === "object" && "id" in (v as object) && typeof (v as Record<string, unknown>).id === typeof k && Math.random() < 0.9) (v as Record<string, unknown>).id = k;
+        m.set(k, v);
+      }
+      // sometimes move an entry to the end (delete then set), so the order is not the key order
+      if (m.size > 1 && Math.random() < 0.3) {
+        const [k, v] = [...m.entries()][0];
+        m.delete(k);
+        m.set(k, v);
+      }
+      return m;
+    }
+    case "set": {
+      const s = new Set<unknown>();
+      const n = depth > 2 ? 0 : rnd(4);
+      for (let i = 0; i < n * 2 && s.size < n; i++) s.add(gen(t.elem, prog, pools, depth + 1));
+      return s;
+    }
+    case "num":
+    case "unit":
+    case "void":
+    case "node":
+    case "fn":
     default:
       return undefined;
   }
+}
+
+/** JSON for counterexample messages: Maps and Sets as their entries (JSON.stringify prints `{}`), undefined spelled out. */
+function show(x: unknown): string {
+  return JSON.stringify(x, (_k, v) => (v instanceof Map ? { Map: [...v.entries()] } : v instanceof Set ? { Set: [...v] } : v === undefined ? "undefined" : v)) ?? "undefined";
 }
 
 /* ───────────────────────── running candidates ───────────────────────── */
@@ -934,8 +1033,8 @@ function makeRunner(sb: Sandbox, target: string, fname: string, paramTypes: VTyp
             continue;
           }
           samples.unshift(samples.splice(i, 1)[0]);
-          if ((e as Error)?.constructor?.name === "PreconditionFailed") return { ok: false, valid, why: `a call violates a precondition on ${JSON.stringify(args)}`, cat: "a call violates a precondition" };
-          return { ok: false, valid, why: `throws on ${JSON.stringify(args)}: ${(e as Error)?.message}`, cat: "throws" };
+          if ((e as Error)?.constructor?.name === "PreconditionFailed") return { ok: false, valid, why: `a call violates a precondition on ${show(args)}`, cat: "a call violates a precondition" };
+          return { ok: false, valid, why: `throws on ${show(args)}: ${(e as Error)?.message}`, cat: "throws" };
         } finally {
           g.__VREACT_TEST__ = undefined;
           g[OWN_ENSURES] = undefined;
@@ -958,7 +1057,7 @@ function makeRunner(sb: Sandbox, target: string, fname: string, paramTypes: VTyp
         valid++;
         if (verdict === "fail") {
           samples.unshift(samples.splice(i, 1)[0]); // counterexample first next time
-          return { ok: false, valid, why: `postcondition fails on ${JSON.stringify(args)} ↦ ${JSON.stringify(r)}`, cat: "postcondition fails" };
+          return { ok: false, valid, why: `postcondition fails on ${show(args)} ↦ ${show(r)}`, cat: "postcondition fails" };
         }
       }
       if (valid > 0) return { ok: true, valid };
@@ -1182,7 +1281,7 @@ export async function synthCommand(root: string, files: string[], opts: { write?
   const program = ts.createProgram(cfg.files, options, overrideHost(options, new Map([[target, base]])));
   const checker = program.getTypeChecker();
   // (the translator's module names, so that type names agree with the translation's)
-  const prog = new Program(checker, root, (sf) => moduleNs(cfg.srcDir, sf.fileName), (sf) => program.isSourceFileDefaultLibrary(sf));
+  const prog = new Program(checker, root, (sf) => moduleNs(cfg.srcDir, sf.fileName), program);
   const sf = program.getSourceFile(target)!;
   const env = baseEnv(new ModCtx(prog, "VTS.Synth", sf, [], { n: 0 }));
   const isTrusted = (n: ts.Node) => ts.getJSDocTags(n).some((t) => t.tagName.text === "trusted");

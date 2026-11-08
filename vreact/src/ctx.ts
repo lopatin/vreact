@@ -159,14 +159,15 @@ export class Program {
   modNs = new Map<string, string>();
   /** set by `vreact synth`: every translation of a `hole<T>()` kept in the output, with its environment (narrowing) */
   holeEnvs?: HoleEnv[];
-  constructor(checker: ts.TypeChecker, root: string, nsOf: (sf: ts.SourceFile) => string, isLib: (sf: ts.SourceFile) => boolean) {
+  constructor(checker: ts.TypeChecker, root: string, nsOf: (sf: ts.SourceFile) => string, program: ts.Program) {
     this.checker = checker;
     this.root = root;
     this.typeEnv = {
       checker,
       reg: this.reg,
       nsOf,
-      isLib,
+      fileKind: (sf) =>
+        program.isSourceFileDefaultLibrary(sf) ? "lib" : program.isSourceFileFromExternalLibrary(sf) || (sf.isDeclarationFile && /[\\/]node_modules[\\/]/.test(sf.fileName)) ? "external" : "user",
       isSpecInt: (node) => {
         if (node.typeName.getText() !== "int") return false;
         let sym = checker.getSymbolAtLocation(node.typeName);

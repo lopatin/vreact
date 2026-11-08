@@ -809,6 +809,9 @@ export function jsxNode(e0: ts.Expression, env: Env): string {
       if (v.type.elem.k === "str") return `(match ${v.code} with | some s => VReact.VNode.text s | none => VReact.VNode.empty)`;
       if (["int", "enum"].includes(v.type.elem.k)) return `(match ${v.code} with | some s => VReact.VNode.text (VReact.JS.str s) | none => VReact.VNode.empty)`;
       fail(e, `cannot render ${showType(v.type)}`);
+    case "map":
+    case "set":
+      fail(e, `a ${v.type.k === "map" ? "Map" : "Set"} is not a valid React child (React renders it as a list of its ${v.type.k === "map" ? "entries" : "elements"}, without keys, and warns): render a keyed list, e.g. {[...${nodeText(e, 20)}.values()].map((x) => <li key={…}>…</li>)}`);
     default:
       fail(e, `cannot render a value of type ${showType(v.type)} (arrays need .map with keys)`);
   }

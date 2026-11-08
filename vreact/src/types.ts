@@ -291,12 +291,14 @@ export function nullShape(t: ts.Type, vt: VType, ck: ts.TypeChecker): string | n
 const COLLECTION_NAMES = new Set(["Map", "ReadonlyMap", "Set", "ReadonlySet"]);
 
 /**
- * Whether every declaration of a symbol is in a TypeScript default library file (`lib.*.d.ts`):
- * the builtins `Map`, `Set`, `Array`, … — not a user declaration shadowing or augmenting one.
+ * Whether a symbol is a builtin of TypeScript's library (`Map`, `Set`, `Array`, …): declared in a
+ * default library file (`lib.*.d.ts`), and not declared or augmented by the project's own sources
+ * (a user `Map`, or `declare global { interface Map<K, V> … }`).  Declarations of installed
+ * packages (`@types/node` adds members to `Array`) are part of the environment, as the library is.
  */
 export function isLibSymbol(sym: ts.Symbol | undefined, env: TypeEnv): boolean {
   const ds = sym?.declarations;
-  return !!ds && ds.length > 0 && ds.every((d) => env.isLib(d.getSourceFile()));
+  return !!ds && ds.some((d) => env.fileKind(d.getSourceFile()) === "lib") && ds.every((d) => env.fileKind(d.getSourceFile()) !== "user");
 }
 
 /**
@@ -485,8 +487,11 @@ export interface TypeEnv {
   nsOf(sf: ts.SourceFile): string;
   /** Whether a type reference denotes `int` from vreact/spec. */
   isSpecInt(node: ts.TypeReferenceNode): boolean;
-  /** Whether a source file is one of TypeScript's default library files (`lib.*.d.ts`). */
-  isLib(sf: ts.SourceFile): boolean;
+  /**
+   * Where a source file comes from: TypeScript's default library (`lib.*.d.ts`), an installed
+   * package (`node_modules`), or the project.
+   */
+  fileKind(sf: ts.SourceFile): "lib" | "external" | "user";
 }
 
 export function typeOfNode(node: ts.TypeNode, env: TypeEnv, hint: string): VType {

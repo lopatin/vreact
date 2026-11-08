@@ -286,6 +286,18 @@ const cases: Record<string, () => Promise<void>> = {
     check("Sx-dedup: no candidate checked twice", checked.length >= 2 && new Set(checked).size === checked.length, `${checked.length} checks`);
     check("Sx-dedup: above proved", solutions(by("above"))[0] === "a + b + 1 + 1", String(solutions(by("above"))[0]));
   },
+  // Map / Set: random Maps and Sets as inputs, pure updates of fresh copies, counterexamples that show them
+  async "Mx-update"() {
+    const dir = project("Mx-update");
+    // (the debug output prints the first tested candidates' counterexamples)
+    process.env.VREACT_SYNTH_DEBUG = "1";
+    const { by, out } = await synth(dir, "src/m.ts", { write: true }).finally(() => delete process.env.VREACT_SYNTH_DEBUG);
+    check("Mx-update: setCount", solutions(by("setCount"))[0] === "new Map(m).set(k, v)", String(solutions(by("setCount"))[0]));
+    check("Mx-update: addTag", solutions(by("addTag"))[0] === "new Set(s).add(t)", String(solutions(by("addTag"))[0]));
+    check("Mx-update: count", solutions(by("count"))[0] === "m.size", String(solutions(by("count"))[0]));
+    check("Mx-update: counterexamples show Maps", /postcondition fails on \[\{"Map":\[/.test(out), out.split("\n").find((l) => l.includes("postcondition fails on")) ?? "(no counterexample)");
+    check("Mx-update: written program translates", translate(loadConfig(dir)).ok);
+  },
 };
 
 for (const [name, run] of Object.entries(cases)) {
