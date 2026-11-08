@@ -23,6 +23,7 @@ import { LEAN_TYPE_AUX, LEAN_ROOT_NAMES } from "./leanNames.ts";
 import { expr, prop, propAll, valueBlock, specFn, symbolOf, bindParam, typeOf, checkParamAnnotation } from "./translate.ts";
 import { translateComponent, compSignature, baseEnv } from "./component.ts";
 import { leanDecls } from "./lean.ts";
+import { manifestMatches } from "./ide.ts";
 
 export interface Config {
   root: string;
@@ -449,17 +450,7 @@ export function translate(cfg: Config): TranslateResult {
   // `.vreact/`) still names that VReact: lake would keep building against it, so it is removed
   // and lake writes a new one from the lakefile
   const manifest = path.join(cfg.outDir, "lake-manifest.json");
-  if (fs.existsSync(manifest)) {
-    let same = false;
-    try {
-      const m = JSON.parse(fs.readFileSync(manifest, "utf8")) as { packages?: { name?: string; dir?: string }[] };
-      const dep = (m.packages ?? []).find((p) => p.name === "VReact");
-      same = !!dep?.dir && fs.realpathSync(path.resolve(cfg.outDir, dep.dir)) === fs.realpathSync(cfg.leanLib);
-    } catch {
-      same = false;
-    }
-    if (!same) fs.rmSync(manifest, { force: true });
-  }
+  if (fs.existsSync(manifest) && !manifestMatches(manifest, { VReact: cfg.leanLib })) fs.rmSync(manifest, { force: true });
   res.ok = true;
   return res;
 }
