@@ -1,6 +1,6 @@
 // Root component: demo data for a hypothetical index futures contract "DIX" and the chain.
 // Prices are ticks of 0.05; theoretical values were computed offline (Black-76) and are data.
-import { useState, useEffect } from "react";
+import { useReducer, useEffect } from "react";
 import { assert, ensures, implies, invariant, type int } from "vreact/spec";
 import { type Expiry, type Quote, validChain } from "./model";
 import { OptionsChain } from "./OptionsChain";
@@ -112,25 +112,58 @@ export function stepFeed(f: Feed): Feed {
   return { offset: next > MAX_MOVE || next < -MAX_MOVE ? f.offset - move : next, seed: seed };
 }
 
+/** The simulation: the feed, and the two controls that drive it. One record, one reducer. */
+export type Sim = { readonly feed: Feed; readonly paused: boolean; readonly rally: boolean };
+
+export type SimAction =
+  | { readonly kind: "tick" } // the 0.8 s random walk
+  | { readonly kind: "rallyTick" } // the 0.2 s climb
+  | { readonly kind: "togglePause" }
+  | { readonly kind: "toggleRally" };
+
+/** The feed is exactly the same. */
+export function sameFeed(a: Feed, b: Feed): boolean {
+  return a.offset === b.offset && a.seed === b.seed;
+}
+
+/** Every change to the simulation goes through here, so its contract holds for every update. */
+export function simReducer(s: Sim, a: SimAction): Sim {
+  ensures((r: Sim) => implies(validFeed(s.feed), validFeed(r.feed)));
+  // while paused, nothing moves the feed
+  ensures((r: Sim) => implies(s.paused, sameFeed(r.feed, s.feed)));
+  // ... and while running, a tick is one step of the random walk (so "never move" is not a fix)
+  ensures((r: Sim) => implies(!s.paused && a.kind === "tick", sameFeed(r.feed, stepFeed(s.feed))));
+  // `paused` is checked here, on the state the action is applied to: a tick dispatched just
+  // before the pause can still arrive after it, and the rally has its own interval
+  switch (a.kind) {
+    case "tick":
+      return s.paused ? s : { ...s, feed: stepFeed(s.feed) };
+    case "rallyTick":
+      return s.paused || s.feed.offset >= MAX_MOVE ? s : { ...s, feed: { ...s.feed, offset: s.feed.offset + 1 } };
+    case "togglePause":
+      return { ...s, paused: !s.paused };
+    case "toggleRally":
+      return { ...s, rally: !s.rally };
+  }
+}
+
 export function App() {
-  const [feed, setFeed] = useState<Feed>({ offset: 0, seed: 1 });
-  const [paused, setPaused] = useState<boolean>(false);
-  const [rally, setRally] = useState<boolean>(false);
-  invariant(validFeed(feed));
-  // every 0.8 s the futures move by -2..+2 ticks; the update reads the state it is applied to
+  const [sim, dispatch] = useReducer(simReducer, { feed: { offset: 0, seed: 1 }, paused: false, rally: false });
+  invariant(validFeed(sim.feed));
+  // every 0.8 s the futures move by -2..+2 ticks
   useEffect(() => {
-    if (paused) return;
-    const id = setInterval(() => setFeed((f) => stepFeed(f)), 800);
+    if (sim.paused) return;
+    const id = setInterval(() => dispatch({ kind: "tick" }), 800);
     return () => clearInterval(id);
-  }, [paused]);
-  // rally: the futures also climb one tick every 0.2 s, up to the top of the band. The limit is
-  // checked inside the update, on the state it is applied to: a tick can run after the feed
-  // interval (or an earlier tick) has moved the offset, before this effect is re-run.
+  }, [sim.paused]);
+  // rally: the futures also climb one tick every 0.2 s, up to the top of the band (no interval
+  // while paused; simReducer ignores a late tick anyway)
   useEffect(() => {
-    if (!rally || feed.offset >= MAX_MOVE) return;
-    const id = setInterval(() => setFeed((f) => (f.offset < MAX_MOVE ? { ...f, offset: f.offset + 1 } : f)), 200);
+    if (!sim.rally || sim.paused || sim.feed.offset >= MAX_MOVE) return;
+    const id = setInterval(() => dispatch({ kind: "rallyTick" }), 200);
     return () => clearInterval(id);
-  }, [rally, feed]);
+  }, [sim.rally, sim.paused, sim.feed.offset]);
+  const feed = sim.feed;
   const offset = feed.offset;
   const expiries = moveFutures(EXPIRIES, offset);
   return (
@@ -142,8 +175,8 @@ export function App() {
           {offset >= 0 ? "+" : ""}
           {offset} ticks
         </p>
-        <button onClick={() => setPaused(!paused)}>{paused ? "Resume feed" : "Pause feed"}</button>
-        <button onClick={() => setRally(!rally)}>{rally ? "Stop rally" : "Rally"}</button>
+        <button onClick={() => dispatch({ kind: "togglePause" })}>{sim.paused ? "Resume feed" : "Pause feed"}</button>
+        <button onClick={() => dispatch({ kind: "toggleRally" })}>{sim.rally ? "Stop rally" : "Rally"}</button>
       </header>
       <OptionsChain expiries={expiries} />
     </div>
