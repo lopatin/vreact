@@ -38,9 +38,107 @@ export function relLoc(node: ts.Node, root: string): string {
   return `${path.relative(root, l.file)}:${l.line}:${l.col}`;
 }
 
+/**
+ * The source text of `node` on one line: runs of whitespace become one space, except inside
+ * string, template and regular expression literals, whose contents stay exact (a line break of a
+ * template literal is shown as `\n`, a line continuation `\` + line break is left out: the same
+ * value).
+ */
+export function flatText(node: ts.Node): string {
+  const sf = node.getSourceFile();
+  const base = node.getStart(sf);
+  const text = node.getText(sf);
+  const lits: [number, number][] = [];
+  const visit = (n: ts.Node) => {
+    if (ts.isStringLiteral(n) || ts.isNoSubstitutionTemplateLiteral(n) || ts.isRegularExpressionLiteral(n) || ts.isTemplateHead(n) || ts.isTemplateMiddle(n) || ts.isTemplateTail(n)) {
+      lits.push([n.getStart(sf) - base, n.getEnd() - base]);
+      return;
+    }
+    ts.forEachChild(n, visit);
+  };
+  visit(node);
+  let out = "";
+  let at = 0;
+  for (const [s, e] of lits) {
+    out += text.slice(at, s).replace(/\s+/g, " ") + text.slice(s, e).replace(/\\\r?\n/g, "").replace(/\r?\n/g, "\\n");
+    at = e;
+  }
+  return out + text.slice(at).replace(/\s+/g, " ");
+}
+
 export function nodeText(node: ts.Node, max = 80): string {
-  const t = node.getText().replace(/\s+/g, " ");
+  const t = flatText(node);
   return t.length > max ? t.slice(0, max - 1) + "…" : t;
+}
+
+/** `t` in at most `max` characters: its start and its end around `…`, cut after/before a space, comma or parenthesis when one is near. */
+export function cutMiddle(t: string, max: number): string {
+  if (t.length <= max) return t;
+  if (max < 5) return "…";
+  const k = Math.ceil((max - 1) / 2);
+  const j = max - 1 - k;
+  let left = t.slice(0, k);
+  for (let p = k; p > 0 && p >= k - 10; p--)
+    if (" ,(".includes(t[p - 1])) {
+      left = t.slice(0, p).trimEnd();
+      break;
+    }
+  let right = t.slice(t.length - j);
+  for (let q = t.length - j; q < t.length && q <= t.length - j + 10; q++)
+    if (" ,)".includes(t[q])) {
+      right = t.slice(q).trimStart();
+      break;
+    }
+  return `${left}…${right}`;
+}
+
+/**
+ * The text of a contract (a postcondition, an assertion, a fact) in an obligation's description:
+ * whole when it has at most `max` characters. A longer one keeps its outer shape: the arguments
+ * of its outer call (`implies(a, b)`, `forall(lo, hi, f)`, `xs.every(f)`) or the operands of its
+ * outer operator (`a && b && c`) are shown in turn, the short ones whole and each longer one by
+ * its start and its end (`cutMiddle`), so that every part, and the end of each, stays in view;
+ * anything else by its start and its end.
+ */
+export function exprText(node: ts.Node, max = 120): string {
+  const t = flatText(node);
+  if (t.length <= max) return t;
+  let open = "";
+  let close = "";
+  let sep = ", ";
+  let parts: ts.Node[] = [];
+  if (ts.isCallExpression(node) && node.arguments.length) {
+    open = `${flatText(node.expression)}(`;
+    close = ")";
+    parts = [...node.arguments];
+  } else if (ts.isBinaryExpression(node)) {
+    // a chain of one operator (`a && b && c`) as its operands
+    const op = node.operatorToken.kind;
+    const operands = (e: ts.Expression): ts.Expression[] => (ts.isBinaryExpression(e) && e.operatorToken.kind === op ? [...operands(e.left), ...operands(e.right)] : [e]);
+    sep = ` ${node.operatorToken.getText()} `;
+    parts = operands(node);
+  }
+  const room = max - open.length - close.length - sep.length * (parts.length - 1);
+  if (!parts.length || room < 8 * parts.length) return cutMiddle(t, max);
+  // the short parts whole, the others sharing what is left equally
+  const texts = parts.map((p) => flatText(p));
+  const budget = texts.map(() => 0);
+  let left = room;
+  let rest = texts.map((_, i) => i);
+  while (rest.length) {
+    const each = Math.floor(left / rest.length);
+    const small = rest.filter((i) => texts[i].length <= each);
+    if (!small.length) {
+      for (const i of rest) budget[i] = each;
+      break;
+    }
+    for (const i of small) {
+      budget[i] = texts[i].length;
+      left -= texts[i].length;
+    }
+    rest = rest.filter((i) => !small.includes(i));
+  }
+  return open + texts.map((x, i) => cutMiddle(x, budget[i])).join(sep) + close;
 }
 
 /**
@@ -51,7 +149,7 @@ export function nodeText(node: ts.Node, max = 80): string {
  * all; anything else cut at `max`.
  */
 export function argText(node: ts.Node, max = 40, each = 24): string {
-  const t = node.getText().replace(/\s+/g, " ");
+  const t = flatText(node);
   if (t.length <= max) return t;
   const cut = (s: string) => (s.length > 160 ? s.slice(0, 159) + "…" : s);
   if (ts.isObjectLiteralExpression(node))

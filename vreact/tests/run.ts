@@ -20,10 +20,12 @@ import fs from "node:fs";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import ts from "typescript";
 import { loadConfig, verify, reportFrom, CAUSE_LABEL, type Report } from "../src/cli.ts";
 import { translate, moduleNs } from "../src/module.ts";
 import { parseMessages, judge, findMarkers, leanDecls, leanBin, runLake, summarizeLeanError } from "../src/lean.ts";
 import { editorProject, LAKEFILE_MARKER } from "../src/ide.ts";
+import { argText, nodeText, exprText } from "../src/util.ts";
 import { honestyChecks } from "./honesty.ts";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -347,6 +349,32 @@ console.log("message attribution (judge)");
   if (summarizeLeanError(short, 18) !== short) why.push("a goal that fits was changed");
   if (!why.length) ok("summarizeLeanError: contract instances, long definitions and long hypotheses become one line each, the hypotheses next to the conclusion stay whole, the left-out ones are named; after a timeout only the case's goal; a goal that fits is unchanged");
   else bad("summarizeLeanError", why.join("; "));
+}
+
+// the source text in descriptions: literal contents exact (whitespace collapsed only outside
+// string, template and regular expression literals); a contract whole up to 120 characters, a
+// longer one by the parts of its outer call or operator, each with its start and its end
+{
+  const src = 'f(\n  { kind: "place",\n    note: "a   b" },\n  `x   y\n  ${a   +  b}  z`,\n  /a  b/.test(s),\n' +
+    '  forall(0, n, (i) => (r.lo <= i && i < r.hi) === inWindow(i, atm, levels)) && r.size === ks.length && sameView(u, r),\n' +
+    '  implies(u.orders.has(id) && price > 0 && somethingElseThatIsLong(u, id, price), repriced(u.orders.get(id), r.orders.get(id), price, extraArgument)),\n' +
+    '  sameView(u, { ...r, collapsed: u.collapsed, focus: u.focus, watch: u.watch, held: u.held }) && sameMembersExcept(u.collapsed, r.collapsed, id) && r.nextId === u.nextId\n);';
+  const sf = ts.createSourceFile("t.ts", src, ts.ScriptTarget.Latest, true);
+  const [obj, tpl, re, chain, imp, conj] = ((sf.statements[0] as ts.ExpressionStatement).expression as ts.CallExpression).arguments;
+  const why: string[] = [];
+  const want = (what: string, got: string, exp: string) => { if (got !== exp) why.push(`${what}: ${JSON.stringify(got)}`); };
+  want("nodeText of an object", nodeText(obj), '{ kind: "place", note: "a   b" }');
+  want("argText of an object", argText(obj, 20), '{ kind: "place", note: "a   b" }');
+  want("a template literal", nodeText(tpl), "`x   y\\n  ${a + b}  z`");
+  want("a regular expression", nodeText(re), "/a  b/.test(s)");
+  want("a contract that fits", exprText(chain), "forall(0, n, (i) => (r.lo <= i && i < r.hi) === inWindow(i, atm, levels)) && r.size === ks.length && sameView(u, r)");
+  for (const [what, e, end] of [["implies", imp, ", price, extraArgument))"], ["a conjunction", conj, " && r.nextId === u.nextId"]] as [string, ts.Node, string][]) {
+    const t = exprText(e);
+    if (t.length > 120 || !t.endsWith(end) || !t.includes("…")) why.push(`${what} of ${nodeText(e, 400).length} characters: ${JSON.stringify(t)}`);
+  }
+  if (!exprText(imp).startsWith("implies(u.orders.has(id) && price")) why.push(`implies: the start: ${JSON.stringify(exprText(imp))}`);
+  if (!why.length) ok("descriptions: literal contents exact; a contract whole up to 120 characters, a longer one by its parts, each with its start and end");
+  else bad("descriptions", why.join("; "));
 }
 
 // declarations of a generated file: escaped keywords (`end'`, `namespace'`, `def'`) that start a

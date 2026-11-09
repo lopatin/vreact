@@ -13,7 +13,7 @@
 import ts from "typescript";
 import { T, type VType, type TypeEnv, type Field, type Param, sameType, showType, leanType, sharedFields, type Variant, typeOfNode, kindsOfType, nullShape, checkValueType, propertyNameText, propertyName, isEqType, mentionsTVar, substType, type TField, type NamedType, collectionKind, collectionTypeArgs, isLibSymbol, mapType, setType, nonValuePart } from "./types.ts";
 import { type Env, type Val, ModCtx, type Binding, type StateVar, type CompCtx, type HandlerAcc, type FnInfo, type CompInfo, type Global, type Narrowed, type DomSite, bind, extend, freshLocal, refSymbol } from "./ctx.ts";
-import { VtsError, fail, leanField, leanAccessor, leanIdent, leanStr, jsStr, leanInt, paren, nodeText, argText, capitalize, relLoc, decodeJsxEntities } from "./util.ts";
+import { VtsError, fail, leanField, leanAccessor, leanIdent, leanStr, jsStr, leanInt, paren, nodeText, argText, exprText, capitalize, relLoc, decodeJsxEntities } from "./util.ts";
 
 /* ───────────────────────────── helpers ───────────────────────────── */
 
@@ -3943,7 +3943,7 @@ function exprStatement(e: ts.Expression, env: Env, bc: BlockCtx, rest: (e: Env) 
       case "assert": {
         const p = prop(e.arguments[0], env);
         const h = m.fresh("hassert");
-        const ob = m.ob(e, "assert", `assertion ${nodeText(e.arguments[0])}`);
+        const ob = m.ob(e, "assert", `assertion ${exprText(e.arguments[0])}`);
         return `(have ${h} : ${p} := ${ob};\n${withFact(h, env, bc, rest)})`;
       }
       case "assume": {

@@ -19,7 +19,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { Program, ModCtx, SPEC_MODULE, moduleFile, isErasedType, type Obligation, type FnInfo, type CompInfo, type Global, type ConstInfo, type HoleEnv } from "./ctx.ts";
 import { T, type VType, typeOfNode, typeOfDecl, emitTypeDecl, leanType, nonValuePart, checkValueType, registerTypeParams, showType } from "./types.ts";
-import { VtsError, fail, leanIdent, leanField, leanStr, paren, capitalize, nodeText, clashesWithLean } from "./util.ts";
+import { VtsError, fail, leanIdent, leanField, leanStr, paren, capitalize, nodeText, exprText, clashesWithLean } from "./util.ts";
 import { LEAN_TYPE_AUX, LEAN_ROOT_NAMES } from "./leanNames.ts";
 import { expr, prop, propAll, valueBlock, specFn, symbolOf, bindParam, typeOf, checkParamAnnotation, checkNotThisParam } from "./translate.ts";
 import { translateComponent, compSignature, baseEnv } from "./component.ts";
@@ -1443,7 +1443,7 @@ function translateFact(d: ts.VariableDeclaration, info: ConstInfo, k: number, m:
   const stmt = prop(f, env);
   // (`unfold` fails where the statement does not mention the constant)
   const unfold = stmt.includes(info.qname) ? `\n  unfold ${short}` : "";
-  return `/-- fact: ${docText(f, 80)} -/\ntheorem ${name} : ${stmt} := by${unfold}\n  exact ${m.ob(f, "fact", `fact about ${short}: ${nodeText(f, 60)}`)}\n`;
+  return `/-- fact: ${docText(f, 80)} -/\ntheorem ${name} : ${stmt} := by${unfold}\n  exact ${m.ob(f, "fact", `fact about ${short}: ${exprText(f)}`)}\n`;
 }
 
 /**
@@ -1578,7 +1578,7 @@ function translateFunction(fn: ts.FunctionDeclaration, info: FnInfo, m: ModCtx):
       // unfolding once here, then used through E-matching on calls (grind_pattern below)
       // a function whose body still contains hole() has no implementation yet: contract pending
       const pending = hasHole(fn, m);
-      const ob = info.trusted || pending ? "" : m.ob(lam, "postcondition", `postcondition of ${info.name}: ${nodeText(body, 70)}`);
+      const ob = info.trusted || pending ? "" : m.ob(lam, "postcondition", `postcondition of ${info.name}: ${exprText(body)}`);
       // (`unfold` fails where the statement does not mention the function: a contract that does
       // not use its result, e.g. a fact about the arguments)
       const unfold = stmt.includes(call) ? `\n  unfold ${short}` : "";
