@@ -951,7 +951,9 @@ hook rules hold (static checks). For every function: its body is safe and its
   longer has its multi-line contract instances (`hcontract…`, the facts of the
   callees' `ensures`) collapsed into one line that names them, so the short
   hypotheses after them stay in view, and keeps the conclusion `⊢ …` after the
-  `…` that marks the lines left out. Each failed or not-checked obligation is
+  `…` that marks the lines left out; a text with several goals (after a timeout:
+  the goal as stated, then the case that failed) is shortened to the last one,
+  so the hypotheses shown are those of the conclusion shown. Each failed or not-checked obligation is
   listed with its position, its kind (`[precondition]`, `[handler]`, …) and, for
   a failure, a description; an argument in a description is shown whole up to
   40 characters (an action dispatched to a reducer up to 100), a longer object or

@@ -1021,13 +1021,16 @@ export function judge(obligations: Obligation[], messages: LeanMessage[], marker
 
 /**
  * Keep the informative part of a Lean failure (the goal), in at most `maxLines` lines (plus the
- * `…` marker). A message that fits is kept as it is. A longer one is shortened in two ways:
- * the contract instances that span several lines (`hcontract…`, the facts `vreact_contracts`
- * adds for each call of a function with `ensures`: long arithmetic when the callee's body is in
- * scope) become one line that names them, where the first of them was, so the short hypotheses
- * after them — usually the ones that decide the case — stay in view; and the conclusion (the last
- * `⊢ …`) is always kept, after the `…` that marks the lines left out. `--full` prints the message
- * unchanged.
+ * `…` marker). A message that fits is kept as it is. A longer one is shortened in three ways:
+ * a message with several goals (after a timeout: the goal as stated, then the case of it that
+ * failed; several unsolved goals) keeps only the last goal, after the lines before the first one
+ * (what failed), so the hypotheses shown are always those of the conclusion shown; the contract
+ * instances that span several lines (`hcontract…`, the facts `vreact_contracts` adds for each
+ * call of a function with `ensures`: long arithmetic when the callee's body is in scope) become
+ * one line that names them, where the first of them was, so the short hypotheses after them —
+ * usually the ones that decide the case — stay in view; and the conclusion (the last `⊢ …`) is
+ * always kept, after the `…` that marks the lines left out (with up to 2 lines that follow it).
+ * `--full` prints the message unchanged.
  */
 export function summarizeLeanError(text: string, maxLines = 30): string {
   const lines = text.split("\n");
@@ -1036,12 +1039,23 @@ export function summarizeLeanError(text: string, maxLines = 30): string {
   if (kept.length <= maxLines) return kept.join("\n");
   // blocks: a line at column 0 and the indented lines that continue it (a hypothesis `h : …`
   // whose type Lean broke over several lines, the conclusion `⊢ …`)
-  const blocks: string[][] = [];
+  let blocks: string[][] = [];
   for (const l of kept) {
     if (/^\s/.test(l) && blocks.length) blocks[blocks.length - 1].push(l);
     else blocks.push([l]);
   }
   const names = (b: string[]) => /^((?:[^\s:]+ )*[^\s:]+) :(?: |$)/.exec(b[0])?.[1].split(" ") ?? [];
+  const isTarget = (b: string[]) => b[0].startsWith("⊢");
+  // several goals: the last one only (cut anywhere else, the hypotheses of one goal would stand
+  // above the conclusion of another: after a timeout, the goal as stated above the failing case's)
+  const targets = blocks.flatMap((b, i) => (isTarget(b) ? [i] : []));
+  if (targets.length >= 2) {
+    const prev = targets[targets.length - 2];
+    const start = blocks.findIndex((b) => isTarget(b) || names(b).length > 0 || /^case /.test(b[0]));
+    const rest = blocks.slice(prev + 1);
+    const what = /^The goal splits into \d+ cases/.test(rest[0][0]) ? "the goal as stated" : targets.length === 2 ? "an earlier goal" : `${targets.length - 1} earlier goals`;
+    blocks = [...blocks.slice(0, start), [`  … (${what}: --full shows ${targets.length === 2 ? "it" : "them"})`], ...rest];
+  }
   const isContract = (b: string[]) => b.length > 1 && names(b).length > 0 && names(b).every((n) => /^hcontract/.test(n));
   const contracts = blocks.filter(isContract);
   let out: string[][] = blocks;
@@ -1055,11 +1069,14 @@ export function summarizeLeanError(text: string, maxLines = 30): string {
   const flat = out.flat();
   if (flat.length <= maxLines) return flat.join("\n");
   // the conclusion: the last `⊢` block, at most 3 lines
-  const ti = out.map((b) => b[0].startsWith("⊢")).lastIndexOf(true);
+  const ti = out.map(isTarget).lastIndexOf(true);
   if (ti < 0) return flat.slice(0, maxLines).join("\n") + "\n  …";
   const target = out[ti].length > 3 ? [...out[ti].slice(0, 3), "  …"] : out[ti];
+  // what follows the conclusion (after a timeout without a failing case: how far the cases got)
+  const tail = out.slice(ti + 1).flat();
+  const end = tail.length <= 2 ? tail : ["  …"];
   const before = out.slice(0, ti).flat();
-  const room = Math.max(0, maxLines - target.length);
-  if (before.length <= room) return [...before, ...target].join("\n") + (ti < out.length - 1 ? "\n  …" : "");
-  return [...before.slice(0, room), "  …", ...target].join("\n");
+  const room = Math.max(0, maxLines - target.length - end.length);
+  if (before.length <= room) return [...before, ...target, ...end].join("\n");
+  return [...before.slice(0, room), "  …", ...target, ...end].join("\n");
 }
