@@ -345,6 +345,10 @@ console.log("message attribution (judge)");
     ["the case", (o) => o.includes("case h_1.isFalse.isTrue") && o[1] === "  … (the goal as stated: --full shows it)"],
     ["the conclusion cut", (o) => o[o.length - 1] === "  …" && o[o.length - 4].startsWith("⊢ ")],
   ]);
+  // a 4-line hypothesis at the top that frees more lines than needed is left out with the rest
+  const one = ["`grind` failed", "case grind", "h0 :", "  0 ≤ a ∧", "    a < 3 ∧", "    b = 1", ...Array.from({ length: 13 }, (_, i) => `x_${i} : Int`), "⊢ False"].join("\n");
+  const oneOut = summarizeLeanError(one, 18).split("\n");
+  if (oneOut[2] !== "  … (an earlier hypothesis: h0: --full shows it)" || oneOut.length !== 17) why.push(`one left out: ${oneOut.slice(0, 4).join(" / ")}`);
   const short = "`grind` failed\ncase grind.1\ns : Sim\nhcontract :\n  0 ≤ s.feed.seed →\n  0 ≤ 1\n⊢ False";
   if (summarizeLeanError(short, 18) !== short) why.push("a goal that fits was changed");
   if (!why.length) ok("summarizeLeanError: contract instances, long definitions and long hypotheses become one line each, the hypotheses next to the conclusion stay whole, the left-out ones are named; after a timeout only the case's goal; a goal that fits is unchanged");

@@ -1076,7 +1076,7 @@ export function summarizeLeanError(text: string, maxLines = 30): string {
   const head = blocks.slice(0, h0);
   let hyps = blocks.slice(h0, end);
   const rest = blocks.slice(end);
-  const a = (k: number, one: string, many: string) => (k === 1 ? `a ${one}` : `${k} ${many}`);
+  const a = (k: number, one: string, many: string) => (k === 1 ? `${/^[aeiou]/.test(one) ? "an" : "a"} ${one}` : `${k} ${many}`);
   /** `base` with the blocks `picked` as one line that names and counts them, where the first was */
   const collapsed = (base: string[][], picked: string[][], sep: string, one: string, many: string): string[][] => {
     if (!picked.length) return base;
