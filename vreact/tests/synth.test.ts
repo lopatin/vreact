@@ -155,6 +155,20 @@ const cases: Record<string, () => Promise<void>> = {
     check("nosolution: reports size and stop reason", out.includes("up to size 3; stopped: all candidates up to size 3 were tried") && out.includes("no candidate passed the tests") && !out.includes("strengthen") && !out.includes("a Map or Set"), out.split("\n").slice(-4).join(" | "));
     check("nosolution: nothing written", writes.length === 0);
   },
+  // the random tests come from a seeded generator: two runs say the same (the same candidates
+  // tested, the same counterexample), whatever ran before; --seed N picks other inputs
+  async "Sx-seed"() {
+    const runs: string[] = [];
+    for (const seed of [undefined, undefined, 2]) {
+      const dir = project("nosolution");
+      // (a hole searched before, in another run, must not change what this run's tests draw)
+      const { out } = await synth(dir, "src/u.ts", { maxSize: 3, ...(seed === undefined ? {} : { seed }) });
+      runs.push(out.replace(/ in \d+\.\ds,/g, " in …s,"));
+    }
+    const fails = (o: string) => o.split("\n").find((l) => l.includes("most common failure")) ?? "";
+    check("Sx-seed: two runs with the default seed say the same", runs[0] === runs[1] && fails(runs[0]) !== "", fails(runs[0]));
+    check("Sx-seed: --seed 2 is said, and its run reports the same search", runs[2].startsWith("random tests from seed 2\n") && /postcondition fails on \[-?\d+\]/.test(fails(runs[2])), fails(runs[2]));
+  },
   // N25: holes no call shares (switch cases) are searched once each; a hole without candidates
   // backjumps over the holes it does not depend on (before: 3^(n-1) searches of the last hole)
   async "Sx-joint5"() {

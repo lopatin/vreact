@@ -15,7 +15,9 @@
  *   3. Test each candidate by *running the real transpiled JavaScript* on random
  *      inputs: the function's own `requires` filters inputs, its own `ensures`
  *      must hold on the result (counterexample-driven pruning). Inputs that reach
- *      another, still unfilled hole are skipped.
+ *      another, still unfilled hole are skipped. The inputs come from a seeded
+ *      generator (`--seed N`, default 1; one per hole), so a run is reproducible
+ *      up to the time limits.
  *   4. Prove the survivors with Lean, in order. A candidate is reported "proved"
  *      only when Lean elaborated the function and all its postcondition theorems,
  *      no obligation of the function failed, and their axioms contain no sorry.
@@ -860,10 +862,32 @@ function harvest(fn: ts.FunctionDeclaration): Pools {
   return { ints: [...ints].filter((k) => !BASE_INTS.includes(k)), strs: [...strs].filter((s) => !BASE_STRS.includes(s)) };
 }
 
-function rnd(n: number) {
-  return Math.floor(Math.random() * n);
+/**
+ * The random numbers of the tests: a seeded generator (mulberry32), so that a run is
+ * reproducible. Each hole's tests draw from their own generator, seeded with the run's seed
+ * (`--seed N`, default `DEFAULT_SEED`), the function's name and the hole's position: what
+ * they say does not depend on the order in which holes are searched. (The tests only filter
+ * candidates; Lean proves every fill.)
+ */
+type Rand = () => number;
+export const DEFAULT_SEED = 1;
+function seeded(key: string): Rand {
+  // FNV-1a of the key, then mulberry32
+  let a = 0x811c9dc5;
+  for (let i = 0; i < key.length; i++) a = Math.imul(a ^ key.charCodeAt(i), 0x01000193) >>> 0;
+  return () => {
+    a = (a + 0x6d2b79f5) >>> 0;
+    let t = a;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
 }
-const pick = <A>(xs: A[]): A => xs[rnd(xs.length)];
+
+function rnd(rand: Rand, n: number) {
+  return Math.floor(rand() * n);
+}
+const pick = <A>(rand: Rand, xs: A[]): A => xs[rnd(rand, xs.length)];
 
 /**
  * The instantiation of a generic function's type parameters for one test input (by id): `int`
@@ -873,8 +897,8 @@ const pick = <A>(xs: A[]): A => xs[rnd(xs.length)];
  */
 type Inst = Map<number, VType | "witness">;
 
-function chooseInst(tparams: readonly TParam[]): Inst {
-  return new Map(tparams.map((p) => [p.id, p.fields ? "witness" : Math.random() < 0.5 ? T.int : T.str]));
+function chooseInst(rand: Rand, tparams: readonly TParam[]): Inst {
+  return new Map(tparams.map((p) => [p.id, p.fields ? "witness" : rand() < 0.5 ? T.int : T.str]));
 }
 
 /** The type of the `id` field of a record type, or of a type parameter's field constraint (null for other types or without one). */
@@ -884,61 +908,65 @@ function idField(t: VType, prog: Program): VType | null {
   return prog.reg.rec(t).find((f) => f.name === "id")?.type ?? null;
 }
 
-function gen(t: VType, prog: Program, pools: Pools, depth = 0, inst?: Inst): unknown {
+function gen(rand: Rand, t: VType, prog: Program, pools: Pools, depth = 0, inst?: Inst): unknown {
   const reg = prog.reg;
   switch (t.k) {
     case "tvar": {
       const c = inst?.get(t.id);
       // (never a silent `undefined`: every value of a type parameter comes from an instantiation)
       if (!c) throw new Error(`internal: no test instantiation of the type parameter ${t.name}`);
-      if (c !== "witness") return gen(c, prog, pools, depth, inst);
+      if (c !== "witness") return gen(rand, c, prog, pools, depth, inst);
       const o: Record<string, unknown> = {};
-      for (const f of t.fields ?? []) o[f.name] = gen(f.type, prog, pools, depth + 1, inst);
+      for (const f of t.fields ?? []) o[f.name] = gen(rand, f.type, prog, pools, depth + 1, inst);
       // (a field the constraint does not name: a fill that rebuilds the value loses it)
-      if (!("witness$" in o)) o.witness$ = pick(BASE_STRS);
+      if (!("witness$" in o)) o.witness$ = pick(rand, BASE_STRS);
       return o;
     }
     case "int":
-      return pools.ints.length && Math.random() < 0.4 ? pick(pools.ints) : pick(BASE_INTS);
+      return pools.ints.length && rand() < 0.4 ? pick(rand, pools.ints) : pick(rand, BASE_INTS);
     case "num":
-      return Math.random() * 10 - 2;
+      return rand() * 10 - 2;
     case "bool":
-      return Math.random() < 0.5;
+      return rand() < 0.5;
     case "str":
-      return pools.strs.length && Math.random() < 0.3 ? pick(pools.strs) : pick(BASE_STRS);
+      return pools.strs.length && rand() < 0.3 ? pick(rand, pools.strs) : pick(rand, BASE_STRS);
     case "enum": {
       const lits = reg.enumLits(t);
-      return lits[rnd(lits.length)];
+      return lits[rnd(rand, lits.length)];
     }
     case "opt": {
-      if (Math.random() >= 0.3) return gen(t.elem, prog, pools, depth, inst);
+      if (rand() >= 0.3) return gen(rand, t.elem, prog, pools, depth, inst);
       const a = (t as OptT).absent ?? "null";
-      return a === "undefined" || (a === "both" && Math.random() < 0.5) ? undefined : null;
+      return a === "undefined" || (a === "both" && rand() < 0.5) ? undefined : null;
     }
     case "tuple":
-      return t.elems.map((e) => gen(e, prog, pools, depth, inst));
+      return t.elems.map((e) => gen(rand, e, prog, pools, depth, inst));
     case "rec": {
       const o: Record<string, unknown> = {};
-      for (const f of reg.rec(t)) o[f.name] = gen(f.type, prog, pools, depth + 1, inst);
+      for (const f of reg.rec(t)) o[f.name] = gen(rand, f.type, prog, pools, depth + 1, inst);
       return o;
     }
     case "union": {
       const u = reg.union(t);
-      const v = u.variants[rnd(u.variants.length)];
+      const v = u.variants[rnd(rand, u.variants.length)];
       const o: Record<string, unknown> = { [u.tag]: v.lit };
-      for (const f of v.fields) o[f.name] = gen(f.type, prog, pools, depth + 1, inst);
+      for (const f of v.fields) o[f.name] = gen(rand, f.type, prog, pools, depth + 1, inst);
       return o;
     }
     case "arr": {
-      const n = depth > 2 ? 0 : rnd(4);
-      const xs = Array.from({ length: n }, () => gen(t.elem, prog, pools, depth + 1, inst));
+      const n = depth > 2 ? 0 : rnd(rand, 4);
+      const xs = Array.from({ length: n }, () => gen(rand, t.elem, prog, pools, depth + 1, inst));
       // favour distinct ids (common invariant), when the records' (or a type parameter's
       // constrained) `id` is an int (a value of another type, e.g. an enum or a string, would not
       // be a value of the parameter's type)
       if (idField(t.elem, prog)?.k === "int" && xs.length) {
-        const ids = [-3, -2, -1, 0, 1, 2, 3, 4, 5, 6].sort(() => Math.random() - 0.5);
+        const ids = [-3, -2, -1, 0, 1, 2, 3, 4, 5, 6];
+        for (let i = ids.length - 1; i > 0; i--) {
+          const j = rnd(rand, i + 1);
+          [ids[i], ids[j]] = [ids[j], ids[i]];
+        }
         xs.forEach((x, i) => {
-          if (x && typeof x === "object" && Math.random() < 0.9) (x as Record<string, unknown>).id = ids[i];
+          if (x && typeof x === "object" && rand() < 0.9) (x as Record<string, unknown>).id = ids[i];
         });
       }
       return xs;
@@ -946,19 +974,19 @@ function gen(t: VType, prog: Program, pools: Pools, depth = 0, inst?: Inst): unk
     case "map": {
       // distinct keys (SameValueZero, as the Map compares them), in a random insertion order
       const m = new Map<unknown, unknown>();
-      const n = depth > 2 ? 0 : rnd(4);
+      const n = depth > 2 ? 0 : rnd(rand, 4);
       for (let i = 0; i < n * 2 && m.size < n; i++) {
-        const k = gen(t.key, prog, pools, depth + 1, inst);
+        const k = gen(rand, t.key, prog, pools, depth + 1, inst);
         if (m.has(k)) continue;
-        const v = gen(t.val, prog, pools, depth + 1, inst);
+        const v = gen(rand, t.val, prog, pools, depth + 1, inst);
         // values keyed by their own id (a common invariant: m.get(k).id === k), when the id has
         // the key's type (so that the key is a value of the field's type)
         const idT = idField(t.val, prog);
-        if (idT && sameType(idT, t.key) && v && typeof v === "object" && Math.random() < 0.9) (v as Record<string, unknown>).id = k;
+        if (idT && sameType(idT, t.key) && v && typeof v === "object" && rand() < 0.9) (v as Record<string, unknown>).id = k;
         m.set(k, v);
       }
       // sometimes move an entry to the end (delete then set), so the order is not the key order
-      if (m.size > 1 && Math.random() < 0.3) {
+      if (m.size > 1 && rand() < 0.3) {
         const [k, v] = [...m.entries()][0];
         m.delete(k);
         m.set(k, v);
@@ -967,8 +995,8 @@ function gen(t: VType, prog: Program, pools: Pools, depth = 0, inst?: Inst): unk
     }
     case "set": {
       const s = new Set<unknown>();
-      const n = depth > 2 ? 0 : rnd(4);
-      for (let i = 0; i < n * 2 && s.size < n; i++) s.add(gen(t.elem, prog, pools, depth + 1, inst));
+      const n = depth > 2 ? 0 : rnd(rand, 4);
+      for (let i = 0; i < n * 2 && s.size < n; i++) s.add(gen(rand, t.elem, prog, pools, depth + 1, inst));
       return s;
     }
     case "unit":
@@ -1074,12 +1102,12 @@ const OWN_PRE = { own: "precondition" };
 /** what vreact/spec's hole() throws outside test mode (the contracts are evaluated outside it) */
 const isUnfilledHoleError = (e: unknown) => e instanceof Error && e.message.startsWith("vreact: unfilled hole()");
 
-function makeRunner(sb: Sandbox, target: string, fname: string, paramTypes: VType[], prog: Program, pools: Pools, textFor: (cand: string) => string, tparams: readonly TParam[] = []): Runner {
+function makeRunner(sb: Sandbox, target: string, fname: string, paramTypes: VType[], prog: Program, pools: Pools, textFor: (cand: string) => string, rand: Rand, tparams: readonly TParam[] = []): Runner {
   // fixed sample set (re-used across candidates; counterexamples are moved to the front); the
   // parameters of one input share one instantiation of the type parameters
   const samples: unknown[][] = Array.from({ length: 400 }, () => {
-    const inst = chooseInst(tparams);
-    return paramTypes.map((t) => gen(t, prog, pools, 0, inst));
+    const inst = chooseInst(rand, tparams);
+    return paramTypes.map((t) => gen(rand, t, prog, pools, 0, inst));
   });
   const g = globalThis as Record<string, unknown>;
   return {
@@ -1318,10 +1346,11 @@ export interface SynthResult {
   note?: string;
 }
 
-export async function synthCommand(root: string, files: string[], opts: { write?: boolean; json?: boolean; maxSize?: number }): Promise<SynthResult[]> {
+export async function synthCommand(root: string, files: string[], opts: { write?: boolean; json?: boolean; maxSize?: number; seed?: number }): Promise<SynthResult[]> {
   if (!files.length) throw new Error("usage: vreact synth <file.tsx> [--write]");
   const cfg = loadConfig(root);
   const maxSize = opts.maxSize ?? 9;
+  const seed = opts.seed ?? DEFAULT_SEED;
   // the file as the program knows it (same spelling as cfg.files: case-insensitive file systems, symlinks)
   const typed = path.resolve(root, files[0]);
   const real = (f: string) => fs.realpathSync.native(f);
@@ -1331,6 +1360,8 @@ export async function synthCommand(root: string, files: string[], opts: { write?
     process.exitCode = 1;
     return [];
   }
+  // (the default seed is not mentioned: the output of a run without --seed stays as it was)
+  if (opts.seed !== undefined) console.log(`random tests from seed ${seed}`);
   const rel = path.relative(root, target);
   const raw = fs.readFileSync(target, "utf8");
   // offsets are computed on the text without a byte-order mark; the mark is restored on --write
@@ -1730,7 +1761,9 @@ export async function synthCommand(root: string, files: string[], opts: { write?
         hp.params.forEach((t) => en.register(t));
       }
       // the earlier holes this one cannot share a call with stay unfilled (calls reaching them are skipped)
-      const runner = makeRunner(sb!, target, task.name, pTypes as VType[], prog, pools, (cand) => applyEdits(base, [...editsOf(new Map([...accepted, ...ctx, [h, fillText(h, cand)]])), ...ownContract]), tparamsOf.get(fd) ?? []);
+      // (the hole's own random inputs: the same whatever the earlier fills and the search order)
+      const rand = seeded(`${seed}\u0000${task.name}\u0000${i}`);
+      const runner = makeRunner(sb!, target, task.name, pTypes as VType[], prog, pools, (cand) => applyEdits(base, [...editsOf(new Map([...accepted, ...ctx, [h, fillText(h, cand)]])), ...ownContract]), rand, tparamsOf.get(fd) ?? []);
       return newSearch(h, en, runner, maxSize, Math.min(TIME_LIMIT_MS, Math.max(5000, deadline - Date.now())));
     };
 

@@ -4,7 +4,7 @@
  *
  *   vreact verify  [--root DIR] [--json] [--full] [--quiet]   translate, check with Lean, report
  *   vreact translate [--root DIR]                     only generate the Lean project
- *   vreact synth <file.tsx> [--root DIR] [--write]    fill hole() placeholders (see synth.ts)
+ *   vreact synth <file.tsx> [--root DIR] [--write] [--seed N]   fill hole() placeholders (see synth.ts)
  *   vreact explain <file.tsx> [--root DIR]            print the generated Lean for a module
  */
 import fs from "node:fs";
@@ -690,17 +690,18 @@ const USAGE = `usage:
                                            (--full: complete Lean goals of failed obligations)
   vreact translate [--root DIR]            generate the Lean project only (.vreact/)
   vreact explain   [file.tsx] [--root DIR] print the generated Lean model
-  vreact synth     <file.tsx> [--root DIR] [--write]
-                                           synthesize hole() placeholders against the spec`;
+  vreact synth     <file.tsx> [--root DIR] [--write] [--json] [--seed N]
+                                           synthesize hole() placeholders against the spec
+                                           (--seed N: another seed for the random tests, default 1)`;
 
 /** A misuse of the command line: reported with the usage, never with a stack trace. */
 export class UsageError extends Error {}
 
-const COMMANDS: Record<string, { flags: string[]; files: "none" | "optional" | "one" }> = {
+const COMMANDS: Record<string, { flags: string[]; files: "none" | "optional" | "one"; seed?: boolean }> = {
   verify: { flags: ["--json", "--quiet", "--full"], files: "none" },
   translate: { flags: [], files: "none" },
   explain: { flags: [], files: "optional" },
-  synth: { flags: ["--write", "--json"], files: "one" },
+  synth: { flags: ["--write", "--json"], files: "one", seed: true },
 };
 
 async function main(argv: string[]) {
@@ -715,16 +716,21 @@ async function main(argv: string[]) {
   const flags = new Set<string>();
   const positional: string[] = [];
   let rootArg: string | undefined;
+  let seed: number | undefined;
   for (let i = 1; i < argv.length; i++) {
     const a = argv[i];
-    if (a === "--root") {
+    if (spec.seed && (a === "--seed" || a.startsWith("--seed="))) {
+      const v = a === "--seed" ? argv[++i] : a.slice("--seed=".length);
+      if (v === undefined || !/^-?\d+$/.test(v) || !Number.isSafeInteger(Number(v))) throw new UsageError("--seed needs an integer: --seed N");
+      seed = Number(v);
+    } else if (a === "--root") {
       if (i + 1 >= argv.length || argv[i + 1].startsWith("-")) throw new UsageError("--root needs a directory: --root DIR");
       rootArg = argv[++i];
     } else if (a.startsWith("--root=")) {
       rootArg = a.slice("--root=".length);
       if (!rootArg) throw new UsageError("--root needs a directory: --root DIR");
     } else if (a.startsWith("-")) {
-      if (!spec.flags.includes(a)) throw new UsageError(`unknown option ${a} for "vreact ${cmd}" (options: ${["--root DIR", ...spec.flags].join(", ")})`);
+      if (!spec.flags.includes(a)) throw new UsageError(`unknown option ${a} for "vreact ${cmd}" (options: ${["--root DIR", ...spec.flags, ...(spec.seed ? ["--seed N"] : [])].join(", ")})`);
       flags.add(a);
     } else positional.push(a);
   }
@@ -783,7 +789,7 @@ async function main(argv: string[]) {
     }
     case "synth": {
       const { synthCommand } = await import("./synth.ts");
-      await synthCommand(root, positional, { write: flag("--write"), json: flag("--json") });
+      await synthCommand(root, positional, { write: flag("--write"), json: flag("--json"), seed });
       return;
     }
   }

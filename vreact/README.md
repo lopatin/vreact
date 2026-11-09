@@ -38,7 +38,8 @@ app relies on.
 
 ```bash
 vreact verify   [--root DIR] [--json]     # translate, check every obligation, report
-vreact synth    <file.ts[x]> [--write]    # fill hole<T>() placeholders (enumerate → test → prove)
+vreact synth    <file.ts[x]> [--write] [--seed N]   # fill hole<T>() placeholders (enumerate → test → prove;
+                                                    # the random tests are seeded: default 1)
 vreact explain  [file.tsx]                # print the generated Lean
 vreact translate                          # only generate .vreact/
 ```

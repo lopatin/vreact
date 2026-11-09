@@ -1345,4 +1345,8 @@ search, and Lean proves the fill for every instantiation. Synth types candidates
 the hole (with the variants left after exclusions, which the translator splits
 on when a fill needs them), and searches a hole once per fill of the earlier holes a call can
 also evaluate (holes in different cases or branches are searched once); both
-only steer the search — Lean still checks every fill of a function together.
+only steer the search — Lean still checks every fill of a function together. The
+random inputs come from a seeded generator, one per hole (its seed made from the
+run's seed, `--seed N`, default 1, the function's name and the hole's position), so
+a run tests the same inputs whatever order the holes are searched in, and two runs
+say the same up to the 60 s time limits; the seed, too, only steers the search.
