@@ -30,7 +30,7 @@ Obligations by file
   ? src/model.ts                             5/6  (1 not checked)
 
 1 obligation(s) not checked:
-  src/model.ts:103:51: it depends on `sorry` from a failure elsewhere (a failed obligation, a declaration with an error, or a hole()) that its goal or its proof contains, so Lean could not check it on its own: fix that first
+  src/model.ts:103:51 [index]: it depends on `sorry` from a failure elsewhere (a failed obligation, a declaration with an error, or a hole()) that its goal or its proof contains, so Lean could not check it on its own: fix that first
 pending (hole() / sorry): quotePrice, midPrice, strikeWindow, heatOf
 
-◐ INCOMPLETE (holes / trusted stubs / unchecked parts remain)  5/6 obligations proved, 1 unchecked; components: 0/0 verified  (6.1s)
+◐ INCOMPLETE (holes / trusted stubs / unchecked parts remain)  5/6 obligations proved, 1 unchecked; components: 0/0 verified  (4.9s)

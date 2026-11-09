@@ -75,8 +75,8 @@ Failed obligations
     │ center : Option Int :=
     │   match h₈ : held with
     │   | some held_1 => some held_1
-    │   | none => live
     │   …
+    │ ⊢ False
 ✗ src/OptionsChain.tsx:101:67  [precondition] precondition of strikeWindow(n, atm, levels)
     │ `grind` failed
     │ case grind.1.1.1.1
@@ -95,12 +95,12 @@ Failed obligations
     │ held : Option Int := reducer.heldPrice ui.held e.id
     │ center : Option Int :=
     │   match h₈ : held with
-    │   | some held_1 => some held_1
     │   …
+    │ ⊢ False
 
 1 obligation(s) not checked:
-  src/OptionsChain.tsx:107:20: it depends on `sorry` from a failure elsewhere (a failed obligation, a declaration with an error, or a hole()) that its goal or its proof contains, so Lean could not check it on its own: fix that first
+  src/OptionsChain.tsx:107:20 [unique-keys]: it depends on `sorry` from a failure elsewhere (a failed obligation, a declaration with an error, or a hole()) that its goal or its proof contains, so Lean could not check it on its own: fix that first
 
 trusted (not verified, contracts assumed): TermRow, StrikeRow, OrderTicket
 
-✗ NOT VERIFIED  72/75 obligations proved, 2 failed, 1 unchecked; components: 0/5 verified  (66.5s)
+✗ NOT VERIFIED  72/75 obligations proved, 2 failed, 1 unchecked; components: 0/5 verified  (59.2s)

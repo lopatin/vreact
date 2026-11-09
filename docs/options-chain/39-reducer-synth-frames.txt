@@ -1,11 +1,11 @@
 hole in follow: ChainUi   scope: u, u.collapsed, u.filter, u.held, u.focus, u.heat, u.orders, id
-  candidate passes 400 random tests: { ...jump(u, id), collapsed: u.collapsed, focus: u.focus }   (11503 candidate(s) tested in 49.8s)
+  candidate passes 400 random tests: { ...jump(u, id), collapsed: u.collapsed, focus: u.focus }   (11503 candidate(s) tested in 45.6s)
   ✗ Lean rejects { ...jump(u, id), collapsed: u.collapsed, focus: u.focus }: postcondition of follow: sameView(u, r) && keepsHolds(u, r, id) (src/reducer.ts:145:11)
-  13698 candidates tested in 60.0s, up to size 7; stopped: the 60s time limit was reached at size 7
+  15089 candidates tested in 60.0s, up to size 7; stopped: the 60s time limit was reached at size 7
   no verified solution for hole in follow: 1 candidate(s) passed the tests, none was proved
   the random tests accept candidates that Lean rejects: write this one by hand
 hole in cancel: ChainUi   scope: u, u.collapsed, u.filter, u.held, u.focus, u.heat, u.orders, id
-  13883 candidates tested in 60.0s, up to size 7; stopped: the 60s time limit was reached at size 7
+  15115 candidates tested in 60.0s, up to size 7; stopped: the 60s time limit was reached at size 7
   no verified solution for hole in cancel: no candidate passed the tests
-  most common failure (13883×): u: postcondition fails on [{"collapsed":{"Set":[]},"filter":"s7","held":{"Map":[[0,4],[-5,3],[10,-5]]},"focus":3,"heat":7,"orders":{"Map":[[1,{"expiry":2,"leg":"put","strike":-5,"buy":false,"qty":10,"price":-5}],[-1,{"expiry":4,"leg":"future","strike":-1,"buy":false,"qty":1,"price":4}],[7,{"expiry":-1,"leg":"put","strike":0,"buy":false,"qty":3,"price":-2}]]}},-1] ↦ {"collapsed":{"Set":[]},"filter":"s7","held":{"Map":[[0,4],[-5,3],[10,-5]]},"focus":3,"heat":7,"orders":{"Map":[[1,{"expiry":2,"leg":"put","strike":-5,"buy":false,"qty":10,"price":-5}],[-1,{"expiry":4,"leg":"future","strike":-1,"buy":false,"qty":1,"price":4}],[7,{"expiry":-1,"leg":"put","strike":0,"buy":false,"qty":3,"price":-2}]]}}
-  write this one by hand (synth builds straight-line expressions; guarded updates need an `if`), or check that the spec is satisfiable
+  most common failure (15115×): u: postcondition fails on [{"collapsed":{"Set":[-10]},"filter":"s7","held":{"Map":[]},"focus":4,"heat":-10,"orders":{"Map":[[-2,{"expiry":-1,"leg":"future","strike":-5,"buy":true,"qty":2,"price":-2}],[1,{"expiry":4,"leg":"call","strike":10,"buy":false,"qty":3,"price":-10}]]}},1] ↦ {"collapsed":{"Set":[-10]},"filter":"s7","held":{"Map":[]},"focus":4,"heat":-10,"orders":{"Map":[[-2,{"expiry":-1,"leg":"future","strike":-5,"buy":true,"qty":2,"price":-2}],[1,{"expiry":4,"leg":"call","strike":10,"buy":false,"qty":3,"price":-10}]]}}
+  write this one by hand (synth builds straight-line expressions; guarded updates need an `if`; it only adds to a Map or Set, by new Map(m).set(k, v) or new Set(s).add(x): deleting is not in its grammar), or check that the spec is satisfiable

@@ -74,7 +74,7 @@ Obligations by file
   ✓ src/App.tsx                              12/12
 
 Failed obligations
-✗ src/OptionsChain.tsx:151:13  [precondition] precondition of chainReducer(…, { kind: "place", ticket: ticket, qty: q…)
+✗ src/OptionsChain.tsx:151:13  [precondition] precondition of chainReducer(…, { kind: "place", ticket: ticket, qty: qty - 1, price: price })
     │ `grind` failed
     │ case grind.1.1.1
     │ E : Type
@@ -92,10 +92,10 @@ Failed obligations
     │ ids : List Int := List.map (fun e => e.id) props.expiries
     │ ticket_1 : model.Ticket
     │ h₃₃ : σ.ticket = some ticket_1
-    │ tExp_1 : model.Expiry
     │   …
+    │ ⊢ False
 
 1 obligation(s) not checked:
-  src/OptionsChain.tsx:150:11: it depends on `sorry` from a failure elsewhere (a failed obligation, a declaration with an error, or a hole()) that its goal or its proof contains, so Lean could not check it on its own: fix that first
+  src/OptionsChain.tsx:150:11 [callback]: it depends on `sorry` from a failure elsewhere (a failed obligation, a declaration with an error, or a hole()) that its goal or its proof contains, so Lean could not check it on its own: fix that first
 
-✗ NOT VERIFIED  140/142 obligations proved, 1 failed, 1 unchecked; components: 4/6 verified  (29.5s)
+✗ NOT VERIFIED  140/142 obligations proved, 1 failed, 1 unchecked; components: 4/6 verified  (25.3s)

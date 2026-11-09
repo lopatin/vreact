@@ -1,0 +1,108 @@
+translated 7 module(s), 122 proof obligation(s) → .vreact/ ; checking with Lean…
+
+Components
+  VERIFIED           PriceCell              src/StrikeRow.tsx:12
+  VERIFIED           StrikeRow              src/StrikeRow.tsx:37
+  VERIFIED           TermRow                src/TermRow.tsx:19
+  INCOMPLETE         OrderTicket            src/OrderTicket.tsx:19
+      ↳ an obligation of it failed
+  INCOMPLETE         OptionsChain           src/OptionsChain.tsx:32
+      ↳ it uses OrderTicket (src/OrderTicket.tsx), which is not verified: an obligation of it failed
+  INCOMPLETE         App                    src/App.tsx:79
+      ↳ it uses OrderTicket (src/OrderTicket.tsx), which is not verified: an obligation of it failed
+Functions
+  VERIFIED           validChain
+  VERIFIED           legOf
+  VERIFIED           theoOf
+  VERIFIED           quotePrice
+  VERIFIED           withinSpread
+  VERIFIED           isMid
+  VERIFIED           midPrice
+  VERIFIED           inTheMoney
+  VERIFIED           dist
+  VERIFIED           nearest
+  VERIFIED           atmIndex
+  VERIFIED           inWindow
+  VERIFIED           strikeWindow
+  VERIFIED           filterLabel
+  VERIFIED           levelsOf
+  VERIFIED           edge
+  VERIFIED           heatOf
+  VERIFIED           legFor
+  VERIFIED           labelOf
+  VERIFIED           marketOf
+  VERIFIED           validQty
+  VERIFIED           validOrder
+  VERIFIED           fmtPrice
+  VERIFIED           contractText
+  VERIFIED           quoteText
+  VERIFIED           crosses
+  VERIFIED           fmtVol
+  VERIFIED           wellFormed
+  VERIFIED           heldPrice
+  VERIFIED           sameView
+  VERIFIED           keepsHolds
+  VERIFIED           toggle
+  VERIFIED           setCollapsed
+  VERIFIED           setFilter
+  VERIFIED           holdAt
+  VERIFIED           follow
+  VERIFIED           jump
+  VERIFIED           setHeat
+  VERIFIED           place
+  VERIFIED           cancel
+  VERIFIED           chainReducer
+App certificates (VReact.run_allInv instantiated)
+  INCOMPLETE         VTS.App.App.certificate  axioms: propext, sorryAx, Classical.choice, Quot.sound
+      ↳ it uses OrderTicket (src/OrderTicket.tsx), which is not verified: an obligation of it failed
+Obligations by file
+  ✓ src/model.ts                             22/22
+  ✓ src/reducer.ts                           22/22
+  ✓ src/StrikeRow.tsx                        22/22
+  ✓ src/TermRow.tsx                          12/12
+  ✗ src/OrderTicket.tsx                      11/12
+  ✓ src/OptionsChain.tsx                     27/27
+  ✓ src/App.tsx                              5/5
+
+Failed obligations
+✗ src/OrderTicket.tsx:46:17  [handler] onClick handler on <button> preserves the invariant of OrderTicket
+    │ `grind` failed
+    │ case grind
+    │ E : Type
+    │ props : Props
+    │ κ : Cb props E
+    │ σ : State
+    │ hpre : props.ticket.price > 0
+    │ qty : Int := σ.qty
+    │ price : Int := σ.price
+    │ buy : Bool := JS.eq props.ticket.side model.Side.ask
+    │ m : Option model.Quote := props.market
+    │ marketable : Bool :=
+    │   match h₁ : m with
+    │   | some m_1 => model.crosses buy price m_1
+    │   | none => false
+    │ e : DomEvent
+    │ hinv : (1 ≤ σ.qty ∧ σ.qty ≤ 500) ∧ σ.price > 0
+    │ h : σ.price + -1 ≤ 0
+    │ ⊢ False
+    │ [grind] Goal diagnostics
+    │   [facts] Asserted facts
+    │     [prop] -1 * props.ticket.price + 1 ≤ 0
+    │     [prop] -1 * σ.qty + 1 ≤ 0 ∧ σ.qty + -500 ≤ 0 ∧ -1 * σ.price + 1 ≤ 0
+    │     [prop] σ.price + -1 ≤ 0
+    │   [eqc] True propositions
+    │     [prop] σ.qty + -500 ≤ 0 ∧ -1 * σ.price + 1 ≤ 0
+    │     [prop] -1 * σ.qty + 1 ≤ 0 ∧ σ.qty + -500 ≤ 0 ∧ -1 * σ.price + 1 ≤ 0
+    │     [prop] σ.price + -1 ≤ 0
+    │     [prop] σ.qty + -500 ≤ 0
+    │     [prop] -1 * σ.price + 1 ≤ 0
+    │     [prop] -1 * σ.qty + 1 ≤ 0
+    │     [prop] -1 * props.ticket.price + 1 ≤ 0
+    │   [cutsat] Assignment satisfying linear constraints
+    │     [assign] qty := 4
+    │     [assign] price := 5
+    │     [assign] σ.price := 1
+    │     [assign] σ.qty := 1
+    │     [assign] props.ticket.price := 1
+
+✗ NOT VERIFIED  121/122 obligations proved, 1 failed; components: 3/6 verified  (21.3s)

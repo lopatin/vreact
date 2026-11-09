@@ -99,8 +99,8 @@ Failed obligations
     │               { expiry := t.expiry, leg := t.leg, strike := t.strike, buy := JS.eq t.side model.Side.ask, qty := qty,
     │                 price := price }).values +
     │       1001 ≤
-    │     0
     │   …
+    │ ⊢ False
 ✗ src/reducer.ts:192:11  [postcondition] postcondition of place: r.orders.size === (accepts(u, qty, price) ? u.orders.size + 1 : u.ord…
     │ `grind` failed
     │ case grind
@@ -136,8 +136,8 @@ Failed obligations
     │   (match h₁ :
     │       (u.orders.set (u.orders.size + 1)
     │             { expiry := t.expiry, leg := t.leg, strike := t.strike, buy := JS.eq t.side model.Side.ask, qty := qty,
-    │               price := price }).get
     │   …
+    │ ⊢ False
 ✗ src/reducer.ts:206:11  [postcondition] postcondition of cancel: implies(wellFormed(u), wellFormed(r))
     │ `grind` failed
     │ case grind
@@ -149,4 +149,4 @@ Failed obligations
     │ h : -1 * model.openQty (u.orders.delete id').values + 1001 ≤ 0
     │ ⊢ False
 
-✗ NOT VERIFIED  146/150 obligations proved, 4 failed; components: 4/6 verified  (50.5s)
+✗ NOT VERIFIED  146/150 obligations proved, 4 failed; components: 4/6 verified  (49.6s)

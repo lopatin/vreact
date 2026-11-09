@@ -100,10 +100,10 @@ Failed obligations
     │   match h₂ : ticket with
     │   | some ticket_1 => collections.byId (fun x₃ => x₃.id) props.expiries ticket_1.expiry
     │   | none => none
-    │ allOpen : Bool := props.expiries.all fun e => !ui.collapsed.has e.id
-    │ ids : List Int := List.map (fun e => e.id) props.expiries
-    │ ticket_1 : model.Ticket
-    │ h₃₄ : ticket = some ticket_1
+    │   …
+    │ ⊢ inv props
+    │     ({
+    │           updates :=
     │   …
 
-✗ NOT VERIFIED  170/171 obligations proved, 1 failed; components: 4/6 verified  (106.4s)
+✗ NOT VERIFIED  170/171 obligations proved, 1 failed; components: 4/6 verified  (101.5s)

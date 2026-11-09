@@ -108,27 +108,27 @@ Failed obligations
     │   -1 *
     │         model.openQty
     │           ((u.orders.delete id').set id'
-    │               { expiry := p_1.expiry, leg := p_1.leg, strike := p_1.strike, buy := p_1.buy, qty := p_1.qty,
     │   …
+    │ ⊢ False
 ✗ src/reducer.ts:261:11  [postcondition] postcondition of amend: sameList([...r.orders.keys()], [...u.orders.keys()])
     │ (deterministic) timeout: the automation did not finish within this obligation's budget of 1000000 heartbeats (set "heartbeats" in vreact.json to change it)
+    │   … (the goal as stated: --full shows it)
+    │ The goal splits into 3 cases. A case's name lists the branches that lead to it, outermost first: `isTrue`/`isFalse` are the two branches of an `if` (a `switch` on a number or a string is a chain of `if`s, one per body), `h_k` is the k-th alternative of a `match` (a `switch` on a union or an enum has one per `case` label, in the order written, then one for the rest: `default`, wherever it is written); conditions in the translation (such as the sign test of `%`) split the same way. Each case alone, smallest first, with up to 100000 heartbeats: 2 proved, 1 did not finish. The first that did not finish, case h_1.isFalse.isTrue:
+    │ case h_1.isFalse.isTrue
     │ u : ChainUi
     │ id' price : Int
-    │ ⊢ collections.sameList
-    │       (have o := u.orders.get id';
-    │           match h₁ : o with
-    │           | some o_1 =>
-    │             if h₄₂ : JS.le price 0 = true then u
-    │             else
-    │               have orders := u.orders;
-    │               have orders_1 := orders.delete id';
-    │               have orders_2 :=
-    │                 orders_1.set id'
-    │                   { expiry := o_1.expiry, leg := o_1.leg, strike := o_1.strike, buy := o_1.buy, qty := o_1.qty,
-    │                     price := price };
-    │               { collapsed := u.collapsed, filter := u.filter, watch := u.watch, held := u.held, focus := u.focus,
-    │                 heat := u.heat, orders := orders_2, nextId := u.nextId }
-    │           | none => u).orders.keys
+    │ hcontract✝⁴ : u.orders.keys.Nodup
+    │ p_1✝ : model.Order
+    │ heq✝ : u.orders.get id' = some p_1✝
+    │ h✝² : ¬price ≤ 0
+    │ hcontract✝³, hcontract✝² : …  (2 contract instances, 17 lines: --full shows them)
+    │ hcontract✝¹ : (List.filter (fun x => !JS.eq x id') u.orders.keys).Nodup
+    │ h✝¹ : ¬False
+    │ h✝ : ↑((List.filter (fun x => !JS.eq x id') u.orders.keys).length + 1) = ↑u.orders.keys.length
+    │   …
+    │ ⊢ ∀
+    │     (x :
+    │       { x //
     │   …
 
-✗ NOT VERIFIED  190/192 obligations proved, 2 failed; components: 4/6 verified  (65.8s)
+✗ NOT VERIFIED  190/192 obligations proved, 2 failed; components: 4/6 verified  (69.7s)

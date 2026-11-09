@@ -1169,8 +1169,8 @@ Failed obligations
     │       [thm] render.match_1.congr_eq_1 ↦ 1
 
 1 obligation(s) not checked:
-  src/OptionsChain.tsx:107:20: it depends on `sorry` from a failure elsewhere (a failed obligation, a declaration with an error, or a hole()) that its goal or its proof contains, so Lean could not check it on its own: fix that first
+  src/OptionsChain.tsx:107:20 [unique-keys]: it depends on `sorry` from a failure elsewhere (a failed obligation, a declaration with an error, or a hole()) that its goal or its proof contains, so Lean could not check it on its own: fix that first
 
 trusted (not verified, contracts assumed): TermRow, StrikeRow, OrderTicket
 
-✗ NOT VERIFIED  72/75 obligations proved, 2 failed, 1 unchecked; components: 0/5 verified  (64.0s)
+✗ NOT VERIFIED  72/75 obligations proved, 2 failed, 1 unchecked; components: 0/5 verified  (59.9s)

@@ -79,21 +79,21 @@ Failed obligations
     │ `grind` failed
     │ case grind.1.1.2.2
     │ s : Sim
-    │ hcontract :
-    │   ((0 ≤
-    │         if 0 ≤ s.feed.seed * 75 + 74 then (s.feed.seed * 75 + 74) % ↑(Int.natAbs 65537)
-    │         else -(-(s.feed.seed * 75 + 74) % ↑(Int.natAbs 65537))) →
-    │       (0 ≤
-    │           if
-    │               0 ≤
-    │                 if 0 ≤ s.feed.seed * 75 + 74 then (s.feed.seed * 75 + 74) % ↑(Int.natAbs 65537)
-    │                 else -(-(s.feed.seed * 75 + 74) % ↑(Int.natAbs 65537)) then
-    │             (if 0 ≤ s.feed.seed * 75 + 74 then (s.feed.seed * 75 + 74) % ↑(Int.natAbs 65537)
-    │               else -(-(s.feed.seed * 75 + 74) % ↑(Int.natAbs 65537))) %
-    │               ↑(Int.natAbs 5)
-    │           else
-    │             -((-if 0 ≤ s.feed.seed * 75 + 74 then (s.feed.seed * 75 + 74) % ↑(Int.natAbs 65537)
-    │                   else -(-(s.feed.seed * 75 + 74) % ↑(Int.natAbs 65537))) %
+    │ hcontract, hcontract_1, hcontract_2, hcontract_3 : …  (4 contract instances, 125 lines: --full shows them)
+    │ h₁₆ : ¬s.rally = true
+    │ h : ¬s.paused = true
+    │ h_1 : ¬40 ≤ s.feed.offset
+    │ hcontract_4 : True
+    │ left : -1 * s.feed.offset + -40 ≤ 0
+    │ left_1 : s.feed.offset + -40 ≤ 0
+    │ left_2 : -1 * s.feed.seed ≤ 0
+    │ right_2 : s.feed.seed + -65536 ≤ 0
+    │ h_4 :
+    │   (if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537 else -1 * ((-75 * s.feed.seed + -74) % 65537)) + -4 ≤ 0
+    │ h_5 :
+    │   ¬((if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537 else -1 * ((-75 * s.feed.seed + -74) % 65537)) = 5 ∨
+    │       (if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537 else -1 * ((-75 * s.feed.seed + -74) % 65537)) = -5)
     │   …
+    │ ⊢ False
 
-✗ NOT VERIFIED  149/150 obligations proved, 1 failed; components: 6/6 verified  (39.0s)
+✗ NOT VERIFIED  149/150 obligations proved, 1 failed; components: 6/6 verified  (29.3s)

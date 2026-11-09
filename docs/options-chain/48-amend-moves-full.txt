@@ -902,6 +902,55 @@ Failed obligations
     │           | none => u).orders.keys
     │       u.orders.keys =
     │     true
+    │ The goal splits into 3 cases. A case's name lists the branches that lead to it, outermost first: `isTrue`/`isFalse` are the two branches of an `if` (a `switch` on a number or a string is a chain of `if`s, one per body), `h_k` is the k-th alternative of a `match` (a `switch` on a union or an enum has one per `case` label, in the order written, then one for the rest: `default`, wherever it is written); conditions in the translation (such as the sign test of `%`) split the same way. Each case alone, smallest first, with up to 100000 heartbeats: 2 proved, 1 did not finish. The first that did not finish, case h_1.isFalse.isTrue:
+    │ case h_1.isFalse.isTrue
+    │ u : ChainUi
+    │ id' price : Int
+    │ hcontract✝⁴ : u.orders.keys.Nodup
+    │ p_1✝ : model.Order
+    │ heq✝ : u.orders.get id' = some p_1✝
+    │ h✝² : ¬price ≤ 0
+    │ hcontract✝³ :
+    │   (match h₁ : u.orders.get id' with
+    │         | some o_1 =>
+    │           if price ≤ 0 then u
+    │           else
+    │             { collapsed := u.collapsed, filter := u.filter, watch := u.watch, held := u.held, focus := u.focus,
+    │               heat := u.heat,
+    │               orders :=
+    │                 (u.orders.delete id').set id'
+    │                   { expiry := o_1.expiry, leg := o_1.leg, strike := o_1.strike, buy := o_1.buy, qty := o_1.qty,
+    │                     price := price },
+    │               nextId := u.nextId }
+    │         | none => u).orders.keys.Nodup
+    │ hcontract✝² :
+    │   ((u.orders.delete id').set id'
+    │         { expiry := p_1✝.expiry, leg := p_1✝.leg, strike := p_1✝.strike, buy := p_1✝.buy, qty := p_1✝.qty,
+    │           price := price }).keys.Nodup
+    │ hcontract✝¹ : (List.filter (fun x => !JS.eq x id') u.orders.keys).Nodup
+    │ h✝¹ : ¬False
+    │ h✝ : ↑((List.filter (fun x => !JS.eq x id') u.orders.keys).length + 1) = ↑u.orders.keys.length
+    │ hcontract✝ : (List.filter (fun x => !JS.eq x id') u.orders.keys).Nodup
+    │ hkey✝ :
+    │   (List.filter (fun y => !JS.eq y id') u.orders.keys).length + List.count id' (List.map (fun x => x) u.orders.keys) =
+    │     u.orders.keys.length
+    │ ⊢ ∀
+    │     (x :
+    │       { x //
+    │         x ∈
+    │           JS.rangeFrom 0
+    │             ↑((u.orders.delete id').set id'
+    │                     { expiry := p_1✝.expiry, leg := p_1✝.leg, strike := p_1✝.strike, buy := p_1✝.buy, qty := p_1✝.qty,
+    │                       price := price }).keys.length }),
+    │     x ∈
+    │         (JS.rangeFrom 0
+    │             ↑((u.orders.delete id').set id'
+    │                     { expiry := p_1✝.expiry, leg := p_1✝.leg, strike := p_1✝.strike, buy := p_1✝.buy, qty := p_1✝.qty,
+    │                       price := price }).keys.length).attach →
+    │       ((u.orders.delete id').set id'
+    │               { expiry := p_1✝.expiry, leg := p_1✝.leg, strike := p_1✝.strike, buy := p_1✝.buy, qty := p_1✝.qty,
+    │                 price := price }).keys[x.val.toNat] =
+    │         u.orders.keys[x.val.toNat]
 ✗ src/reducer.ts:263:11  [postcondition] postcondition of amend: [...r.orders.keys()].indexOf(id) === [...u.orders.keys()].indexOf(id)
     │ `grind` failed
     │ case grind.1.2.1.2.1.1.1.1.1.1
@@ -8388,4 +8437,4 @@ Failed obligations
     │       [thm] JS.JSMap.keys_set ↦ 1
     │       [thm] JS.JSMap.length_keys_set ↦ 1
 
-✗ NOT VERIFIED  190/193 obligations proved, 3 failed; components: 4/6 verified  (69.1s)
+✗ NOT VERIFIED  190/193 obligations proved, 3 failed; components: 4/6 verified  (74.2s)

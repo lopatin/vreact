@@ -68,8 +68,7 @@ Failed obligations
     │ h : 0 ≤ i
     │ h_1 : i < n
     │ h_pre : (0 ≤ atm ∧ atm < n) ∧ levels ≥ 0
-    │ hcontract :
-    │   ((0 ≤ max 0 (atm - levels) ∧ max 0 (atm - levels) ≤ atm) ∧ atm < min n (atm + levels)) ∧ min n (atm + levels) ≤ n
+    │ hcontract : …  (a contract instance, 2 lines: --full shows it)
     │ h_2 :
     │   (JS.le (max 0 (atm + -1 * levels)) i = true ∧ JS.lt i (min n (atm + levels)) = true) =
     │     (JS.le (atm + -1 * levels) i = false ∨ JS.le i (atm + levels) = false)
@@ -79,8 +78,9 @@ Failed obligations
     │ h_4 : JS.lt i (min n (atm + levels)) = false
     │ h_5 : ¬n + -1 * atm + -1 * levels ≤ 0
     │   …
+    │ ⊢ False
 
 4 obligation(s) not checked:
-  src/model.ts:116:11, src/model.ts:119:44, src/model.ts:119:11, src/model.ts:121:11: it depends on `sorry` from a failure elsewhere (a failed obligation, a declaration with an error, or a hole()) that its goal or its proof contains, so Lean could not check it on its own: fix that first
+  src/model.ts:116:11 [postcondition], src/model.ts:119:44 [index], src/model.ts:119:11 [postcondition], src/model.ts:121:11 [postcondition]: it depends on `sorry` from a failure elsewhere (a failed obligation, a declaration with an error, or a hole()) that its goal or its proof contains, so Lean could not check it on its own: fix that first
 
-✗ NOT VERIFIED  16/24 obligations proved, 4 failed, 4 unchecked; components: 0/0 verified  (18.3s)
+✗ NOT VERIFIED  16/24 obligations proved, 4 failed, 4 unchecked; components: 0/0 verified  (15.2s)
