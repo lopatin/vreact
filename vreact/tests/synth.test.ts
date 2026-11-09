@@ -307,6 +307,26 @@ const cases: Record<string, () => Promise<void>> = {
     check("Gx-helpers: optional constrained field absent as undefined, never null", solutions(by("zeroNote"))[0] === "0" && !/"note":null/.test(out), String(solutions(by("zeroNote"))[0]));
     check("Gx-helpers: enum-constrained K tested at int/string, explained", /tested with K = int or string, standing for every type with equality/.test(out) && solutions(by("firstKey"))[0] === "[k]", String(solutions(by("firstKey"))[0]));
   },
+  // Map / Set: random Maps and Sets as inputs, pure updates of fresh copies, counterexamples that show them
+  async "Mx-update"() {
+    const dir = project("Mx-update");
+    // (the debug output prints the first tested candidates' counterexamples)
+    process.env.VREACT_SYNTH_DEBUG = "1";
+    const { by, out } = await synth(dir, "src/m.ts", { write: true }).finally(() => delete process.env.VREACT_SYNTH_DEBUG);
+    check("Mx-update: setCount", solutions(by("setCount"))[0] === "new Map(m).set(k, v)", String(solutions(by("setCount"))[0]));
+    check("Mx-update: addTag", solutions(by("addTag"))[0] === "new Set(s).add(t)", String(solutions(by("addTag"))[0]));
+    check("Mx-update: count", solutions(by("count"))[0] === "m.size", String(solutions(by("count"))[0]));
+    check("Mx-update: counterexamples show Maps", /postcondition fails on \[\{"Map":\[/.test(out), out.split("\n").find((l) => l.includes("postcondition fails on")) ?? "(no counterexample)");
+    check("Mx-update: written program translates", translate(loadConfig(dir)).ok);
+  },
+  // random records keep their field types: an enum or string `id` is not overwritten by a key / an int
+  async "Mx-ids"() {
+    const dir = project("Mx-ids");
+    const { by } = await synth(dir, "src/m.ts");
+    check("Mx-ids: allRed (enum id in Map values)", solutions(by("allRed"))[0] === "true", String(solutions(by("allRed"))[0]));
+    check("Mx-ids: allNamed (string id in an array)", solutions(by("allNamed"))[0] === "true", String(solutions(by("allNamed"))[0]));
+    check("Mx-ids: nValues", solutions(by("nValues"))[0] === "m.size", String(solutions(by("nValues"))[0]));
+  },
 };
 
 for (const [name, run] of Object.entries(cases)) {

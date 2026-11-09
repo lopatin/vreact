@@ -102,10 +102,11 @@ compiles a file with the nearest one's settings, e.g. its `jsxImportSource`).
 | `{ readonly f: T; g?: U }`              | records (optional field = `U \| undefined`) |
 | `{ kind: "x"; … } \| { kind: "y"; … }`  | discriminated unions — any common string-literal field works |
 | `readonly T[]`, `T \| null`, `[A, B]`   | lists, options (not both null and undefined), tuples |
+| `ReadonlyMap<K, V>`, `ReadonlySet<T>`   | Maps and Sets (also `Map`/`Set`): see [Map and Set](#map-and-set) |
 | `(a: A) => void`                        | only as callback **props** (a direct field of a props type); never data: not a function's parameter or result, state, a constant, a local, a hole, an array element |
 
 Not supported: `any`, generic types (generic type aliases and interfaces; generic
-*functions* are, see Generics), classes, `Map/Set/Record`, recursive types,
+*functions* are, see Generics), classes, `Record`, `WeakMap`/`WeakSet`, recursive types,
 non-discriminated unions (`string | number`), `ReactNode`/`children` props,
 library types (`Date`, `HTMLElement`, …). Function types and React nodes are not
 data: a parameter, result, constant, state, local, data prop, callback parameter,
@@ -153,7 +154,9 @@ inherited member, not `undefined`. Such names are fine for required fields.
   (or `r.f`, `r[i]`) where the type tells null from undefined (`isNull(r)` with
   `isNull(x: int | null)`, `xs.includes(r)`, `{ f: r }`) is rejected unless its
   nullish value, from the return type, is that one. Annotate `r` with the return
-  type to have TypeScript check it.
+  type to have TypeScript check it. Its nullish value is known through fields, indexes,
+  `!`, optional chains and the reads of a Map, Set or array (`r.get(k)?.name === x`,
+  `r.at(0)?.id === y`); a comparison it cannot type asks for the annotation.
 * `+` with a string operand concatenates; `int`, `boolean` and enum operands are
   converted as in template literals (`x + "px"`); a `number` or nullable operand is
   rejected (use an int, or `${n}`). Bitwise operators (`~ & | ^ << >> >>>`) and
@@ -163,7 +166,9 @@ inherited member, not `undefined`. Such names are fine for required fields.
   (`return k;`, `k === s`). The same inline object type or string-literal union
   in one module is one type (e.g. `hole<{ readonly v: int }>()` returned from a
   function declared to return `{ readonly v: int }`).
-* `&& || ! ?: ?? ?.` (also `a ?? b ?? 0`) and template literals.
+* `&& || ! ?: ?? ?.` (also `a ?? b ?? 0`) and template literals. `?.` skips the whole rest
+  of the chain, as in JS: `x?.tags.length ?? 0`, `m.get(k)?.has(id) ?? false`,
+  `grid.get(r)?.get(c) ?? 0`, `xs?.[0]` (optional calls `f?.()` are rejected).
 * `xs[i]` (obligation: `0 <= i < xs.length`), `t[0]` on tuples, `x!` (obligation).
 * Arrays: `length map filter some every find findIndex includes indexOf slice
   concat join reduce(f, init) toSorted(cmp) toReversed with at flatMap`, spread.
@@ -216,6 +221,81 @@ inherited member, not `undefined`. Such names are fine for required fields.
   Assigning a present value to a `let x: T | null` (`x = 0`, `let x: int | null = 3`)
   narrows it too; assigning again (or in a loop) forgets it.
 
+## Map and Set
+
+`ReadonlyMap<K, V>`, `ReadonlySet<T>` (and `Map`, `Set`: prefer the readonly forms in
+signatures, state and props, so that TypeScript rejects `set` on them), wherever a type may
+appear: parameters, results, state, props, record fields, array elements, reducer state.
+
+* Keys and elements: `int`, `string`, `boolean`, string-literal enums. JS compares keys with
+  SameValueZero, so `number` (NaN, -0), objects, arrays and tuples (identity) and optional
+  types (`null` and `undefined` are different keys) are rejected. Values: any data type but an
+  optional one (`m.get(k)` is `undefined` for a missing key): no `ReadonlyMap<K, V | null>` —
+  delete the key instead. Not (yet) a type parameter of a generic function, as key, value or
+  element.
+* Order is JS's insertion order, exactly: `set` on a present key keeps its position, on a new
+  key appends it; `delete` then `set` moves the key to the end; `new Map(entries)` with a
+  repeated key keeps its first position and its last value; `new Set(xs)` keeps first occurrences.
+* Create: `new Map<K, V>()`, or `new Map()` where the type is known (an annotation,
+  `useState<T>(…)`, a parameter, the return type) — never with neither (TypeScript types it
+  `Map<any, any>`); `new Map(m)` (a copy), `new Map(pairs)` (`[k, v]` pairs: a literal,
+  `new Map<int, Item>(xs.map((x: Item) => [x.id, x]))`), `new Set(xs)`, `new Set(s)`. A
+  literal of pairs needs no type arguments: its types are those of its first pair
+  (`new Map([["a", 1]])` is a `Map<string, int>`); pairs computed by a callback do
+  (`new Map<int, Item>(…)`: TypeScript infers `number` for an integer, which cannot tell `int`
+  from `number`). `new Set(string)` is rejected (it iterates code points).
+* Read: `m.get(k)` (`V | undefined`: `m.get(k) ?? d`, `m.get(k)?.f`, `m.get(k)!` with an
+  obligation, or `const v = m.get(k); if (v !== undefined) …` — a call is not narrowed),
+  `m.has(k)`, `m.size`, `s.has(x)`, `s.size`.
+* Iterate where the iteration is consumed at once: `[...m]` / `[...m.entries()]` (`[k, v]`
+  pairs), `[...m.keys()]`, `[...m.values()]`, `[...s]`, `Array.from(it)` (one argument),
+  `for (const [k, v] of m)`, `for (const k of m.keys())`, `for (const x of s)`, and the argument
+  of `new Map(…)` / `new Set(…)`. An iterator anywhere else (stored in a `const`, passed,
+  rendered) is rejected: a JS iterator is used up once and sees later changes. Render a Map as
+  a keyed list: `{[...m.values()].map((it) => <li key={it.id}>…</li>)}`.
+* Tuples destructure exactly: `([k, v]) => …`, `for (const [k, v] of m)`, `const [k, v] = pair`
+  (all elements; `[, v]` skips one).
+* Update in an expression with `.set` / `.add` chains on a fresh copy:
+  `new Map(m).set(k, v)`, `new Set(s).add(x).add(y)`. As statements, mutate a local copy:
+  `const n = new Map(m); n.set(k, v); n.delete(j); n.clear(); return n;` — only a `const`
+  initialised in the same function with `new Map(…)` / `new Set(…)`, also in a `for…of`
+  (`for (const x of xs) n.set(x.id, x);`), a functional update
+  (`setM((p) => { const n = new Map(p); n.set(k, v); return n; })`) or a reducer. Rejected:
+  mutating parameters, props, state, constants, `let`s or values read from elsewhere (the
+  caller, React or other code holds the same object); `set`/`add`/`delete`/`clear` inside an
+  expression (`if (n.delete(k))`, `console.log(m.set(…))`); mutating from inside a callback or
+  helper; using `n` — storing it, passing it to a function, setter or child, rendering it,
+  capturing it in a handler or helper — when a mutation of `n` follows (later in the code, or in
+  a later loop iteration; the function's own `return n` is fine, a callback's `return n` is
+  not — it hands `n` back to the function, which goes on): mutate first, or pass a copy
+  `new Map(n)`; mutating `n` in a `for…of` over `n` itself (iterate `[...n]`). Logging or
+  writing out `n` where it stands is not a use: `console.log("start", n)`,
+  `localStorage.setItem(k, JSON.stringify(n))` (the model reads nothing of it). A local named
+  like a global (`const console = new Set(…)`) is an ordinary variable: `console.add(1)` mutates
+  it. The mutating
+  methods are only called directly, `n.set(…)`: not through an index (`m["clear"]()`), as a
+  value (`const f = n.set`, `n.set.bind(n)`) or via the prototype (`Map.prototype.set.call(m, …)`),
+  and a Map or Set is never indexed (`m[k]`: use `m.get(k)`).
+* Not supported: `===` on Maps/Sets (identity: compare the contents), truthiness (`if (m)` is
+  always true: test `m.size > 0`), `forEach` (use `for…of`), `entries()` of a Set, `WeakMap`,
+  `WeakSet`, `Map.groupBy`, the ES2025 Set methods, a Map or Set as a JSX child or a string.
+  Effect dependencies compare Maps by identity (a new Map re-runs the effect).
+* Contracts use the same forms: `r.get(k) === v`, `r.has(k)`, `r.size`,
+  `[...r.values()].every((v) => v >= 0)`, frames
+  `[...m.keys()].every((j) => j === k || r.get(j) === m.get(j))`, order
+  `[...r.keys()].indexOf(k) === m.size`. The automation knows `get`/`has`/`size` after
+  `set`/`delete`, that keys are distinct (keyed lists by the keys, or by the values' `id` when an
+  invariant states `[...m.entries()].every(([k, v]) => k === v.id)`), that a value read with
+  `m.get(k)` is the value of `k`'s entry (so such an invariant applies to it), the position of a
+  set or re-set key, the entries and values of `new Map(pairs)`, of `new Map` of a filtered
+  `[...m]` and of the loops `for (const x of xs) n.set(f(x), g(x))` / `n.add(f(x))` / `n.add(x)` (they come
+  from the pairs), `new Map`/`new Set` of literals, `[...m].length === m.size` (also
+  `[...m.values()]`), `new Set(xs).size <= xs.length` (`===` when `distinct(xs)`), the size of
+  `new Map(pairs)` with distinct keys, and membership in a Set after `add`/`delete` (also a Set
+  stored in a Map). Other loops (a loop of `delete`s, a sum over `m.values()`) need a lemma, as
+  for arrays. Lean lemmas for `proofs/` (e.g. `JSMap.keys_set`, `JSMap.get_set`,
+  `JSMap.entries_set`, `JSMap.mem_entries_of_get`) are in `VReact/JSMap.lean`.
+
 ## Statements
 
 `const`, `let` + reassignment (locals only), `if/else`, `return`, `switch`
@@ -240,6 +320,8 @@ a user proof may use it). Not in generic functions (see Generics), nor inside a
 Lean checks those for every value of the loop's variables, the element or the
 state, so the fact would be assumed for all of them — use `assert(…)`, or
 `requires(…)` of a helper function that takes the values as parameters.
+
+A Map or Set mutated by statements follows the rules of [Map and Set](#map-and-set).
 
 Closures and `let`: JS closures read a variable when they run. So a function
 that runs later (helper arrow, handler, callback prop, `setX(prev => …)`, effect,
@@ -310,7 +392,9 @@ which each caller proves (or assumes) at its own types, or prove it with
 `assert(…)`. A type parameter may appear in parameter and return types,
 local annotations (also of helper arrows and callback parameters), `hole<T>()`,
 arrays, `T | null` and tuples — not inside object types (`{ readonly v: T }`:
-pass the value as its own parameter). At most one constraint per parameter:
+pass the value as its own parameter), and not yet inside Map or Set types
+(`ReadonlyMap<K, V>`, `new Set<K>()` in a generic function: rejected). At most one
+constraint per parameter:
 
 * **none** — values of `T` are abstract: they can be passed, stored (arrays,
   `T | null`, tuples), returned, given to other generic functions, and used with
@@ -449,7 +533,10 @@ allowed and have no modelled effect, but JS evaluates their arguments, so these
 are checked like any expression (here and in handlers, timers, cleanups, render
 and functions: `console.log(xs[i].name)` needs `i` in bounds; an argument may be
 `JSON.stringify(v)` or `JSON.stringify(v, null, 2)`, which cannot throw on a VTS
-value); no async. A cleanup
+value; no casts, `eval`, `arguments`, `m["clear"]()`); no async. `console`,
+`localStorage`, `document`, `setTimeout`, `clearTimeout`, … are the globals only: a local,
+parameter or import with such a name is an ordinary variable (a parameter `document` has no
+external `document.title`). A cleanup
 is an inline `() => { … }`, returned at the end of the effect body or of a branch
 of it, that only calls `clearTimeout`/`clearInterval` and makes those external
 writes, possibly under `if`/`else` (`if (id !== null) clearInterval(id)`: a timer
@@ -460,12 +547,19 @@ when React calls it. No setters, `dispatch`, parent callbacks or local helpers:
 it runs later with the values it captured. Its conditions and arguments are
 checked where the effect returns it, under the facts that hold there (the
 effect's early returns, its `if`s). Statements after the effect's `return` are
-rejected (they never run).
+rejected (they never run). A cleanup's arguments and conditions, and a timer's
+delay, must also be data: they may call only the library's reading methods (array
+methods but `push`/`pop`/`shift`/`unshift`/`splice`/`sort`/`reverse`/`fill`/
+`copyWithin`, string and number methods, `Math.*`, `JSON.stringify`,
+`m.get`/`has`/`keys`/`values`/`entries`), `String(…)` and the module's functions; a function
+is only called there, never passed or stored (inline callbacks aside: `[1].map(setN)` and
+`String({ toString: setN })` would run the setter); no mutators (`xs.push(1)`,
+`m.get(k)!.push(x)`), `.call`/`.apply`/`.bind`, `new`, assignments.
 
 JSX: intrinsic elements with string/int/bool/enum attributes (`className`,
 `value`, `checked`, `disabled`, `placeholder`, `type`, …; no `style`, `ref`,
 spread), child components with all their props, `{cond && <X/>}`, ternaries,
-`xs.map(x => <El key={…}/>)` (keys `int` or `string`, distinct), text from
+`xs.map(x => <El key={…}/>)` (keys `int`, `string` or a string-literal enum, distinct), text from
 strings/ints/enums (booleans render nothing, but are checked). `key={…}` outside
 lists is checked too (JS evaluates it). A JSX const (`const row = <p>{e}</p>;`)
 is checked where it is declared, even if it is rendered only under a condition or

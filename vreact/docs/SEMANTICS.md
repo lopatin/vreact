@@ -37,6 +37,8 @@ exact, total meaning in Lean, while still covering what real React code uses.
 | `readonly T[]`, `T[]`                        | `List T`                                | immutable |
 | `T \| null`, `T \| undefined`, `f?: T`       | `Option T`                              | not both null and undefined |
 | `[A, B]`                                     | `A × B`                                 | |
+| `ReadonlyMap<K, V>`, `Map<K, V>`             | `JS.JSMap K V`: entries in insertion order, keys distinct | keys `boolean`/`int`/`string`/enum; values not optional; no type parameter inside (not yet) |
+| `ReadonlySet<T>`, `Set<T>`                   | `JS.JSSet T`: elements in insertion order, distinct | elements as Map keys |
 | `(x: A) => void` (props only)                | callback with a contract                | see §2.4; never data (a function's parameter or result, state, a constant, a local, a hole, an array element or a non-props field: rejected) |
 | type parameter `T` of a generic function     | binder `{T : Type}` (+ constraint binders) | abstract; instantiated at each call (below) |
 
@@ -93,10 +95,23 @@ absent, reading it gives the inherited function, not `undefined` (TypeScript
 catches this only for the members its library declares). Required fields with
 these names are own properties of every value and are accepted.
 
+`Map`, `Set`, `ReadonlyMap`, `ReadonlySet` (types and constructors), `Array.from` and the other
+builtins Map/Set code uses are recognised by their declaration in TypeScript's library, not by
+name (as `ReadonlyArray` is: declared in TypeScript's default library and only in library
+files): a user type or value of that name, or a declaration in the project that augments one
+(`declare global { interface Map<K, V> … }`), is not the builtin. Map keys and Set elements are
+the types whose SameValueZero (the comparison JS Maps use) is Lean equality: `boolean`, `int`,
+`string` and string-literal enums — not `number` (NaN equals NaN, -0 equals +0), not objects,
+arrays or tuples (identity), not optional types (`null` and `undefined` are different keys). A
+Map value is never optional: `m.get(k)` is `undefined` for a missing key, which an optional
+value would make ambiguous (`JSMap.get` is an `Option V`). A type parameter of a generic
+function inside a Map or Set type is not supported yet (rejected).
+
 Rejected: `any`, `as` casts, classes, `this` (also `this` parameters), mutation of
-objects/arrays, `==` (except `== null`), `===` on objects (reference identity),
-generic types, components and arrows (generic top-level functions are supported,
-below), exceptions (`try`), `var`, `while`, recursion (for now), recursive types,
+objects/arrays (of Maps and Sets: see §1.2), `==` (except `== null`), `===` on objects,
+Maps and Sets (reference identity), generic types, components and arrows (generic
+top-level functions are supported, below), exceptions (`try`), `var`, `while`,
+recursion (for now), recursive types,
 `async`.
 
 **Generic functions.** A top-level function may have type parameters; each is a
@@ -220,7 +235,54 @@ Every expression maps to a Lean term whose value is the JavaScript value.
   (`-5 + "a"` is `"-5a"`); a `number` or possibly-null operand is rejected.
   Bitwise operators (`~ & | ^ << >> >>>`, also as `&=` …) are rejected (ToInt32 is
   not modelled), as are compound assignments other than `+=` and `-=`.
-* `x!` carries the obligation `x ≠ null`; `?.` and `??` map to `Option.map/getD`.
+* `x!` carries the obligation `x ≠ null`; `??` maps to `Option.getD`. An optional chain
+  short-circuits as in JS: when the base before a `?.` is null/undefined, the whole rest of the
+  chain is skipped and the chain is `undefined` (`a?.b.c`, `m.get(k)?.has(x)`,
+  `g.get(r)?.get(c)`, `xs?.[i]`); it is a `match` on the base, `some v => some (rest v)` /
+  `none => none` (a rest that is itself optional is not wrapped again; the match hypothesis is
+  in scope for the rest's obligations). Optional calls `f?.(…)` are rejected; in `a?.b!` the
+  `!` asserts the chain's value (TypeScript's reading).
+* Maps and Sets (`lean/VReact/JSMap.lean`) are values: `JS.JSMap K V` is the list of entries in
+  insertion order with distinct keys, `JS.JSSet T` the list of elements; Lean `=` on them is
+  equality of these lists, i.e. observational equality (JS `===`, identity, is rejected). The
+  operations follow ECMA-262: `m.set(k, v)` replaces the value of a present key in place and
+  appends a new key; `delete` removes the entry (a later `set` appends it again);
+  `new Map(entries)` is `set` of each pair in turn (a repeated key keeps its first position and
+  its last value), `new Set(xs)` keeps first occurrences, `new Map(m)` is a copy (the same
+  value); `get` is an `Option`, `size` the number of entries; `keys()`, `values()`, `entries()`,
+  spread, `Array.from` and `for…of` list them in order. An iterator is translated only where it
+  is consumed at once (spread, `Array.from(it)`, `for…of`, the argument of `new Map/Set`): JS
+  iterators are one-shot and live (they see later mutations), a list is neither. JS Maps are
+  mutable objects shared by reference, so a mutation is exact on the value model only when
+  nothing else can observe the object. VTS allows `.set`/`.add` in an expression only in a chain
+  on a fresh `new Map(…)`/`new Set(…)` (a pure update), and `set`/`add`/`delete`/`clear` as
+  statements on a local `const` initialised in the same function with a fresh `new Map/Set(…)`,
+  where they rebind the local (as an assignment rebinds a `let`; a `for…of` threads it through
+  its fold). A static check of each body (`checkCollectionMutation`) guarantees that no other
+  reference to that object exists while a mutation can still run: no mutation of parameters,
+  props, state, constants, `let`s or values read from elsewhere; no mutation inside an
+  expression; no mutation from a nested function (a callback's mutation would be lost, and it
+  may run later); a use of the local other than a read (`size`, `get`, `has`, an iteration
+  consumed at once, a copy) — storing, passing, rendering, returning it from a callback (a
+  `return` of an array callback or a `useMemo` callback hands it back to the function) — must
+  not be followed by a mutation (later in the code or in a later iteration of an enclosing
+  loop; a `return` statement of the declaring function itself ends it); a function that runs
+  later may not refer to the local when a mutation can follow its creation; and a `for…of`
+  over the local may not mutate it (JS would visit the added entries). The check recognises a
+  mutation in the form `x.set(…)` (`add`, `delete`, `clear`); every other way to reach a
+  mutating method of the library's Map/Set — an index (`m["clear"]()`; Maps and Sets are never
+  indexed), the prototype (`Map.prototype.set.call(m, …)`, `Reflect.apply(Set.prototype.add,
+  …)`), a method value (`m.set.bind(m)`, `(m.set)(k, v)`) — is rejected wherever it is written.
+  The arguments of external writes (`console.*(…)`, `localStorage.setItem(…)`, the value of
+  `document.title = …`), whose values are not modelled, are translated with their obligations
+  (casts, `eval`, `arguments` and the like are rejected there as anywhere); an effect
+  cleanup's arguments and conditions and a timer's delay are translated too, and must in
+  addition be data (§2.6: casts, `arguments` and `any`-typed expressions rejected, so their
+  static types show every Map/Set they can reach). Such an argument is not an alias: the write prints or
+  converts the local where it stands (`console.log("start", n)`, `JSON.stringify(n)` in one), and
+  the model reads nothing of it. `console`, `localStorage`, `document` (and the timer functions)
+  are recognised by the declaration they resolve to — the library's global —, never by their
+  spelling: a fresh local named `console` is mutated by `console.add(1)` like any other.
 * Narrowing (`x !== null`, `x.kind === "add"`, `switch (x.kind)`, early
   `return`) is compiled to Lean `match`, so the narrowed facts are available to
   every obligation in the branch. The complement of a tag test is narrowed too
@@ -607,7 +669,8 @@ function returning a view tree in which
 * every event handler stores the proof that its outcome is safe (§2.2),
 * every child element `<C …/>` stores the proof of `C.pre`,
 * every keyed list stores the proof that its keys are pairwise distinct
-  (React's reconciliation requirement; `int` and `string` keys never mix),
+  (React's reconciliation requirement; `int` and `string` keys never mix; a string-literal
+  enum key is its string, `Key.str (JS.str k)`),
 * every expression JavaScript evaluates during render is kept in the term with
   its obligations, including `key={…}` outside lists (`VNode.withKey`; a key
   change remounts, which is covered because both keeping the state and
@@ -667,6 +730,17 @@ run, so a cleanup can clear it, or test it, only when it is returned after the
 registration on its path. A cleanup returned earlier — from a branch before
 `const id = …` — would read `id` in its temporal dead zone when React calls it
 (a ReferenceError; TypeScript does not flag a use inside a closure): rejected.
+"Pure" (for the arguments and conditions of a cleanup, and a timer's delay, which
+are also translated with their obligations) is checked
+syntactically and by TypeScript symbol: calls only of the library's reading methods (by the
+lib interface that declares them: array methods other than the mutators, string, number and
+boolean methods, `Math`, `JSON.stringify`, the reads of `Map`/`Set`, `Object.prototype`'s),
+`String`, spec functions and the module's functions; a function value only as the callee of
+a call — not passed, stored in an object or array, or chosen by `?:` (inline callbacks, which
+are checked themselves, aside); no `new`, `delete`, `await`, tagged templates, assignments,
+`++`/`--`, casts, `arguments` or `any`. So the code cannot mutate a state value in place
+(`xs.push(1)`, `m.get(k)!.push(x)`, `Array.prototype.push.call(xs, 1)`) or reach a setter
+(`[1].map(setN)`, `String({ toString: setN })`).
 Running a robust effect any number of times (StrictMode) is safe.
 
 A timer is registered only by a statement at the top level of the effect body
@@ -774,7 +848,15 @@ hook rules hold (static checks). For every function: its body is safe and its
 ## 5. The trusted base — what is *not* verified
 
 * **The translation** from TypeScript to Lean (≈3k lines of TypeScript). It is
-  structural and syntax-directed; the regression suite pins its behaviour. Its
+  structural and syntax-directed; the regression suite pins its behaviour. The
+  value model of Maps and Sets relies on its alias analysis (§1.2): that a mutated Map or
+  Set is referenced by nothing else while it can still change, and that every mutation is
+  written `x.set(…)`/`add`/`delete`/`clear` (other routes to the library's mutating methods are
+  rejected syntactically, by their TypeScript symbol; in a cleanup's arguments and conditions
+  and a timer's delay, which must be data, the static checks also rely on TypeScript's types,
+  with casts, `arguments` and `any` rejected, and on the list of the library's reading methods
+  of §2.6). Globals (`console`, `localStorage`, `document`, the timer functions) are
+  recognised by their declarations in the library files. Its
   name escaping relies on `src/leanNames.ts` (Lean tokens and root names),
   generated from the Lean environment by `lean/scripts/GenNames.lean`; regenerate
   it when the Lean toolchain or the VReact library changes.
@@ -1039,8 +1121,9 @@ hook rules hold (static checks). For every function: its body is safe and its
   `"./b"`); `react`, `vreact/spec` and the `react/jsx-runtime` of JSX must
   resolve to the installed packages' declarations, and to the same files
   without those settings.
-* **The JS runtime model** (`JS.lean`): e.g. that `Array.prototype.slice` behaves
-  like `JS.slice`. Definitions follow ECMA-262 directly; where ECMA-262 leaves a
+* **The JS runtime model** (`JS.lean`, `JSMap.lean`): e.g. that `Array.prototype.slice` behaves
+  like `JS.slice`, and that a JS `Map`/`Set` with keys of the admitted types behaves like
+  `JS.JSMap`/`JS.JSSet` (insertion order, SameValueZero as Lean equality on those types). Definitions follow ECMA-262 directly; where ECMA-262 leaves a
   result implementation-defined (`toSorted` with an inconsistent comparator) the
   model fixes only what every engine guarantees (a permutation).
 * **The React model**: that React 18 behaves as described in §2–3 (discrete-event

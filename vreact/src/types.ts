@@ -11,7 +11,9 @@ import { fail, leanField, leanAccessor, leanIdent, leanStr, jsStr, capitalize, s
  *   { … } / interface → structure,
  *   discriminated union of objects → inductive with one constructor per variant,
  *   readonly T[] / T[] → List T,  T | null / T | undefined / f?: T → Option T,
- *   [A, B] → A × B.
+ *   [A, B] → A × B,
+ *   ReadonlyMap<K, V> / Map<K, V> → VReact.JS.JSMap K V,  ReadonlySet<T> / Set<T> → VReact.JS.JSSet T
+ *   (keys / elements of a key type, see `isKeyType`; values never optional).
  */
 export type VType =
   | { k: "bool" }
@@ -27,6 +29,8 @@ export type VType =
   | { k: "arr"; elem: VType }
   | { k: "opt"; elem: VType }
   | { k: "tuple"; elems: VType[] }
+  | { k: "map"; key: VType; val: VType }
+  | { k: "set"; elem: VType }
   | { k: "fn"; params: Param[]; ret: VType }
   /**
    * A type parameter of a generic top-level function (identified by `id`: one per declaration),
@@ -85,6 +89,10 @@ export function mentionsTVar(t: VType, ids?: ReadonlySet<number>): boolean {
       return mentionsTVar(t.elem, ids);
     case "tuple":
       return t.elems.some((e) => mentionsTVar(e, ids));
+    case "map":
+      return mentionsTVar(t.key, ids) || mentionsTVar(t.val, ids);
+    case "set":
+      return mentionsTVar(t.elem, ids);
     case "fn":
       return t.params.some((p) => mentionsTVar(p.type, ids)) || mentionsTVar(t.ret, ids);
     default:
@@ -103,6 +111,10 @@ export function substType(t: VType, σ: ReadonlyMap<number, VType>): VType {
       return T.opt(substType(t.elem, σ));
     case "tuple":
       return { k: "tuple", elems: t.elems.map((e) => substType(e, σ)) };
+    case "map":
+      return { k: "map", key: substType(t.key, σ), val: substType(t.val, σ) };
+    case "set":
+      return { k: "set", elem: substType(t.elem, σ) };
     case "fn":
       return { k: "fn", params: t.params.map((p) => ({ name: p.name, type: substType(p.type, σ) })), ret: substType(t.ret, σ) };
     default:
@@ -226,6 +238,12 @@ export function sameType(a: VType, b: VType): boolean {
       const bb = b as typeof a;
       return a.elems.length === bb.elems.length && a.elems.every((e, i) => sameType(e, bb.elems[i]));
     }
+    case "map": {
+      const bb = b as typeof a;
+      return sameType(a.key, bb.key) && sameType(a.val, bb.val);
+    }
+    case "set":
+      return sameType(a.elem, (b as typeof a).elem);
     case "fn": {
       const bb = b as typeof a;
       return a.params.length === bb.params.length && a.params.every((p, i) => sameType(p.type, bb.params[i].type)) && sameType(a.ret, bb.ret);
@@ -264,6 +282,10 @@ export function showType(t: VType): string {
       return `${t.elem.k === "fn" ? `(${showType(t.elem)})` : showType(t.elem)} | null`;
     case "tuple":
       return `[${t.elems.map(showType).join(", ")}]`;
+    case "map":
+      return `ReadonlyMap<${showType(t.key)}, ${showType(t.val)}>`;
+    case "set":
+      return `ReadonlySet<${showType(t.elem)}>`;
     case "fn":
       return `(${t.params.map((p) => `${p.name}: ${showType(p.type)}`).join(", ")}) => ${showType(t.ret)}`;
     case "tvar":
@@ -292,6 +314,10 @@ export function typeKey(t: VType): string {
       return `?(${typeKey(t.elem)})`;
     case "tuple":
       return `(${t.elems.map(typeKey).join(",")})`;
+    case "map":
+      return `Map<${typeKey(t.key)},${typeKey(t.val)}>`;
+    case "set":
+      return `Set<${typeKey(t.elem)}>`;
     case "fn":
       return `fn(${t.params.map((p) => typeKey(p.type)).join(",")})=>${typeKey(t.ret)}`;
     case "tvar":
@@ -354,6 +380,16 @@ export function nullShape(t: ts.Type, vt: VType, ck: ts.TypeChecker): string | n
       const inner = vt.elems.map((e, i) => nullShape(args[i], e, ck));
       return inner.some((x) => x === null) ? null : `(${inner.join(",")})`;
     }
+    case "map":
+    case "set": {
+      // the type arguments of `Map<K, V>` / `ReadonlySet<T>` (keys and elements are never
+      // optional, but a value may have optional parts: `ReadonlyMap<int, readonly (int | null)[]>`)
+      const args = collectionTypeArgs(t, ck);
+      const parts = vt.k === "map" ? [vt.key, vt.val] : [vt.elem];
+      if (!args || args.length !== parts.length) return null;
+      const inner = parts.map((e, i) => nullShape(args[i], e, ck));
+      return inner.some((x) => x === null) ? null : `${vt.k}<${inner.join(",")}>`;
+    }
     case "bool":
     case "int":
     case "num":
@@ -372,6 +408,81 @@ export function nullShape(t: ts.Type, vt: VType, ck: ts.TypeChecker): string | n
       // where the type parameter is in scope), and never nullish itself
       return "";
   }
+}
+
+/** The names of the library's Map and Set types (and their constructors). */
+const COLLECTION_NAMES = new Set(["Map", "ReadonlyMap", "Set", "ReadonlySet"]);
+
+/**
+ * Whether a symbol is a builtin of TypeScript's library (`Map`, `Set`, `Array`, …): declared in a
+ * default library file (`lib.*.d.ts`), and not declared or augmented by the project's own sources
+ * (a user `Map`, or `declare global { interface Map<K, V> … }`).  Declarations of installed
+ * packages (`@types/node` adds members to `Array`) are part of the environment, as the library is.
+ */
+export function isLibSymbol(sym: ts.Symbol | undefined, env: TypeEnv): boolean {
+  return env.isLibSymbol(sym);
+}
+
+/**
+ * The type arguments of a TypeScript `Map`/`ReadonlyMap`/`Set`/`ReadonlySet` type (null for any
+ * other type): `[K, V]` or `[T]`.
+ */
+export function collectionTypeArgs(t: ts.Type, ck: ts.TypeChecker): readonly ts.Type[] | null {
+  if (!(t.flags & ts.TypeFlags.Object) || !((t as ts.ObjectType).objectFlags & ts.ObjectFlags.Reference)) return null;
+  const sym = (t as ts.TypeReference).target.getSymbol();
+  if (!sym || !COLLECTION_NAMES.has(sym.name)) return null;
+  return ck.getTypeArguments(t as ts.TypeReference);
+}
+
+/** "map" / "set" for a TypeScript type that is the library's Map/ReadonlyMap / Set/ReadonlySet. */
+export function collectionKind(t: ts.Type, env: TypeEnv): "map" | "set" | null {
+  if (!(t.flags & ts.TypeFlags.Object) || !((t as ts.ObjectType).objectFlags & ts.ObjectFlags.Reference)) return null;
+  const sym = (t as ts.TypeReference).target.getSymbol();
+  if (!sym || !COLLECTION_NAMES.has(sym.name) || !isLibSymbol(sym, env)) return null;
+  return sym.name.endsWith("Map") ? "map" : "set";
+}
+
+/**
+ * Map keys and Set elements: the types whose JS SameValueZero is Lean equality — booleans, ints,
+ * strings and string-literal enums.  Not `number` (NaN equals NaN, -0 equals +0, and Lean's
+ * Float has no decidable equality), not objects, arrays or tuples (compared by identity), not
+ * optional types (`null` and `undefined` are different keys, VTS represents both as absent).
+ */
+export function isKeyType(t: VType): boolean {
+  return t.k === "bool" || t.k === "int" || t.k === "str" || t.k === "enum";
+}
+
+/** Why `t` cannot be a Map key / Set element (`what`: "Map keys", "Set elements"). */
+export function keyTypeProblem(t: VType, what: string): string {
+  if (t.k === "num") return `${what} must be int, string, boolean or a string-literal enum, not number (JS compares keys with SameValueZero: NaN equals NaN and -0 equals +0, unlike number equality): use int`;
+  if (t.k === "opt") return `${what} must not be optional (JS tells a null key from an undefined one, VTS represents both as absent): use a non-optional key type`;
+  return `${what} must be int, string, boolean or a string-literal enum, not ${showType(t)} (JS compares objects, arrays and tuples by identity: a copy is a different key): key by an id, e.g. ReadonlyMap<int, ${showType(t)}>`;
+}
+
+/**
+ * Type parameters of generic functions inside Map and Set types (`ReadonlyMap<K, V>` in a generic
+ * helper) are not supported yet: rejected, rather than half-handled by inference and the
+ * instantiation checks.
+ */
+function noTVarInCollection(parts: VType[], Name: string, node: ts.Node) {
+  const tv = parts.find((p) => mentionsTVar(p));
+  if (tv) fail(node, `a type parameter inside a ${Name} type (${node.getText()}) is not supported yet: give the ${Name} concrete ${Name === "Map" ? "key and value types" : "element type"} (write the helper for the types it is used with)`);
+}
+
+/** The VTS type `ReadonlyMap<key, val>`, or a rejection at `node` (keys: `isKeyType`; values: present data). */
+export function mapType(key: VType, val: VType, node: ts.Node): VType {
+  noTVarInCollection([key, val], "Map", node);
+  if (!isKeyType(key)) fail(node, keyTypeProblem(key, "Map keys"));
+  if (val.k === "opt") fail(node, `Map values must not be optional: m.get(k) is undefined for a missing key, which VTS could not tell from a present value that is null/undefined; use a Map without the missing case (e.g. delete the key instead of storing null)`);
+  if (val.k === "fn" || val.k === "node" || val.k === "void" || val.k === "unit") fail(node, `Map values must be data (not ${showType(val)})`);
+  return { k: "map", key, val };
+}
+
+/** The VTS type `ReadonlySet<elem>`, or a rejection at `node`. */
+export function setType(elem: VType, node: ts.Node): VType {
+  noTVarInCollection([elem], "Set", node);
+  if (!isKeyType(elem)) fail(node, keyTypeProblem(elem, "Set elements"));
+  return { k: "set", elem };
 }
 
 /** The Lean type of a VTS type. */
@@ -400,6 +511,10 @@ export function leanType(t: VType): string {
       return `(Option ${leanType(t.elem)})`;
     case "tuple":
       return "(" + t.elems.map(leanType).join(" × ") + ")";
+    case "map":
+      return `(VReact.JS.JSMap ${leanType(t.key)} ${leanType(t.val)})`;
+    case "set":
+      return `(VReact.JS.JSSet ${leanType(t.elem)})`;
     case "fn":
       throw new Error("internal: function type has no Lean value type");
     case "tvar":
@@ -473,6 +588,10 @@ export function hasDecEq(t: VType, reg: TypeRegistry, seen = new Set<string>()):
       return hasDecEq(t.elem, reg, seen);
     case "tuple":
       return t.elems.every((e) => hasDecEq(e, reg, seen));
+    case "map":
+      return hasDecEq(t.key, reg, seen) && hasDecEq(t.val, reg, seen);
+    case "set":
+      return hasDecEq(t.elem, reg, seen);
     case "rec":
     case "union": {
       if (seen.has(t.name)) return true;
@@ -557,6 +676,11 @@ export interface TypeEnv {
   isReactType(node: ts.TypeReferenceNode, names: readonly string[]): string | null;
   /** A file of TypeScript's standard library or an external library (not the project's). */
   isLibraryFile(sf: ts.SourceFile): boolean;
+  /**
+   * Whether a symbol (through import aliases) is a declaration of JavaScript's standard library:
+   * declared in TypeScript's default library, and only in library files (`Program.isLibSymbol`).
+   */
+  isLibSymbol(s: ts.Symbol | undefined): boolean;
 }
 
 export function typeOfNode(node: ts.TypeNode, env: TypeEnv, hint: string): VType {
@@ -617,6 +741,16 @@ function typeRef(node: ts.TypeReferenceNode, env: TypeEnv, hint: string): VType 
   const args = node.typeArguments ?? [];
   if (env.isLibType(node, ["ReadonlyArray", "Array"]) && args.length === 1) {
     return T.arr(typeOfNode(args[0], env, hint + "Item"));
+  }
+  // Map / Set: the library's types (by symbol, like ReadonlyArray: not a project type of that name)
+  const coll = env.isLibType(node, ["ReadonlyMap", "Map", "ReadonlySet", "Set"]);
+  if (coll) {
+    if (coll.endsWith("Map")) {
+      if (args.length !== 2) fail(node, `${coll} needs its key and value types: ${coll}<K, V>`);
+      return mapType(typeOfNode(args[0], env, hint + "Key"), typeOfNode(args[1], env, hint + "Value"), node);
+    }
+    if (args.length !== 1) fail(node, `${coll} needs its element type: ${coll}<T>`);
+    return setType(typeOfNode(args[0], env, hint + "Item"), node);
   }
   if (env.isReactType(node, ["ReactNode", "ReactElement", "Element"])) {
     return T.node;

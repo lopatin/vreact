@@ -267,8 +267,9 @@ export class Program {
       isSpecInt: (node) => this.specName(ts.isQualifiedName(node.typeName) ? node.typeName.right : node.typeName) === "int",
       isLibType: (node, names) => {
         const s = this.resolve(this.checker.getSymbolAtLocation(ts.isQualifiedName(node.typeName) ? node.typeName.right : node.typeName));
-        return !!s && names.includes(s.name) && this.declaredIn(s, (f) => this.isLibraryFile(f)) ? s.name : null;
+        return !!s && names.includes(s.name) && this.isLibSymbol(s) ? s.name : null;
       },
+      isLibSymbol: (s) => this.isLibSymbol(s),
       isLibraryFile: (sf) => this.isLibraryFile(sf),
       isReactType: (node, names) => {
         const n = this.reactName(ts.isQualifiedName(node.typeName) ? node.typeName.right : node.typeName);
@@ -285,6 +286,17 @@ export class Program {
   }
   isReactFile(sf: ts.SourceFile): boolean {
     return this.isLibraryFile(sf) && REACT_FILE_RE.test(sf.fileName);
+  }
+  /**
+   * A declaration of JavaScript's standard library — a lib type or value (`ReadonlyArray`,
+   * `ReadonlyMap`, `Set`, the `Map` constructor, `Array.from`, a method of one of them), through
+   * import aliases: declared in TypeScript's default library, and nowhere but in library files
+   * (an installed package may add to it, e.g. @types/node to `Array`; a project declaration
+   * spelled like one, or merged into one, is the project's).
+   */
+  isLibSymbol(s0: ts.Symbol | undefined): boolean {
+    const s = this.resolve(s0);
+    return !!s && this.declaredIn(s, (f) => this.isLibraryFile(f)) && s.declarations!.some((d) => this.tsProgram.isSourceFileDefaultLibrary(d.getSourceFile()));
   }
   /** The symbol an import alias stands for (other symbols unchanged). */
   resolve(s: ts.Symbol | undefined): ts.Symbol | undefined {

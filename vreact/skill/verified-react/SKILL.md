@@ -140,6 +140,9 @@ export function ItemList(props: ItemListProps) {
   No generic type aliases, components or arrows, no `@trusted` generics, and no
   callback parameters (`p: (x: T) => boolean`): use a field constraint.
 * State is immutable: spread, `filter`, `map`, `toSorted`, `with` — never `push`/`sort`/property assignment.
+* Maps/Sets (`ReadonlyMap<int, Item>`, `ReadonlySet<string>`; keys int/string/boolean/enum):
+  update a fresh copy — `new Map(m).set(k, v)`, or `const n = new Map(m); n.delete(k); return n;` —
+  never state, props or parameters; consume iterators at once (`[...m.values()]`, `for…of`).
 * Handlers may call setters, `dispatch`, and **at most one** parent callback per path.
 * `setX(v)` uses the render snapshot; two of them in one handler do not compose — use
   `setX(prev => …)` when updates must accumulate.
@@ -148,7 +151,8 @@ export function ItemList(props: ItemListProps) {
   **any** state (stale closures): prefer functional updates there; effect deps
   must be exhaustive. Cleanups only clear timers (and log / write `localStorage` /
   `document.title`; the arguments of such writes are checked everywhere, like any
-  expression). In such a component, clicks etc. must also be safe on top
+  expression; in a cleanup they and a timer's delay are data, reading methods only: no
+  `xs.push`, setters or helpers). In such a component, clicks etc. must also be safe on top
   of their pending updates (React rebases): guard inside `setX(p => …)`.
 * Closures read `let`s when they run: do not reassign a `let` after creating a
   handler/helper/updater that reads it (`const xNow = x;` first), and never assign

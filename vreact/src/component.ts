@@ -8,9 +8,9 @@
  *   useEffect        ↦ VReact.Effect with robust outcomes
  */
 import ts from "typescript";
-import { T, type VType, type Param, type Field, leanType, showType, typeOfNode, checkValueType, propertyName } from "./types.ts";
+import { T, type VType, type Param, type Field, leanType, showType, typeOfNode, checkValueType, propertyName, isLibSymbol } from "./types.ts";
 import { type Env, ModCtx, type CompCtx, type CompInfo, type StateVar, type FnInfo, type Binding, bind, freshLocal, refSymbol } from "./ctx.ts";
-import { expr, prop, propAll, block, branch, handlerFn, checkDeps, hookName, specFn, isGlobal, symbolOf, bindParam, type BlockCtx, typeOf, valueBlock, lambda, outcome, checkClosures, topLevelHookDecls, fnParamTsTypes, stripParens, isNumeric, evalArgs, isDocumentTitle, jsxAttrText, checkPlainParams, isNullLit } from "./translate.ts";
+import { expr, prop, propAll, block, branch, handlerFn, checkDeps, hookName, specFn, isGlobal, symbolOf, bindParam, type BlockCtx, typeOf, valueBlock, lambda, outcome, checkClosures, topLevelHookDecls, fnParamTsTypes, stripParens, isNumeric, evalArgs, isDocumentTitle, jsxAttrText, checkPlainParams, isNullLit, ARRAY_MUTATORS } from "./translate.ts";
 import { fail, leanField, leanIdent, leanStr, jsStr, paren, nodeText, indent, VtsError, jsxTextValue, asciiLower } from "./util.ts";
 
 /* ─────────────────────── React 18.3.1 event model ───────────────────────
@@ -673,6 +673,9 @@ function effectCode(c: ts.CallExpression, env: Env, info: CompInfo): string {
     if (call) {
       if (!call.arguments.length) fail(call, `${nodeText(call.expression)} needs a callback`);
       if (call.arguments.length > 2) fail(call.arguments[2], `extra arguments of ${nodeText(call.expression)} are passed to its callback: not supported (use them in the callback directly)`);
+      // the delay: data only (it is also translated, with its obligations, where the timer is
+      // registered: `onStmt`)
+      if (call.arguments[1]) pureCleanupExpr(call.arguments[1], env, TIMER_ARG_RULE, "a timer's delay");
       const timer = call.arguments[0];
       tasks.push(`(fun _ => ${guardedTimer(guards, 0, env, (e) => handlerFn(timer, e, "robust", []).code)})`);
       timerCalls.set(s, call);
@@ -793,6 +796,7 @@ function guardedTimer(guards: TimerGuard[], i: number, env: Env, body: (e: Env) 
   return g.holds ? branch(g.cond, env, next, () => skip) : branch(g.cond, env, () => skip, next);
 }
 
+const TIMER_ARG_RULE = "the delay of setTimeout/setInterval must be data (a literal, a constant, props or state, pure functions of them): no mutating methods (push, sort, set, …), casts, `arguments`, `any`, setters or helpers";
 const CLEANUP_RULE = "effect cleanups may only clear timers (clearTimeout/clearInterval) and make external writes (console.*, localStorage.*, document.title = …), possibly under if/else: React runs a cleanup later, with the props and state of the render that created it, and the cleanup is not verified";
 
 /**
@@ -901,8 +905,9 @@ function checkCleanupItems(items: readonly ts.Node[], env: Env) {
     while (ts.isParenthesizedExpression(x)) x = x.expression;
     if (ts.isCallExpression(x)) {
       const callee = x.expression;
+      // of the globals (a local or parameter named `console` or `clearTimeout` is not one)
       const timerClear = isGlobal(env, callee, "clearTimeout") || isGlobal(env, callee, "clearInterval");
-      const external = ts.isPropertyAccessExpression(callee) && (isGlobal(env, callee.expression, "console") || isGlobal(env, callee.expression, "localStorage"));
+      const external = ts.isPropertyAccessExpression(callee) && (isGlobal(env, unparen(callee.expression), "console") || isGlobal(env, unparen(callee.expression), "localStorage"));
       if (timerClear || external) {
         x.arguments.forEach((a) => pureCleanupExpr(a, env));
         continue;
@@ -929,40 +934,128 @@ function updatesState(callee: ts.Expression, env: Env): boolean {
   return false;
 }
 
-/** Arguments inside a cleanup: data only (no state updates, callbacks, helpers or unknown calls). */
-function pureCleanupExpr(n: ts.Node, env: Env) {
-  const visit = (x: ts.Node) => {
-    if (ts.isCallExpression(x)) {
-      const callee = x.expression;
-      let ok = false;
-      if (ts.isIdentifier(callee)) {
-        const s = symbolOf(env, callee);
-        const d = s && (s.flags & ts.SymbolFlags.Alias ? env.m.checker.getAliasedSymbol(s) : s).declarations?.[0];
-        ok = !env.vars.get(s!) && (isGlobal(env, callee, "String") || !!specFn(env, callee) || (!!d && env.m.prog.globals.get(d)?.k === "fn"));
-      } else if (ts.isPropertyAccessExpression(callee)) {
-        // methods of data values (arrays, strings) and Math.*; not props callbacks or helpers
-        const root = callee.expression;
-        if (ts.isIdentifier(root)) {
-          const b = env.vars.get(symbolOf(env, root)!);
-          ok = isGlobal(env, root, "Math") || b?.k === "val" || (!b && !!globalConst(root, env)) || (callee.name.text === "stringify" && isGlobal(env, root, "JSON"));
-        } else ok = !(ts.isPropertyAccessExpression(root) && updatesState(root, env));
-      }
-      if (!ok) fail(x, `effect cleanups may not call \`${nodeText(callee, 40)}\` here; ${CLEANUP_RULE}`);
-    }
-    if (ts.isNewExpression(x) || ts.isAwaitExpression(x) || ts.isDeleteExpression(x)) fail(x, CLEANUP_RULE);
-    if (ts.isBinaryExpression(x) && x.operatorToken.kind >= ts.SyntaxKind.FirstAssignment && x.operatorToken.kind <= ts.SyntaxKind.LastAssignment) fail(x, CLEANUP_RULE);
-    if ((ts.isPrefixUnaryExpression(x) || ts.isPostfixUnaryExpression(x)) && (x.operator === ts.SyntaxKind.PlusPlusToken || x.operator === ts.SyntaxKind.MinusMinusToken)) fail(x, CLEANUP_RULE);
-    ts.forEachChild(x, visit);
-  };
-  visit(n);
+function unparen(e: ts.Expression): ts.Expression {
+  while (ts.isParenthesizedExpression(e)) e = e.expression;
+  return e;
 }
 
-function globalConst(id: ts.Identifier, env: Env) {
-  let s = symbolOf(env, id);
-  if (s && s.flags & ts.SymbolFlags.Alias) s = env.m.checker.getAliasedSymbol(s);
-  const d = s?.declarations?.[0];
-  const g = d ? env.m.prog.globals.get(d) : undefined;
-  return g?.k === "const" ? g : undefined;
+/** Map/Set methods that only read (`size` is a property). */
+const COLLECTION_READS = new Set(["get", "has", "keys", "values", "entries"]);
+
+/**
+ * The library methods that only read their receiver and arguments, by the interface that
+ * declares them (TypeScript's lib): array methods other than the mutators, string, number and
+ * boolean methods, `Math.*`, `JSON.stringify`, Map/Set reads and `Object.prototype`'s.  A
+ * function they call is an inline callback, checked like the rest.  Not mutators (`xs.push`,
+ * `m.get(k)!.push`, `m.set`), not `.call` / `.apply` / `.bind` (which run any function:
+ * `Array.prototype.push.call(xs, …)`), not DOM or storage methods, not props callbacks.
+ */
+const PURE_LIB_METHODS: ReadonlyMap<string, (name: string) => boolean> = new Map([
+  ["Array", (name: string) => !ARRAY_MUTATORS.has(name)],
+  ["ReadonlyArray", () => true],
+  ["String", () => true],
+  ["Number", () => true],
+  ["Boolean", () => true],
+  ["Math", () => true],
+  ["JSON", (name: string) => name === "stringify"],
+  ["Map", (name: string) => COLLECTION_READS.has(name)],
+  ["ReadonlyMap", (name: string) => COLLECTION_READS.has(name)],
+  ["Set", (name: string) => COLLECTION_READS.has(name)],
+  ["ReadonlySet", (name: string) => COLLECTION_READS.has(name)],
+  ["Object", (name: string) => ["toString", "toLocaleString", "valueOf", "hasOwnProperty", "isPrototypeOf", "propertyIsEnumerable"].includes(name)],
+]);
+
+/** Is `callee` (`recv.m`) a library method that only reads (see PURE_LIB_METHODS)? */
+function isPureLibMethod(callee: ts.PropertyAccessExpression, env: Env): boolean {
+  const sym = env.m.checker.getSymbolAtLocation(callee.name);
+  const ds = sym?.declarations;
+  if (!sym || !ds?.length || !isLibSymbol(sym, env.m.prog.typeEnv)) return false;
+  return ds.every((d) => {
+    const owner = d.parent;
+    const ok = owner && ts.isInterfaceDeclaration(owner) ? PURE_LIB_METHODS.get(owner.name.text) : undefined;
+    return !!ok && ok(callee.name.text);
+  });
+}
+
+/** Is `id` the name a declaration introduces (a parameter, variable, property key, member access `a.x`, …)? */
+function isDeclName(id: ts.Identifier): boolean {
+  const p = id.parent as ts.Node & { name?: ts.Node; label?: ts.Node };
+  if (ts.isLabeledStatement(p) || ts.isBreakOrContinueStatement(p)) return p.label === id;
+  const named = ts.isPropertyAccessExpression(p) || ts.isParameter(p) || ts.isVariableDeclaration(p) || ts.isBindingElement(p) || ts.isPropertyAssignment(p) || ts.isFunctionExpression(p) || ts.isFunctionDeclaration(p) || ts.isClassExpression(p) || ts.isClassDeclaration(p) || ts.isMethodDeclaration(p) || ts.isPropertyDeclaration(p) || ts.isGetAccessorDeclaration(p) || ts.isSetAccessorDeclaration(p) || ts.isJsxAttribute(p);
+  return named && p.name === id;
+}
+
+/** Does a value of this type have call or construct signatures (a function, a class)? */
+function isFunctionValued(t: ts.Type, env: Env): boolean {
+  const ck = env.m.checker;
+  return (t.isUnion() ? t.types : [t]).some((p) => ck.getSignaturesOfType(p, ts.SignatureKind.Call).length > 0 || ck.getSignaturesOfType(p, ts.SignatureKind.Construct).length > 0);
+}
+
+/**
+ * Code that JS evaluates but VTS does not translate — the arguments and conditions inside an
+ * effect cleanup, a timer's delay: data only.  Calls only of pure library methods (see
+ * PURE_LIB_METHODS), `String(…)`, vreact/spec functions and the module's functions, with no
+ * function passed to them other than an inline callback (`[1].map(setN)` would call the setter);
+ * no state updates, callbacks, helpers, assignments, `new`, `delete`, `await`, tagged templates,
+ * casts, `arguments` or `any`.
+ */
+function pureCleanupExpr(n: ts.Node, env: Env, rule = CLEANUP_RULE, who = "effect cleanups") {
+  const call = (x: ts.CallExpression) => {
+    const callee = unparen(x.expression);
+    let ok = false;
+    if (ts.isIdentifier(callee)) {
+      const s = symbolOf(env, callee);
+      const d = s && (s.flags & ts.SymbolFlags.Alias ? env.m.checker.getAliasedSymbol(s) : s).declarations?.[0];
+      ok = !env.vars.get(s!) && (isGlobal(env, callee, "String") || !!specFn(env, callee) || (!!d && env.m.prog.globals.get(d)?.k === "fn"));
+    } else if (ts.isPropertyAccessExpression(callee)) {
+      ok = isPureLibMethod(callee, env);
+    }
+    if (!ok) {
+      const mut = ts.isPropertyAccessExpression(callee) && (ARRAY_MUTATORS.has(callee.name.text) || ["set", "add", "delete", "clear"].includes(callee.name.text)) ? ` (it mutates ${nodeText(callee.expression, 30)})` : "";
+      fail(x, `${who} may not call \`${nodeText(callee, 40)}\` here${mut}; ${rule}`);
+    }
+  };
+  /**
+   * A function value used other than by calling it here: passed (`[1].map(setN)`), stored
+   * (`{ toString: setN }`, `{ toJSON }`, `[setN]`) or chosen (`c ? f : g`) — the code it goes
+   * to may call it (`String(…)` calls `toString`, `JSON.stringify` `toJSON`).  An inline
+   * function is checked itself, and a method by the call it is the callee of.
+   */
+  const fnRef = (x: ts.Node) => {
+    const ck = env.m.checker;
+    let t: ts.Type | undefined;
+    if (ts.isIdentifier(x)) {
+      const p = x.parent;
+      if (ts.isShorthandPropertyAssignment(p) && p.name === x) {
+        const v = ck.getShorthandAssignmentValueSymbol(p);
+        if (!v) return;
+        t = ck.getTypeOfSymbolAtLocation(v, x);
+      } else if (isDeclName(x)) return;
+    } else if (!ts.isPropertyAccessExpression(x) && !ts.isElementAccessExpression(x)) return;
+    let top: ts.Node = x;
+    while (ts.isParenthesizedExpression(top.parent) || ts.isNonNullExpression(top.parent)) top = top.parent;
+    const q = top.parent;
+    if ((ts.isCallExpression(q) && q.expression === top) || (ts.isPropertyAccessExpression(q) && q.expression === top)) return;
+    if (isFunctionValued(t ?? ck.getTypeAtLocation(x), env)) fail(x, `${who} may not use the function \`${nodeText(x, 40)}\` here other than by calling it (what it is passed to or stored in may call it); ${rule}`);
+  };
+  const visit = (x: ts.Node) => {
+    if (ts.isTypeNode(x)) return; // (types: `xs.map<T>(…)`; a cast is reported at its expression)
+    fnRef(x);
+    if (ts.isNewExpression(x) || ts.isAwaitExpression(x) || ts.isDeleteExpression(x) || ts.isTaggedTemplateExpression(x)) fail(x, rule);
+    // the code is not translated, so its static types are all that stands for what it can
+    // reach: no cast (`(m as any).clear()`), no `arguments`, nothing typed `any`
+    if ((ts.isAsExpression(x) && x.type.getText() !== "const") || ts.isTypeAssertionExpression(x)) fail(x, `type assertions are not allowed in VTS (they are unchecked casts); ${rule}`);
+    if (ts.isIdentifier(x) && x.text === "arguments" && !(ts.isPropertyAccessExpression(x.parent) && x.parent.name === x)) fail(x, `\`arguments\` is not allowed in VTS; ${rule}`);
+    if (ts.isBinaryExpression(x) && x.operatorToken.kind >= ts.SyntaxKind.FirstAssignment && x.operatorToken.kind <= ts.SyntaxKind.LastAssignment) fail(x, rule);
+    if ((ts.isPrefixUnaryExpression(x) || ts.isPostfixUnaryExpression(x)) && (x.operator === ts.SyntaxKind.PlusPlusToken || x.operator === ts.SyntaxKind.MinusMinusToken)) fail(x, rule);
+    ts.forEachChild(x, visit);
+    // (after the parts, so that a cast is reported as one)
+    if (ts.isCallExpression(x)) call(x);
+    if (ts.isExpression(x) && !(ts.isIdentifier(x) && ts.isPropertyAccessExpression(x.parent) && x.parent.name === x) && env.m.checker.getTypeAtLocation(x).flags & (ts.TypeFlags.Any | ts.TypeFlags.Unknown)) {
+      fail(x, `\`${nodeText(x, 40)}\` has type any or unknown here, so VTS cannot tell what it does; ${rule}`);
+    }
+  };
+  visit(n);
 }
 
 /* ───────────────────────────── JSX ───────────────────────────── */
@@ -1014,6 +1107,9 @@ export function jsxNode(e0: ts.Expression, env: Env): string {
       if (v.type.elem.k === "str") return `(match ${v.code} with | some s => VReact.VNode.text s | none => VReact.VNode.empty)`;
       if (["int", "enum"].includes(v.type.elem.k)) return `(match ${v.code} with | some s => VReact.VNode.text (VReact.JS.str s) | none => VReact.VNode.empty)`;
       fail(e, `cannot render ${showType(v.type)}`);
+    case "map":
+    case "set":
+      fail(e, `a ${v.type.k === "map" ? "Map" : "Set"} is not a valid React child (React renders it as a list of its ${v.type.k === "map" ? "entries" : "elements"}, without keys, and warns): render a keyed list, e.g. {[...${nodeText(e, 20)}.values()].map((x) => <li key={…}>…</li>)}`);
     default:
       fail(e, `cannot render a value of type ${showType(v.type)} (arrays need .map with keys)`);
   }
@@ -1594,7 +1690,9 @@ function keyedMap(c: ts.CallExpression, env: Env): string {
   const asKey = (kv: { code: string; type: VType }): string => {
     if (kv.type.k === "int") return `VReact.Key.int ${paren(kv.code)}`;
     if (kv.type.k === "str") return `VReact.Key.str ${paren(kv.code)}`;
-    fail(keyE, "keys must be int or string");
+    // an enum member is its string (React sees exactly that string), as in `${k}`
+    if (kv.type.k === "enum") return `VReact.Key.str (VReact.JS.str ${paren(kv.code)})`;
+    fail(keyE, "keys must be int, string or a string-literal enum");
   };
   const keyCode = ts.isBlock(fn.body)
     ? asKey(valueBlock(fn.body.statements.slice(0, -1).concat([ts.factory.createReturnStatement(keyE)]) as unknown as ts.Statement[], { ...kEnvR.env, keyFn: true }, undefined, fn))
