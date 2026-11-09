@@ -1359,9 +1359,15 @@ def timeoutCases (budget : Nat) : TacticM (Option MessageData) := do
     let name (g : MVarId) : MetaM MessageData := do
       let t ← g.getTag
       return if t.isAnonymous then m!"(unnamed)" else m!"{t}"
-    let head := m!"The goal splits into {n} cases (Lean's names: `h_k` is the k-th alternative of a \
-      `switch` or `match`, `isTrue`/`isFalse` the two branches of an `if`). Each case alone, smallest \
-      first, with up to {per / 1000} heartbeats:"
+    -- (the names as the translation makes them: a `switch` on a union or an enum is a `match`
+    -- with one alternative per `case` label in source order — Lean expands `| .a | .b =>` — and a
+    -- last `_` for `default`; a `switch` on a number or a string is a chain of `if`s, one per body)
+    let head := m!"The goal splits into {n} cases. A case's name lists the branches that lead to it, \
+      outermost first: `isTrue`/`isFalse` are the two branches of an `if` (a `switch` on a number or a \
+      string is a chain of `if`s, one per body), `h_k` is the k-th alternative of a `match` (a `switch` \
+      on a union or an enum has one per `case` label, in the order written, then one for the rest: \
+      `default`, wherever it is written); conditions in the translation (such as the sign test of `%`) \
+      split the same way. Each case alone, smallest first, with up to {per / 1000} heartbeats:"
     match failed, slow[0]? with
     | some (g, msg), _ =>
       return some m!"{head} {proved} proved, {slow.size} did not finish, then case {← name g} \

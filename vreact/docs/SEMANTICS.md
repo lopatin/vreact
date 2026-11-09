@@ -940,8 +940,13 @@ hook rules hold (static checks). For every function: its body is safe and its
   the automation logged and a proof that uses a `sorry` the automation made
   are failures, never proofs. After running out of the budget, the automation
   looks for the case that fails, as a diagnosis: the goal's cases (the branches
-  of its `if`s and `switch`es, named as Lean's `split` names them: `h_k` the k-th
-  alternative, `isTrue`/`isFalse` the branches of an `if`) are tried alone,
+  of its `if`s and `switch`es, named as Lean's `split` names them, outermost
+  first: `isTrue`/`isFalse` the branches of an `if`, also of a `switch` on a
+  number or a string, which is a chain of `if`s, one per body; `h_k` the k-th
+  alternative of a `match`, and a `switch` on a union or an enum has one per
+  `case` label in the order written, then one for the rest, `default` wherever
+  it is written; conditions in the translation, such as the sign test of `%`,
+  split too) are tried alone,
   smallest first, with a tenth of the budget each and half of it in all, until
   one fails; the failure text adds how many were proved, did not finish or were
   not tried, and the goal of the case that failed (or of the first that did not
