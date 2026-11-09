@@ -602,6 +602,9 @@ if (r && !only.length) {
     ["lakefile.toml", 'name = "app"\n[[lean_lib]]\nname = "vts"\npath = ".vreact"\n', false],
     ["lakefile.lean", 'import Lake\nopen Lake DSL\npackage app\nrequire vts from ".vreact"\n', true],
     ["lakefile.lean", 'import Lake\nopen Lake DSL\npackage app\n-- require vts from ".vreact"\n', false],
+    // (a require in a block comment is not one; one after a comment on its line is)
+    ["lakefile.lean", 'import Lake\nopen Lake DSL\npackage app\n/- old: /- nested -/\nrequire vts from ".vreact"\n-/\n', false],
+    ["lakefile.lean", 'import Lake\nopen Lake DSL\npackage app\n/- editor -/ require vts from ".vreact" -- the generated project\n', true],
   ] as [string, string, boolean][]) {
     reset();
     fs.writeFileSync(path.join(d, f), text);

@@ -85,7 +85,7 @@ export function editorProject(root: string, outDir: string, proofsDir: string, l
 /**
  * Whether a lakefile requires the package `name` from the directory `dir`: a `[[require]]` table
  * of a lakefile.toml with `name = "…"` and `path = "…"`, or `require name from "…"` in a
- * lakefile.lean (false when it cannot be read, or says it some other way).
+ * lakefile.lean, outside comments (false when it cannot be read, or says it some other way).
  */
 export function requiresPackage(lakefile: string, name: string, dir: string): boolean {
   let text: string;
@@ -105,8 +105,9 @@ export function requiresPackage(lakefile: string, name: string, dir: string): bo
     }
   };
   if (lakefile.endsWith(".lean")) {
+    // (outside comments: a require in a block comment `/- … -/` is not one)
     const re = /^\s*require\s+(?:«([^»]+)»|([\w.]+))\s+from\s+"([^"]*)"/gm;
-    for (const m of text.matchAll(re)) if ((m[1] ?? m[2]) === name && same(m[3])) return true;
+    for (const m of leanCode(text).matchAll(re)) if ((m[1] ?? m[2]) === name && same(m[3])) return true;
     return false;
   }
   // lakefile.toml: the key/value lines of each [[require]] table (basic or literal strings)
@@ -124,6 +125,31 @@ export function requiresPackage(lakefile: string, name: string, dir: string): bo
     if (table && kv) table[kv[1].replace(/^"|"$/g, "")] = str(kv[2]);
   }
   return tables.some((t) => t.name === name && typeof t.path === "string" && same(t.path));
+}
+
+/** Lean source `text` without its comments (`-- …` to the end of the line, `/- … -/`, nested; line breaks kept), string literals as they are. */
+function leanCode(text: string): string {
+  let out = "";
+  let depth = 0;
+  for (let i = 0; i < text.length; i++) {
+    const two = text.slice(i, i + 2);
+    if (depth > 0) {
+      if (two === "/-" || two === "-/") {
+        depth += two === "/-" ? 1 : -1;
+        i++;
+      } else if (text[i] === "\n") out += "\n";
+    } else if (two === "/-") {
+      depth = 1;
+      i++;
+    } else if (two === "--") {
+      while (i + 1 < text.length && text[i + 1] !== "\n") i++;
+    } else if (text[i] === '"') {
+      const lit = /^"(?:[^"\\]|\\.)*"/s.exec(text.slice(i))?.[0] ?? '"';
+      out += lit;
+      i += lit.length - 1;
+    } else out += text[i];
+  }
+  return out;
 }
 
 /** Whether a lake manifest names each package of `deps` at that directory (false when it cannot be read). */
