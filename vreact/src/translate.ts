@@ -717,11 +717,14 @@ function checkStrictNullTest(node: ts.Node, other: ts.Expression, lit: ts.Expres
   const k = nullishKinds(other, env);
   if (!k) fail(node, `cannot tell whether \`${what}\` may be null or undefined (its TypeScript type is any or unknown): ${untypedFix(other, env, "give it its exact type (e.g. ensures((r: T | null) => …))")} or compare with == null`);
   if (k.null && k.undef) fail(node, `\`${what}\` may be null or undefined, which VTS does not distinguish: compare with == null / != null`);
+  // the test as written (`!==` is always true where `===` is always false)
+  const neg = op === ts.SyntaxKind.ExclamationEqualsEqualsToken;
+  const [eq, loose, always] = neg ? ["!==", "!=", "true"] : ["===", "==", "false"];
   if (litText === "null" && k.undef && !k.null) {
-    fail(node, `\`${what}\` can be undefined but never null (optional fields, find(), at() and ?. give undefined), so \`=== null\` is always false in JS: write === undefined or == null`);
+    fail(node, `\`${what}\` can be undefined but never null (optional fields, find(), at(), a Map's get() and ?. give undefined), so \`${eq} null\` is always ${always} in JS: write ${eq} undefined or ${loose} null`);
   }
   if (litText === "undefined" && k.null && !k.undef) {
-    fail(node, `\`${what}\` can be null but never undefined, so \`=== undefined\` is always false in JS: write === null or == null`);
+    fail(node, `\`${what}\` can be null but never undefined, so \`${eq} undefined\` is always ${always} in JS: write ${eq} null or ${loose} null`);
   }
 }
 
