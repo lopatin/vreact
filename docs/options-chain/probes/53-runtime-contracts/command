@@ -1,0 +1,1 @@
+npx esbuild contracts.ts --bundle --platform=node --format=esm --outfile=contracts.mjs && node contracts.mjs src

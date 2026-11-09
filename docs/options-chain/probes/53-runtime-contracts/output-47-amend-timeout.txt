@@ -1,0 +1,13 @@
+▲ [WARNING] Import "shownRows" will always be undefined because there is no matching export in "src/model.ts" [import-is-undefined]
+
+    contracts.ts:147:23:
+      147 │ for (let i = 0; i < (M.shownRows === undefined ? 0 : 20000); i++) {
+          ╵                        ~~~~~~~~~
+
+1 warning
+
+  contracts.mjs  110.1kb
+
+⚡ Done in 10ms
+FAIL amend post 4 [{"collapsed":{"Set":[2,3,4,1]},"filter":"s7","watch":{"Set":[2120,1960]},"held":{"Map":[[1,2112]]},"focus":1,"heat":1,"orders":{"Map":[[1,{"expiry":1,"leg":"put","strike":2080,"buy":false,"qty":373,"price":139}],[2,{"expiry":2,"leg":"call","strike":2160,"buy":false,"qty":169,"price":67}],[3,{"expiry":3,"leg":"future","strike":0,"buy":false,"qty":457,"price":3}]]},"nextId":4},2,91]
+reachable steps: 18000; postconditions checked: 247787; failures: [["amend post 4",1],["orders out of placement order",18]]

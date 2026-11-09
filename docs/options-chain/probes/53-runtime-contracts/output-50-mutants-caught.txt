@@ -1,0 +1,17 @@
+▲ [WARNING] Import "shownRows" will always be undefined because there is no matching export in "src/model.ts" [import-is-undefined]
+
+    contracts.ts:147:23:
+      147 │ for (let i = 0; i < (M.shownRows === undefined ? 0 : 20000); i++) {
+          ╵                        ~~~~~~~~~
+
+1 warning
+
+  contracts.mjs  110.2kb
+
+⚡ Done in 11ms
+FAIL toggle post 3 [{"collapsed":{"Set":[2,3,4]},"filter":"all","watch":{"Set":[2080,2000,2120]},"held":{"Map":[]},"focus":1,"heat":1,"orders":{"Map":[[1,{"expiry":1,"leg":"call","strike":2120,"buy":false,"qty":1,"price":99}],[2,{"expiry":2,"leg":"future","strike":0,"buy":false,"qty":361,"price":75}],[3,{"expiry":3,"leg":"call","strike":2080,"buy":false,"qty":105,"price":43}],[4,{"expiry":1,"leg":"call","strike":200
+FAIL cancel post 4 [{"collapsed":{"Set":[2,3,4,1]},"filter":"all","watch":{"Set":[2080,2000,2120]},"held":{"Map":[]},"focus":null,"heat":1,"orders":{"Map":[[1,{"expiry":1,"leg":"call","strike":2120,"buy":false,"qty":1,"price":99}],[2,{"expiry":2,"leg":"future","strike":0,"buy":false,"qty":361,"price":75}],[3,{"expiry":3,"leg":"call","strike":2080,"buy":false,"qty":105,"price":43}],[4,{"expiry":1,"leg":"call","strike
+FAIL toggle post 3 [{"collapsed":{"Set":[1,2,3,4]},"filter":"s3","watch":{"Set":[2040]},"held":{"Map":[[1,2160]]},"focus":1,"heat":1,"orders":{"Map":[[1,{"expiry":3,"leg":"put","strike":1960,"buy":false,"qty":449,"price":147}]]},"nextId":2},1]
+FAIL cancel post 4 [{"collapsed":{"Set":[2,3,4]},"filter":"s11","watch":{"Set":[2040,1920]},"held":{"Map":[]},"focus":1,"heat":1,"orders":{"Map":[[1,{"expiry":3,"leg":"put","strike":1960,"buy":false,"qty":449,"price":147}],[2,{"expiry":3,"leg":"call","strike":2000,"buy":false,"qty":125,"price":35}],[3,{"expiry":2,"leg":"put","strike":1920,"buy":false,"qty":277,"price":91}]]},"nextId":4},99]
+FAIL holdAt post 3 [{"collapsed":{"Set":[3,4,1]},"filter":"s99","watch":{"Set":[2000,2040]},"held":{"Map":[[1,1996]]},"focus":2,"heat":1,"orders":{"Map":[[3,{"expiry":1,"leg":"call","strike":2000,"buy":false,"qty":221,"price":187}],[1,{"expiry":2,"leg":"call","strike":2160,"buy":false,"qty":113,"price":147}],[2,{"expiry":3,"leg":"put","strike":2080,"buy":false,"qty":305,"price":107}],[4,{"expiry":3,"leg":"future","s
+reachable steps: 18000; postconditions checked: 247787; failures: [["toggle post 3",2299],["cancel post 4",724],["orders out of placement order",4828],["holdAt post 3",1]]

@@ -1,0 +1,2 @@
+✗ TS  src/reducer.ts(85,40): error TS2339: Property 'delete' does not exist on type 'ReadonlySet<number>'.
+✗ TS  src/reducer.ts(86,20): error TS2339: Property 'add' does not exist on type 'ReadonlySet<number>'.

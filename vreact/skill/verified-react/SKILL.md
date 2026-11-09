@@ -23,7 +23,10 @@ in the project). Read `reference/language.md` before writing VTS and
 `reference/obligations.md` when an obligation fails. The formal model is in
 `tool/docs/SEMANTICS.md`; a complete worked example (spec-first model,
 synthesis, top-down App with trusted stubs, bugs caught, final certificate) is
-`tool/docs/WALKTHROUGH.md`.
+`tool/docs/WALKTHROUGH.md`. The repository that contains the tool also has a larger
+example, `examples/options-chain`, with its walkthrough `docs/OPTIONS_CHAIN_WALKTHROUGH.md`:
+it grows a verified app with a `requires` on dispatched actions, a Lean proof file, state on
+Maps and Sets, and generic helpers.
 
 ## Setup (once per machine / project)
 

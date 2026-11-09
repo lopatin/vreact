@@ -1,0 +1,1 @@
+✗ VTS src/OptionsChain.tsx:118:45: filter callbacks take only the element in VTS (an index parameter is supported for map only, `xs.map((x, i) => …)`): for a condition on positions write forall(0, xs.length, (i) => … xs[i] …)

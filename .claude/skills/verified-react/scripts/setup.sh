@@ -33,6 +33,7 @@ if [ "${1:-}" != "" ]; then
   (cd "$APP" && npm install --silent "$TOOL")
   [ -f "$APP/vreact.json" ] || printf '{ "src": "src", "exclude": ["main.tsx"], "proofs": "proofs", "out": ".vreact" }\n' > "$APP/vreact.json"
   grep -q '"strict": *true' "$APP/tsconfig.json" 2>/dev/null || echo "warning: set \"strict\": true in $APP/tsconfig.json"
+  grep -qi '"es2023"\|"esnext"' "$APP/tsconfig.json" 2>/dev/null || echo "warning: add \"lib\": [\"ES2023\", \"DOM\"] to $APP/tsconfig.json (toSorted / toReversed / with)"
   grep -q '^\.vreact' "$APP/.gitignore" 2>/dev/null || echo ".vreact/" >> "$APP/.gitignore"
   # Lean editors (lean4ij, VS Code) opened on the app folder: lean-toolchain + lakefile.toml
   # (never over a lakefile of the user's; `vreact verify` keeps vreact's own up to date)

@@ -50,6 +50,7 @@ vreact translate                          # only generate .vreact/
 | `src/` | the translator (TypeScript compiler API → Lean), CLI, synthesizer |
 | `spec/` | `vreact/spec`: `requires ensures invariant callbackRequires assert assume forall exists distinct implies idiv range hole` and `type int` |
 | `lean/VReact/JS.lean` | exact model of the JS operations VTS allows (UTF-16 strings, `slice`, `%`, …); numbers are an opaque type |
+| `lean/VReact/JSMap.lean` | JS `Map` and `Set` with primitive keys: the entry list in insertion order, keys distinct, operations as ECMA-262 defines them |
 | `lean/VReact/Core.lean` | the React model: update queues, outcomes, proof-carrying `VNode`, `Spec`, `Component` |
 | `lean/VReact/Runtime.lean` | lifecycle semantics (mount, reconcile, dispatch, effects, timers) and `run_allInv` |
 | `lean/VReact/Tactic.lean`, `Contracts.lean`, `Lists.lean`, `Simprocs.lean` | `vreact_auto`: simp normalisation + per-call contract instantiation + `grind` |
@@ -66,8 +67,9 @@ in `lean/lean-toolchain`). Run `skill/verified-react/scripts/setup.sh [app]`.
 ## Tests
 
 ```bash
-node --experimental-strip-types tests/run.ts          # 160+ cases: React-semantics bugs caught, subset rejections, report honesty
+node --experimental-strip-types tests/run.ts          # 680+ cases: React-semantics bugs caught, subset rejections, report honesty
 node --experimental-strip-types tests/synth.test.ts   # synthesis (append / remove-by-key / update-by-key, joint holes, what counts as proved)
 (cd tests/todo && node ../../bin/vreact.js verify)    # small verified app with child callbacks
 (cd ../examples/kanban && node ../../vreact/bin/vreact.js verify)   # the walkthrough app: 79 obligations
+(cd ../examples/options-chain && node ../../vreact/bin/vreact.js verify)   # the options-chain walkthrough app: 195 obligations
 ```

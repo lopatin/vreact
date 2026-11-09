@@ -1,0 +1,140 @@
+translated 7 module(s), 142 proof obligation(s) → .vreact/ ; checking with Lean…
+
+Components
+  UNCHECKED          PriceCell              src/StrikeRow.tsx:12
+      ↳ 4 obligations of it were not checked: VTS/StrikeRow/View.lean was not checked: a module it imports failed, or the file stopped at an error in its imports
+  UNCHECKED          StrikeRow              src/StrikeRow.tsx:39
+      ↳ 18 obligations of it were not checked: VTS/StrikeRow/View.lean was not checked: a module it imports failed, or the file stopped at an error in its imports
+  UNCHECKED          TermRow                src/TermRow.tsx:19
+      ↳ 12 obligations of it were not checked: VTS/TermRow/View.lean was not checked: a module it imports failed, or the file stopped at an error in its imports
+  UNCHECKED          OrderTicket            src/OrderTicket.tsx:19
+      ↳ 12 obligations of it were not checked: VTS/OrderTicket/View.lean was not checked: a module it imports failed, or the file stopped at an error in its imports
+  UNCHECKED          OptionsChain           src/OptionsChain.tsx:32
+      ↳ 37 obligations of it were not checked: VTS/OptionsChain/View.lean was not checked: a module it imports failed, or the file stopped at an error in its imports
+  UNCHECKED          App                    src/App.tsx:115
+      ↳ 6 obligations of it were not checked: VTS/App/View.lean was not checked: a module it imports failed, or the file stopped at an error in its imports
+Functions
+  VERIFIED           validChain
+  VERIFIED           legOf
+  VERIFIED           theoOf
+  UNCHECKED          quotePrice
+      ↳ an obligation of it was not checked: VTS/model/Posts.lean was not checked: a module it imports failed, or the file stopped at an error in its imports
+  VERIFIED           withinSpread
+  VERIFIED           isMid
+  UNCHECKED          midPrice
+      ↳ 5 obligations of it were not checked: VTS/model/Posts.lean was not checked: a module it imports failed, or the file stopped at an error in its imports
+  VERIFIED           inTheMoney
+  VERIFIED           dist
+  VERIFIED           nearest
+  UNCHECKED          atmIndex
+      ↳ 4 obligations of it were not checked: VTS/model/Posts.lean was not checked: a module it imports failed, or the file stopped at an error in its imports
+  VERIFIED           inWindow
+  UNCHECKED          strikeWindow
+      ↳ 2 obligations of it were not checked: VTS/model/Posts.lean was not checked: a module it imports failed, or the file stopped at an error in its imports
+  VERIFIED           filterLabel
+  UNCHECKED          levelsOf
+      ↳ an obligation of it was not checked: VTS/model/Posts.lean was not checked: a module it imports failed, or the file stopped at an error in its imports
+  VERIFIED           edge
+  UNCHECKED          heatOf
+      ↳ 4 obligations of it were not checked: VTS/model/Posts.lean was not checked: a module it imports failed, or the file stopped at an error in its imports
+  VERIFIED           legFor
+  VERIFIED           labelOf
+  VERIFIED           marketOf
+  VERIFIED           validQty
+  VERIFIED           validOrder
+  VERIFIED           openQty
+  VERIFIED           fmtPrice
+  VERIFIED           contractText
+  VERIFIED           quoteText
+  VERIFIED           crosses
+  VERIFIED           fmtVol
+  UNCHECKED          wellFormed
+      ↳ Lean reported no axioms for VTS.reducer.wellFormed (its module was not checked to the end)
+  UNCHECKED          heldPrice
+      ↳ Lean reported no axioms for VTS.reducer.heldPrice (its module was not checked to the end)
+  UNCHECKED          sameView
+      ↳ Lean reported no axioms for VTS.reducer.sameView (its module was not checked to the end)
+  UNCHECKED          keepsHolds
+      ↳ Lean reported no axioms for VTS.reducer.keepsHolds (its module was not checked to the end)
+  UNCHECKED          keepsAllHolds
+      ↳ Lean reported no axioms for VTS.reducer.keepsAllHolds (its module was not checked to the end)
+  UNCHECKED          keepsOrders
+      ↳ Lean reported no axioms for VTS.reducer.keepsOrders (its module was not checked to the end)
+  UNCHECKED          orderFor
+      ↳ Lean reported no axioms for VTS.reducer.orderFor (its module was not checked to the end)
+  UNCHECKED          toggle
+      ↳ 2 obligations of it were not checked: VTS/reducer/Defs.lean was not checked: a module it imports failed, or the file stopped at an error in its imports
+  UNCHECKED          setCollapsed
+      ↳ 2 obligations of it were not checked: VTS/reducer/Defs.lean was not checked: a module it imports failed, or the file stopped at an error in its imports
+  UNCHECKED          setFilter
+      ↳ 2 obligations of it were not checked: VTS/reducer/Defs.lean was not checked: a module it imports failed, or the file stopped at an error in its imports
+  UNCHECKED          holdAt
+      ↳ 3 obligations of it were not checked: VTS/reducer/Defs.lean was not checked: a module it imports failed, or the file stopped at an error in its imports
+  UNCHECKED          follow
+      ↳ 3 obligations of it were not checked: VTS/reducer/Defs.lean was not checked: a module it imports failed, or the file stopped at an error in its imports
+  UNCHECKED          jump
+      ↳ 2 obligations of it were not checked: VTS/reducer/Defs.lean was not checked: a module it imports failed, or the file stopped at an error in its imports
+  UNCHECKED          setHeat
+      ↳ 2 obligations of it were not checked: VTS/reducer/Defs.lean was not checked: a module it imports failed, or the file stopped at an error in its imports
+  UNCHECKED          accepts
+      ↳ Lean reported no axioms for VTS.reducer.accepts (its module was not checked to the end)
+  UNCHECKED          place
+      ↳ 4 obligations of it were not checked: VTS/reducer/Defs.lean was not checked: a module it imports failed, or the file stopped at an error in its imports
+  UNCHECKED          cancel
+      ↳ 3 obligations of it were not checked: VTS/reducer/Defs.lean was not checked: a module it imports failed, or the file stopped at an error in its imports
+  UNCHECKED          validAction
+      ↳ Lean reported no axioms for VTS.reducer.validAction (its module was not checked to the end)
+  UNCHECKED          chainReducer
+      ↳ 2 obligations of it were not checked: VTS/reducer/Defs.lean was not checked: a module it imports failed, or the file stopped at an error in its imports
+  UNCHECKED          shiftQuote
+      ↳ Lean reported no axioms for VTS.App.shiftQuote (its module was not checked to the end)
+  UNCHECKED          moveFutures
+      ↳ an obligation of it was not checked: VTS/App/Defs.lean was not checked: a module it imports failed, or the file stopped at an error in its imports
+  UNCHECKED          nextSeed
+      ↳ an obligation of it was not checked: VTS/App/Defs.lean was not checked: a module it imports failed, or the file stopped at an error in its imports
+  UNCHECKED          validFeed
+      ↳ Lean reported no axioms for VTS.App.validFeed (its module was not checked to the end)
+  UNCHECKED          stepFeed
+      ↳ 2 obligations of it were not checked: VTS/App/Defs.lean was not checked: a module it imports failed, or the file stopped at an error in its imports
+Constants
+  UNCHECKED          MAX_HEAT
+      ↳ Lean reported no axioms for VTS.reducer.MAX_HEAT (its module was not checked to the end)
+  UNCHECKED          INITIAL_UI
+      ↳ Lean reported no axioms for VTS.reducer.INITIAL_UI (its module was not checked to the end)
+  UNCHECKED          LOTS
+      ↳ Lean reported no axioms for VTS.OrderTicket.LOTS (its module was not checked to the end)
+  UNCHECKED          FILTERS
+      ↳ Lean reported no axioms for VTS.OptionsChain.FILTERS (its module was not checked to the end)
+  UNCHECKED          EXPIRIES
+      ↳ an obligation of it was not checked: VTS/App/Defs.lean was not checked: a module it imports failed, or the file stopped at an error in its imports
+  UNCHECKED          MAX_MOVE
+      ↳ Lean reported no axioms for VTS.App.MAX_MOVE (its module was not checked to the end)
+App certificates (VReact.run_allInv instantiated)
+  UNCHECKED          VTS.App.App.certificate  axioms: none
+      ↳ an obligation of it was not checked: VTS/App/View.lean was not checked: a module it imports failed, or the file stopped at an error in its imports
+Obligations by file
+  ? src/model.ts                             5/22  (17 not checked)
+  ? src/reducer.ts                           0/25  (25 not checked)
+  ? src/StrikeRow.tsx                        0/22  (22 not checked)
+  ? src/TermRow.tsx                          0/12  (12 not checked)
+  ? src/OrderTicket.tsx                      0/12  (12 not checked)
+  ? src/OptionsChain.tsx                     0/37  (37 not checked)
+  ? src/App.tsx                              0/12  (12 not checked)
+
+137 obligation(s) not checked:
+  src/model.ts:61:11 [postcondition], src/model.ts:88:11 [postcondition], src/model.ts:89:11 [postcondition], src/model.ts:90:11 [postcondition], … (17): VTS/model/Posts.lean was not checked: a module it imports failed, or the file stopped at an error in its imports
+  src/reducer.ts:97:11 [postcondition], src/reducer.ts:98:11 [postcondition], src/reducer.ts:108:11 [postcondition], src/reducer.ts:109:11 [postcondition], … (25): VTS/reducer/Defs.lean was not checked: a module it imports failed, or the file stopped at an error in its imports
+  src/StrikeRow.tsx:12:17 [init-invariant], src/StrikeRow.tsx:12:17 [props-stability], src/StrikeRow.tsx:19:30 [callback-contract], src/StrikeRow.tsx:19:15 [handler], … (22): VTS/StrikeRow/View.lean was not checked: a module it imports failed, or the file stopped at an error in its imports
+  src/TermRow.tsx:19:17 [init-invariant], src/TermRow.tsx:19:17 [props-stability], src/TermRow.tsx:26:85 [callback-contract], src/TermRow.tsx:26:70 [handler], … (12): VTS/TermRow/View.lean was not checked: a module it imports failed, or the file stopped at an error in its imports
+  src/OrderTicket.tsx:19:17 [init-invariant], src/OrderTicket.tsx:19:17 [props-stability], src/OrderTicket.tsx:35:37 [handler], src/OrderTicket.tsx:37:43 [handler], … (12): VTS/OrderTicket/View.lean was not checked: a module it imports failed, or the file stopped at an error in its imports
+  src/OptionsChain.tsx:32:17 [init-invariant], src/OptionsChain.tsx:32:17 [props-stability], src/OptionsChain.tsx:54:30 [precondition], src/OptionsChain.tsx:54:15 [handler], … (37): VTS/OptionsChain/View.lean was not checked: a module it imports failed, or the file stopped at an error in its imports
+  src/App.tsx:78:8 [fact], src/App.tsx:90:11 [postcondition], src/App.tsx:96:10 [nonzero-divisor], src/App.tsx:110:17 [nonzero-divisor], … (5): VTS/App/Defs.lean was not checked: a module it imports failed, or the file stopped at an error in its imports
+  src/App.tsx:115:17 [init-invariant], src/App.tsx:115:17 [props-stability], src/App.tsx:120:3 [effect-robust], src/App.tsx:120:3 [effect-robust], … (7): VTS/App/View.lean was not checked: a module it imports failed, or the file stopped at an error in its imports
+
+Errors in user proofs (proofs/*.lean):
+  proofs/model.lean:20:66 (in openQty_cons): unsolved goals
+    o : VTS.model.Order
+    os : List VTS.model.Order
+    ⊢ 0 + o.qty + List.foldl (fun n o => n + o.qty) 0 os = o.qty + List.foldl (fun n o => n + o.qty) 0 os
+
+✗ NOT VERIFIED  5/142 obligations proved, 137 unchecked; components: 0/6 verified  (6.2s)

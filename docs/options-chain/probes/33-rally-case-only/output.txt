@@ -1,0 +1,97 @@
+translated 7 module(s), 148 proof obligation(s) → .vreact/ ; checking with Lean…
+
+Components
+  VERIFIED           PriceCell              src/StrikeRow.tsx:12
+  VERIFIED           StrikeRow              src/StrikeRow.tsx:39
+  VERIFIED           TermRow                src/TermRow.tsx:19
+  VERIFIED           OrderTicket            src/OrderTicket.tsx:19
+  VERIFIED           OptionsChain           src/OptionsChain.tsx:32
+  VERIFIED           App                    src/App.tsx:150
+Functions
+  VERIFIED           validChain
+  VERIFIED           legOf
+  VERIFIED           theoOf
+  VERIFIED           quotePrice
+  VERIFIED           withinSpread
+  VERIFIED           isMid
+  VERIFIED           midPrice
+  VERIFIED           inTheMoney
+  VERIFIED           dist
+  VERIFIED           nearest
+  VERIFIED           atmIndex
+  VERIFIED           inWindow
+  VERIFIED           strikeWindow
+  VERIFIED           filterLabel
+  VERIFIED           levelsOf
+  VERIFIED           edge
+  VERIFIED           heatOf
+  VERIFIED           legFor
+  VERIFIED           labelOf
+  VERIFIED           marketOf
+  VERIFIED           validQty
+  VERIFIED           validOrder
+  VERIFIED           openQty
+  VERIFIED           fmtPrice
+  VERIFIED           contractText
+  VERIFIED           quoteText
+  VERIFIED           crosses
+  VERIFIED           fmtVol
+  VERIFIED           wellFormed
+  VERIFIED           heldPrice
+  VERIFIED           sameView
+  VERIFIED           keepsHolds
+  VERIFIED           keepsAllHolds
+  VERIFIED           keepsOrders
+  VERIFIED           orderFor
+  VERIFIED           toggle
+  VERIFIED           setCollapsed
+  VERIFIED           setFilter
+  VERIFIED           holdAt
+  VERIFIED           follow
+  VERIFIED           jump
+  VERIFIED           setHeat
+  VERIFIED           accepts
+  VERIFIED           place
+  VERIFIED           cancel
+  VERIFIED           validAction
+  VERIFIED           chainReducer
+  VERIFIED           shiftQuote
+  VERIFIED           moveFutures
+  VERIFIED           nextSeed
+  VERIFIED           validFeed
+  VERIFIED           stepFeed
+  VERIFIED           sameFeed
+  INCOMPLETE         simReducer
+      ↳ an obligation of it failed
+App certificates (VReact.run_allInv instantiated)
+  VERIFIED           VTS.App.App.certificate  axioms: propext, Classical.choice, Quot.sound
+Obligations by file
+  ✓ src/model.ts                             22/22
+  ✓ src/reducer.ts                           25/25
+  ✓ src/StrikeRow.tsx                        22/22
+  ✓ src/TermRow.tsx                          12/12
+  ✓ src/OrderTicket.tsx                      12/12
+  ✓ src/OptionsChain.tsx                     37/37
+  ✗ src/App.tsx                              17/18
+
+Failed obligations
+✗ src/App.tsx:133:11  [postcondition] postcondition of simReducer: implies(s.paused, sameFeed(r.feed, s.feed))
+    │ `grind` failed
+    │ case grind.1.1.2.2
+    │ s : Sim
+    │ h₁₁ : s.paused = true
+    │ hcontract, hcontract_1, hcontract_2 : …  (3 contract instances, 118 lines: --full shows them)
+    │ h : ¬40 ≤ s.feed.offset
+    │ left : -1 * s.feed.offset + -40 ≤ 0
+    │ left_1 : s.feed.offset + -40 ≤ 0
+    │ left_2 : -1 * s.feed.seed ≤ 0
+    │ right_2 : s.feed.seed + -65536 ≤ 0
+    │ h_3 :
+    │   (if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537 else -1 * ((-75 * s.feed.seed + -74) % 65537)) + -4 ≤ 0
+    │ h_4 :
+    │   ¬((if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537 else -1 * ((-75 * s.feed.seed + -74) % 65537)) = 5 ∨
+    │       (if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537 else -1 * ((-75 * s.feed.seed + -74) % 65537)) = -5)
+    │ h_5 : ¬s.feed.seed + -872 ≤ 0
+    │ ⊢ False
+
+✗ NOT VERIFIED  147/148 obligations proved, 1 failed; components: 6/6 verified  (26.2s)

@@ -1,0 +1,6 @@
+✗ TS  src/reducer.ts(45,103): error TS2345: Argument of type 'ReadonlyMap<number, Order>' is not assignable to parameter of type 'ReadonlyMap<number, string | number | boolean>'.
+  Type 'Order' is not assignable to type 'string | number | boolean'.
+✗ TS  src/reducer.ts(169,132): error TS2345: Argument of type 'ReadonlyMap<number, Order>' is not assignable to parameter of type 'ReadonlyMap<number, string | number | boolean>'.
+  Type 'Order' is not assignable to type 'string | number | boolean'.
+✗ TS  src/reducer.ts(188,39): error TS2345: Argument of type 'ReadonlyMap<number, Order>' is not assignable to parameter of type 'ReadonlyMap<number, string | number | boolean>'.
+  Type 'Order' is not assignable to type 'string | number | boolean'.
