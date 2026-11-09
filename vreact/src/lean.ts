@@ -1031,13 +1031,16 @@ export function judge(obligations: Obligation[], messages: LeanMessage[], marker
  *      them, where the first of them was;
  *   3. then the let-definitions that span several lines (`x : T :=` and its value, code that the
  *      source shows), from the top and only as many as needed, likewise one line;
- *   4. then the other hypotheses that span several lines, likewise;
- *   5. last, the conclusion (the last `⊢ …`) is cut to 3 lines and what follows it to 2, and the
- *      hypotheses farthest from the conclusion are left out, named and counted by one line
- *      `… (k earlier hypotheses: …)` (the lines of steps 2-4 stay).
- * So the short hypotheses next to the conclusion (usually the ones that decide the case: branch
- * conditions, the negated goal) and the conclusion stay in view, and every line that stands for
- * others says so (`--full shows …`). `--full` prints the message unchanged.
+ *   4. then the other hypotheses that span several lines, from the top and only as many as
+ *      needed, likewise (not the hypothesis right above the conclusion);
+ *   5. last, the conclusion (the last `⊢ …`) is cut to 3 lines and what follows it to 2; from the
+ *      conclusion up, each hypothesis is shown whole while it fits, a long one that does not fit
+ *      as one line that names it, and the hypotheses farthest from the conclusion are left out,
+ *      named and counted by one line `… (k earlier hypotheses: …)` (the lines of steps 2-4 stay).
+ * So the hypotheses next to the conclusion (usually the ones that decide the case: branch
+ * conditions, the negated goal; the one right above the conclusion whole whenever it fits) and
+ * the conclusion stay in view, and every line that stands for others says so (`--full shows
+ * …`). `--full` prints the message unchanged.
  */
 export function summarizeLeanError(text: string, maxLines = 30): string {
   const lines = text.split("\n");
@@ -1120,37 +1123,44 @@ export function summarizeLeanError(text: string, maxLines = 30): string {
     if (over(hyps) <= 0) return shown();
   }
   // 4. the other long hypotheses, from the top, each one whose line frees no more lines than are
-  // still needed: one near the conclusion (often the negated goal, the one that decides) stays
-  // when leaving out a few short lines above is enough
+  // still needed; not the one right above the conclusion (the last case split, often the negated
+  // goal: the one that decides) when it fits, which step 5 then shows whole
+  const room = Math.max(0, maxLines - size(head) - target.length - tail.length);
   const base = hyps;
+  const last = base[base.length - 1];
   const picked: string[][] = [];
   for (const b of base.filter(long)) {
+    if (b === last && b.length <= room - 1) continue;
     const trial = collapsed(base, [...picked, b], ":", "long hypothesis", "long hypotheses");
     if (size(hyps) - size(trial) > over(hyps)) continue;
     picked.push(b);
     hyps = trial;
     if (over(hyps) <= 0) return shown();
   }
-  // 5. the hypotheses nearest the conclusion, and the lines that stand for others; one line names
-  // and counts the hypotheses left out
-  const room = Math.max(0, maxLines - size(head) - target.length - tail.length);
-  const keep = new Set<string[]>();
+  // 5. the lines that stand for others (when they fit), then from the conclusion up each
+  // hypothesis whole while it fits, a long one that does not as one line that names it, until
+  // one does not fit at all; one line names and counts the hypotheses left out (if any)
+  const keep = new Map<string[], string[]>();
   let left = room - 1;
   const standIns = hyps.filter((b) => notes.has(b));
   if (size(standIns) <= left) {
-    for (const b of standIns) keep.add(b);
+    for (const b of standIns) keep.set(b, b);
     left -= size(standIns);
   }
   for (let i = hyps.length - 1; i >= 0; i--) {
     const b = hyps[i];
     if (keep.has(b)) continue;
-    if (b.length > left) break;
-    keep.add(b);
-    left -= b.length;
+    if (b.length <= left) {
+      keep.set(b, b);
+      left -= b.length;
+    } else if (long(b) && left >= 1) {
+      keep.set(b, collapsed([b], [b], ":", "long hypothesis", "long hypotheses")[0]);
+      left -= 1;
+    } else break;
   }
   const dropped = hyps.filter((b) => !keep.has(b));
   const ns = dropped.flatMap(names);
   const what = ns.length ? `${a(ns.length, "earlier hypothesis", "earlier hypotheses")}: ${[...ns.slice(0, 8), ...(ns.length > 8 ? ["…"] : [])].join(", ")}` : a(size(dropped), "earlier line", "earlier lines");
-  const marker = `  … (${what}: --full shows ${ns.length === 1 ? "it" : "them"})`;
-  return [...head.flat(), marker, ...hyps.filter((b) => keep.has(b)).flat(), ...target, ...tail].join("\n");
+  const marker = dropped.length ? [`  … (${what}: --full shows ${ns.length === 1 ? "it" : "them"})`] : [];
+  return [...head.flat(), ...marker, ...hyps.flatMap((b) => keep.get(b) ?? []), ...target, ...tail].join("\n");
 }

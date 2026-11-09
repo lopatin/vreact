@@ -963,10 +963,13 @@ hook rules hold (static checks). For every function: its body is safe and its
   callees' `ensures`) become one line that names and counts them; then its
   multi-line let-definitions (`x : T := match …`, code the source shows), from
   the top, likewise; then its other multi-line hypotheses, from the top, each one
-  only if that frees no more lines than are still needed (a long hypothesis next
-  to the conclusion, often the negated goal, stays); last, the conclusion is cut
-  to 3 lines and the hypotheses farthest from it are left out, named and counted
-  by one line `… (k earlier hypotheses: …)`. Every line that stands for others
+  only if that frees no more lines than are still needed, but not the hypothesis
+  right above the conclusion (often the negated goal or the last case split) when
+  it fits; last, the conclusion is cut to 3 lines and, from the conclusion up,
+  each hypothesis is shown whole while it fits (a multi-line one that does not
+  fit as one line that names it, where it was), and the hypotheses farthest from
+  the conclusion are left out, named and counted by one line `… (k earlier
+  hypotheses: …)`. Every line that stands for others
   ends in `--full shows it` (or `them`); every other line is a whole line of
   Lean's text, so the short hypotheses next to the conclusion (usually the
   branch conditions that decide the case) stay in view. Each failed or not-checked obligation is

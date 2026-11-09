@@ -186,10 +186,11 @@ xs.length) console.log(xs[i].name)`).
    literal of dozens of records turns into long disjunctions. Mark such constants
    `/** @opaque */` and state what proofs need as module-level `assert(...)` facts.
 6. **Inspect.** The short report shows at most 18 lines of a goal: the conclusion and the
-   hypotheses next to it, with contract instances, multi-line definitions and other long
-   hypotheses (only as many as needed) each collapsed into one line that names and counts
-   them, and the hypotheses farthest from the conclusion named by one line `… (k earlier
-   hypotheses: …)` (see "Reading results" in SKILL.md).
+   hypotheses next to it (the one right above the conclusion whole when it fits), with
+   contract instances, multi-line definitions and other long hypotheses (only as many as
+   needed) each collapsed into one line that names and counts them, and the hypotheses
+   farthest from the conclusion named by one line `… (k earlier hypotheses: …)` (see
+   "Reading results" in SKILL.md).
    `vreact verify --full` prints complete goals; `vreact explain
    src/X.tsx` prints the generated Lean; the project in `.vreact/` can be opened
    in a Lean editor or re-checked file by file with `lake env lean <file>`; each

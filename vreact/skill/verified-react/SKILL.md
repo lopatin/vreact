@@ -222,10 +222,10 @@ the short hypotheses next to it, which usually decide the case; what it leaves o
 counted by a line that ends in `--full shows it` (or `them`): the contract instances of called
 functions (`hcontract, hcontract_1 : …  (2 contract instances, 40 lines: …)`), let-definitions
 that span several lines (`center, atm := …  (2 definitions, 8 lines: …)`), other long
-hypotheses (only as many as needed: one next to the conclusion, often the negated goal, stays
-when leaving out a few short lines above is enough), and last the hypotheses farthest from the
-conclusion (`… (12 earlier hypotheses: E, props, κ, …)`). Every other line is a whole line of
-Lean's text. `vreact explain <file>` prints the generated
+hypotheses (only as many as needed; the hypothesis right above the conclusion, often the
+negated goal or the last case split, stays whole when it fits; one too long to fit is one line
+where it was), and last the hypotheses farthest from the conclusion (`… (12 earlier
+hypotheses: E, props, κ, …)`). Every other line is a whole line of Lean's text. `vreact explain <file>` prints the generated
 Lean; `.vreact/` is an ordinary Lake project, so `cd .vreact && lake env lean
 VTS/<module>/View.lean` (with `~/.elan/bin` on PATH) re-checks one file.
 A failed obligation does not stop the check: everything else, also in the

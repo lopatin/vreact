@@ -343,12 +343,34 @@ console.log("message attribution (judge)");
   // a timeout whose first unfinished case has a long conclusion: cut to 3 lines and `…`
   check("timeout-unfinished-case.txt", [
     ["the case", (o) => o.includes("case h_1.isFalse.isTrue") && o[1] === "  … (the goal as stated: --full shows it)"],
+    ["the 3-line hypothesis right above the conclusion whole", (o) => { const i = o.indexOf("hkey✝ :"); return i > 0 && o[i + 3].startsWith("⊢ ∀"); }],
     ["the conclusion cut", (o) => o[o.length - 1] === "  …" && o[o.length - 4].startsWith("⊢ ")],
   ]);
-  // a 4-line hypothesis at the top that frees more lines than needed is left out with the rest
+  // a 4-line hypothesis at the top that frees more lines than needed is one line where it was
+  // (it was left out, as "an earlier hypothesis")
   const one = ["`grind` failed", "case grind", "h0 :", "  0 ≤ a ∧", "    a < 3 ∧", "    b = 1", ...Array.from({ length: 13 }, (_, i) => `x_${i} : Int`), "⊢ False"].join("\n");
   const oneOut = summarizeLeanError(one, 18).split("\n");
-  if (oneOut[2] !== "  … (an earlier hypothesis: h0: --full shows it)" || oneOut.length !== 17) why.push(`one left out: ${oneOut.slice(0, 4).join(" / ")}`);
+  if (oneOut[2] !== "h0 : …  (a long hypothesis, 4 lines: --full shows it)" || oneOut.length !== 17 || oneOut.some((l) => l.startsWith("  … ("))) why.push(`one at the top: ${oneOut.slice(0, 4).join(" / ")}`);
+  // the hypothesis right above the conclusion (here the negated goal, 4 lines) stays whole when it
+  // fits: the short hypotheses farthest from the conclusion are left out instead (it was one line
+  // "h : …", with 13 short hypotheses above it)
+  const neg = ["`grind` failed", "case grind", ...Array.from({ length: 20 }, (_, i) => `x_${i} : Int`), "h :", "  ¬(0 ≤ a ∧", "      a < 3 ∧", "      b = 1)", "⊢ False"].join("\n");
+  const negOut = summarizeLeanError(neg, 18).split("\n");
+  if (negOut.length > 18 || negOut[2] !== "  … (10 earlier hypotheses: x_0, x_1, x_2, x_3, x_4, x_5, x_6, x_7, …: --full shows them)" || negOut.slice(-5).join("\n") !== "h :\n  ¬(0 ≤ a ∧\n      a < 3 ∧\n      b = 1)\n⊢ False")
+    why.push(`the negated goal above the conclusion: ${negOut.slice(-6).join(" / ")}`);
+  // a hypothesis too long to fit, next to the conclusion or between short ones, is one line
+  // where it was, and the short hypotheses around it stay (the report was the conclusion alone,
+  // or the short ones above it were left out: the walk from the conclusion stopped at it)
+  const big = (name: string) => [`${name} :`, ...Array.from({ length: 19 }, (_, i) => `  t_${i} ∧`)];
+  const shortHs = ["h_a : x = 1", "h_b : ¬y = 2", "h_c : z ≤ 0", "h_d : w = 3", "h_e : ¬v = 0"];
+  for (const [what, hs, want] of [
+    ["last", [...shortHs, ...big("h_neg")], [...shortHs, "h_neg : …  (a long hypothesis, 20 lines: --full shows it)"]],
+    ["in the middle", [...shortHs.slice(0, 2), ...big("hinv"), ...shortHs.slice(2)], [...shortHs.slice(0, 2), "hinv : …  (a long hypothesis, 20 lines: --full shows it)", ...shortHs.slice(2)]],
+  ] as [string, string[], string[]][]) {
+    const got = summarizeLeanError(["`grind` failed", "case grind", ...hs, "⊢ False"].join("\n"), 18);
+    const exp = ["`grind` failed", "case grind", ...want, "⊢ False"].join("\n");
+    if (got !== exp) why.push(`a 20-line hypothesis ${what}: ${JSON.stringify(got)}`);
+  }
   const short = "`grind` failed\ncase grind.1\ns : Sim\nhcontract :\n  0 ≤ s.feed.seed →\n  0 ≤ 1\n⊢ False";
   if (summarizeLeanError(short, 18) !== short) why.push("a goal that fits was changed");
   if (!why.length) ok("summarizeLeanError: contract instances, long definitions and long hypotheses become one line each, the hypotheses next to the conclusion stay whole, the left-out ones are named; after a timeout only the case's goal; a goal that fits is unchanged");
