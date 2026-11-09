@@ -989,7 +989,9 @@ const BUDGET_SLOT = "set_option maxHeartbeats @BUDGET@";
  * Every obligation runs with its own budget (`vreact.heartbeats`); since heartbeats spent
  * in an obligation still count for the enclosing command, the per-command `maxHeartbeats`
  * covers all obligations of the largest declaration of the file plus the declaration's own
- * elaboration and kernel check.
+ * elaboration and kernel check. An obligation that runs out of its budget may spend up to
+ * 0.85 budgets more on finding the case that fails (`timeoutCases` in VReact/Tactic.lean),
+ * so each obligation counts twice.
  */
 function withBudget(text: string, perOb = OB_HEARTBEATS): string {
   const lines = text.split("\n");
@@ -999,7 +1001,7 @@ function withBudget(text: string, perOb = OB_HEARTBEATS): string {
     most = Math.max(most, (body.match(/\/-⟦ob\d+⟧-\//g) ?? []).length);
   }
   // 0 = no limit (for obligations, hence also for their declarations)
-  const outer = perOb === 0 ? 0 : DECL_HEARTBEATS + perOb * most;
+  const outer = perOb === 0 ? 0 : DECL_HEARTBEATS + 2 * perOb * most;
   return text.replace(BUDGET_SLOT, `set_option maxHeartbeats ${outer}\nset_option vreact.heartbeats ${perOb}`);
 }
 

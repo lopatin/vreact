@@ -938,7 +938,15 @@ hook rules hold (static checks). For every function: its body is safe and its
   proved (a proof through the admitted proof of a false statement proves
   nothing) nor failed. Running out of the budget, goals left over, an error
   the automation logged and a proof that uses a `sorry` the automation made
-  are failures, never proofs. (A proof that refers to another declaration whose
+  are failures, never proofs. After running out of the budget, the automation
+  looks for the case that fails, as a diagnosis: the goal's cases (the branches
+  of its `if`s and `switch`es, named as Lean's `split` names them: `h_k` the k-th
+  alternative, `isTrue`/`isFalse` the branches of an `if`) are tried alone,
+  smallest first, with a tenth of the budget each and half of it in all, until
+  one fails; the failure text adds how many were proved, did not finish or were
+  not tried, and the goal of the case that failed (or of the first that did not
+  finish). The obligation stays failed; a declaration's `maxHeartbeats` counts
+  each of its obligations twice to leave room for this. (A proof that refers to another declaration whose
   proof was admitted — a callee's failed contract — is a proof modulo that
   contract and counts as proved; the item is `INCOMPLETE` by its axioms.) A failure is not a Lean error, so the module and every module
   importing it are still built and checked; the admitted goal shows as

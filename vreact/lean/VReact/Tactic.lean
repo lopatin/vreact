@@ -1256,9 +1256,12 @@ elab "vreact_open" : tactic => withMainContext do
     g := g'
   replaceMainGoal (← openBoundTarget g)
 
-syntax "vreact_auto" : tactic
+/-- `vreact_auto` without its last step: everything before `vreact_finish`.  The goals it leaves are
+the cases of the obligation (the branches of the `if`s and `match`es that `vreact_splits` split),
+each normalised and with its contract instances and helper facts. -/
+syntax "vreact_prep" : tactic
 macro_rules
-  | `(tactic| vreact_auto) => `(tactic|
+  | `(tactic| vreact_prep) => `(tactic|
       (intros
        vreact_expose
        vreact_contracts
@@ -1278,7 +1281,100 @@ macro_rules
          all_goals vreact_memmap
          all_goals vreact_keyfacts
          all_goals vreact_bounded
-         all_goals vreact_subperm
-         all_goals vreact_finish)))
+         all_goals vreact_subperm)))
+
+syntax "vreact_auto" : tactic
+macro_rules
+  | `(tactic| vreact_auto) => `(tactic|
+      (vreact_prep
+       all_goals vreact_finish))
+
+open Lean Meta Elab Tactic in
+/-- Run `k` with a budget of its own: `b` heartbeats (Lean's raw count, as `IO.getNumHeartbeats`),
+counted from now (see `vreact_ob`). -/
+def withHeartbeatBudget {α : Type} (b : Nat) (k : TacticM α) : TacticM α :=
+  controlAt CoreM fun runInBase => do
+    let now ← IO.getNumHeartbeats
+    withReader (fun ctx => { ctx with initHeartbeats := now, maxHeartbeats := b }) (runInBase k)
+
+open Lean Meta Elab Tactic in
+/-- Where `vreact_auto` fails on the main goal, after it ran out of the obligation's budget
+`budget` (Lean's raw heartbeats): `vreact_prep` (with a quarter of the budget), then
+`vreact_finish` on each case it leaves alone, smallest goal first, with a tenth of the budget
+each and half of it in all, until a case fails.  The message says how many cases were proved,
+did not finish or were not tried, and shows the error of the case that failed (`grind`'s goal),
+or else the goal of the first case that did not finish.  `none` if the goal has no cases (or
+`vreact_prep` itself did not finish).  Only a diagnosis: the state (and message log) is
+restored, and the obligation stays failed — a case proved here proves nothing about the
+obligation, whose own run did not finish. -/
+def timeoutCases (budget : Nat) : TacticM (Option MessageData) := do
+  let s ← saveState
+  let log ← Core.getMessageLog
+  try
+    let prep ← tryCatchRuntimeEx
+      (do withHeartbeatBudget (budget / 4) (evalTactic (← `(tactic| vreact_prep))); pure true)
+      (fun _ => pure false)
+    unless prep do return none
+    let goals ← getUnsolvedGoals
+    let n := goals.length
+    if n < 2 then return none
+    let mut sized : Array (Nat × Nat × MVarId) := #[]
+    let mut i : Nat := 0
+    for g in goals do
+      sized := sized.push ((← instantiateMVars (← g.getType)).sizeWithoutSharing, i, g)
+      i := i + 1
+    let sorted := sized.qsort fun a b => a.1 < b.1 || (a.1 == b.1 && a.2.1 < b.2.1)
+    let per := budget / 10
+    let start ← IO.getNumHeartbeats
+    let mut proved : Nat := 0
+    let mut slow : Array MVarId := #[]
+    let mut tried : Nat := 0
+    let mut failed : Option (MVarId × MessageData) := none
+    for (_, _, g) in sorted do
+      if (← IO.getNumHeartbeats) - start ≥ budget / 2 then break
+      tried := tried + 1
+      let gs ← saveState
+      setGoals [g]
+      Core.resetMessageLog
+      let r ← tryCatchRuntimeEx
+        (do
+          withHeartbeatBudget per vreactFinish
+          unless (← getUnsolvedGoals).isEmpty do throwError "unsolved goals"
+          if let some m := (← Core.getMessageLog).reportedPlusUnreported.toList.find? (·.severity == .error) then
+            throw (.error .missing m.data)
+          pure none)
+        (fun ex => pure (some ex))
+      match r with
+      | none => proved := proved + 1
+      | some ex =>
+        if ex.isMaxHeartbeat then slow := slow.push g
+        else
+          -- the message, with the context of the failed run (its goals are gone afterwards)
+          let msg ← addMessageContext ex.toMessageData
+          failed := some (g, msg)
+      gs.restore
+      if failed.isSome then break
+    let notTried : Nat := n - tried
+    let rest := if notTried > 0 then m!" ({notTried} not tried)" else m!""
+    let name (g : MVarId) : MetaM MessageData := do
+      let t ← g.getTag
+      return if t.isAnonymous then m!"(unnamed)" else m!"{t}"
+    let head := m!"The goal splits into {n} cases (Lean's names: `h_k` is the k-th alternative of a \
+      `switch` or `match`, `isTrue`/`isFalse` the two branches of an `if`). Each case alone, smallest \
+      first, with up to {per / 1000} heartbeats:"
+    match failed, slow[0]? with
+    | some (g, msg), _ =>
+      return some m!"{head} {proved} proved, {slow.size} did not finish, then case {← name g} \
+        failed{rest}:\n{msg}"
+    | none, some g =>
+      return some m!"{head} {proved} proved, {slow.size} did not finish{rest}. The first that did \
+        not finish, case {← name g}:\n{← addMessageContext (MessageData.ofGoal g)}"
+    | none, none =>
+      if notTried == 0 then
+        return some m!"{head} all {n} proved, but together they need more than the obligation's budget."
+      return some m!"{head} {proved} proved{rest}."
+  finally
+    s.restore
+    Core.setMessageLog log
 
 end VReact

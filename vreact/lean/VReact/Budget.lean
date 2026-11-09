@@ -1,4 +1,5 @@
 import Lean
+import VReact.Tactic
 /-!
 # `vreact_ob` — one proof obligation: its own heartbeat budget, and its result as a message
 
@@ -28,7 +29,11 @@ first obligation that needs it (about 0.6% there).  A copy of a theorem placed a
 * failed — a **warning** `vreact: <why>` with the failure text and the goal; the goal is
   admitted with `sorry`. Failures are: the tactic failed (any exception, also the heartbeat
   limit or the maximal recursion depth), goals were left, the automation logged an error,
-  or the proof it produced uses a `sorry` it made itself (also in an auxiliary lemma);
+  or the proof it produced uses a `sorry` it made itself (also in an auxiliary lemma).
+  When `vreact_auto` runs out of the budget, the text also says where it fails
+  (`timeoutCases` in `Tactic.lean`): each case of the goal is tried alone, and the goal of
+  the case that fails (or the first that does not finish) is shown — a diagnosis only, with
+  up to 0.85 budgets more; the obligation stays failed;
 * blocked — a **warning** `vreact:blocked <why>` when the obligation depends on `sorry` from
   elsewhere (an obligation above that failed, a declaration with an error, a `hole()`): the
   proof the automation found uses such a `sorry` (it is in the goal or its hypotheses, or in
@@ -213,6 +218,10 @@ private structure Failure where
   let envBefore ← getEnv
   let sorryBefore ← goals.anyM (fun g => goalHasSorry g)
   let budget := vreact.heartbeats.get (← getOptions) * 1000
+  -- the generated obligations' tactic: on a timeout, `timeoutCases` names the failing case
+  let isAuto := match stx[1] with
+    | `(tacticSeq| vreact_auto) => true
+    | _ => false
   -- the automation's messages are collected apart from the file's
   let outer ← Core.getMessageLog
   Core.resetMessageLog
@@ -236,8 +245,18 @@ private structure Failure where
       | some false => return some { why := m!"the automation closed the goal with `sorry`" })
     (fun ex => do
       if ex.isMaxHeartbeat then
-        return some { why := m!"(deterministic) timeout: the automation did not finish within this \
-          obligation's budget of {budget / 1000} heartbeats (set \"heartbeats\" in vreact.json to change it)" }
+        let why := m!"(deterministic) timeout: the automation did not finish within this \
+          obligation's budget of {budget / 1000} heartbeats (set \"heartbeats\" in vreact.json to change it)"
+        -- which case of the goal `vreact_auto` fails on (`timeoutCases`): the goal as stated first
+        if isAuto then
+          -- (the goal as it was, with the automation's messages so far: `saved` holds the
+          -- file's log, which this obligation must not log a second time)
+          let log ← Core.getMessageLog
+          saved.restore
+          Core.setMessageLog log
+          if let some cases ← timeoutCases budget then
+            return some { why := m!"{why}\n{goalsToMessageData goals}\n{cases}" }
+        return some { why }
       -- an abort carries no text: the error logged before it says why; when there is none,
       -- Lean hid it, which it does for errors that mention `sorry`
       if let .internal id _ := ex then

@@ -4,7 +4,8 @@
  * `verified`/`fail`/`status` cases are checked together in one Lean build; `reject` cases
  * must be refused by the translator with the given message. Tokens `key=value` add
  * report checks (see `checkReport`): `Name=<status>` for a component/function/constant of
- * the case, `verdict=…`, `proved=N`, `unchecked=N`, `errors=<cause>`, `failtext=<word>`,
+ * the case, `verdict=…`, `proved=N`, `unchecked=N`, `errors=<cause>`, `failtext=<text>`
+ * (every failure's Lean text contains it; `~` stands for a space),
  * `faildesc=<text>` (every failure's description; `~` stands for a space),
  * `why.Name=<text>` (the item's reported reason mentions the text; `~` stands for a space).
  * A directory `cases/<Name>/` is a multi-file case with its own project: its .ts/.tsx files
@@ -143,7 +144,8 @@ function checkReport(r: Report, files: string[], expect: string[], whole: boolea
   const certs = r.certificates.filter((c) => whole || files.some((x) => c.theorem.startsWith(`VTS.${x.replace(/\.tsx?$/, "")}.`))).map((c) => ({ ...c, name: `${c.name}.certificate`, file: "" }));
   const items = [...[...r.components, ...r.functions, ...r.constants].filter((x) => mine(x.file)), ...certs];
   for (const t of expect.filter((t) => t.includes("="))) {
-    const [k, v] = t.split("=");
+    const at = t.indexOf("=");
+    const [k, v] = [t.slice(0, at), t.slice(at + 1)];
     if (k === "verdict" || k === "proved" || k === "failed" || k === "unchecked") {
       if (!whole) throw new Error(`${files[0]}: ${k}= needs a directory case`);
       const got = k === "verdict" ? r.verdict : String(r.obligations[k]);
@@ -154,8 +156,10 @@ function checkReport(r: Report, files: string[], expect: string[], whole: boolea
       const label = CAUSE_LABEL[v as keyof typeof CAUSE_LABEL];
       if (!r.errors.some((e) => e.startsWith(label))) why.push(`expected a "${label}" error, got: ${r.errors.join(" | ") || "none"}`);
     } else if (k === "failtext") {
+      // failtext=<text>: every failure's Lean text contains the text (`~` for a space)
+      const want = v.replace(/~/g, " ");
       const fs_ = r.failures.filter((f) => mine(f.where));
-      if (!fs_.length || !fs_.every((f) => f.leanFull.includes(v))) why.push(`expected every failure to mention "${v}": ${fs_.map((f) => f.where + " " + f.lean.split("\n")[0]).join(" | ")}`);
+      if (!fs_.length || !fs_.every((f) => f.leanFull.includes(want))) why.push(`expected every failure to mention "${want}": ${fs_.map((f) => f.where + " " + f.lean.split("\n")[0]).join(" | ")}`);
     } else if (k === "faildesc") {
       // faildesc=<text>: every failure's description (what the report prints after [kind]) contains the text (`~` for a space)
       const want = v.replace(/~/g, " ");
