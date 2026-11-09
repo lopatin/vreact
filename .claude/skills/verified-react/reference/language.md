@@ -361,6 +361,12 @@ export function f(x: int, xs: readonly int[]): int {
 /** @trusted */ …   // body not verified, contract assumed (reported)
 ```
 
+Callers of an `@opaque` function get its `ensures` instantiated at each call, also at a call
+under a binder (in a timer callback or a functional update, a continuous or rebased handler,
+a `map`/`every` lambda); not at a call that occurs only inside a quantified hypothesis (an
+`invariant` such as `xs.every((x) => f(x) > 0)`), which the automation instantiates itself
+without the contract: state what is needed there directly.
+
 Several `requires` form one precondition, in order: a later one may rely on an
 earlier one (`requires(xs.length > 0); requires(xs[0] >= 0)`); the same holds for
 a component's `requires` and `invariant`s. A reducer's `requires` may mention
@@ -670,6 +676,7 @@ or a label (use `htmlFor`).
 | callbacks as parameters of top-level functions (`p: (x: T) => boolean`), functions in state, locals, holes or arrays | write the arrow at the call site (`xs.find((x) => …)`); in a generic helper, read a property through a field constraint (`T extends { readonly done: boolean }`) |
 | `async`, fetch | keep I/O in an unverified module that calls verified reducers |
 | guarded updates in `vreact synth` | write the guard by hand with a hole per branch; synth fills straight-line code (all holes of a function are proved together; a hole per `case`/branch is searched once) |
+| deleting from a Map or Set in `vreact synth` (its grammar only grows them: `new Map(m).set(k, v)`, `new Set(s).add(x)`) | write the deletion by hand (`const n = new Map(m); n.delete(k); return n;`) |
 | `vreact synth` on a function whose contract's Lean statement mentions a function that still has a hole (called in the contract, or in the body or `requires` of a function it calls; not in a `@trusted` body or a callee's `ensures`) | not searched ("the contract depends on unfinished function f"): fill or write `f` first |
 | `vreact synth` on a `/** @trusted */` function or a component | refused (Lean checks nothing in a trusted body): remove `@trusted` / move the expression into a model function |
 | a reducer over a discriminated union calling `@opaque` model functions | supported (contracts are instantiated inside the `switch` arms) |

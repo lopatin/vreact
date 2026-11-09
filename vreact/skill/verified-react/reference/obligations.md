@@ -42,7 +42,12 @@ xs.length) console.log(xs[i].name)`).
 
 1. **Make the knowledge available.** The prover only knows: props `requires`,
    the `invariant`, branch conditions on the path, contracts of called
-   `@opaque` functions, and definitions of transparent functions. A fact you
+   `@opaque` functions (instantiated at each call, also under a binder: inside a timer
+   callback, a functional update `setS((s) => …)`, a continuous or rebased handler, a
+   `map`/`every` lambda; not at a call that occurs only inside a quantified hypothesis,
+   e.g. an invariant `xs.every((x) => f(x) > 0)`, which the automation instantiates
+   itself, without the contract: state what the proof needs about `f` in the quantified
+   fact itself or as an `assert`), and definitions of transparent functions. A fact you
    "know" but never wrote down is missing — add it as an invariant, `requires`,
    or `ensures` (they are then proved once and reused everywhere).
 2. **Go modular.** Big model functions: mark `/** @opaque */`, give precise
@@ -180,7 +185,12 @@ xs.length) console.log(xs[i].name)`).
    the generated Lean) are unfolded into every goal that mentions them; a list
    literal of dozens of records turns into long disjunctions. Mark such constants
    `/** @opaque */` and state what proofs need as module-level `assert(...)` facts.
-6. **Inspect.** `vreact verify --full` prints complete goals; `vreact explain
+6. **Inspect.** The short report shows at most 18 lines of a goal: the conclusion and the
+   hypotheses next to it, with contract instances, multi-line definitions and other long
+   hypotheses (only as many as needed) each collapsed into one line that names and counts
+   them, and the hypotheses farthest from the conclusion named by one line `… (k earlier
+   hypotheses: …)` (see "Reading results" in SKILL.md).
+   `vreact verify --full` prints complete goals; `vreact explain
    src/X.tsx` prints the generated Lean; the project in `.vreact/` can be opened
    in a Lean editor or re-checked file by file with `lake env lean <file>`; each
    obligation is `(/-⟦obN⟧-/ by vreact_ob vreact_auto)`.
@@ -188,7 +198,14 @@ xs.length) console.log(xs[i].name)`).
    `"heartbeats"` in vreact.json, default 1000000). One that runs out fails
    *at that obligation* with `(deterministic) timeout`; the others are still
    checked. Make the goal smaller (`@opaque` helpers with `ensures`, `assert`)
-   before raising the budget. (`vreact_auto could not prove the goal (grind
+   before raising the budget. After a timeout the report tries each case of the goal
+   alone (smallest first, with a tenth of the budget each, half of it in all) and names
+   the case that failed, with its goal, or the first that did not finish. A case's name
+   lists its branches, outermost first: `isTrue`/`isFalse` are the branches of an `if`
+   (also the bodies of a `switch` on a number or a string, a chain of `if`s), `h_k` the
+   k-th alternative of a `match` (a `switch` on a union or an enum: one per `case` label
+   in the order written, then `default`). The failing case is often a real
+   counterexample: read its hypotheses. (`vreact_auto could not prove the goal (grind
    stopped at Lean's recursion limit)` is not a timeout: `grind` gave up on a
    hypothesis shape it cannot handle, and the other strategies did not prove
    the goal either. Guarded contracts `xs.length === 3 && forall(0, 3, i =>

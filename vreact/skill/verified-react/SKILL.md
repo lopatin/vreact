@@ -101,7 +101,12 @@ change (it is incremental and usually takes seconds).
    import: fix that first); a contract whose statement depends on a function
    that still has a hole (through calls, their bodies and `requires`; not
    through `@trusted` bodies) is reported as such: fill that function first. Synth never edits the
-   file while searching; `--write` writes only proved fills.
+   file while searching; `--write` writes only proved fills. Maps and Sets only grow in its
+   grammar (`new Map(m).set(k, v)`, `new Set(s).add(x)`): a fill that deletes is written by
+   hand. The random tests are reproducible: each hole's inputs come from a seeded generator
+   (`--seed N` picks another seed, default 1), so two runs test the same inputs and print the
+   same counterexamples; only the 60 s limit depends on the machine. (The tests only filter
+   candidates: Lean proves every fill.)
 3. **Reducer** — a `switch` over a discriminated-union action type, total in the
    state (a `requires` on the action is checked at each dispatch), delegating to
    the model; `ensures` that it preserves the invariant.
@@ -211,8 +216,16 @@ Lean build/import error or an internal error stopped its file), plus each failed
 hypotheses are what is known (props precondition, invariant, branch
 conditions, `h_…` facts); `⊢ False` after `grind` means the facts were
 insufficient — often a real counterexample is visible in them (e.g. `h : total = 0`).
-Goals are abridged; `vreact verify --full` prints them completely (`--json`
-has both `lean` and `leanFull`). `vreact explain <file>` prints the generated
+Goals are shortened to 18 lines; `vreact verify --full` prints them completely (`--json`
+has both `lean` and `leanFull`). A long goal keeps its conclusion `⊢ …` (at most 3 lines) and
+the short hypotheses next to it, which usually decide the case; what it leaves out is named and
+counted by a line that ends in `--full shows it` (or `them`): the contract instances of called
+functions (`hcontract, hcontract_1 : …  (2 contract instances, 40 lines: …)`), let-definitions
+that span several lines (`center, atm := …  (2 definitions, 8 lines: …)`), other long
+hypotheses (only as many as needed: one next to the conclusion, often the negated goal, stays
+when leaving out a few short lines above is enough), and last the hypotheses farthest from the
+conclusion (`… (12 earlier hypotheses: E, props, κ, …)`). Every other line is a whole line of
+Lean's text. `vreact explain <file>` prints the generated
 Lean; `.vreact/` is an ordinary Lake project, so `cd .vreact && lake env lean
 VTS/<module>/View.lean` (with `~/.elan/bin` on PATH) re-checks one file.
 A failed obligation does not stop the check: everything else, also in the
@@ -227,7 +240,15 @@ error stopped the file) — fix the first failure or the listed Lean build error
 and re-run.
 Each obligation has its own time budget; one that runs out fails with
 `(deterministic) timeout` at that obligation (help the prover, or raise
-`"heartbeats"` in vreact.json — default 1000000).
+`"heartbeats"` in vreact.json — default 1000000). After a timeout the report tries
+each case of the goal alone (the branches of its `if`s and `switch`es, smallest first) and
+names the case that fails, with that case's goal (or the first that did not finish); the short
+report then shows only that goal. A case's name lists the branches that lead to it, outermost
+first: `isTrue`/`isFalse` are the two branches of an `if` (a `switch` on a number or a string is
+a chain of `if`s, one per body), `h_k` is the k-th alternative of a `match` (a `switch` on a
+union or an enum has one per `case` label in the order written, then one for the rest:
+`default`, wherever it is written). The lines of obligations that were not checked name each
+one's position and kind (`src/OptionsChain.tsx:150:11 [callback]: it depends on …`).
 
 Kinds → usual fix: see `reference/obligations.md` (handler, handler-robust,
 handler-rebased, effect-robust, init-invariant, props-stability, unique-keys,
