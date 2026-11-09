@@ -9,7 +9,9 @@
  *      grammar of idiomatic immutable updates: field updates `{ ...s, f: e }`,
  *      append `[...xs, e]`, remove-by-key `xs.filter(x => x.k !== v)`,
  *      update-by-key `xs.map(x => x.k === v ? { ...x, f: e } : x)`, record and
- *      variant literals, ±1 arithmetic, comparisons, calls of total helpers.
+ *      variant literals, ±1 arithmetic, comparisons, calls of total helpers;
+ *      Maps and Sets only grow: `new Map(m).set(k, v)`, `new Set(s).add(x)` (no
+ *      deletion), with `m.get(k)`, `m.has(k)`, `.size`.
  *   3. Test each candidate by *running the real transpiled JavaScript* on random
  *      inputs: the function's own `requires` filters inputs, its own `ensures`
  *      must hold on the result (counterexample-driven pruning). Inputs that reach
@@ -1199,10 +1201,13 @@ interface Search {
   untestable: string | null;
   searchMs: number;
   fails: Map<string, { n: number; example: string }>;
+  /** the hole works with a Map or Set (its type, its scope's, or their parts) */
+  collections: boolean;
 }
 
 function newSearch(h: Hole, en: Enumerator, runner: Runner, maxSize: number, limitMs: number): Search {
-  const S: Search = { next: () => null, tested: 0, passed: 0, sizeReached: 0, stop: "", untestable: null, searchMs: 0, fails: new Map() };
+  const collections = [...en.types.values()].some((t) => t.k === "map" || t.k === "set");
+  const S: Search = { next: () => null, tested: 0, passed: 0, sizeReached: 0, stop: "", untestable: null, searchMs: 0, fails: new Map(), collections };
   const seenText = new Set<string>();
   const seenCanon = new Set<string>();
   // the same candidate up to whitespace and parentheses goes to Lean once
@@ -1864,7 +1869,8 @@ export async function synthCommand(root: string, files: string[], opts: { write?
       if (rejected.length && s.untestable) console.log("  the inputs cannot test this hole and Lean rejects the smallest candidates: write this one by hand");
       else if (rejected.length) console.log("  the random tests accept candidates that Lean rejects: write this one by hand");
       else if (untranslatable.length) console.log(`  the candidate(s) that pass the tests do not translate (${eg(untranslatable)}): a synth limitation, write this one by hand`);
-      else if (last || !s.passed) console.log("  write this one by hand (synth builds straight-line expressions; guarded updates need an `if`), or check that the spec is satisfiable");
+      // (Maps and Sets: the grammar only grows them, so a fill that deletes is never found)
+      else if (last || !s.passed) console.log(`  write this one by hand (synth builds straight-line expressions; guarded updates need an \`if\`${s.collections ? "; it only adds to a Map or Set, by new Map(m).set(k, v) or new Set(s).add(x): deleting is not in its grammar" : ""}), or check that the spec is satisfiable`);
       return { sol: null, conflict, failed: i };
     };
 

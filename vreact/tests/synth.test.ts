@@ -152,7 +152,7 @@ const cases: Record<string, () => Promise<void>> = {
     const dir = project("nosolution");
     const { by, out, writes } = await synth(dir, "src/u.ts", { maxSize: 3 });
     check("nosolution: not proved", !by("impossible")[0]?.proved);
-    check("nosolution: reports size and stop reason", out.includes("up to size 3; stopped: all candidates up to size 3 were tried") && out.includes("no candidate passed the tests") && !out.includes("strengthen"), out.split("\n").slice(-4).join(" | "));
+    check("nosolution: reports size and stop reason", out.includes("up to size 3; stopped: all candidates up to size 3 were tried") && out.includes("no candidate passed the tests") && !out.includes("strengthen") && !out.includes("a Map or Set"), out.split("\n").slice(-4).join(" | "));
     check("nosolution: nothing written", writes.length === 0);
   },
   // N25: holes no call shares (switch cases) are searched once each; a hole without candidates
@@ -318,6 +318,14 @@ const cases: Record<string, () => Promise<void>> = {
     check("Mx-update: count", solutions(by("count"))[0] === "m.size", String(solutions(by("count"))[0]));
     check("Mx-update: counterexamples show Maps", /postcondition fails on \[\{"Map":\[/.test(out), out.split("\n").find((l) => l.includes("postcondition fails on")) ?? "(no counterexample)");
     check("Mx-update: written program translates", translate(loadConfig(dir)).ok);
+  },
+  // a fill that deletes from a Map is not in the grammar: the closing hint says so (and only for
+  // holes that work with Maps or Sets: nosolution's hint has no such note)
+  async "Mx-delete"() {
+    const dir = project("Mx-delete");
+    const { by, out } = await synth(dir, "src/m.ts", { maxSize: 4 });
+    check("Mx-delete: dropKey not found", !by("dropKey")[0]?.proved);
+    check("Mx-delete: the hint names the missing deletion", out.includes("deleting is not in its grammar"), out.split("\n").slice(-2).join(" | "));
   },
   // generic holes over Maps / Sets: random Maps and Sets at the int and string instantiations,
   // generic Set helpers offered at the hole's types, counterexamples that show the Maps / Sets
