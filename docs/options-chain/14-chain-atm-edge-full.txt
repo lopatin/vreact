@@ -5,7 +5,9 @@ Components
   TRUSTED            StrikeRow              src/StrikeRow.tsx:18
   TRUSTED            OrderTicket            src/OrderTicket.tsx:15
   INCOMPLETE         OptionsChain           src/OptionsChain.tsx:31
-  UNCHECKED          App                    src/App.tsx:79
+      ↳ 2 obligations of it failed
+  INCOMPLETE         App                    src/App.tsx:79
+      ↳ it uses OptionsChain (src/OptionsChain.tsx), which is not verified: 2 obligations of it failed
 Functions
   VERIFIED           validChain
   VERIFIED           legOf
@@ -46,12 +48,13 @@ Functions
   VERIFIED           cancel
   VERIFIED           chainReducer
 App certificates (VReact.run_allInv instantiated)
-  UNCHECKED          VTS.App.App.certificate  axioms: none
+  INCOMPLETE         VTS.App.App.certificate  axioms: propext, sorryAx, Classical.choice, Quot.sound, VTS.OrderTicket.OrderTicket.init_inv, VTS.OrderTicket.OrderTicket.renderTrusted, VTS.OrderTicket.OrderTicket.stable, VTS.StrikeRow.StrikeRow.init_inv, VTS.StrikeRow.StrikeRow.renderTrusted, VTS.StrikeRow.StrikeRow.stable, VTS.TermRow.TermRow.init_inv, VTS.TermRow.TermRow.renderTrusted, VTS.TermRow.TermRow.stable
+      ↳ it uses OptionsChain (src/OptionsChain.tsx), which is not verified: 2 obligations of it failed
 Obligations by file
   ✓ src/model.ts                             22/22
   ✓ src/reducer.ts                           22/22
-  ✗ src/OptionsChain.tsx                     24/26
-  ? src/App.tsx                              1/5  (4 not checked)
+  ✗ src/OptionsChain.tsx                     23/26  (1 not checked)
+  ✓ src/App.tsx                              5/5
 
 Failed obligations
 ✗ src/OptionsChain.tsx:101:67  [precondition] precondition of strikeWindow(n, atm, levels)
@@ -1165,9 +1168,9 @@ Failed obligations
     │       [thm] inv.match_1.congr_eq_1 ↦ 1
     │       [thm] render.match_1.congr_eq_1 ↦ 1
 
-4 obligation(s) not checked:
-  src/App.tsx:79:17, src/App.tsx:79:17, src/App.tsx:86:7, src/App.tsx:79:1: VTS/App/View.lean was not checked: a module it imports failed, or the file stopped at an error in its imports
+1 obligation(s) not checked:
+  src/OptionsChain.tsx:107:20: it depends on `sorry` from a failure elsewhere (a failed obligation, a declaration with an error, or a hole()) that its goal or its proof contains, so Lean could not check it on its own: fix that first
 
 trusted (not verified, contracts assumed): TermRow, StrikeRow, OrderTicket
 
-✗ NOT VERIFIED  69/75 obligations proved, 2 failed, 4 unchecked; components: 0/5 verified  (13.5s)
+✗ NOT VERIFIED  72/75 obligations proved, 2 failed, 1 unchecked; components: 0/5 verified  (64.0s)

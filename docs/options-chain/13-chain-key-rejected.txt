@@ -1,1 +1,1 @@
-✗ VTS src/OptionsChain.tsx:63:26: keys must be int or string
+✗ VTS src/OptionsChain.tsx:98:42: type mismatch: expected int, got int | null

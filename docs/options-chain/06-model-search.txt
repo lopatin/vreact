@@ -13,6 +13,7 @@ Functions
   VERIFIED           dist
   VERIFIED           nearest
   INCOMPLETE         atmIndex
+      ↳ an obligation of it failed
   VERIFIED           inWindow
   VERIFIED           strikeWindow
   VERIFIED           levelsOf
@@ -37,14 +38,9 @@ Failed obligations
     │ hcontract_1 :
     │   (JS.findIndex ks fun s => nearest ks s price) < 0 ∨
     │     ∃ h, nearest ks ks[(JS.findIndex ks fun s => nearest ks s price).toNat] price = true
-    │ hcontract_2 :
+    │ hcontract_2 hcontract_3 :
     │   (-1 ≤ JS.findIndex ks fun s => nearest ks s price) ∧ (JS.findIndex ks fun s => nearest ks s price) < ↑ks.length
-    │ hcontract_3 :
-    │   (JS.findIndex ks fun s => nearest ks s price) < 0 ∨
-    │     ∃ h, nearest ks ks[(JS.findIndex ks fun s => nearest ks s price).toNat] price = true
-    │ hcontract_4 :
-    │   (-1 ≤ JS.findIndex ks fun s => nearest ks s price) ∧ (JS.findIndex ks fun s => nearest ks s price) < ↑ks.length
-    │ hcontract_5 :
-    │   …
+    │ h : (JS.findIndex ks fun s => nearest ks s price) + 1 ≤ 0
+    │ ⊢ False
 
-✗ NOT VERIFIED  21/22 obligations proved, 1 failed; components: 0/0 verified  (1.9s)
+✗ NOT VERIFIED  21/22 obligations proved, 1 failed; components: 0/0 verified  (7.2s)

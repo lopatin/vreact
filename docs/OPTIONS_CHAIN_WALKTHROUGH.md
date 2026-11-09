@@ -124,9 +124,10 @@ with `.vreact/`, and `vreact.json`:
 { "src": "src", "exclude": ["main.tsx"], "proofs": "proofs", "out": ".vreact" }
 ```
 
-`main.tsx` only mounts `<App/>`. It stays outside the verified program. In this walkthrough
-the app's `node_modules` was a symlink to `../kanban/node_modules`, and the commands were run as
-`node <repo>/vreact/bin/vreact.js …`. `npx vreact …` is the same program.
+`main.tsx` only mounts `<App/>`. It stays outside the verified program. The logs of this
+walkthrough were made the way the replay runs a step (see "Try it yourself"): the step's
+snapshot in a temp project with the app's configs and a `node_modules` symlink, and the command
+run as `node <repo>/vreact/bin/vreact.js …`. `npx vreact …` is the same program.
 
 The finished app has seven verified files:
 
@@ -207,23 +208,37 @@ then `b`", `forall(lo, hi, (i) => …)` says the condition holds for every integ
 ```
 $ vreact verify
 translated 1 module(s), 6 proof obligation(s) → .vreact/ ; checking with Lean…
+…
 Functions
   VERIFIED           validChain
   …
   INCOMPLETE         quotePrice
-  INCOMPLETE         midPrice
+      ↳ pending: it has a hole() / sorry
   …
   INCOMPLETE         atmIndex
+      ↳ an obligation of it was not checked: it depends on `sorry` from a failure elsewhere (a failed obligation, a declaration with an error, or a hole()) that its goal or its proof contains, so Lean could not check it on its own: fix that first
   …
-pending (hole() / sorry): quotePrice, midPrice, atmIndex, strikeWindow, heatOf
+Obligations by file
+  ? src/model.ts                             5/6  (1 not checked)
 
-◐ INCOMPLETE (holes / trusted stubs / unchecked parts remain)  6/6 obligations proved; components: 0/0 verified  (2.5s)
+1 obligation(s) not checked:
+  src/model.ts:103:51: it depends on `sorry` from a failure elsewhere (a failed obligation, a declaration with an error, or a hole()) that its goal or its proof contains, so Lean could not check it on its own: fix that first
+pending (hole() / sorry): quotePrice, midPrice, strikeWindow, heatOf
+
+◐ INCOMPLETE (holes / trusted stubs / unchecked parts remain)  5/6 obligations proved, 1 unchecked; components: 0/0 verified  (6.1s)
 ```
 
 A **proof obligation** is one claim that must be true for the program to be correct, such as
 "this index is in bounds" or "this function returns what its `ensures` says". `vreact verify`
 translates the code to Lean 4 and asks Lean to prove every obligation. A function is
 `VERIFIED` when all of its obligations are proved, and `INCOMPLETE` while it still has a hole.
+
+The one obligation that is **not checked** (`?`, "1 unchecked") is the index `ks[r]` in
+`atmIndex`'s second `ensures` (line 103, column 51). To show that `r` is in bounds, Lean needs
+to know what the function returns, and the body is still a hole. In Lean a hole is a `sorry`,
+a placeholder for something missing. An obligation whose goal or proof contains a `sorry`
+from elsewhere would prove nothing, so it is neither counted as proved nor as failed; it is
+checked again once the hole is filled.
 
 ### 1b. Let the synthesizer test the spec ([log](options-chain/02-model-synth.txt))
 
@@ -232,16 +247,17 @@ random inputs against the contracts, and asks Lean to prove the ones that pass.
 
 ```
 $ vreact synth src/model.ts
-hole 2/2 in quotePrice (with hole 1 = q.bid): int | null   scope: q, q.bid, q.bidQty, q.ask, q.askQty, side
-  candidate passes 400 random tests: q.ask   (2 candidate(s) tested in 0.0s)
+…
+hole 2/2 in quotePrice: int | null   scope: q, q.bid, q.bidQty, q.ask, q.askQty, side
+  candidate passes 196 random tests: q.ask   (2 candidate(s) tested in 0.0s)
   ✔ proved by Lean: quotePrice with q.bid / q.ask
 hole in midPrice: int | null   scope: q, q.bid, q.bidQty, q.ask, q.askQty
   candidate passes 400 random tests: q.bid   (1 candidate(s) tested in 0.0s)
   ✔ proved by Lean: q.bid
 hole in atmIndex: int   scope: ks, price
-  26743 candidates tested in 60.0s, up to size 7; stopped: the 60s time limit was reached at size 7
+  14785 candidates tested in 60.0s, up to size 7; stopped: the 60s time limit was reached at size 7
   no verified solution for hole in atmIndex: no candidate passed the tests
-  most common failure (26743×): price: postcondition fails on [[],7] ↦ 7
+  most common failure (14785×): price: postcondition fails on [[{"strike":1,"call":{"bid":10,"bidQty":1,"ask":null,"askQty":-1},"put":{"bid":10,"bidQty":1,"ask":7,"askQty":0},"callTheo":-1,"putTheo":4,"vol":-10}],-1] ↦ -1
 …
 ```
 
@@ -256,9 +272,10 @@ its specification, and the synthesizer just showed that ours does not say "mid".
 
 For `atmIndex`, no candidate passed, not even the trivial `-1`. The reason is how synth tests:
 it runs the contracts as JavaScript, where `implies(a, b)` is an ordinary function call that
-evaluates `b` even when `a` is false. For `r = -1`, `ks[-1].strike` throws. In Lean, `implies`
-is guarded. We write the same condition with `||`, which short-circuits in both languages
-([log](options-chain/03-model-synth-guard.txt)):
+evaluates `b` even when `a` is false. For `r = -1`, `ks[-1].strike` throws. (The failure printed
+above is such a case: on a one-strike ladder and the price −1, the candidate `price` returns
+−1.) In Lean, `implies` is guarded. We write the same condition with `||`, which short-circuits
+in both languages ([log](options-chain/03-model-synth-guard.txt)):
 
 ```ts
 ensures((r: int) => r < 0 || nearest(ks, ks[r], price));
@@ -292,13 +309,14 @@ $ vreact synth src/model.ts --write
   ✔ proved by Lean: quotePrice with q.bid / q.ask
 hole in midPrice: int | null   …
   no verified solution for hole in midPrice: no candidate passed the tests
-  most common failure (11824×): q.bid: postcondition fails on [{"bid":null,"bidQty":3,"ask":10,"askQty":3}] ↦ null
+  most common failure (10143×): q.bid: postcondition fails on [{"bid":1,"bidQty":2,"ask":-2,"askQty":2}] ↦ 1
 …
 wrote src/model.ts
 ```
 
-`q.bid` is now refuted by a concrete input (no bid, an ask of 10). The rest needs branches,
-which synth does not build ("write this one by hand"). `--write` keeps the one proved fill.
+`q.bid` is now refuted by a concrete input (a bid of 1 and an ask of −2: the mid, rounded down,
+is −1, not 1). The rest needs branches, which synth does not build ("write this one by hand").
+`--write` keeps the one proved fill.
 
 ### 1c. Hand-written code, machine-checked ([log](options-chain/05-model-bugs.txt), [snapshot](options-chain/steps/05-model-bugs/src/model.ts))
 
@@ -317,13 +335,9 @@ return { lo: Math.max(0, atm - levels), hi: Math.min(n, atm + levels) };   // st
 ```
 $ vreact verify
 …
-✗ src/model.ts:119:11  [postcondition] postcondition of atmIndex: r < 0 || nearest(ks, ks[r], price)
-    │ vreact: (deterministic) timeout: the automation did not finish within this obligation's budget …
-✗ src/model.ts:121:11  [postcondition] postcondition of atmIndex: implies(ks.length > 0, r >= 0)
-    │ vreact_auto could not prove the goal (grind stopped at Lean's recursion limit)
-    │ …
 ✗ src/model.ts:125:18  [index] index k - 1 is within bounds of ks
     │ `grind` failed
+    │ …
     │ k : Int := JS.findIndex ks fun s => JS.le price s.strike
     │ …
     │ h : (JS.findIndex ks fun s => JS.le price s.strike) ≤ 0
@@ -332,23 +346,28 @@ $ vreact verify
     │ right : ∀ (x : Strike), x ∈ ks → JS.le price x.strike = false
     │ ⊢ False
 ✗ src/model.ts:125:38  [index] index k is within bounds of ks
+    │ …
     │ h : (JS.findIndex ks fun s => JS.le price s.strike) + 1 ≤ 0
     │ ⊢ False
 ✗ src/model.ts:139:11  [postcondition] postcondition of strikeWindow: 0 <= r.lo && r.lo <= atm && atm < r.hi && r.hi <= n
-    │ h_pre : (0 ≤ atm ∧ atm < n) ∧ levels ≥ 0
+    │ …
+    │ h_pre_1 h_pre : (0 ≤ atm ∧ atm < n) ∧ levels ≥ 0
     │ h : -1 * atm + min n (atm + levels) ≤ 0
     │ h_1 : ¬n + -1 * atm + -1 * levels ≤ 0
     │ ⊢ False
 ✗ src/model.ts:140:11  [postcondition] postcondition of strikeWindow: forall(0, n, (i) => (r.lo <= i && i < r.hi) === inWindow(i, atm, leve…
-✗ NOT VERIFIED  18/24 obligations proved, 6 failed; components: 0/0 verified  (38.3s)
+…
+4 obligation(s) not checked:
+  src/model.ts:116:11, src/model.ts:119:44, src/model.ts:119:11, src/model.ts:121:11: it depends on `sorry` from a failure elsewhere (a failed obligation, a declaration with an error, or a hole()) that its goal or its proof contains, so Lean could not check it on its own: fix that first
+
+✗ NOT VERIFIED  16/24 obligations proved, 4 failed, 4 unchecked; components: 0/0 verified  (18.3s)
 ```
 
 Some vocabulary first. vreact proves each obligation with `vreact_auto`, its automation, whose
 main tool is `grind`, an automatic Lean tactic for this kind of goal (equalities, linear
 arithmetic, case splits). "`grind` failed" means it ran out of ideas, and the goal it prints is
-where it stopped. A "(deterministic) timeout" means the obligation used up its fixed budget of
-proof steps (Lean counts them in "heartbeats", so the result does not depend on the machine's
-speed); the other obligations are still checked.
+where it stopped. A failure does not stop the check: vreact admits the failed goal (with
+`sorry`) and goes on, so one run reports every failure.
 
 How to read a failure: the lines above `⊢` are what Lean knows at that point (hypotheses), and
 `⊢ False` means they were not enough. Often they *are* a counterexample:
@@ -365,17 +384,22 @@ How to read a failure: the lines above `⊢` are what Lean knows at that point (
   window `[atm, atm)` is empty and the ATM row disappears. In general the last row
   `atm + levels` is missing: the filter "3" showed 3 rows below the ATM row but only 2 above.
   The fix is `hi: Math.min(n, atm + levels + 1)`.
-* **The two `atmIndex` postconditions: the code is wrong, not the prover.** Neither failure
-  points at a counterexample (one is a timeout, the other a goal `grind` could not handle), but
-  both statements are false for this code, so no prover could have proved them. The second one
-  is the edge bug again: above the top strike, `k = -1`, and the function returns `k - 1` or
-  `k`, both negative, although the ladder is not empty. The first one, "the result is a nearest
-  strike", is false even away from the edges. The search silently assumes an ascending ladder,
-  and no contract says so: `validChain` asks only for distinct strikes. Take the ladder
-  `[10, 100, 50, 12]` (in ticks) and the price 60. The first strike at or above 60 is 100, the
-  one before it is 10, and 100 is nearer, so the search returns the strike 100, 40 ticks away,
-  while 50 is only 10 ticks away. Lesson: when an obligation is not proved, look for a
-  counterexample before blaming the automation.
+* **`atmIndex`'s postconditions: not checked, and false anyway.** The three `ensures` of
+  `atmIndex` (lines 116, 119 and 121, and the index `ks[r]` inside the second one) are about
+  the value the function returns, and that value is computed from `ks[k - 1]` and `ks[k]`,
+  whose index obligations failed. A proof through an admitted failure would rest on a false
+  statement and prove nothing, so vreact does not count it: these obligations are "not
+  checked" until the failures they depend on are fixed. Here, fixing the reads would not be
+  enough, because the statements are false for this code, so no prover could prove them. Two
+  of them are the edge bug again: above the top strike, `k = -1`, and the function returns
+  `k - 1` or `k`, both negative (`-2` is not even in the range `-1 <= r`), although the ladder
+  is not empty. The third, "the result is a nearest strike", is false even away from the
+  edges. The search silently assumes an ascending ladder, and no contract says so:
+  `validChain` asks only for distinct strikes. Take the ladder `[10, 100, 50, 12]` (in ticks)
+  and the price 60. The first strike at or above 60 is 100, the one before it is 10, and 100 is
+  nearer, so the search returns the strike 100, 40 ticks away, while 50 is only 10 ticks away.
+  Lesson: when an obligation is not proved, look for a counterexample before blaming the
+  automation.
 
 ### 1d. Make the code easy to prove ([log](options-chain/06-model-search.txt), [log](options-chain/07-model-verified.txt))
 
@@ -398,14 +422,19 @@ atom. One obligation still fails:
 ```
 ✗ src/model.ts:121:11  [postcondition] postcondition of atmIndex: implies(ks.length > 0, r >= 0)
     │ `grind` failed
+    │ …
     │ h₂₁ : ↑ks.length > 0
     │ …
-✗ NOT VERIFIED  21/22 obligations proved, 1 failed; components: 0/0 verified  (1.9s)
+    │ h : (JS.findIndex ks fun s => nearest ks s price) + 1 ≤ 0
+    │ ⊢ False
+
+✗ NOT VERIFIED  21/22 obligations proved, 1 failed; components: 0/0 verified  (7.2s)
 ```
 
-"A non-empty ladder has a nearest strike" is true. But proving it is an induction over the list
-(a minimum exists), and the automation does not do induction. We state what is provable and
-still rules out the escape hatch:
+The goal is the case of a non-empty ladder (`h₂₁`) in which `findIndex` found no nearest strike
+and returned −1 (`h`). That case cannot happen: "a non-empty ladder has a nearest strike" is
+true. But proving it is an induction over the list (a minimum exists), and the automation does
+not do induction. We state what is provable and still rules out the escape hatch:
 
 ```ts
 // whenever some strike is nearest, an ATM row is found.
@@ -427,7 +456,7 @@ $ vreact verify
   …
   ✓ src/model.ts                             22/22
 
-✔ VERIFIED  22/22 obligations proved; components: 0/0 verified  (3.1s)
+✔ VERIFIED  22/22 obligations proved; components: 0/0 verified  (8.5s)
 ```
 
 `heatOf` and `midPrice` were right the first time. The verifier checked, for example, that
@@ -465,7 +494,7 @@ every operation must keep the invariant from any well-formed state, and say so:
 reducer and the components reason with the contracts only. The reducer is a `switch` over a
 discriminated-union `Action` (one variant per operation) that delegates to them.
 
-### 2a. Synthesis finds two weak specs ([log](options-chain/08-reducer-synth.txt))
+### 2a. Synthesis finds three weak specs ([log](options-chain/08-reducer-synth.txt))
 
 ```
 $ vreact synth src/reducer.ts
@@ -474,12 +503,14 @@ hole in setCollapsed: ChainUi   …
 hole in setFilter: ChainUi   …
   ✔ proved by Lean: { ...u, filter: f }
 hole in holdAt: ChainUi   …
-  untested candidate: chainReducer(u, { kind: "follow", expiry: u.heat })
-  ✗ chainReducer(u, { kind: "follow", expiry: u.heat }): does not translate: src/reducer.ts:70:1: mutually recursive declarations are not supported
-  …
+  candidate passes 400 random tests: { ...u, held: [{ expiry: id, price: price }] }   (12658 candidate(s) tested in 44.5s)
+  ✔ proved by Lean: { ...u, held: [{ expiry: id, price: price }] }
 hole in follow: ChainUi   …
   candidate passes 400 random tests: jump(u, id)   (17 candidate(s) tested in 0.1s)
   ✔ proved by Lean: jump(u, id)
+hole in place: ChainUi   …
+  19699 candidates tested in 60.0s, up to size 6; stopped: the 60s time limit was reached at size 6
+  no verified solution for hole in place: no candidate passed the tests
 …
 hole in cancel: ChainUi   …
   candidate passes 400 random tests: u   (1 candidate(s) tested in 0.0s)
@@ -490,6 +521,12 @@ hole in cancel: ChainUi   …
 * `follow` (contract: afterwards the expiry follows the futures price) is satisfied by
   **`jump(u, id)`**, which also expands the expiry and moves the focus. The contract never said
   that everything else stays the same. That missing part is called a **frame condition**.
+* `holdAt` (contract: afterwards the expiry is held at `price`) is satisfied by
+  **`{ ...u, held: [{ expiry: id, price: price }] }`**, which holds this expiry and silently
+  drops the holds of every other expiry. The same frame condition is missing.
+
+`place` needs a guard (an invalid quantity or price adds nothing), and synth does not build
+`if`s: it is written by hand in 2c.
 
 We add the frame conditions as predicates and the missing functional postcondition for
 `cancel`:
@@ -507,41 +544,35 @@ ensures((r: ChainUi) => !r.orders.some((o) => o.id === id));
 ensures((r: ChainUi) => u.orders.every((o) => o.id === id || r.orders.some((p) => p.id === o.id)));
 ```
 
-### 2b. A synth limitation, and how to work around it ([log](options-chain/09-reducer-synth-strong.txt), [log](options-chain/10-reducer-synth-ops.txt))
+### 2b. Synthesis with the frame conditions ([log](options-chain/09-reducer-synth-strong.txt), [log](options-chain/10-reducer-synth-ops.txt))
 
-With the stronger specs, synth gave up on every remaining hole:
-
-```
-hole in cancel: ChainUi   …
-  no generated input can test this hole (400 of 400 reach another unfilled hole): the smallest candidates are checked by Lean only
-  untested candidate: chainReducer(u, { kind: "follow", expiry: u.heat })
-  ✗ chainReducer(u, { kind: "follow", expiry: u.heat }): does not translate: src/reducer.ts:144:1: mutually recursive declarations are not supported
-  …
-  no verified solution for hole in cancel: no generated input can test this hole (400 of 400 reach another unfilled hole)
-```
-
-Synth offers every total function of the module as a building block, including `chainReducer`,
-which calls the very operation being synthesized. Those candidates cannot be tested or
-translated, and the search stops after three of them, before it reaches the `filter`
-candidates. The workaround follows the natural order anyway: **synthesize the operations
-before writing the reducer that calls them.** With `chainReducer` removed for one run
-([snapshot](options-chain/steps/10-reducer-synth-ops/src/reducer.ts)):
+With the stronger specs, synth fills `follow` and `cancel`:
 
 ```
 $ vreact synth src/reducer.ts --write
 …
 hole in follow: ChainUi   …
-  candidate passes 400 random tests: { ...u, held: u.held.filter((x) => x.expiry !== id) }   (10409 candidate(s) tested in 24.9s)
+  candidate passes 400 random tests: { ...u, held: u.held.filter((x) => x.expiry !== id) }   (9690 candidate(s) tested in 30.0s)
   ✔ proved by Lean: { ...u, held: u.held.filter((x) => x.expiry !== id) }
 …
 hole in cancel: ChainUi   …
-  candidate passes 400 random tests: { ...u, orders: u.orders.filter((x) => x.id !== id) }   (13940 candidate(s) tested in 42.0s)
+  candidate passes 400 random tests: { ...u, orders: u.orders.filter((x) => x.id !== id) }   (12887 candidate(s) tested in 39.4s)
   ✔ proved by Lean: { ...u, orders: u.orders.filter((x) => x.id !== id) }
 wrote src/reducer.ts
 ```
 
-Both are the intended programs. With the frame conditions in place, synth's answer is the
-right one.
+Both are the intended programs. With the frame conditions in place, synth's answer is the right
+one. `holdAt` and `place` are not found within the 60 s that synth spends on each hole.
+
+Step 10 runs the same search with `chainReducer` removed
+([snapshot](options-chain/steps/10-reducer-synth-ops/src/reducer.ts)) and finds the same two
+programs. That step was a workaround for an earlier synth, which offered every total function
+of the module as a building block, including `chainReducer`, which calls the very operations
+being synthesized. Those candidates could not be translated ("mutually recursive declarations
+are not supported"), and the search gave up on every hole. Synth now leaves out any function
+that calls the one being filled (VTS has no recursion, so such a fill could never translate).
+Synthesizing the operations before writing the reducer that calls them is still the natural
+order.
 
 ### 2c. The rest by hand ([log](options-chain/11-reducer-bug.txt), [log](options-chain/12-reducer-verified.txt))
 
@@ -570,14 +601,14 @@ $ vreact verify
     │       { id := u.nextId, expiry := t.expiry, leg := t.leg, strike := t.strike, buy := JS.eq t.side model.Side.ask,
     │         qty := qty, price := price }
     │ h_6 : -1 * x.id + u.nextId ≤ 0
-✗ NOT VERIFIED  43/44 obligations proved, 1 failed; components: 0/0 verified  (6.4s)
+✗ NOT VERIFIED  43/44 obligations proved, 1 failed; components: 0/0 verified  (12.0s)
 ```
 
 The counterexample is the new order `x` itself, whose id is `u.nextId`: `nextId` was never
 advanced, so the next order would reuse the id. The fix is `nextId: u.nextId + 1`:
 
 ```
-✔ VERIFIED  44/44 obligations proved; components: 0/0 verified  (8.0s)
+✔ VERIFIED  44/44 obligations proved; components: 0/0 verified  (9.0s)
 ```
 
 ---
@@ -650,14 +681,17 @@ export function OptionsChain(props: OptionsChainProps) {
   })}
 ```
 
-Two quick rejections came first. VTS does not accept an *enum* (its name for a string-literal
-union type such as `StrikeFilter = "s3" | "s7" | "s11" | "s99" | "all"`) as a React key
-([log](options-chain/13-chain-key-rejected.txt)): `✗ VTS src/OptionsChain.tsx:63:26: keys must be
-int or string`, so the filter buttons use `key={filterLabel(f)}`. It also did not unify a
-ternary whose branches are `int | null` and a narrowed `int`
-([log](options-chain/13b-chain-ternary-rejected.txt)): `✗ VTS src/OptionsChain.tsx:98:42: type
-mismatch: expected int, got int | null`. The annotation `const center: int | null` above fixes
-that. Then the first real result ([log](options-chain/14-chain-atm-edge.txt)):
+A quick rejection came first. VTS does not unify a ternary whose branches are `int | null` and a
+narrowed `int` ([log](options-chain/13b-chain-ternary-rejected.txt)): `✗ VTS
+src/OptionsChain.tsx:98:42: type mismatch: expected int, got int | null`. The annotation `const
+center: int | null` above fixes that. Step 13's snapshot, one draft earlier, also used the
+filter value itself as the key of its button: `key={f}`, where `f` is an *enum* (VTS's name for
+a string-literal union type such as `StrikeFilter = "s3" | "s7" | "s11" | "s99" | "all"`). When
+this walkthrough was first written, VTS rejected that (`keys must be int or string`), and the
+filter buttons got `key={filterLabel(f)}`. vreact now accepts an enum key (the key is its
+string), so step 13 now stops at the same ternary as step 13b
+([log](options-chain/13-chain-key-rejected.txt)). `key={filterLabel(f)}` stays; either key
+works. Then the first real result ([log](options-chain/14-chain-atm-edge.txt)):
 
 ```
 $ vreact verify
@@ -672,7 +706,11 @@ $ vreact verify
     │   …
 ✗ src/OptionsChain.tsx:101:67  [precondition] precondition of strikeWindow(n, atm, levels)
     │ …
-✗ NOT VERIFIED  69/75 obligations proved, 2 failed, 4 unchecked; components: 0/5 verified  (30.0s)
+
+1 obligation(s) not checked:
+  src/OptionsChain.tsx:107:20: it depends on `sorry` from a failure elsewhere (a failed obligation, a declaration with an error, or a hole()) that its goal or its proof contains, so Lean could not check it on its own: fix that first
+…
+✗ NOT VERIFIED  72/75 obligations proved, 2 failed, 1 unchecked; components: 0/5 verified  (66.5s)
 ```
 
 The short report cuts the goal off before the interesting part. `vreact verify --full` prints
@@ -707,7 +745,9 @@ nearest, which is the case for an empty ladder. The code shows a second way to g
 
 Why is the same call reported twice? The translation evaluates the `map` callback over the
 expiries twice: once to compute each `<tbody>`'s key, and once to build its rows. The second
-goal is the same case, with one more fact (`hmem₁₃ : e ∈ props.expiries`).
+goal is the same case, with one more fact (`hmem₁₃ : e ∈ props.expiries`). For the same
+reason, the obligation that the `<tbody>` keys are distinct (line 107) is not checked: the keys
+are computed through the failed call, so its goal contains the `sorry` that stands for it.
 
 The fix is the first condition below:
 
@@ -738,7 +778,7 @@ Obligations by file
 trusted (not verified, contracts assumed): TermRow, StrikeRow, OrderTicket
 VERIFIED* = all own obligations proved; relies on the contracts of the trusted declarations above
 
-✔ VERIFIED modulo @trusted declarations  75/75 obligations proved; components: 0/5 verified  (11.6s)
+✔ VERIFIED modulo @trusted declarations  75/75 obligations proved; components: 0/5 verified  (21.1s)
 ```
 
 **`VERIFIED*`** means that all of the component's own obligations are proved, assuming the
@@ -807,7 +847,7 @@ $ vreact verify
     │   (List.map (fun e => e.id) props'.expiries).Nodup ∧
     │     ∀ (x : model.Expiry), x ∈ props'.expiries → (List.map (fun s => s.strike) x.strikes).Nodup
     │ …
-✗ NOT VERIFIED  73/78 obligations proved, 1 failed, 4 unchecked; components: 0/5 verified  (16.7s)
+✗ NOT VERIFIED  77/78 obligations proved, 1 failed; components: 0/5 verified  (21.8s)
 ```
 
 The handlers do establish the invariant: the `tExp!` assertions and every `setTicket` were proved.
@@ -832,7 +872,7 @@ const tExp = ticket === null ? undefined : props.expiries.find((e) => e.id === t
 ```
 
 ```
-✔ VERIFIED modulo @trusted declarations  76/76 obligations proved; components: 0/5 verified  (8.6s)
+✔ VERIFIED modulo @trusted declarations  76/76 obligations proved; components: 0/5 verified  (19.1s)
 ```
 
 The same reasoning is why the reducer's invariant says nothing about the expiries:
@@ -868,11 +908,19 @@ first version had a copy-paste error that is easy to miss in a mirrored layout:
 
 ```
 $ vreact verify
+…
+  INCOMPLETE         StrikeRow              src/StrikeRow.tsx:37
+      ↳ an obligation of it failed
+  TRUSTED            OrderTicket            src/OrderTicket.tsx:16
+  INCOMPLETE         OptionsChain           src/OptionsChain.tsx:32
+      ↳ it uses StrikeRow (src/StrikeRow.tsx), which is not verified: an obligation of it failed
+…
 ✗ src/StrikeRow.tsx:55:110  [callback-contract] callback contract of onPick("put", "ask", x)
     │ `grind` failed
+    │ …
     │ hpre_1 : props.heat ≥ 1
     │ …
-✗ NOT VERIFIED  66/98 obligations proved, 1 failed, 31 unchecked; components: 1/6 verified  (2.6s)
+✗ NOT VERIFIED  97/98 obligations proved, 1 failed; components: 1/6 verified  (22.4s)
 ```
 
 A **callback-contract** obligation says that a call of a callback prop satisfies its
@@ -880,9 +928,11 @@ A **callback-contract** obligation says that a call of a callback prop satisfies
 would have opened a *buy* ticket at the *bid* price. The contract catches this because the
 report contradicts itself: the bid's price under the name "ask". (A cell that reported another
 cell's name together with that cell's price would not contradict itself; step 7 comes back to
-that.) After the fix (`"bid"`), `StrikeRow` and `PriceCell` are `VERIFIED`, and everything that
-was `UNCHECKED` because it imported the failing module is checked again: `✔ VERIFIED modulo
-@trusted declarations  98/98 obligations proved; components: 2/6 verified`.
+that.) The chain and the App are `INCOMPLETE` too, although all their own obligations are
+proved: they use `StrikeRow`, so they rest on the `sorry` that admits its failed obligation (the
+certificate lists it among its axioms as `sorryAx`). After the fix (`"bid"`), `StrikeRow` and
+`PriceCell` are `VERIFIED`, and the chain and the App are back to `VERIFIED*`: `✔ VERIFIED
+modulo @trusted declarations  98/98 obligations proved; components: 2/6 verified`.
 
 ### 5b. TermRow and OrderTicket ([log](options-chain/20-children-bug.txt), [log](options-chain/21-children-verified.txt))
 
@@ -902,10 +952,14 @@ export function OrderTicket(props: OrderTicketProps) {
 
 ```
 $ vreact verify
+…
 ✗ src/OrderTicket.tsx:46:17  [handler] onClick handler on <button> preserves the invariant of OrderTicket
+    │ …
     │ hinv : (1 ≤ σ.qty ∧ σ.qty ≤ 500) ∧ σ.price > 0
     │ h : σ.price + -1 ≤ 0
-✗ NOT VERIFIED  90/122 obligations proved, 1 failed, 31 unchecked; components: 3/6 verified  (5.7s)
+    │   …
+
+✗ NOT VERIFIED  121/122 obligations proved, 1 failed; components: 3/6 verified  (22.8s)
 ```
 
 At a price of 1 tick, "−" makes it 0. A **handler** obligation says that a click, run against the
@@ -928,7 +982,7 @@ Components
 App certificates (VReact.run_allInv instantiated)
   VERIFIED           VTS.App.App.certificate  axioms: propext, Classical.choice, Quot.sound
 
-✔ VERIFIED  122/122 obligations proved; components: 6/6 verified  (9.4s)
+✔ VERIFIED  122/122 obligations proved; components: 6/6 verified  (23.2s)
 ```
 
 The submit button needs no guard: the invariant already makes `(qty, price)` valid, which is
@@ -970,45 +1024,50 @@ const expiries = moveFutures(EXPIRIES, offset);
 
 ```
 $ vreact verify
+…
 ✗ src/App.tsx:106:3  [effect-robust] timer callbacks of the effect preserve the invariant of App from any state
     │ `grind` failed
+    │ …
     │ hinv : (-40 ≤ σ.offset ∧ σ.offset ≤ 40) ∧ 0 ≤ σ.seed ∧ σ.seed < 65537
     │ …
-✗ NOT VERIFIED  127/128 obligations proved, 1 failed; components: 5/6 verified  (9.4s)
 
-$ vreact verify --full     # the same failure, complete goal (excerpt, lines 82-138 of the log)
+✗ NOT VERIFIED  127/128 obligations proved, 1 failed; components: 5/6 verified  (46.5s)
+
+$ vreact verify --full     # the same failure, complete goal (excerpt, lines 84-142 of the log)
     │ h :
     │   t = fun x =>
-    │     if
-    │         -40 ≤
-    │           σ.offset +
-    │             ((if
+    │     if σ.paused = true then { }
+    │     else
+    │       if
+    │           -40 ≤
+    │             σ.offset +
+    │               ((if
 …
-    │             40 then
-    │         {
-    │           updates :=
-    │             [fun τ =>
-    │               { offset := τ.offset,
+    │               40 then
+    │           {
+    │             updates :=
+    │               [fun τ =>
+    │                 { offset := τ.offset,
 …
-    │               fun τ =>
-    │               {
-    │                 offset :=
-    │                   τ.offset +
-    │                     ((if
+    │                 fun τ =>
+    │                 {
+    │                   offset :=
+    │                     τ.offset +
+    │                       ((if
 …
-    │                       2),
-    │                 seed := τ.seed, paused := τ.paused }] }
+    │                         2),
+    │                   seed := τ.seed, paused := τ.paused }] }
 ```
 
-`t` is the timer callback, and the long elided expressions are `move`, computed from
-`σ.seed`. The guard compares `σ.offset + move` with −40 and 40, but the second update sets
-`offset := τ.offset + move`. The timer callback is a **stale closure**: its guard reads
-`σ.offset` from the render that created the timer, but its update `o => o + move` is applied
-to `τ`, the state React holds when it processes the update. vreact's model (see
-`vreact/docs/SEMANTICS.md` §2.2) treats effects and timers as running later, against any state
-that satisfies the invariant. So it asks for an **effect-robust** update: one that keeps the
-invariant from *every* valid `τ`, not just from the snapshot. With `τ.offset = 40` and
-`move = +2`, this one does not.
+`t` is the timer callback. Its first branch is the effect's `if (paused) return;`, and the long
+elided expressions are `move`, computed from `σ.seed`. The guard compares `σ.offset + move` with
+−40 and 40, but the second update sets `offset := τ.offset + move`. The timer callback is a
+**stale closure**: its guard reads `σ.offset` from the render that created the timer, but its
+update `o => o + move` is applied to `τ`, the state React holds when it processes the update.
+vreact's model (see `vreact/docs/SEMANTICS.md` §2.2) treats effects and timers as running later,
+against any state that satisfies the invariant. So it asks for an **effect-robust** update: one
+that keeps the invariant from *every* valid `τ`, not just from the snapshot. With `τ.offset =
+40` and `move = +2`, this one does not.
 
 The fix the skill recommends: put the related state in one record, and make the timer apply one
 total function to whatever state it finds ([log](options-chain/23-app-feed.txt)):
@@ -1070,7 +1129,7 @@ Obligations by file
   ✓ src/OptionsChain.tsx                     27/27
   ✓ src/App.tsx                              12/12
 
-✔ VERIFIED  129/129 obligations proved; components: 6/6 verified  (11.4s)
+✔ VERIFIED  129/129 obligations proved; components: 6/6 verified  (21.9s)
 ```
 
 `moveFutures(EXPIRIES, offset)` maps over the constant, and its `ensures` (validity is preserved)
@@ -1110,7 +1169,7 @@ $ vreact verify
 App certificates (VReact.run_allInv instantiated)
   VERIFIED           VTS.App.App.certificate  axioms: propext, Classical.choice, Quot.sound
 …
-✔ VERIFIED  129/129 obligations proved; components: 6/6 verified  (13.6s)
+✔ VERIFIED  129/129 obligations proved; components: 6/6 verified  (23.4s)
 ```
 
 All three survive. They are of two kinds.
@@ -1167,14 +1226,22 @@ export function place(u: ChainUi, t: Ticket, qty: int, price: int): ChainUi {
 ```
 $ vreact verify
 …
+  VERIFIED           OptionsChain           src/OptionsChain.tsx:32
+  VERIFIED           App                    src/App.tsx:115
+…
+  INCOMPLETE         place
+      ↳ an obligation of it failed
+…
+App certificates (VReact.run_allInv instantiated)
+  VERIFIED           VTS.App.App.certificate  axioms: propext, Classical.choice, Quot.sound
 Obligations by file
   ✓ src/model.ts                             22/22
   ✗ src/reducer.ts                           23/24
   ✓ src/StrikeRow.tsx                        22/22
   ✓ src/TermRow.tsx                          12/12
   ✓ src/OrderTicket.tsx                      12/12
-  ? src/OptionsChain.tsx                     0/27  (27 not checked)
-  ? src/App.tsx                              0/12  (12 not checked)
+  ✓ src/OptionsChain.tsx                     27/27
+  ✓ src/App.tsx                              12/12
 
 Failed obligations
 ✗ src/reducer.ts:175:11  [postcondition] postcondition of place: implies(validQty(qty) && price > 0, r.orders.some((o) => orderFor(o, …
@@ -1190,15 +1257,22 @@ Failed obligations
     │         ¬a.expiry = t.expiry ∨
     │           ¬a.leg = t.leg ∨ ¬a.strike = t.strike ∨ ¬a.buy = JS.eq t.side model.Side.ask ∨ ¬a.qty = qty ∨ ¬a.price = price
     │ ⊢ False
-…
-✗ NOT VERIFIED  91/131 obligations proved, 1 failed, 39 unchecked; components: 4/6 verified  (5.7s)
+
+✗ NOT VERIFIED  130/131 obligations proved, 1 failed; components: 6/6 verified  (22.0s)
 ```
 
 `h_2` says that no order in the result fits `orderFor`, and why: the new order has
 `buy := JS.eq t.side model.Side.bid`, where the contract asks for `Side.ask`. The two other new
 postconditions of `place` (one order more, the rest kept) are proved. `StrikeRow.tsx` and
-`TermRow.tsx` are still ✓ with their mutants, as expected. The chain and the App are not
-checked because they import the failing reducer.
+`TermRow.tsx` are still ✓ with their mutants, as expected.
+
+The verdict is `NOT VERIFIED`, but the chain, the App and the certificate are `VERIFIED`, on the
+three standard axioms. That is not a contradiction. The certificate is about invariants, and all
+its proofs need from `place` is its first postcondition (the invariant is kept), which is
+proved. The failing postcondition, *which* order is added, is a functional contract that no
+invariant proof uses, so the failure does not reach them (no `sorryAx` among the axioms). It is
+a failed obligation all the same: `place` is `INCOMPLETE`, and the app is not verified until it
+is fixed.
 
 ### 7b. The final app ([log](options-chain/26-final.txt), [snapshot](options-chain/steps/26-final/src/))
 
@@ -1238,7 +1312,7 @@ Obligations by file
   ✓ src/OptionsChain.tsx                     27/27
   ✓ src/App.tsx                              12/12
 
-✔ VERIFIED  131/131 obligations proved; components: 6/6 verified  (68.5s)
+✔ VERIFIED  131/131 obligations proved; components: 6/6 verified  (21.9s)
 ```
 
 ---
@@ -1374,18 +1448,18 @@ could not prove) or a construct VTS rejected. Each was resolved by restructuring
    induction. *Fix:* the postcondition says "an ATM row is found whenever some strike is
    nearest". That excludes the `-1` escape hatch and is provable. The remaining gap is a plain
    mathematical fact, listed above under "not proven".
-3. **Synth offers the reducer as a building block** (steps 08–10). While `chainReducer` exists,
-   synth proposes `chainReducer(u, …)` inside the operations it calls ("mutually recursive
-   declarations are not supported") and stops after three such untestable candidates. *Fix:*
-   synthesize the operations first, then write the reducer.
-4. **Enum keys** (step 13): `keys must be int or string`. *Fix:* `key={filterLabel(f)}`.
-5. **Ternary of `int | null` and a narrowed `int`** (step 13b): `type mismatch: expected int, got
-   int | null`. *Fix:* annotate the const (`const center: int | null = …`).
+3. **Ternary of `int | null` and a narrowed `int`** (steps 13 and 13b): `type mismatch:
+   expected int, got int | null`. *Fix:* annotate the const (`const center: int | null = …`).
 
-Not on this list: the bracket ATM search of step 05. Its postconditions were not proved
-because they are false (the search assumes an ascending ladder that no contract promises), so
-there the verifier was right. Nor are the surviving mutants of step 7: they are gaps in the
-spec, not in the tool.
+Two more items were on this list when this walkthrough was first written, and the current
+vreact no longer pushes back on either: synth offered `chainReducer` as a building block for
+the very operations it calls, and gave up (steps 08–10, see 2b); and VTS rejected enum keys
+(step 13, see step 3).
+
+Not on this list: the bracket ATM search of step 05. Its postconditions were not proved (they
+were not checked, behind its failed index reads), and they are false: the search assumes an
+ascending ladder that no contract promises, so there the verifier was right. Nor are the
+surviving mutants of step 7: they are gaps in the spec, not in the tool.
 
 ---
 
@@ -1411,14 +1485,16 @@ command is run (without `--write`), and the verdict and per-item statuses are co
 saved log:
 
 ```bash
-bash docs/options-chain/replay.sh           # all steps, 10-15 minutes; exits non-zero on any mismatch
+bash docs/options-chain/replay.sh           # all steps (~42 minutes; steps 01-26: ~20); non-zero on any mismatch
 bash docs/options-chain/replay.sh 05 16     # just steps 05 and 16
 bash docs/options-chain/replay.sh --stable docs/options-chain/26-final.txt   # the lines it compares
 ```
 
-The synth steps run against the clock: each hole has a 60 s budget, and step 10 finds
-`cancel` after about 40 s. On a much slower machine that fill may not be found in time, and the
-replay then reports a mismatch for step 10.
+The synth steps run against the clock: each hole has a 60 s budget. In our runs, step 08 found
+`holdAt` after 30 to 45 s, and steps 09 and 10 found `cancel` after 35 to 40 s, depending on
+the machine's load. On a much slower or busier machine such a fill may not be found in time, and
+the replay then reports a mismatch for that step. The budget is wall-clock time, so keep the
+machine awake while the replay runs (on macOS: `caffeinate -i bash docs/options-chain/replay.sh`).
 
 ---
 
@@ -1433,12 +1509,12 @@ replay then reports a mismatch for step 10.
 | 05 hand-written model | `verify` | ✗ ATM edges, window off-by-one | [src](options-chain/steps/05-model-bugs/src/) | [log](options-chain/05-model-bugs.txt) |
 | 06 ATM as a search | `verify` | ✗ existence (induction) | [src](options-chain/steps/06-model-search/src/) | [log](options-chain/06-model-search.txt) |
 | 07 model verified | `verify` | ✔ 22/22 | [src](options-chain/steps/07-model-verified/src/) | [log](options-chain/07-model-verified.txt) |
-| 08 reducer synth | `synth src/reducer.ts` | `cancel = u`, `follow = jump(u, id)` | [src](options-chain/steps/08-reducer-synth/src/) | [log](options-chain/08-reducer-synth.txt) |
-| 09 frame conditions | `synth src/reducer.ts --write` | synth stuck on `chainReducer` | [src](options-chain/steps/09-reducer-synth-strong/src/) | [log](options-chain/09-reducer-synth-strong.txt) |
-| 10 ops before the reducer | `synth src/reducer.ts --write` | `follow`, `cancel` written | [src](options-chain/steps/10-reducer-synth-ops/src/) | [log](options-chain/10-reducer-synth-ops.txt) |
+| 08 reducer synth | `synth src/reducer.ts` | `cancel = u`, `follow = jump(u, id)`, `holdAt` drops the other holds | [src](options-chain/steps/08-reducer-synth/src/) | [log](options-chain/08-reducer-synth.txt) |
+| 09 frame conditions | `synth src/reducer.ts --write` | `follow`, `cancel` written | [src](options-chain/steps/09-reducer-synth-strong/src/) | [log](options-chain/09-reducer-synth-strong.txt) |
+| 10 ops before the reducer | `synth src/reducer.ts --write` | the same, without `chainReducer` | [src](options-chain/steps/10-reducer-synth-ops/src/) | [log](options-chain/10-reducer-synth-ops.txt) |
 | 11 hand-written ops | `verify` | ✗ `place` reuses an id | [src](options-chain/steps/11-reducer-bug/src/) | [log](options-chain/11-reducer-bug.txt) |
 | 12 reducer verified | `verify` | ✔ 44/44 | [src](options-chain/steps/12-reducer-verified/src/) | [log](options-chain/12-reducer-verified.txt) |
-| 13 chain, enum key | `verify` | ✗ VTS: keys must be int or string | [src](options-chain/steps/13-chain-key-rejected/src/) | [log](options-chain/13-chain-key-rejected.txt) |
+| 13 chain, enum key | `verify` | ✗ VTS: type mismatch (the enum key is now accepted) | [src](options-chain/steps/13-chain-key-rejected/src/) | [log](options-chain/13-chain-key-rejected.txt) |
 | 13b chain, ternary | `verify` | ✗ VTS: type mismatch | [src](options-chain/steps/13b-chain-ternary-rejected/src/) | [log](options-chain/13b-chain-ternary-rejected.txt) |
 | 14 chain vs stubs | `verify` (and `verify --full`) | ✗ ATM edge in the chain | [src](options-chain/steps/14-chain-atm-edge/src/) | [log](options-chain/14-chain-atm-edge.txt), [full](options-chain/14-chain-atm-edge-full.txt) |
 | 15 chain vs stubs, fixed | `verify` | ✔ VERIFIED* 75/75 | [src](options-chain/steps/15-chain-topdown/src/) | [log](options-chain/15-chain-topdown.txt) |
@@ -1451,7 +1527,7 @@ replay then reports a mismatch for step 10.
 | 22 moving market | `verify` (and `verify --full`) | ✗ effect-robust | [src](options-chain/steps/22-app-stale-timer/src/) | [log](options-chain/22-app-stale-timer.txt), [full](options-chain/22-app-stale-timer-full.txt) |
 | 23 the feed as one record | `verify` | ✔ VERIFIED 129/129 | [src](options-chain/steps/23-app-feed/src/) | [log](options-chain/23-app-feed.txt) |
 | 24 three mutants | `verify` | ✔ VERIFIED 129/129: all three survive | [src](options-chain/steps/24-mutants/src/) | [log](options-chain/24-mutants.txt) |
-| 25 stronger `place` contract | `verify` | ✗ the `place` mutant is caught | [src](options-chain/steps/25-mutants-place-spec/src/) | [log](options-chain/25-mutants-place-spec.txt) |
+| 25 stronger `place` contract | `verify` | ✗ the `place` mutant is caught (certificate still VERIFIED) | [src](options-chain/steps/25-mutants-place-spec/src/) | [log](options-chain/25-mutants-place-spec.txt) |
 | 26 final | `verify` | ✔ VERIFIED 131/131 | [src](options-chain/steps/26-final/src/) | [log](options-chain/26-final.txt) |
 
 The two `--full` logs are not part of the replay (it runs each step's command only).

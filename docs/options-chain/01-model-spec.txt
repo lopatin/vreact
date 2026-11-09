@@ -6,23 +6,31 @@ Functions
   VERIFIED           legOf
   VERIFIED           theoOf
   INCOMPLETE         quotePrice
+      ↳ pending: it has a hole() / sorry
   VERIFIED           withinSpread
   INCOMPLETE         midPrice
+      ↳ pending: it has a hole() / sorry
   VERIFIED           inTheMoney
   VERIFIED           dist
   VERIFIED           nearest
   INCOMPLETE         atmIndex
+      ↳ an obligation of it was not checked: it depends on `sorry` from a failure elsewhere (a failed obligation, a declaration with an error, or a hole()) that its goal or its proof contains, so Lean could not check it on its own: fix that first
   VERIFIED           inWindow
   INCOMPLETE         strikeWindow
+      ↳ pending: it has a hole() / sorry
   VERIFIED           levelsOf
   VERIFIED           edge
   INCOMPLETE         heatOf
+      ↳ pending: it has a hole() / sorry
   VERIFIED           validQty
   VERIFIED           validOrder
   VERIFIED           fmtPrice
   VERIFIED           fmtVol
 Obligations by file
-  ✓ src/model.ts                             6/6
-pending (hole() / sorry): quotePrice, midPrice, atmIndex, strikeWindow, heatOf
+  ? src/model.ts                             5/6  (1 not checked)
 
-◐ INCOMPLETE (holes / trusted stubs / unchecked parts remain)  6/6 obligations proved; components: 0/0 verified  (2.5s)
+1 obligation(s) not checked:
+  src/model.ts:103:51: it depends on `sorry` from a failure elsewhere (a failed obligation, a declaration with an error, or a hole()) that its goal or its proof contains, so Lean could not check it on its own: fix that first
+pending (hole() / sorry): quotePrice, midPrice, strikeWindow, heatOf
+
+◐ INCOMPLETE (holes / trusted stubs / unchecked parts remain)  5/6 obligations proved, 1 unchecked; components: 0/0 verified  (6.1s)

@@ -5,32 +5,16 @@ hole in setFilter: ChainUi   scope: u, u.collapsed, u.filter, u.held, u.focus, u
   candidate passes 400 random tests: { ...u, filter: f }   (17 candidate(s) tested in 0.1s)
   ✔ proved by Lean: { ...u, filter: f }
 hole in holdAt: ChainUi   scope: u, u.collapsed, u.filter, u.held, u.focus, u.heat, u.orders, u.nextId, id, price
-  no generated input can test this hole (400 of 400 reach another unfilled hole): the smallest candidates are checked by Lean only
-  untested candidate: chainReducer(u, { kind: "follow", expiry: u.heat })
-  ✗ chainReducer(u, { kind: "follow", expiry: u.heat }): does not translate: src/reducer.ts:70:1: mutually recursive declarations are not supported
-  untested candidate: chainReducer(u, { kind: "follow", expiry: u.nextId })
-  ✗ chainReducer(u, { kind: "follow", expiry: u.nextId }): does not translate: src/reducer.ts:70:1: mutually recursive declarations are not supported
-  untested candidate: chainReducer(u, { kind: "follow", expiry: id })
-  ✗ chainReducer(u, { kind: "follow", expiry: id }): does not translate: src/reducer.ts:70:1: mutually recursive declarations are not supported
-  121 candidates tested in 0.4s, up to size 4; stopped: 3 untested candidates were tried
-  no verified solution for hole in holdAt: no generated input can test this hole (400 of 400 reach another unfilled hole)
-  most common failure (120×): u: postcondition fails on [{"collapsed":[0,1,-1],"filter":"s3","held":[{"expiry":-1,"price":7}],"focus":null,"heat":7,"orders":[{"id":3,"expiry":1,"leg":"put","strike":1,"buy":true,"qty":0,"price":3},{"id":1,"expiry":5,"leg":"call","strike":0,"buy":true,"qty":2,"price":0},{"id":4,"expiry":10,"leg":"future","strike":0,"buy":false,"qty":4,"price":1}],"nextId":4},7,4] ↦ {"collapsed":[0,1,-1],"filter":"s3","held":[{"expiry":-1,"price":7}],"focus":null,"heat":7,"orders":[{"id":3,"expiry":1,"leg":"put","strike":1,"buy":true,"qty":0,"price":3},{"id":1,"expiry":5,"leg":"call","strike":0,"buy":true,"qty":2,"price":0},{"id":4,"expiry":10,"leg":"future","strike":0,"buy":false,"qty":4,"price":1}],"nextId":4}
-  the random tests accept candidates that Lean rejects: write this one by hand
+  candidate passes 400 random tests: { ...u, held: [{ expiry: id, price: price }] }   (12658 candidate(s) tested in 44.5s)
+  ✔ proved by Lean: { ...u, held: [{ expiry: id, price: price }] }
 hole in follow: ChainUi   scope: u, u.collapsed, u.filter, u.held, u.focus, u.heat, u.orders, u.nextId, id
   candidate passes 400 random tests: jump(u, id)   (17 candidate(s) tested in 0.1s)
   ✔ proved by Lean: jump(u, id)
 hole in place: ChainUi   scope: u, u.collapsed, u.filter, u.held, u.focus, u.heat, u.orders, u.nextId, t, t.expiry, t.leg, t.strike, t.side, t.price, qty, price
-  no generated input can test this hole (400 of 400 reach another unfilled hole): the smallest candidates are checked by Lean only
-  untested candidate: chainReducer(u, { kind: "cancel", id: u.heat })
-  ✗ chainReducer(u, { kind: "cancel", id: u.heat }): does not translate: src/reducer.ts:116:1: mutually recursive declarations are not supported
-  untested candidate: chainReducer(u, { kind: "cancel", id: u.nextId })
-  ✗ chainReducer(u, { kind: "cancel", id: u.nextId }): does not translate: src/reducer.ts:116:1: mutually recursive declarations are not supported
-  untested candidate: chainReducer(u, { kind: "cancel", id: t.expiry })
-  ✗ chainReducer(u, { kind: "cancel", id: t.expiry }): does not translate: src/reducer.ts:116:1: mutually recursive declarations are not supported
-  220 candidates tested in 0.6s, up to size 4; stopped: 3 untested candidates were tried
-  no verified solution for hole in place: no generated input can test this hole (400 of 400 reach another unfilled hole)
-  most common failure (219×): u: postcondition fails on [{"collapsed":[-1,2],"filter":"s99","held":[{"expiry":10,"price":4},{"expiry":1,"price":2}],"focus":null,"heat":1,"orders":[{"id":-1,"expiry":0,"leg":"future","strike":-1,"buy":true,"qty":2,"price":5},{"id":1,"expiry":1,"leg":"future","strike":10,"buy":false,"qty":5,"price":7},{"id":1,"expiry":5,"leg":"call","strike":5,"buy":true,"qty":5,"price":1}],"nextId":0},{"expiry":4,"leg":"call","strike":2,"side":"bid","price":1},10,5] ↦ {"collapsed":[-1,2],"filter":"s99","held":[{"expiry":10,"price":4},{"expiry":1,"price":2}],"focus":null,"heat":1,"orders":[{"id":-1,"expiry":0,"leg":"future","strike":-1,"buy":true,"qty":2,"price":5},{"id":1,"expiry":1,"leg":"future","strike":10,"buy":false,"qty":5,"price":7},{"id":1,"expiry":5,"leg":"call","strike":5,"buy":true,"qty":5,"price":1}],"nextId":0}
-  the random tests accept candidates that Lean rejects: write this one by hand
+  19699 candidates tested in 60.0s, up to size 6; stopped: the 60s time limit was reached at size 6
+  no verified solution for hole in place: no candidate passed the tests
+  most common failure (19699×): u: postcondition fails on [{"collapsed":[1,-10],"filter":"s99","held":[{"expiry":7,"price":-1}],"focus":-2,"heat":0,"orders":[{"id":0,"expiry":-5,"leg":"call","strike":1,"buy":true,"qty":-10,"price":3},{"id":-2,"expiry":1,"leg":"future","strike":3,"buy":false,"qty":2,"price":1}],"nextId":0},{"expiry":3,"leg":"future","strike":1,"side":"bid","price":-2},5,5] ↦ {"collapsed":[1,-10],"filter":"s99","held":[{"expiry":7,"price":-1}],"focus":-2,"heat":0,"orders":[{"id":0,"expiry":-5,"leg":"call","strike":1,"buy":true,"qty":-10,"price":3},{"id":-2,"expiry":1,"leg":"future","strike":3,"buy":false,"qty":2,"price":1}],"nextId":0}
+  write this one by hand (synth builds straight-line expressions; guarded updates need an `if`), or check that the spec is satisfiable
 hole in cancel: ChainUi   scope: u, u.collapsed, u.filter, u.held, u.focus, u.heat, u.orders, u.nextId, id
   candidate passes 400 random tests: u   (1 candidate(s) tested in 0.0s)
   ✔ proved by Lean: u

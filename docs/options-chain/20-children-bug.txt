@@ -5,8 +5,11 @@ Components
   VERIFIED           StrikeRow              src/StrikeRow.tsx:37
   VERIFIED           TermRow                src/TermRow.tsx:19
   INCOMPLETE         OrderTicket            src/OrderTicket.tsx:19
-  UNCHECKED          OptionsChain           src/OptionsChain.tsx:32
-  UNCHECKED          App                    src/App.tsx:79
+      ↳ an obligation of it failed
+  INCOMPLETE         OptionsChain           src/OptionsChain.tsx:32
+      ↳ it uses OrderTicket (src/OrderTicket.tsx), which is not verified: an obligation of it failed
+  INCOMPLETE         App                    src/App.tsx:79
+      ↳ it uses OrderTicket (src/OrderTicket.tsx), which is not verified: an obligation of it failed
 Functions
   VERIFIED           validChain
   VERIFIED           legOf
@@ -50,15 +53,16 @@ Functions
   VERIFIED           cancel
   VERIFIED           chainReducer
 App certificates (VReact.run_allInv instantiated)
-  UNCHECKED          VTS.App.App.certificate  axioms: none
+  INCOMPLETE         VTS.App.App.certificate  axioms: propext, sorryAx, Classical.choice, Quot.sound
+      ↳ it uses OrderTicket (src/OrderTicket.tsx), which is not verified: an obligation of it failed
 Obligations by file
   ✓ src/model.ts                             22/22
   ✓ src/reducer.ts                           22/22
   ✓ src/StrikeRow.tsx                        22/22
   ✓ src/TermRow.tsx                          12/12
   ✗ src/OrderTicket.tsx                      11/12
-  ? src/OptionsChain.tsx                     0/27  (27 not checked)
-  ? src/App.tsx                              1/5  (4 not checked)
+  ✓ src/OptionsChain.tsx                     27/27
+  ✓ src/App.tsx                              5/5
 
 Failed obligations
 ✗ src/OrderTicket.tsx:46:17  [handler] onClick handler on <button> preserves the invariant of OrderTicket
@@ -82,8 +86,4 @@ Failed obligations
     │ h : σ.price + -1 ≤ 0
     │   …
 
-31 obligation(s) not checked:
-  src/OptionsChain.tsx:32:17, src/OptionsChain.tsx:32:17, src/OptionsChain.tsx:54:15, src/OptionsChain.tsx:51:15, … (27): VTS/OptionsChain/View.lean was not checked: a module it imports failed, or the file stopped at an error in its imports
-  src/App.tsx:79:17, src/App.tsx:79:17, src/App.tsx:86:7, src/App.tsx:79:1: VTS/App/View.lean was not checked: a module it imports failed, or the file stopped at an error in its imports
-
-✗ NOT VERIFIED  90/122 obligations proved, 1 failed, 31 unchecked; components: 3/6 verified  (5.7s)
+✗ NOT VERIFIED  121/122 obligations proved, 1 failed; components: 3/6 verified  (22.8s)

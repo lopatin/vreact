@@ -7,6 +7,7 @@ Components
   VERIFIED           OrderTicket            src/OrderTicket.tsx:19
   VERIFIED           OptionsChain           src/OptionsChain.tsx:32
   INCOMPLETE         App                    src/App.tsx:99
+      ↳ an obligation of it failed
 Functions
   VERIFIED           validChain
   VERIFIED           legOf
@@ -54,6 +55,7 @@ Functions
   VERIFIED           nextSeed
 App certificates (VReact.run_allInv instantiated)
   INCOMPLETE         VTS.App.App.certificate  axioms: propext, sorryAx, Classical.choice, Quot.sound
+      ↳ it uses App, which is not verified: an obligation of it failed
 Obligations by file
   ✓ src/model.ts                             22/22
   ✓ src/reducer.ts                           22/22
@@ -66,7 +68,7 @@ Obligations by file
 Failed obligations
 ✗ src/App.tsx:106:3  [effect-robust] timer callbacks of the effect preserve the invariant of App from any state
     │ `grind` failed
-    │ case grind.1.1.1.1
+    │ case grind.1.2.1.1.1.2.1
     │ E : Type
     │ props : Props
     │ κ : Cb props E
@@ -81,23 +83,11 @@ Failed obligations
     │ e : DomEvent
     │ h :
     │   t = fun x =>
-    │     if
-    │         -40 ≤
-    │           σ.offset +
-    │             ((if
-    │                   0 ≤
-    │                     if 0 ≤ σ.seed * 75 + 74 then (σ.seed * 75 + 74) % ↑(Int.natAbs 65537)
-    │                     else -(-(σ.seed * 75 + 74) % ↑(Int.natAbs 65537)) then
-    │                 (if 0 ≤ σ.seed * 75 + 74 then (σ.seed * 75 + 74) % ↑(Int.natAbs 65537)
-    │                   else -(-(σ.seed * 75 + 74) % ↑(Int.natAbs 65537))) %
-    │                   ↑(Int.natAbs 5)
-    │               else
-    │                 -((-if 0 ≤ σ.seed * 75 + 74 then (σ.seed * 75 + 74) % ↑(Int.natAbs 65537)
-    │                       else -(-(σ.seed * 75 + 74) % ↑(Int.natAbs 65537))) %
-    │                     ↑(Int.natAbs 5))) -
-    │               2) then
+    │     if σ.paused = true then { }
+    │     else
     │       if
-    │           σ.offset +
+    │           -40 ≤
+    │             σ.offset +
     │               ((if
     │                     0 ≤
     │                       if 0 ≤ σ.seed * 75 + 74 then (σ.seed * 75 + 74) % ↑(Int.natAbs 65537)
@@ -109,33 +99,56 @@ Failed obligations
     │                   -((-if 0 ≤ σ.seed * 75 + 74 then (σ.seed * 75 + 74) % ↑(Int.natAbs 65537)
     │                         else -(-(σ.seed * 75 + 74) % ↑(Int.natAbs 65537))) %
     │                       ↑(Int.natAbs 5))) -
-    │                 2) ≤
-    │             40 then
-    │         {
-    │           updates :=
-    │             [fun τ =>
-    │               { offset := τ.offset,
-    │                 seed :=
-    │                   if 0 ≤ σ.seed * 75 + 74 then (σ.seed * 75 + 74) % ↑(Int.natAbs 65537)
-    │                   else -(-(σ.seed * 75 + 74) % ↑(Int.natAbs 65537)),
-    │                 paused := τ.paused },
-    │               fun τ =>
-    │               {
-    │                 offset :=
-    │                   τ.offset +
-    │                     ((if
-    │                           0 ≤
-    │                             if 0 ≤ σ.seed * 75 + 74 then (σ.seed * 75 + 74) % ↑(Int.natAbs 65537)
-    │                             else -(-(σ.seed * 75 + 74) % ↑(Int.natAbs 65537)) then
-    │                         (if 0 ≤ σ.seed * 75 + 74 then (σ.seed * 75 + 74) % ↑(Int.natAbs 65537)
+    │                 2) then
+    │         if
+    │             σ.offset +
+    │                 ((if
+    │                       0 ≤
+    │                         if 0 ≤ σ.seed * 75 + 74 then (σ.seed * 75 + 74) % ↑(Int.natAbs 65537)
+    │                         else -(-(σ.seed * 75 + 74) % ↑(Int.natAbs 65537)) then
+    │                     (if 0 ≤ σ.seed * 75 + 74 then (σ.seed * 75 + 74) % ↑(Int.natAbs 65537)
+    │                       else -(-(σ.seed * 75 + 74) % ↑(Int.natAbs 65537))) %
+    │                       ↑(Int.natAbs 5)
+    │                   else
+    │                     -((-if 0 ≤ σ.seed * 75 + 74 then (σ.seed * 75 + 74) % ↑(Int.natAbs 65537)
     │                           else -(-(σ.seed * 75 + 74) % ↑(Int.natAbs 65537))) %
-    │                           ↑(Int.natAbs 5)
-    │                       else
-    │                         -((-if 0 ≤ σ.seed * 75 + 74 then (σ.seed * 75 + 74) % ↑(Int.natAbs 65537)
-    │                               else -(-(σ.seed * 75 + 74) % ↑(Int.natAbs 65537))) %
-    │                             ↑(Int.natAbs 5))) -
-    │                       2),
-    │                 seed := τ.seed, paused := τ.paused }] }
+    │                         ↑(Int.natAbs 5))) -
+    │                   2) ≤
+    │               40 then
+    │           {
+    │             updates :=
+    │               [fun τ =>
+    │                 { offset := τ.offset,
+    │                   seed :=
+    │                     if 0 ≤ σ.seed * 75 + 74 then (σ.seed * 75 + 74) % ↑(Int.natAbs 65537)
+    │                     else -(-(σ.seed * 75 + 74) % ↑(Int.natAbs 65537)),
+    │                   paused := τ.paused },
+    │                 fun τ =>
+    │                 {
+    │                   offset :=
+    │                     τ.offset +
+    │                       ((if
+    │                             0 ≤
+    │                               if 0 ≤ σ.seed * 75 + 74 then (σ.seed * 75 + 74) % ↑(Int.natAbs 65537)
+    │                               else -(-(σ.seed * 75 + 74) % ↑(Int.natAbs 65537)) then
+    │                           (if 0 ≤ σ.seed * 75 + 74 then (σ.seed * 75 + 74) % ↑(Int.natAbs 65537)
+    │                             else -(-(σ.seed * 75 + 74) % ↑(Int.natAbs 65537))) %
+    │                             ↑(Int.natAbs 5)
+    │                         else
+    │                           -((-if 0 ≤ σ.seed * 75 + 74 then (σ.seed * 75 + 74) % ↑(Int.natAbs 65537)
+    │                                 else -(-(σ.seed * 75 + 74) % ↑(Int.natAbs 65537))) %
+    │                               ↑(Int.natAbs 5))) -
+    │                         2),
+    │                   seed := τ.seed, paused := τ.paused }] }
+    │         else
+    │           {
+    │             updates :=
+    │               [fun τ =>
+    │                 { offset := τ.offset,
+    │                   seed :=
+    │                     if 0 ≤ σ.seed * 75 + 74 then (σ.seed * 75 + 74) % ↑(Int.natAbs 65537)
+    │                     else -(-(σ.seed * 75 + 74) % ↑(Int.natAbs 65537)),
+    │                   paused := τ.paused }] }
     │       else
     │         {
     │           updates :=
@@ -145,22 +158,14 @@ Failed obligations
     │                   if 0 ≤ σ.seed * 75 + 74 then (σ.seed * 75 + 74) % ↑(Int.natAbs 65537)
     │                   else -(-(σ.seed * 75 + 74) % ↑(Int.natAbs 65537)),
     │                 paused := τ.paused }] }
-    │     else
-    │       {
-    │         updates :=
-    │           [fun τ =>
-    │             { offset := τ.offset,
-    │               seed :=
-    │                 if 0 ≤ σ.seed * 75 + 74 then (σ.seed * 75 + 74) % ↑(Int.natAbs 65537)
-    │                 else -(-(σ.seed * 75 + 74) % ↑(Int.natAbs 65537)),
-    │               paused := τ.paused }] }
     │ s : State
     │ left : -1 * s.offset + -40 ≤ 0
     │ left_1 : s.offset + -40 ≤ 0
     │ left_2 : -1 * s.seed ≤ 0
     │ right_2 : s.seed + -65536 ≤ 0
     │ h_3 : (List.foldl (fun s u => u s) s (t e).updates).offset + 41 ≤ 0
-    │ h_4 :
+    │ h_4 : ¬σ.paused = true
+    │ h_5 :
     │   (-1 * σ.offset +
     │         -1 *
     │           if (-1 * if -1 * σ.seed ≤ 0 then (75 * σ.seed + 74) % 65537 else -1 * ((-75 * σ.seed + -74) % 65537)) ≤ 0 then
@@ -171,7 +176,7 @@ Failed obligations
     │                 5)) +
     │       -38 ≤
     │     0
-    │ h_5 :
+    │ h_6 :
     │   (σ.offset +
     │         if (-1 * if -1 * σ.seed ≤ 0 then (75 * σ.seed + 74) % 65537 else -1 * ((-75 * σ.seed + -74) % 65537)) ≤ 0 then
     │           (if -1 * σ.seed ≤ 0 then (75 * σ.seed + 74) % 65537 else -1 * ((-75 * σ.seed + -74) % 65537)) % 5
@@ -180,7 +185,9 @@ Failed obligations
     │             ((-1 * if -1 * σ.seed ≤ 0 then (75 * σ.seed + 74) % 65537 else -1 * ((-75 * σ.seed + -74) % 65537)) % 5)) +
     │       -42 ≤
     │     0
-    │ h_6 :
+    │ h_7 : (if -1 * σ.seed ≤ 0 then (75 * σ.seed + 74) % 65537 else -1 * ((-75 * σ.seed + -74) % 65537)) + -4 ≤ 0
+    │ h_8 : ¬σ.seed + -872 ≤ 0
+    │ h_9 :
     │   (fun τ =>
     │       {
     │         offset :=
@@ -204,68 +211,80 @@ Failed obligations
     │   [facts] Asserted facts
     │     [prop] -1 * σ.offset + -40 ≤ 0 ∧ σ.offset + -40 ≤ 0 ∧ -1 * σ.seed ≤ 0 ∧ σ.seed + -65536 ≤ 0
     │     [prop] t = fun x =>
-    │           if
-    │               (-1 * σ.offset +
-    │                     -1 *
-    │                       if
-    │                           (-1 *
-    │                               if -1 * σ.seed ≤ 0 then (75 * σ.seed + 74) % 65537
-    │                               else -1 * ((-75 * σ.seed + -74) % 65537)) ≤
-    │                             0 then
-    │                         (if -1 * σ.seed ≤ 0 then (75 * σ.seed + 74) % 65537 else -1 * ((-75 * σ.seed + -74) % 65537)) %
-    │                           5
-    │                       else
-    │                         -1 *
-    │                           ((-1 *
-    │                               if -1 * σ.seed ≤ 0 then (75 * σ.seed + 74) % 65537
-    │                               else -1 * ((-75 * σ.seed + -74) % 65537)) %
-    │                             5)) +
-    │                   -38 ≤
-    │                 0 then
+    │           if σ.paused = true then { }
+    │           else
     │             if
-    │                 (σ.offset +
-    │                       if
-    │                           (-1 *
-    │                               if -1 * σ.seed ≤ 0 then (75 * σ.seed + 74) % 65537
-    │                               else -1 * ((-75 * σ.seed + -74) % 65537)) ≤
-    │                             0 then
-    │                         (if -1 * σ.seed ≤ 0 then (75 * σ.seed + 74) % 65537 else -1 * ((-75 * σ.seed + -74) % 65537)) %
-    │                           5
-    │                       else
-    │                         -1 *
-    │                           ((-1 *
-    │                               if -1 * σ.seed ≤ 0 then (75 * σ.seed + 74) % 65537
-    │                               else -1 * ((-75 * σ.seed + -74) % 65537)) %
-    │                             5)) +
-    │                     -42 ≤
-    │                   0 then
-    │               {
-    │                 updates :=
-    │                   [fun τ =>
-    │                     { offset := τ.offset,
-    │                       seed :=
-    │                         if -1 * σ.seed ≤ 0 then (75 * σ.seed + 74) % 65537 else -1 * ((-75 * σ.seed + -74) % 65537),
-    │                       paused := τ.paused },
-    │                     fun τ =>
-    │                     {
-    │                       offset :=
-    │                         (τ.offset +
-    │                             if
-    │                                 (-1 *
-    │                                     if -1 * σ.seed ≤ 0 then (75 * σ.seed + 74) % 65537
-    │                                     else -1 * ((-75 * σ.seed + -74) % 65537)) ≤
-    │                                   0 then
-    │                               (if -1 * σ.seed ≤ 0 then (75 * σ.seed + 74) % 65537
+    │                 (-1 * σ.offset +
+    │                       -1 *
+    │                         if
+    │                             (-1 *
+    │                                 if -1 * σ.seed ≤ 0 then (75 * σ.seed + 74) % 65537
+    │                                 else -1 * ((-75 * σ.seed + -74) % 65537)) ≤
+    │                               0 then
+    │                           (if -1 * σ.seed ≤ 0 then (75 * σ.seed + 74) % 65537
+    │                             else -1 * ((-75 * σ.seed + -74) % 65537)) %
+    │                             5
+    │                         else
+    │                           -1 *
+    │                             ((-1 *
+    │                                 if -1 * σ.seed ≤ 0 then (75 * σ.seed + 74) % 65537
     │                                 else -1 * ((-75 * σ.seed + -74) % 65537)) %
-    │                                 5
-    │                             else
-    │                               -1 *
-    │                                 ((-1 *
-    │                                     if -1 * σ.seed ≤ 0 then (75 * σ.seed + 74) % 65537
-    │                                     else -1 * ((-75 * σ.seed + -74) % 65537)) %
-    │                                   5)) +
-    │                           -2,
-    │                       seed := τ.seed, paused := τ.paused }] }
+    │                               5)) +
+    │                     -38 ≤
+    │                   0 then
+    │               if
+    │                   (σ.offset +
+    │                         if
+    │                             (-1 *
+    │                                 if -1 * σ.seed ≤ 0 then (75 * σ.seed + 74) % 65537
+    │                                 else -1 * ((-75 * σ.seed + -74) % 65537)) ≤
+    │                               0 then
+    │                           (if -1 * σ.seed ≤ 0 then (75 * σ.seed + 74) % 65537
+    │                             else -1 * ((-75 * σ.seed + -74) % 65537)) %
+    │                             5
+    │                         else
+    │                           -1 *
+    │                             ((-1 *
+    │                                 if -1 * σ.seed ≤ 0 then (75 * σ.seed + 74) % 65537
+    │                                 else -1 * ((-75 * σ.seed + -74) % 65537)) %
+    │                               5)) +
+    │                       -42 ≤
+    │                     0 then
+    │                 {
+    │                   updates :=
+    │                     [fun τ =>
+    │                       { offset := τ.offset,
+    │                         seed :=
+    │                           if -1 * σ.seed ≤ 0 then (75 * σ.seed + 74) % 65537 else -1 * ((-75 * σ.seed + -74) % 65537),
+    │                         paused := τ.paused },
+    │                       fun τ =>
+    │                       {
+    │                         offset :=
+    │                           (τ.offset +
+    │                               if
+    │                                   (-1 *
+    │                                       if -1 * σ.seed ≤ 0 then (75 * σ.seed + 74) % 65537
+    │                                       else -1 * ((-75 * σ.seed + -74) % 65537)) ≤
+    │                                     0 then
+    │                                 (if -1 * σ.seed ≤ 0 then (75 * σ.seed + 74) % 65537
+    │                                   else -1 * ((-75 * σ.seed + -74) % 65537)) %
+    │                                   5
+    │                               else
+    │                                 -1 *
+    │                                   ((-1 *
+    │                                       if -1 * σ.seed ≤ 0 then (75 * σ.seed + 74) % 65537
+    │                                       else -1 * ((-75 * σ.seed + -74) % 65537)) %
+    │                                     5)) +
+    │                             -2,
+    │                         seed := τ.seed, paused := τ.paused }] }
+    │               else
+    │                 {
+    │                   updates :=
+    │                     [fun τ =>
+    │                       { offset := τ.offset,
+    │                         seed :=
+    │                           if -1 * σ.seed ≤ 0 then (75 * σ.seed + 74) % 65537 else -1 * ((-75 * σ.seed + -74) % 65537),
+    │                         paused := τ.paused }] }
     │             else
     │               {
     │                 updates :=
@@ -274,13 +293,6 @@ Failed obligations
     │                       seed :=
     │                         if -1 * σ.seed ≤ 0 then (75 * σ.seed + 74) % 65537 else -1 * ((-75 * σ.seed + -74) % 65537),
     │                       paused := τ.paused }] }
-    │           else
-    │             {
-    │               updates :=
-    │                 [fun τ =>
-    │                   { offset := τ.offset,
-    │                     seed := if -1 * σ.seed ≤ 0 then (75 * σ.seed + 74) % 65537 else -1 * ((-75 * σ.seed + -74) % 65537),
-    │                     paused := τ.paused }] }
     │     [prop] -1 * s.offset + -40 ≤ 0
     │     [prop] s.offset + -40 ≤ 0
     │     [prop] -1 * s.seed ≤ 0
@@ -290,68 +302,80 @@ Failed obligations
     │             (List.foldl (fun s u => u s) s (t e).updates).seed + 1 ≤ 0 ∨
     │               -1 * (List.foldl (fun s u => u s) s (t e).updates).seed + 65537 ≤ 0
     │     [prop] t e =
-    │           if
-    │               (-1 * σ.offset +
-    │                     -1 *
-    │                       if
-    │                           (-1 *
-    │                               if -1 * σ.seed ≤ 0 then (75 * σ.seed + 74) % 65537
-    │                               else -1 * ((-75 * σ.seed + -74) % 65537)) ≤
-    │                             0 then
-    │                         (if -1 * σ.seed ≤ 0 then (75 * σ.seed + 74) % 65537 else -1 * ((-75 * σ.seed + -74) % 65537)) %
-    │                           5
-    │                       else
-    │                         -1 *
-    │                           ((-1 *
-    │                               if -1 * σ.seed ≤ 0 then (75 * σ.seed + 74) % 65537
-    │                               else -1 * ((-75 * σ.seed + -74) % 65537)) %
-    │                             5)) +
-    │                   -38 ≤
-    │                 0 then
+    │           if σ.paused = true then { }
+    │           else
     │             if
-    │                 (σ.offset +
-    │                       if
-    │                           (-1 *
-    │                               if -1 * σ.seed ≤ 0 then (75 * σ.seed + 74) % 65537
-    │                               else -1 * ((-75 * σ.seed + -74) % 65537)) ≤
-    │                             0 then
-    │                         (if -1 * σ.seed ≤ 0 then (75 * σ.seed + 74) % 65537 else -1 * ((-75 * σ.seed + -74) % 65537)) %
-    │                           5
-    │                       else
-    │                         -1 *
-    │                           ((-1 *
-    │                               if -1 * σ.seed ≤ 0 then (75 * σ.seed + 74) % 65537
-    │                               else -1 * ((-75 * σ.seed + -74) % 65537)) %
-    │                             5)) +
-    │                     -42 ≤
-    │                   0 then
-    │               {
-    │                 updates :=
-    │                   [fun τ =>
-    │                     { offset := τ.offset,
-    │                       seed :=
-    │                         if -1 * σ.seed ≤ 0 then (75 * σ.seed + 74) % 65537 else -1 * ((-75 * σ.seed + -74) % 65537),
-    │                       paused := τ.paused },
-    │                     fun τ =>
-    │                     {
-    │                       offset :=
-    │                         (τ.offset +
-    │                             if
-    │                                 (-1 *
-    │                                     if -1 * σ.seed ≤ 0 then (75 * σ.seed + 74) % 65537
-    │                                     else -1 * ((-75 * σ.seed + -74) % 65537)) ≤
-    │                                   0 then
-    │                               (if -1 * σ.seed ≤ 0 then (75 * σ.seed + 74) % 65537
+    │                 (-1 * σ.offset +
+    │                       -1 *
+    │                         if
+    │                             (-1 *
+    │                                 if -1 * σ.seed ≤ 0 then (75 * σ.seed + 74) % 65537
+    │                                 else -1 * ((-75 * σ.seed + -74) % 65537)) ≤
+    │                               0 then
+    │                           (if -1 * σ.seed ≤ 0 then (75 * σ.seed + 74) % 65537
+    │                             else -1 * ((-75 * σ.seed + -74) % 65537)) %
+    │                             5
+    │                         else
+    │                           -1 *
+    │                             ((-1 *
+    │                                 if -1 * σ.seed ≤ 0 then (75 * σ.seed + 74) % 65537
     │                                 else -1 * ((-75 * σ.seed + -74) % 65537)) %
-    │                                 5
-    │                             else
-    │                               -1 *
-    │                                 ((-1 *
-    │                                     if -1 * σ.seed ≤ 0 then (75 * σ.seed + 74) % 65537
-    │                                     else -1 * ((-75 * σ.seed + -74) % 65537)) %
-    │                                   5)) +
-    │                           -2,
-    │                       seed := τ.seed, paused := τ.paused }] }
+    │                               5)) +
+    │                     -38 ≤
+    │                   0 then
+    │               if
+    │                   (σ.offset +
+    │                         if
+    │                             (-1 *
+    │                                 if -1 * σ.seed ≤ 0 then (75 * σ.seed + 74) % 65537
+    │                                 else -1 * ((-75 * σ.seed + -74) % 65537)) ≤
+    │                               0 then
+    │                           (if -1 * σ.seed ≤ 0 then (75 * σ.seed + 74) % 65537
+    │                             else -1 * ((-75 * σ.seed + -74) % 65537)) %
+    │                             5
+    │                         else
+    │                           -1 *
+    │                             ((-1 *
+    │                                 if -1 * σ.seed ≤ 0 then (75 * σ.seed + 74) % 65537
+    │                                 else -1 * ((-75 * σ.seed + -74) % 65537)) %
+    │                               5)) +
+    │                       -42 ≤
+    │                     0 then
+    │                 {
+    │                   updates :=
+    │                     [fun τ =>
+    │                       { offset := τ.offset,
+    │                         seed :=
+    │                           if -1 * σ.seed ≤ 0 then (75 * σ.seed + 74) % 65537 else -1 * ((-75 * σ.seed + -74) % 65537),
+    │                         paused := τ.paused },
+    │                       fun τ =>
+    │                       {
+    │                         offset :=
+    │                           (τ.offset +
+    │                               if
+    │                                   (-1 *
+    │                                       if -1 * σ.seed ≤ 0 then (75 * σ.seed + 74) % 65537
+    │                                       else -1 * ((-75 * σ.seed + -74) % 65537)) ≤
+    │                                     0 then
+    │                                 (if -1 * σ.seed ≤ 0 then (75 * σ.seed + 74) % 65537
+    │                                   else -1 * ((-75 * σ.seed + -74) % 65537)) %
+    │                                   5
+    │                               else
+    │                                 -1 *
+    │                                   ((-1 *
+    │                                       if -1 * σ.seed ≤ 0 then (75 * σ.seed + 74) % 65537
+    │                                       else -1 * ((-75 * σ.seed + -74) % 65537)) %
+    │                                     5)) +
+    │                             -2,
+    │                         seed := τ.seed, paused := τ.paused }] }
+    │               else
+    │                 {
+    │                   updates :=
+    │                     [fun τ =>
+    │                       { offset := τ.offset,
+    │                         seed :=
+    │                           if -1 * σ.seed ≤ 0 then (75 * σ.seed + 74) % 65537 else -1 * ((-75 * σ.seed + -74) % 65537),
+    │                         paused := τ.paused }] }
     │             else
     │               {
     │                 updates :=
@@ -360,13 +384,8 @@ Failed obligations
     │                       seed :=
     │                         if -1 * σ.seed ≤ 0 then (75 * σ.seed + 74) % 65537 else -1 * ((-75 * σ.seed + -74) % 65537),
     │                       paused := τ.paused }] }
-    │           else
-    │             {
-    │               updates :=
-    │                 [fun τ =>
-    │                   { offset := τ.offset,
-    │                     seed := if -1 * σ.seed ≤ 0 then (75 * σ.seed + 74) % 65537 else -1 * ((-75 * σ.seed + -74) % 65537),
-    │                     paused := τ.paused }] }
+    │     [prop] (List.foldl (fun s u => u s) s (t e).updates).offset + 41 ≤ 0
+    │     [prop] ¬σ.paused = true
     │     [prop] (75 * σ.seed + 74) % 65537 + -65536 ≤ 0
     │     [prop] -1 * ((75 * σ.seed + 74) % 65537) ≤ 0
     │     [prop] (if -1 * σ.seed ≤ 0 then (75 * σ.seed + 74) % 65537 else -1 * ((-75 * σ.seed + -74) % 65537)) % 5 + -4 ≤ 0
@@ -376,7 +395,15 @@ Failed obligations
     │             (if -1 * σ.seed ≤ 0 then (75 * σ.seed + 74) % 65537 else -1 * ((-75 * σ.seed + -74) % 65537)) % 5 =
     │           0
     │     [prop] -75 * σ.seed + 65537 * ((75 * σ.seed + 74) / 65537) + (75 * σ.seed + 74) % 65537 + -74 = 0
-    │     [prop] (List.foldl (fun s u => u s) s (t e).updates).offset + 41 ≤ 0
+    │     [prop] (-1 * if -1 * σ.seed ≤ 0 then (75 * σ.seed + 74) % 65537 else -1 * ((-75 * σ.seed + -74) % 65537)) ≤ 0 →
+    │           (if -1 * σ.seed ≤ 0 then (75 * σ.seed + 74) % 65537 else -1 * ((-75 * σ.seed + -74) % 65537)) + -4 ≤ 0 →
+    │             (if -1 * σ.seed ≤ 0 then (75 * σ.seed + 74) % 65537 else -1 * ((-75 * σ.seed + -74) % 65537)) % 5 =
+    │               if -1 * σ.seed ≤ 0 then (75 * σ.seed + 74) % 65537 else -1 * ((-75 * σ.seed + -74) % 65537)
+    │     [prop] -1 * σ.seed ≤ 0 → σ.seed + -872 ≤ 0 → -75 * σ.seed + (75 * σ.seed + 74) % 65537 + -74 = 0
+    │     [prop] (if -1 * σ.seed ≤ 0 then (75 * σ.seed + 74) % 65537 else -1 * ((-75 * σ.seed + -74) % 65537)) % 5 + -4 ≤ 0
+    │     [prop] (75 * σ.seed + 74) % 65537 + -65536 ≤ 0
+    │     [prop] -1 * ((if -1 * σ.seed ≤ 0 then (75 * σ.seed + 74) % 65537 else -1 * ((-75 * σ.seed + -74) % 65537)) % 5) ≤ 0
+    │     [prop] -1 * ((75 * σ.seed + 74) % 65537) ≤ 0
     │     [prop] (-1 * σ.offset +
     │               -1 *
     │                 if
@@ -753,6 +780,8 @@ Failed obligations
     │                           5)) +
     │                   -2,
     │               seed := τ.seed, paused := τ.paused }]
+    │     [prop] (if -1 * σ.seed ≤ 0 then (75 * σ.seed + 74) % 65537 else -1 * ((-75 * σ.seed + -74) % 65537)) + -4 ≤ 0
+    │     [prop] ¬σ.seed + -872 ≤ 0
     │     [prop] (fun τ =>
     │             {
     │               offset :=
@@ -843,6 +872,18 @@ Failed obligations
     │             -38 ≤
     │           0
     │     [prop] (-1 * if -1 * σ.seed ≤ 0 then (75 * σ.seed + 74) % 65537 else -1 * ((-75 * σ.seed + -74) % 65537)) ≤ 0
+    │     [prop] (if -1 * σ.seed ≤ 0 then (75 * σ.seed + 74) % 65537 else -1 * ((-75 * σ.seed + -74) % 65537)) % 5 =
+    │           if -1 * σ.seed ≤ 0 then (75 * σ.seed + 74) % 65537 else -1 * ((-75 * σ.seed + -74) % 65537)
+    │     [prop] (if -1 * σ.seed ≤ 0 then (75 * σ.seed + 74) % 65537 else -1 * ((-75 * σ.seed + -74) % 65537)) + -4 ≤ 0
+    │     [prop] σ.seed + -872 ≤ 0 → -75 * σ.seed + (75 * σ.seed + 74) % 65537 + -74 = 0
+    │     [prop] (if -1 * σ.seed ≤ 0 then (75 * σ.seed + 74) % 65537 else -1 * ((-75 * σ.seed + -74) % 65537)) + -4 ≤ 0 →
+    │           (if -1 * σ.seed ≤ 0 then (75 * σ.seed + 74) % 65537 else -1 * ((-75 * σ.seed + -74) % 65537)) % 5 =
+    │             if -1 * σ.seed ≤ 0 then (75 * σ.seed + 74) % 65537 else -1 * ((-75 * σ.seed + -74) % 65537)
+    │     [prop] -1 * σ.seed ≤ 0 → σ.seed + -872 ≤ 0 → -75 * σ.seed + (75 * σ.seed + 74) % 65537 + -74 = 0
+    │     [prop] (-1 * if -1 * σ.seed ≤ 0 then (75 * σ.seed + 74) % 65537 else -1 * ((-75 * σ.seed + -74) % 65537)) ≤ 0 →
+    │           (if -1 * σ.seed ≤ 0 then (75 * σ.seed + 74) % 65537 else -1 * ((-75 * σ.seed + -74) % 65537)) + -4 ≤ 0 →
+    │             (if -1 * σ.seed ≤ 0 then (75 * σ.seed + 74) % 65537 else -1 * ((-75 * σ.seed + -74) % 65537)) % 5 =
+    │               if -1 * σ.seed ≤ 0 then (75 * σ.seed + 74) % 65537 else -1 * ((-75 * σ.seed + -74) % 65537)
     │   [eqc] False propositions
     │     [prop] (List.foldl (fun s u => u s) s (t e).updates).seed + 1 ≤ 0 ∨
     │           -1 * (List.foldl (fun s u => u s) s (t e).updates).seed + 65537 ≤ 0
@@ -852,73 +893,87 @@ Failed obligations
     │     [prop] (List.foldl (fun s u => u s) s (t e).updates).seed + 1 ≤ 0
     │     [prop] -1 * (List.foldl (fun s u => u s) s (t e).updates).offset + 41 ≤ 0
     │     [prop] -1 * (List.foldl (fun s u => u s) s (t e).updates).seed + 65537 ≤ 0
+    │     [prop] σ.paused = true
+    │     [prop] σ.seed + -872 ≤ 0
     │   [eqc] Equivalence classes
     │     [eqc] {props, { }}
     │     [eqc] {κ, { }}
     │     [eqc] {t,
     │         fun x =>
-    │           if
-    │               (-1 * σ.offset +
-    │                     -1 *
-    │                       if
-    │                           (-1 *
-    │                               if -1 * σ.seed ≤ 0 then (75 * σ.seed + 74) % 65537
-    │                               else -1 * ((-75 * σ.seed + -74) % 65537)) ≤
-    │                             0 then
-    │                         (if -1 * σ.seed ≤ 0 then (75 * σ.seed + 74) % 65537 else -1 * ((-75 * σ.seed + -74) % 65537)) %
-    │                           5
-    │                       else
-    │                         -1 *
-    │                           ((-1 *
-    │                               if -1 * σ.seed ≤ 0 then (75 * σ.seed + 74) % 65537
-    │                               else -1 * ((-75 * σ.seed + -74) % 65537)) %
-    │                             5)) +
-    │                   -38 ≤
-    │                 0 then
+    │           if σ.paused = true then { }
+    │           else
     │             if
-    │                 (σ.offset +
-    │                       if
-    │                           (-1 *
-    │                               if -1 * σ.seed ≤ 0 then (75 * σ.seed + 74) % 65537
-    │                               else -1 * ((-75 * σ.seed + -74) % 65537)) ≤
-    │                             0 then
-    │                         (if -1 * σ.seed ≤ 0 then (75 * σ.seed + 74) % 65537 else -1 * ((-75 * σ.seed + -74) % 65537)) %
-    │                           5
-    │                       else
-    │                         -1 *
-    │                           ((-1 *
-    │                               if -1 * σ.seed ≤ 0 then (75 * σ.seed + 74) % 65537
-    │                               else -1 * ((-75 * σ.seed + -74) % 65537)) %
-    │                             5)) +
-    │                     -42 ≤
-    │                   0 then
-    │               {
-    │                 updates :=
-    │                   [fun τ =>
-    │                     { offset := τ.offset,
-    │                       seed :=
-    │                         if -1 * σ.seed ≤ 0 then (75 * σ.seed + 74) % 65537 else -1 * ((-75 * σ.seed + -74) % 65537),
-    │                       paused := τ.paused },
-    │                     fun τ =>
-    │                     {
-    │                       offset :=
-    │                         (τ.offset +
-    │                             if
-    │                                 (-1 *
-    │                                     if -1 * σ.seed ≤ 0 then (75 * σ.seed + 74) % 65537
-    │                                     else -1 * ((-75 * σ.seed + -74) % 65537)) ≤
-    │                                   0 then
-    │                               (if -1 * σ.seed ≤ 0 then (75 * σ.seed + 74) % 65537
+    │                 (-1 * σ.offset +
+    │                       -1 *
+    │                         if
+    │                             (-1 *
+    │                                 if -1 * σ.seed ≤ 0 then (75 * σ.seed + 74) % 65537
+    │                                 else -1 * ((-75 * σ.seed + -74) % 65537)) ≤
+    │                               0 then
+    │                           (if -1 * σ.seed ≤ 0 then (75 * σ.seed + 74) % 65537
+    │                             else -1 * ((-75 * σ.seed + -74) % 65537)) %
+    │                             5
+    │                         else
+    │                           -1 *
+    │                             ((-1 *
+    │                                 if -1 * σ.seed ≤ 0 then (75 * σ.seed + 74) % 65537
     │                                 else -1 * ((-75 * σ.seed + -74) % 65537)) %
-    │                                 5
-    │                             else
-    │                               -1 *
-    │                                 ((-1 *
-    │                                     if -1 * σ.seed ≤ 0 then (75 * σ.seed + 74) % 65537
-    │                                     else -1 * ((-75 * σ.seed + -74) % 65537)) %
-    │                                   5)) +
-    │                           -2,
-    │                       seed := τ.seed, paused := τ.paused }] }
+    │                               5)) +
+    │                     -38 ≤
+    │                   0 then
+    │               if
+    │                   (σ.offset +
+    │                         if
+    │                             (-1 *
+    │                                 if -1 * σ.seed ≤ 0 then (75 * σ.seed + 74) % 65537
+    │                                 else -1 * ((-75 * σ.seed + -74) % 65537)) ≤
+    │                               0 then
+    │                           (if -1 * σ.seed ≤ 0 then (75 * σ.seed + 74) % 65537
+    │                             else -1 * ((-75 * σ.seed + -74) % 65537)) %
+    │                             5
+    │                         else
+    │                           -1 *
+    │                             ((-1 *
+    │                                 if -1 * σ.seed ≤ 0 then (75 * σ.seed + 74) % 65537
+    │                                 else -1 * ((-75 * σ.seed + -74) % 65537)) %
+    │                               5)) +
+    │                       -42 ≤
+    │                     0 then
+    │                 {
+    │                   updates :=
+    │                     [fun τ =>
+    │                       { offset := τ.offset,
+    │                         seed :=
+    │                           if -1 * σ.seed ≤ 0 then (75 * σ.seed + 74) % 65537 else -1 * ((-75 * σ.seed + -74) % 65537),
+    │                         paused := τ.paused },
+    │                       fun τ =>
+    │                       {
+    │                         offset :=
+    │                           (τ.offset +
+    │                               if
+    │                                   (-1 *
+    │                                       if -1 * σ.seed ≤ 0 then (75 * σ.seed + 74) % 65537
+    │                                       else -1 * ((-75 * σ.seed + -74) % 65537)) ≤
+    │                                     0 then
+    │                                 (if -1 * σ.seed ≤ 0 then (75 * σ.seed + 74) % 65537
+    │                                   else -1 * ((-75 * σ.seed + -74) % 65537)) %
+    │                                   5
+    │                               else
+    │                                 -1 *
+    │                                   ((-1 *
+    │                                       if -1 * σ.seed ≤ 0 then (75 * σ.seed + 74) % 65537
+    │                                       else -1 * ((-75 * σ.seed + -74) % 65537)) %
+    │                                     5)) +
+    │                             -2,
+    │                         seed := τ.seed, paused := τ.paused }] }
+    │               else
+    │                 {
+    │                   updates :=
+    │                     [fun τ =>
+    │                       { offset := τ.offset,
+    │                         seed :=
+    │                           if -1 * σ.seed ≤ 0 then (75 * σ.seed + 74) % 65537 else -1 * ((-75 * σ.seed + -74) % 65537),
+    │                         paused := τ.paused }] }
     │             else
     │               {
     │                 updates :=
@@ -926,14 +981,8 @@ Failed obligations
     │                     { offset := τ.offset,
     │                       seed :=
     │                         if -1 * σ.seed ≤ 0 then (75 * σ.seed + 74) % 65537 else -1 * ((-75 * σ.seed + -74) % 65537),
-    │                       paused := τ.paused }] }
-    │           else
-    │             {
-    │               updates :=
-    │                 [fun τ =>
-    │                   { offset := τ.offset,
-    │                     seed := if -1 * σ.seed ≤ 0 then (75 * σ.seed + 74) % 65537 else -1 * ((-75 * σ.seed + -74) % 65537),
-    │                     paused := τ.paused }] }}
+    │                       paused := τ.paused }] }}
+    │     [eqc] {false, σ.paused}
     │     [eqc] {t e,
     │         {
     │           updates :=
@@ -960,7 +1009,89 @@ Failed obligations
     │                             5)) +
     │                     -2,
     │                 seed := τ.seed, paused := τ.paused }] }}
-    │       [eqc] {if
+    │       [eqc] {if σ.paused = true then { }
+    │           else
+    │             if
+    │                 (-1 * σ.offset +
+    │                       -1 *
+    │                         if
+    │                             (-1 *
+    │                                 if -1 * σ.seed ≤ 0 then (75 * σ.seed + 74) % 65537
+    │                                 else -1 * ((-75 * σ.seed + -74) % 65537)) ≤
+    │                               0 then
+    │                           (if -1 * σ.seed ≤ 0 then (75 * σ.seed + 74) % 65537
+    │                             else -1 * ((-75 * σ.seed + -74) % 65537)) %
+    │                             5
+    │                         else
+    │                           -1 *
+    │                             ((-1 *
+    │                                 if -1 * σ.seed ≤ 0 then (75 * σ.seed + 74) % 65537
+    │                                 else -1 * ((-75 * σ.seed + -74) % 65537)) %
+    │                               5)) +
+    │                     -38 ≤
+    │                   0 then
+    │               if
+    │                   (σ.offset +
+    │                         if
+    │                             (-1 *
+    │                                 if -1 * σ.seed ≤ 0 then (75 * σ.seed + 74) % 65537
+    │                                 else -1 * ((-75 * σ.seed + -74) % 65537)) ≤
+    │                               0 then
+    │                           (if -1 * σ.seed ≤ 0 then (75 * σ.seed + 74) % 65537
+    │                             else -1 * ((-75 * σ.seed + -74) % 65537)) %
+    │                             5
+    │                         else
+    │                           -1 *
+    │                             ((-1 *
+    │                                 if -1 * σ.seed ≤ 0 then (75 * σ.seed + 74) % 65537
+    │                                 else -1 * ((-75 * σ.seed + -74) % 65537)) %
+    │                               5)) +
+    │                       -42 ≤
+    │                     0 then
+    │                 {
+    │                   updates :=
+    │                     [fun τ =>
+    │                       { offset := τ.offset,
+    │                         seed :=
+    │                           if -1 * σ.seed ≤ 0 then (75 * σ.seed + 74) % 65537 else -1 * ((-75 * σ.seed + -74) % 65537),
+    │                         paused := τ.paused },
+    │                       fun τ =>
+    │                       {
+    │                         offset :=
+    │                           (τ.offset +
+    │                               if
+    │                                   (-1 *
+    │                                       if -1 * σ.seed ≤ 0 then (75 * σ.seed + 74) % 65537
+    │                                       else -1 * ((-75 * σ.seed + -74) % 65537)) ≤
+    │                                     0 then
+    │                                 (if -1 * σ.seed ≤ 0 then (75 * σ.seed + 74) % 65537
+    │                                   else -1 * ((-75 * σ.seed + -74) % 65537)) %
+    │                                   5
+    │                               else
+    │                                 -1 *
+    │                                   ((-1 *
+    │                                       if -1 * σ.seed ≤ 0 then (75 * σ.seed + 74) % 65537
+    │                                       else -1 * ((-75 * σ.seed + -74) % 65537)) %
+    │                                     5)) +
+    │                             -2,
+    │                         seed := τ.seed, paused := τ.paused }] }
+    │               else
+    │                 {
+    │                   updates :=
+    │                     [fun τ =>
+    │                       { offset := τ.offset,
+    │                         seed :=
+    │                           if -1 * σ.seed ≤ 0 then (75 * σ.seed + 74) % 65537 else -1 * ((-75 * σ.seed + -74) % 65537),
+    │                         paused := τ.paused }] }
+    │             else
+    │               {
+    │                 updates :=
+    │                   [fun τ =>
+    │                     { offset := τ.offset,
+    │                       seed :=
+    │                         if -1 * σ.seed ≤ 0 then (75 * σ.seed + 74) % 65537 else -1 * ((-75 * σ.seed + -74) % 65537),
+    │                       paused := τ.paused }] },
+    │           if
     │               (σ.offset +
     │                     if
     │                         (-1 *
@@ -1115,7 +1246,9 @@ Failed obligations
     │                   -2,
     │               seed := if -1 * σ.seed ≤ 0 then (75 * σ.seed + 74) % 65537 else -1 * ((-75 * σ.seed + -74) % 65537),
     │               paused := s.paused }.offset}
-    │     [eqc] {(List.foldl (fun s u => u s) s (t e).updates).seed, (75 * σ.seed + 74) % 65537}
+    │     [eqc] {(List.foldl (fun s u => u s) s (t e).updates).seed,
+    │         (if -1 * σ.seed ≤ 0 then (75 * σ.seed + 74) % 65537 else -1 * ((-75 * σ.seed + -74) % 65537)) % 5,
+    │         (75 * σ.seed + 74) % 65537}
     │       [eqc] {{
     │               offset :=
     │                 (s.offset +
@@ -1134,12 +1267,18 @@ Failed obligations
     │                   -2,
     │               seed := if -1 * σ.seed ≤ 0 then (75 * σ.seed + 74) % 65537 else -1 * ((-75 * σ.seed + -74) % 65537),
     │               paused := s.paused }.seed,
-    │           if -1 * σ.seed ≤ 0 then (75 * σ.seed + 74) % 65537 else -1 * ((-75 * σ.seed + -74) % 65537)}
+    │           if -1 * σ.seed ≤ 0 then (75 * σ.seed + 74) % 65537 else -1 * ((-75 * σ.seed + -74) % 65537),
+    │           if (-1 * if -1 * σ.seed ≤ 0 then (75 * σ.seed + 74) % 65537 else -1 * ((-75 * σ.seed + -74) % 65537)) ≤ 0 then
+    │             (if -1 * σ.seed ≤ 0 then (75 * σ.seed + 74) % 65537 else -1 * ((-75 * σ.seed + -74) % 65537)) % 5
+    │           else
+    │             -1 *
+    │               ((-1 * if -1 * σ.seed ≤ 0 then (75 * σ.seed + 74) % 65537 else -1 * ((-75 * σ.seed + -74) % 65537)) % 5)}
     │     [eqc] {0,
     │         -75 * σ.seed + 65537 * ((75 * σ.seed + 74) / 65537) + (75 * σ.seed + 74) % 65537 + -74,
     │         (-1 * if -1 * σ.seed ≤ 0 then (75 * σ.seed + 74) % 65537 else -1 * ((-75 * σ.seed + -74) % 65537)) +
     │             5 * ((if -1 * σ.seed ≤ 0 then (75 * σ.seed + 74) % 65537 else -1 * ((-75 * σ.seed + -74) % 65537)) / 5) +
-    │           (if -1 * σ.seed ≤ 0 then (75 * σ.seed + 74) % 65537 else -1 * ((-75 * σ.seed + -74) % 65537)) % 5}
+    │           (if -1 * σ.seed ≤ 0 then (75 * σ.seed + 74) % 65537 else -1 * ((-75 * σ.seed + -74) % 65537)) % 5,
+    │         (if -1 * σ.seed ≤ 0 then (75 * σ.seed + 74) % 65537 else -1 * ((-75 * σ.seed + -74) % 65537)) / 5}
     │     [eqc] {(t e).updates,
     │         [fun τ =>
     │           { offset := τ.offset,
@@ -1405,10 +1544,12 @@ Failed obligations
     │               paused := s.paused }
     │             [])
     │           []}
+    │     [eqc] {(if -1 * σ.seed ≤ 0 then (75 * σ.seed + 74) % 65537 else -1 * ((-75 * σ.seed + -74) % 65537)) % 5 + -4,
+    │         (if -1 * σ.seed ≤ 0 then (75 * σ.seed + 74) % 65537 else -1 * ((-75 * σ.seed + -74) % 65537)) + -4}
     │     [eqc] {-1 * (List.foldl (fun s u => u s) s (t e).updates).seed,
+    │         -1 * ((if -1 * σ.seed ≤ 0 then (75 * σ.seed + 74) % 65537 else -1 * ((-75 * σ.seed + -74) % 65537)) % 5),
     │         -1 * ((75 * σ.seed + 74) % 65537),
-    │         -1 * if -1 * σ.seed ≤ 0 then (75 * σ.seed + 74) % 65537 else -1 * ((-75 * σ.seed + -74) % 65537)}
-    │     [eqc] {-1 * ((if -1 * σ.seed ≤ 0 then (75 * σ.seed + 74) % 65537 else -1 * ((-75 * σ.seed + -74) % 65537)) % 5),
+    │         -1 * if -1 * σ.seed ≤ 0 then (75 * σ.seed + 74) % 65537 else -1 * ((-75 * σ.seed + -74) % 65537),
     │         -1 *
     │           if (-1 * if -1 * σ.seed ≤ 0 then (75 * σ.seed + 74) % 65537 else -1 * ((-75 * σ.seed + -74) % 65537)) ≤ 0 then
     │             (if -1 * σ.seed ≤ 0 then (75 * σ.seed + 74) % 65537 else -1 * ((-75 * σ.seed + -74) % 65537)) % 5
@@ -1510,21 +1651,177 @@ Failed obligations
     │                         5)) +
     │                 -2,
     │             seed := τ.seed, paused := τ.paused }}
-    │     [eqc] others
-    │       [eqc] {if
-    │               (-1 * if -1 * σ.seed ≤ 0 then (75 * σ.seed + 74) % 65537 else -1 * ((-75 * σ.seed + -74) % 65537)) ≤
-    │                 0 then
-    │             (if -1 * σ.seed ≤ 0 then (75 * σ.seed + 74) % 65537 else -1 * ((-75 * σ.seed + -74) % 65537)) % 5
-    │           else
-    │             -1 *
-    │               ((-1 * if -1 * σ.seed ≤ 0 then (75 * σ.seed + 74) % 65537 else -1 * ((-75 * σ.seed + -74) % 65537)) % 5),
-    │           (if -1 * σ.seed ≤ 0 then (75 * σ.seed + 74) % 65537 else -1 * ((-75 * σ.seed + -74) % 65537)) % 5}
     │   [cases] Case analyses
     │     [cases] [1/2]: (List.foldl (fun s u => u s) s (t e).updates).offset + 41 ≤ 0 ∨
     │           -1 * (List.foldl (fun s u => u s) s (t e).updates).offset + 41 ≤ 0 ∨
     │             (List.foldl (fun s u => u s) s (t e).updates).seed + 1 ≤ 0 ∨
     │               -1 * (List.foldl (fun s u => u s) s (t e).updates).seed + 65537 ≤ 0
     │       [cases] source: Initial goal
+    │     [cases] [2/2]: if σ.paused = true then { }
+    │         else
+    │           if
+    │               (-1 * σ.offset +
+    │                     -1 *
+    │                       if
+    │                           (-1 *
+    │                               if -1 * σ.seed ≤ 0 then (75 * σ.seed + 74) % 65537
+    │                               else -1 * ((-75 * σ.seed + -74) % 65537)) ≤
+    │                             0 then
+    │                         (if -1 * σ.seed ≤ 0 then (75 * σ.seed + 74) % 65537 else -1 * ((-75 * σ.seed + -74) % 65537)) %
+    │                           5
+    │                       else
+    │                         -1 *
+    │                           ((-1 *
+    │                               if -1 * σ.seed ≤ 0 then (75 * σ.seed + 74) % 65537
+    │                               else -1 * ((-75 * σ.seed + -74) % 65537)) %
+    │                             5)) +
+    │                   -38 ≤
+    │                 0 then
+    │             if
+    │                 (σ.offset +
+    │                       if
+    │                           (-1 *
+    │                               if -1 * σ.seed ≤ 0 then (75 * σ.seed + 74) % 65537
+    │                               else -1 * ((-75 * σ.seed + -74) % 65537)) ≤
+    │                             0 then
+    │                         (if -1 * σ.seed ≤ 0 then (75 * σ.seed + 74) % 65537 else -1 * ((-75 * σ.seed + -74) % 65537)) %
+    │                           5
+    │                       else
+    │                         -1 *
+    │                           ((-1 *
+    │                               if -1 * σ.seed ≤ 0 then (75 * σ.seed + 74) % 65537
+    │                               else -1 * ((-75 * σ.seed + -74) % 65537)) %
+    │                             5)) +
+    │                     -42 ≤
+    │                   0 then
+    │               {
+    │                 updates :=
+    │                   [fun τ =>
+    │                     { offset := τ.offset,
+    │                       seed :=
+    │                         if -1 * σ.seed ≤ 0 then (75 * σ.seed + 74) % 65537 else -1 * ((-75 * σ.seed + -74) % 65537),
+    │                       paused := τ.paused },
+    │                     fun τ =>
+    │                     {
+    │                       offset :=
+    │                         (τ.offset +
+    │                             if
+    │                                 (-1 *
+    │                                     if -1 * σ.seed ≤ 0 then (75 * σ.seed + 74) % 65537
+    │                                     else -1 * ((-75 * σ.seed + -74) % 65537)) ≤
+    │                                   0 then
+    │                               (if -1 * σ.seed ≤ 0 then (75 * σ.seed + 74) % 65537
+    │                                 else -1 * ((-75 * σ.seed + -74) % 65537)) %
+    │                                 5
+    │                             else
+    │                               -1 *
+    │                                 ((-1 *
+    │                                     if -1 * σ.seed ≤ 0 then (75 * σ.seed + 74) % 65537
+    │                                     else -1 * ((-75 * σ.seed + -74) % 65537)) %
+    │                                   5)) +
+    │                           -2,
+    │                       seed := τ.seed, paused := τ.paused }] }
+    │             else
+    │               {
+    │                 updates :=
+    │                   [fun τ =>
+    │                     { offset := τ.offset,
+    │                       seed :=
+    │                         if -1 * σ.seed ≤ 0 then (75 * σ.seed + 74) % 65537 else -1 * ((-75 * σ.seed + -74) % 65537),
+    │                       paused := τ.paused }] }
+    │           else
+    │             {
+    │               updates :=
+    │                 [fun τ =>
+    │                   { offset := τ.offset,
+    │                     seed := if -1 * σ.seed ≤ 0 then (75 * σ.seed + 74) % 65537 else -1 * ((-75 * σ.seed + -74) % 65537),
+    │                     paused := τ.paused }] }
+    │       [cases] source: Beta-reduction of
+    │             fun x =>
+    │               if σ.paused = true then { }
+    │               else
+    │                 if
+    │                     (-1 * σ.offset +
+    │                           -1 *
+    │                             if
+    │                                 (-1 *
+    │                                     if -1 * σ.seed ≤ 0 then (75 * σ.seed + 74) % 65537
+    │                                     else -1 * ((-75 * σ.seed + -74) % 65537)) ≤
+    │                                   0 then
+    │                               (if -1 * σ.seed ≤ 0 then (75 * σ.seed + 74) % 65537
+    │                                 else -1 * ((-75 * σ.seed + -74) % 65537)) %
+    │                                 5
+    │                             else
+    │                               -1 *
+    │                                 ((-1 *
+    │                                     if -1 * σ.seed ≤ 0 then (75 * σ.seed + 74) % 65537
+    │                                     else -1 * ((-75 * σ.seed + -74) % 65537)) %
+    │                                   5)) +
+    │                         -38 ≤
+    │                       0 then
+    │                   if
+    │                       (σ.offset +
+    │                             if
+    │                                 (-1 *
+    │                                     if -1 * σ.seed ≤ 0 then (75 * σ.seed + 74) % 65537
+    │                                     else -1 * ((-75 * σ.seed + -74) % 65537)) ≤
+    │                                   0 then
+    │                               (if -1 * σ.seed ≤ 0 then (75 * σ.seed + 74) % 65537
+    │                                 else -1 * ((-75 * σ.seed + -74) % 65537)) %
+    │                                 5
+    │                             else
+    │                               -1 *
+    │                                 ((-1 *
+    │                                     if -1 * σ.seed ≤ 0 then (75 * σ.seed + 74) % 65537
+    │                                     else -1 * ((-75 * σ.seed + -74) % 65537)) %
+    │                                   5)) +
+    │                           -42 ≤
+    │                         0 then
+    │                     {
+    │                       updates :=
+    │                         [fun τ =>
+    │                           { offset := τ.offset,
+    │                             seed :=
+    │                               if -1 * σ.seed ≤ 0 then (75 * σ.seed + 74) % 65537
+    │                               else -1 * ((-75 * σ.seed + -74) % 65537),
+    │                             paused := τ.paused },
+    │                           fun τ =>
+    │                           {
+    │                             offset :=
+    │                               (τ.offset +
+    │                                   if
+    │                                       (-1 *
+    │                                           if -1 * σ.seed ≤ 0 then (75 * σ.seed + 74) % 65537
+    │                                           else -1 * ((-75 * σ.seed + -74) % 65537)) ≤
+    │                                         0 then
+    │                                     (if -1 * σ.seed ≤ 0 then (75 * σ.seed + 74) % 65537
+    │                                       else -1 * ((-75 * σ.seed + -74) % 65537)) %
+    │                                       5
+    │                                   else
+    │                                     -1 *
+    │                                       ((-1 *
+    │                                           if -1 * σ.seed ≤ 0 then (75 * σ.seed + 74) % 65537
+    │                                           else -1 * ((-75 * σ.seed + -74) % 65537)) %
+    │                                         5)) +
+    │                                 -2,
+    │                             seed := τ.seed, paused := τ.paused }] }
+    │                   else
+    │                     {
+    │                       updates :=
+    │                         [fun τ =>
+    │                           { offset := τ.offset,
+    │                             seed :=
+    │                               if -1 * σ.seed ≤ 0 then (75 * σ.seed + 74) % 65537
+    │                               else -1 * ((-75 * σ.seed + -74) % 65537),
+    │                             paused := τ.paused }] }
+    │                 else
+    │                   {
+    │                     updates :=
+    │                       [fun τ =>
+    │                         { offset := τ.offset,
+    │                           seed :=
+    │                             if -1 * σ.seed ≤ 0 then (75 * σ.seed + 74) % 65537 else -1 * ((-75 * σ.seed + -74) % 65537),
+    │                           paused := τ.paused }] }
     │     [cases] [1/2]: if
     │             (-1 * σ.offset +
     │                   -1 *
@@ -1600,70 +1897,82 @@ Failed obligations
     │                   paused := τ.paused }] }
     │       [cases] source: Beta-reduction of
     │             fun x =>
-    │               if
-    │                   (-1 * σ.offset +
-    │                         -1 *
-    │                           if
-    │                               (-1 *
-    │                                   if -1 * σ.seed ≤ 0 then (75 * σ.seed + 74) % 65537
-    │                                   else -1 * ((-75 * σ.seed + -74) % 65537)) ≤
-    │                                 0 then
-    │                             (if -1 * σ.seed ≤ 0 then (75 * σ.seed + 74) % 65537
-    │                               else -1 * ((-75 * σ.seed + -74) % 65537)) %
-    │                               5
-    │                           else
-    │                             -1 *
-    │                               ((-1 *
-    │                                   if -1 * σ.seed ≤ 0 then (75 * σ.seed + 74) % 65537
-    │                                   else -1 * ((-75 * σ.seed + -74) % 65537)) %
-    │                                 5)) +
-    │                       -38 ≤
-    │                     0 then
+    │               if σ.paused = true then { }
+    │               else
     │                 if
-    │                     (σ.offset +
-    │                           if
-    │                               (-1 *
-    │                                   if -1 * σ.seed ≤ 0 then (75 * σ.seed + 74) % 65537
-    │                                   else -1 * ((-75 * σ.seed + -74) % 65537)) ≤
-    │                                 0 then
-    │                             (if -1 * σ.seed ≤ 0 then (75 * σ.seed + 74) % 65537
-    │                               else -1 * ((-75 * σ.seed + -74) % 65537)) %
-    │                               5
-    │                           else
-    │                             -1 *
-    │                               ((-1 *
-    │                                   if -1 * σ.seed ≤ 0 then (75 * σ.seed + 74) % 65537
-    │                                   else -1 * ((-75 * σ.seed + -74) % 65537)) %
-    │                                 5)) +
-    │                         -42 ≤
-    │                       0 then
-    │                   {
-    │                     updates :=
-    │                       [fun τ =>
-    │                         { offset := τ.offset,
-    │                           seed :=
-    │                             if -1 * σ.seed ≤ 0 then (75 * σ.seed + 74) % 65537 else -1 * ((-75 * σ.seed + -74) % 65537),
-    │                           paused := τ.paused },
-    │                         fun τ =>
-    │                         {
-    │                           offset :=
-    │                             (τ.offset +
-    │                                 if
-    │                                     (-1 *
-    │                                         if -1 * σ.seed ≤ 0 then (75 * σ.seed + 74) % 65537
-    │                                         else -1 * ((-75 * σ.seed + -74) % 65537)) ≤
-    │                                       0 then
-    │                                   (if -1 * σ.seed ≤ 0 then (75 * σ.seed + 74) % 65537
+    │                     (-1 * σ.offset +
+    │                           -1 *
+    │                             if
+    │                                 (-1 *
+    │                                     if -1 * σ.seed ≤ 0 then (75 * σ.seed + 74) % 65537
+    │                                     else -1 * ((-75 * σ.seed + -74) % 65537)) ≤
+    │                                   0 then
+    │                               (if -1 * σ.seed ≤ 0 then (75 * σ.seed + 74) % 65537
+    │                                 else -1 * ((-75 * σ.seed + -74) % 65537)) %
+    │                                 5
+    │                             else
+    │                               -1 *
+    │                                 ((-1 *
+    │                                     if -1 * σ.seed ≤ 0 then (75 * σ.seed + 74) % 65537
     │                                     else -1 * ((-75 * σ.seed + -74) % 65537)) %
-    │                                     5
-    │                                 else
-    │                                   -1 *
-    │                                     ((-1 *
-    │                                         if -1 * σ.seed ≤ 0 then (75 * σ.seed + 74) % 65537
-    │                                         else -1 * ((-75 * σ.seed + -74) % 65537)) %
-    │                                       5)) +
-    │                               -2,
-    │                           seed := τ.seed, paused := τ.paused }] }
+    │                                   5)) +
+    │                         -38 ≤
+    │                       0 then
+    │                   if
+    │                       (σ.offset +
+    │                             if
+    │                                 (-1 *
+    │                                     if -1 * σ.seed ≤ 0 then (75 * σ.seed + 74) % 65537
+    │                                     else -1 * ((-75 * σ.seed + -74) % 65537)) ≤
+    │                                   0 then
+    │                               (if -1 * σ.seed ≤ 0 then (75 * σ.seed + 74) % 65537
+    │                                 else -1 * ((-75 * σ.seed + -74) % 65537)) %
+    │                                 5
+    │                             else
+    │                               -1 *
+    │                                 ((-1 *
+    │                                     if -1 * σ.seed ≤ 0 then (75 * σ.seed + 74) % 65537
+    │                                     else -1 * ((-75 * σ.seed + -74) % 65537)) %
+    │                                   5)) +
+    │                           -42 ≤
+    │                         0 then
+    │                     {
+    │                       updates :=
+    │                         [fun τ =>
+    │                           { offset := τ.offset,
+    │                             seed :=
+    │                               if -1 * σ.seed ≤ 0 then (75 * σ.seed + 74) % 65537
+    │                               else -1 * ((-75 * σ.seed + -74) % 65537),
+    │                             paused := τ.paused },
+    │                           fun τ =>
+    │                           {
+    │                             offset :=
+    │                               (τ.offset +
+    │                                   if
+    │                                       (-1 *
+    │                                           if -1 * σ.seed ≤ 0 then (75 * σ.seed + 74) % 65537
+    │                                           else -1 * ((-75 * σ.seed + -74) % 65537)) ≤
+    │                                         0 then
+    │                                     (if -1 * σ.seed ≤ 0 then (75 * σ.seed + 74) % 65537
+    │                                       else -1 * ((-75 * σ.seed + -74) % 65537)) %
+    │                                       5
+    │                                   else
+    │                                     -1 *
+    │                                       ((-1 *
+    │                                           if -1 * σ.seed ≤ 0 then (75 * σ.seed + 74) % 65537
+    │                                           else -1 * ((-75 * σ.seed + -74) % 65537)) %
+    │                                         5)) +
+    │                                 -2,
+    │                             seed := τ.seed, paused := τ.paused }] }
+    │                   else
+    │                     {
+    │                       updates :=
+    │                         [fun τ =>
+    │                           { offset := τ.offset,
+    │                             seed :=
+    │                               if -1 * σ.seed ≤ 0 then (75 * σ.seed + 74) % 65537
+    │                               else -1 * ((-75 * σ.seed + -74) % 65537),
+    │                             paused := τ.paused }] }
     │                 else
     │                   {
     │                     updates :=
@@ -1672,14 +1981,6 @@ Failed obligations
     │                           seed :=
     │                             if -1 * σ.seed ≤ 0 then (75 * σ.seed + 74) % 65537 else -1 * ((-75 * σ.seed + -74) % 65537),
     │                           paused := τ.paused }] }
-    │               else
-    │                 {
-    │                   updates :=
-    │                     [fun τ =>
-    │                       { offset := τ.offset,
-    │                         seed :=
-    │                           if -1 * σ.seed ≤ 0 then (75 * σ.seed + 74) % 65537 else -1 * ((-75 * σ.seed + -74) % 65537),
-    │                         paused := τ.paused }] }
     │     [cases] [1/2]: if
     │             (σ.offset +
     │                   if
@@ -1727,88 +2028,12 @@ Failed obligations
     │                 { offset := τ.offset,
     │                   seed := if -1 * σ.seed ≤ 0 then (75 * σ.seed + 74) % 65537 else -1 * ((-75 * σ.seed + -74) % 65537),
     │                   paused := τ.paused }] }
-    │       [cases] source: Beta-reduction of
-    │             fun x =>
-    │               if
-    │                   (-1 * σ.offset +
-    │                         -1 *
-    │                           if
-    │                               (-1 *
-    │                                   if -1 * σ.seed ≤ 0 then (75 * σ.seed + 74) % 65537
-    │                                   else -1 * ((-75 * σ.seed + -74) % 65537)) ≤
-    │                                 0 then
-    │                             (if -1 * σ.seed ≤ 0 then (75 * σ.seed + 74) % 65537
-    │                               else -1 * ((-75 * σ.seed + -74) % 65537)) %
-    │                               5
-    │                           else
-    │                             -1 *
-    │                               ((-1 *
-    │                                   if -1 * σ.seed ≤ 0 then (75 * σ.seed + 74) % 65537
-    │                                   else -1 * ((-75 * σ.seed + -74) % 65537)) %
-    │                                 5)) +
-    │                       -38 ≤
-    │                     0 then
-    │                 if
-    │                     (σ.offset +
-    │                           if
-    │                               (-1 *
-    │                                   if -1 * σ.seed ≤ 0 then (75 * σ.seed + 74) % 65537
-    │                                   else -1 * ((-75 * σ.seed + -74) % 65537)) ≤
-    │                                 0 then
-    │                             (if -1 * σ.seed ≤ 0 then (75 * σ.seed + 74) % 65537
-    │                               else -1 * ((-75 * σ.seed + -74) % 65537)) %
-    │                               5
-    │                           else
-    │                             -1 *
-    │                               ((-1 *
-    │                                   if -1 * σ.seed ≤ 0 then (75 * σ.seed + 74) % 65537
-    │                                   else -1 * ((-75 * σ.seed + -74) % 65537)) %
-    │                                 5)) +
-    │                         -42 ≤
-    │                       0 then
-    │                   {
-    │                     updates :=
-    │                       [fun τ =>
-    │                         { offset := τ.offset,
-    │                           seed :=
-    │                             if -1 * σ.seed ≤ 0 then (75 * σ.seed + 74) % 65537 else -1 * ((-75 * σ.seed + -74) % 65537),
-    │                           paused := τ.paused },
-    │                         fun τ =>
-    │                         {
-    │                           offset :=
-    │                             (τ.offset +
-    │                                 if
-    │                                     (-1 *
-    │                                         if -1 * σ.seed ≤ 0 then (75 * σ.seed + 74) % 65537
-    │                                         else -1 * ((-75 * σ.seed + -74) % 65537)) ≤
-    │                                       0 then
-    │                                   (if -1 * σ.seed ≤ 0 then (75 * σ.seed + 74) % 65537
-    │                                     else -1 * ((-75 * σ.seed + -74) % 65537)) %
-    │                                     5
-    │                                 else
-    │                                   -1 *
-    │                                     ((-1 *
-    │                                         if -1 * σ.seed ≤ 0 then (75 * σ.seed + 74) % 65537
-    │                                         else -1 * ((-75 * σ.seed + -74) % 65537)) %
-    │                                       5)) +
-    │                               -2,
-    │                           seed := τ.seed, paused := τ.paused }] }
-    │                 else
-    │                   {
-    │                     updates :=
-    │                       [fun τ =>
-    │                         { offset := τ.offset,
-    │                           seed :=
-    │                             if -1 * σ.seed ≤ 0 then (75 * σ.seed + 74) % 65537 else -1 * ((-75 * σ.seed + -74) % 65537),
-    │                           paused := τ.paused }] }
-    │               else
-    │                 {
-    │                   updates :=
-    │                     [fun τ =>
-    │                       { offset := τ.offset,
-    │                         seed :=
-    │                           if -1 * σ.seed ≤ 0 then (75 * σ.seed + 74) % 65537 else -1 * ((-75 * σ.seed + -74) % 65537),
-    │                         paused := τ.paused }] }
+    │       [cases] source: E-matching `JS.emod_nonneg_of_ne`
+    │     [cases] [1/2]: (if -1 * σ.seed ≤ 0 then (75 * σ.seed + 74) % 65537 else -1 * ((-75 * σ.seed + -74) % 65537)) + -4 ≤
+    │           0
+    │       [cases] source: E-matching `JS.emod_eq_self_of_lt`
+    │     [cases] [2/2]: σ.seed + -872 ≤ 0
+    │       [cases] source: E-matching `JS.emod_eq_self_of_lt`
     │     [cases] [1/2]: (fun τ =>
     │             {
     │               offset :=
@@ -1831,90 +2056,12 @@ Failed obligations
     │           { offset := τ.offset,
     │             seed := if -1 * σ.seed ≤ 0 then (75 * σ.seed + 74) % 65537 else -1 * ((-75 * σ.seed + -74) % 65537),
     │             paused := τ.paused }
-    │       [cases] source: Beta-reduction of
-    │             fun x =>
-    │               if
-    │                   (-1 * σ.offset +
-    │                         -1 *
-    │                           if
-    │                               (-1 *
-    │                                   if -1 * σ.seed ≤ 0 then (75 * σ.seed + 74) % 65537
-    │                                   else -1 * ((-75 * σ.seed + -74) % 65537)) ≤
-    │                                 0 then
-    │                             (if -1 * σ.seed ≤ 0 then (75 * σ.seed + 74) % 65537
-    │                               else -1 * ((-75 * σ.seed + -74) % 65537)) %
-    │                               5
-    │                           else
-    │                             -1 *
-    │                               ((-1 *
-    │                                   if -1 * σ.seed ≤ 0 then (75 * σ.seed + 74) % 65537
-    │                                   else -1 * ((-75 * σ.seed + -74) % 65537)) %
-    │                                 5)) +
-    │                       -38 ≤
-    │                     0 then
-    │                 if
-    │                     (σ.offset +
-    │                           if
-    │                               (-1 *
-    │                                   if -1 * σ.seed ≤ 0 then (75 * σ.seed + 74) % 65537
-    │                                   else -1 * ((-75 * σ.seed + -74) % 65537)) ≤
-    │                                 0 then
-    │                             (if -1 * σ.seed ≤ 0 then (75 * σ.seed + 74) % 65537
-    │                               else -1 * ((-75 * σ.seed + -74) % 65537)) %
-    │                               5
-    │                           else
-    │                             -1 *
-    │                               ((-1 *
-    │                                   if -1 * σ.seed ≤ 0 then (75 * σ.seed + 74) % 65537
-    │                                   else -1 * ((-75 * σ.seed + -74) % 65537)) %
-    │                                 5)) +
-    │                         -42 ≤
-    │                       0 then
-    │                   {
-    │                     updates :=
-    │                       [fun τ =>
-    │                         { offset := τ.offset,
-    │                           seed :=
-    │                             if -1 * σ.seed ≤ 0 then (75 * σ.seed + 74) % 65537 else -1 * ((-75 * σ.seed + -74) % 65537),
-    │                           paused := τ.paused },
-    │                         fun τ =>
-    │                         {
-    │                           offset :=
-    │                             (τ.offset +
-    │                                 if
-    │                                     (-1 *
-    │                                         if -1 * σ.seed ≤ 0 then (75 * σ.seed + 74) % 65537
-    │                                         else -1 * ((-75 * σ.seed + -74) % 65537)) ≤
-    │                                       0 then
-    │                                   (if -1 * σ.seed ≤ 0 then (75 * σ.seed + 74) % 65537
-    │                                     else -1 * ((-75 * σ.seed + -74) % 65537)) %
-    │                                     5
-    │                                 else
-    │                                   -1 *
-    │                                     ((-1 *
-    │                                         if -1 * σ.seed ≤ 0 then (75 * σ.seed + 74) % 65537
-    │                                         else -1 * ((-75 * σ.seed + -74) % 65537)) %
-    │                                       5)) +
-    │                               -2,
-    │                           seed := τ.seed, paused := τ.paused }] }
-    │                 else
-    │                   {
-    │                     updates :=
-    │                       [fun τ =>
-    │                         { offset := τ.offset,
-    │                           seed :=
-    │                             if -1 * σ.seed ≤ 0 then (75 * σ.seed + 74) % 65537 else -1 * ((-75 * σ.seed + -74) % 65537),
-    │                           paused := τ.paused }] }
-    │               else
-    │                 {
-    │                   updates :=
-    │                     [fun τ =>
-    │                       { offset := τ.offset,
-    │                         seed :=
-    │                           if -1 * σ.seed ≤ 0 then (75 * σ.seed + 74) % 65537 else -1 * ((-75 * σ.seed + -74) % 65537),
-    │                         paused := τ.paused }] }
+    │       [cases] source: E-matching `JS.emod_nonneg_of_ne`
     │   [ematch] E-matching patterns
     │     [thm] List.foldl_append: [@List.foldl #4 #5 #3 (@List.foldl _ _ #3 #2 #1) #0]
+    │     [thm] JS.emod_eq_self_of_lt: [@HMod.hMod `[Int] `[Int] `[Int] `[instHMod] #3 #2]
+    │     [thm] JS.emod_lt_of_pos: [@HMod.hMod `[Int] `[Int] `[Int] `[instHMod] #2 #1]
+    │     [thm] JS.emod_nonneg_of_ne: [@HMod.hMod `[Int] `[Int] `[Int] `[instHMod] #2 #1]
     │     [thm] List.foldl_cons: [@List.foldl #4 #5 #1 #0 (@List.cons _ #3 #2)]
     │     [thm] List.foldl_nil: [@List.foldl #3 #2 #1 #0 (@List.nil _)]
     │     [thm] List.nil_append: [@HAppend.hAppend (List #1) (List _) (List _) _ (@List.nil _) #0]
@@ -1925,9 +2072,9 @@ Failed obligations
     │     [thm] List.foldl_append: [@List.foldl #4 #5 #3 #2 (@HAppend.hAppend (List _) (List _) (List _) _ #1 #0)]
     │     [thm] List.cons_append: [@List.cons #3 #2 (@HAppend.hAppend (List _) (List _) (List _) _ #1 #0)]
     │   [cutsat] Assignment satisfying linear constraints
-    │     [assign] offset := 9
-    │     [assign] seed := 11
-    │     [assign] σ.offset := -39
+    │     [assign] offset := 8
+    │     [assign] seed := 9
+    │     [assign] σ.offset := -38
     │     [assign] s.offset := -40
     │     [assign] {
     │             offset :=
@@ -1944,9 +2091,9 @@ Failed obligations
     │                         5)) +
     │                 -2,
     │             seed := if -1 * σ.seed ≤ 0 then (75 * σ.seed + 74) % 65537 else -1 * ((-75 * σ.seed + -74) % 65537),
-    │             paused := s.paused }.offset := -41
-    │     [assign] (List.foldl (fun s u => u s) s (t e).updates).offset := -41
-    │     [assign] σ.seed := 3495
+    │             paused := s.paused }.offset := -42
+    │     [assign] (List.foldl (fun s u => u s) s (t e).updates).offset := -42
+    │     [assign] σ.seed := 45438
     │     [assign] s.seed := 0
     │     [assign] {
     │             offset :=
@@ -1963,8 +2110,8 @@ Failed obligations
     │                         5)) +
     │                 -2,
     │             seed := if -1 * σ.seed ≤ 0 then (75 * σ.seed + 74) % 65537 else -1 * ((-75 * σ.seed + -74) % 65537),
-    │             paused := s.paused }.seed := 51
-    │     [assign] (List.foldl (fun s u => u s) s (t e).updates).seed := 51
+    │             paused := s.paused }.seed := 0
+    │     [assign] (List.foldl (fun s u => u s) s (t e).updates).seed := 0
     │   [ring] Ring `Int`
     │     [basis] Basis
     │       [_] 75 * σ.seed +
@@ -2004,6 +2151,7 @@ Failed obligations
     │                   ((if -1 * σ.seed ≤ 0 then (75 * σ.seed + 74) % 65537 else -1 * ((-75 * σ.seed + -74) % 65537)) % 5) +
     │               -5 * ((if -1 * σ.seed ≤ 0 then (75 * σ.seed + 74) % 65537 else -1 * ((-75 * σ.seed + -74) % 65537)) / 5) =
     │             0
+    │       [_] (if -1 * σ.seed ≤ 0 then (75 * σ.seed + 74) % 65537 else -1 * ((-75 * σ.seed + -74) % 65537)) / 5 = 0
     │   [assoc] Operator `HAppend.hAppend`
     │     [basis] Basis
     │       [_] [fun τ =>
@@ -2039,7 +2187,10 @@ Failed obligations
     │       [thm] List.foldl_append ↦ 3
     │       [thm] List.cons_append ↦ 2
     │       [thm] List.foldl_cons ↦ 2
-    │       [thm] List.foldl_nil ↦ 1
+    │       [thm] List.foldl_nil ↦ 2
+    │       [thm] JS.emod_eq_self_of_lt ↦ 2
+    │       [thm] JS.emod_lt_of_pos ↦ 2
+    │       [thm] JS.emod_nonneg_of_ne ↦ 2
     │       [thm] List.nil_append ↦ 1
 
-✗ NOT VERIFIED  127/128 obligations proved, 1 failed; components: 5/6 verified  (20.0s)
+✗ NOT VERIFIED  127/128 obligations proved, 1 failed; components: 5/6 verified  (45.8s)

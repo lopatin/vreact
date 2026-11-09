@@ -7,6 +7,7 @@ Components
   VERIFIED           OrderTicket            src/OrderTicket.tsx:19
   VERIFIED           OptionsChain           src/OptionsChain.tsx:32
   INCOMPLETE         App                    src/App.tsx:99
+      ↳ an obligation of it failed
 Functions
   VERIFIED           validChain
   VERIFIED           legOf
@@ -54,6 +55,7 @@ Functions
   VERIFIED           nextSeed
 App certificates (VReact.run_allInv instantiated)
   INCOMPLETE         VTS.App.App.certificate  axioms: propext, sorryAx, Classical.choice, Quot.sound
+      ↳ it uses App, which is not verified: an obligation of it failed
 Obligations by file
   ✓ src/model.ts                             22/22
   ✓ src/reducer.ts                           22/22
@@ -66,7 +68,7 @@ Obligations by file
 Failed obligations
 ✗ src/App.tsx:106:3  [effect-robust] timer callbacks of the effect preserve the invariant of App from any state
     │ `grind` failed
-    │ case grind.1.1.1.1
+    │ case grind.1.2.1.1.1.2.1
     │ E : Type
     │ props : Props
     │ κ : Cb props E
@@ -81,8 +83,8 @@ Failed obligations
     │ e : DomEvent
     │ h :
     │   t = fun x =>
-    │     if
-    │         -40 ≤
+    │     if σ.paused = true then { }
+    │     else
     │   …
 
-✗ NOT VERIFIED  127/128 obligations proved, 1 failed; components: 5/6 verified  (9.4s)
+✗ NOT VERIFIED  127/128 obligations proved, 1 failed; components: 5/6 verified  (46.5s)

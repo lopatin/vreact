@@ -34,8 +34,10 @@ Functions
   VERIFIED           jump
   VERIFIED           setHeat
   INCOMPLETE         place
+      ↳ an obligation of it failed
   VERIFIED           cancel
   INCOMPLETE         chainReducer
+      ↳ it uses place, which is not verified: an obligation of it failed
 Obligations by file
   ✓ src/model.ts                             22/22
   ✗ src/reducer.ts                           21/22
@@ -62,4 +64,4 @@ Failed obligations
     │ left : JS.eq t.side model.Side.ask = false
     │   …
 
-✗ NOT VERIFIED  43/44 obligations proved, 1 failed; components: 0/0 verified  (6.4s)
+✗ NOT VERIFIED  43/44 obligations proved, 1 failed; components: 0/0 verified  (12.0s)

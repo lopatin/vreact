@@ -4,9 +4,12 @@ Components
   TRUSTED            TermRow                src/TermRow.tsx:19
   VERIFIED           PriceCell              src/StrikeRow.tsx:12
   INCOMPLETE         StrikeRow              src/StrikeRow.tsx:37
+      ↳ an obligation of it failed
   TRUSTED            OrderTicket            src/OrderTicket.tsx:16
-  UNCHECKED          OptionsChain           src/OptionsChain.tsx:32
-  UNCHECKED          App                    src/App.tsx:79
+  INCOMPLETE         OptionsChain           src/OptionsChain.tsx:32
+      ↳ it uses StrikeRow (src/StrikeRow.tsx), which is not verified: an obligation of it failed
+  INCOMPLETE         App                    src/App.tsx:79
+      ↳ it uses StrikeRow (src/StrikeRow.tsx), which is not verified: an obligation of it failed
 Functions
   VERIFIED           validChain
   VERIFIED           legOf
@@ -48,13 +51,14 @@ Functions
   VERIFIED           cancel
   VERIFIED           chainReducer
 App certificates (VReact.run_allInv instantiated)
-  UNCHECKED          VTS.App.App.certificate  axioms: none
+  INCOMPLETE         VTS.App.App.certificate  axioms: propext, sorryAx, Classical.choice, Quot.sound, VTS.OrderTicket.OrderTicket.init_inv, VTS.OrderTicket.OrderTicket.renderTrusted, VTS.OrderTicket.OrderTicket.stable, VTS.TermRow.TermRow.init_inv, VTS.TermRow.TermRow.renderTrusted, VTS.TermRow.TermRow.stable
+      ↳ it uses StrikeRow (src/StrikeRow.tsx), which is not verified: an obligation of it failed
 Obligations by file
   ✓ src/model.ts                             22/22
   ✓ src/reducer.ts                           22/22
   ✗ src/StrikeRow.tsx                        21/22
-  ? src/OptionsChain.tsx                     0/27  (27 not checked)
-  ? src/App.tsx                              1/5  (4 not checked)
+  ✓ src/OptionsChain.tsx                     27/27
+  ✓ src/App.tsx                              5/5
 
 Failed obligations
 ✗ src/StrikeRow.tsx:55:110  [callback-contract] callback contract of onPick("put", "ask", x)
@@ -78,10 +82,6 @@ Failed obligations
     │   | some p_1 => model.inTheMoney model.Right.put s.strike p_1
     │   …
 
-31 obligation(s) not checked:
-  src/OptionsChain.tsx:32:17, src/OptionsChain.tsx:32:17, src/OptionsChain.tsx:54:15, src/OptionsChain.tsx:51:15, … (27): VTS/OptionsChain/View.lean was not checked: a module it imports failed, or the file stopped at an error in its imports
-  src/App.tsx:79:17, src/App.tsx:79:17, src/App.tsx:86:7, src/App.tsx:79:1: VTS/App/View.lean was not checked: a module it imports failed, or the file stopped at an error in its imports
-
 trusted (not verified, contracts assumed): TermRow, OrderTicket
 
-✗ NOT VERIFIED  66/98 obligations proved, 1 failed, 31 unchecked; components: 1/6 verified  (2.6s)
+✗ NOT VERIFIED  97/98 obligations proved, 1 failed; components: 1/6 verified  (22.4s)

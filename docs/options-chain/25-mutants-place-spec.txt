@@ -5,8 +5,8 @@ Components
   VERIFIED           StrikeRow              src/StrikeRow.tsx:37
   VERIFIED           TermRow                src/TermRow.tsx:19
   VERIFIED           OrderTicket            src/OrderTicket.tsx:19
-  UNCHECKED          OptionsChain           src/OptionsChain.tsx:32
-  UNCHECKED          App                    src/App.tsx:115
+  VERIFIED           OptionsChain           src/OptionsChain.tsx:32
+  VERIFIED           App                    src/App.tsx:115
 Functions
   VERIFIED           validChain
   VERIFIED           legOf
@@ -50,27 +50,24 @@ Functions
   VERIFIED           jump
   VERIFIED           setHeat
   INCOMPLETE         place
+      ↳ an obligation of it failed
   VERIFIED           cancel
   VERIFIED           chainReducer
-  UNCHECKED          shiftQuote
-  UNCHECKED          moveFutures
-  UNCHECKED          nextSeed
-  UNCHECKED          validFeed
-  UNCHECKED          stepFeed
-Constants
-  UNCHECKED          FILTERS
-  UNCHECKED          EXPIRIES
-  UNCHECKED          MAX_MOVE
+  VERIFIED           shiftQuote
+  VERIFIED           moveFutures
+  VERIFIED           nextSeed
+  VERIFIED           validFeed
+  VERIFIED           stepFeed
 App certificates (VReact.run_allInv instantiated)
-  UNCHECKED          VTS.App.App.certificate  axioms: none
+  VERIFIED           VTS.App.App.certificate  axioms: propext, Classical.choice, Quot.sound
 Obligations by file
   ✓ src/model.ts                             22/22
   ✗ src/reducer.ts                           23/24
   ✓ src/StrikeRow.tsx                        22/22
   ✓ src/TermRow.tsx                          12/12
   ✓ src/OrderTicket.tsx                      12/12
-  ? src/OptionsChain.tsx                     0/27  (27 not checked)
-  ? src/App.tsx                              0/12  (12 not checked)
+  ✓ src/OptionsChain.tsx                     27/27
+  ✓ src/App.tsx                              12/12
 
 Failed obligations
 ✗ src/reducer.ts:175:11  [postcondition] postcondition of place: implies(validQty(qty) && price > 0, r.orders.some((o) => orderFor(o, …
@@ -93,9 +90,4 @@ Failed obligations
     │           ¬a.leg = t.leg ∨ ¬a.strike = t.strike ∨ ¬a.buy = JS.eq t.side model.Side.ask ∨ ¬a.qty = qty ∨ ¬a.price = price
     │ ⊢ False
 
-39 obligation(s) not checked:
-  src/OptionsChain.tsx:32:17, src/OptionsChain.tsx:32:17, src/OptionsChain.tsx:54:15, src/OptionsChain.tsx:51:15, … (27): VTS/OptionsChain/View.lean was not checked: a module it imports failed, or the file stopped at an error in its imports
-  src/App.tsx:78:8, src/App.tsx:90:11, src/App.tsx:96:10, src/App.tsx:110:17, … (5): VTS/App/Defs.lean was not checked: a module it imports failed, or the file stopped at an error in its imports
-  src/App.tsx:115:17, src/App.tsx:115:17, src/App.tsx:120:3, src/App.tsx:120:3, … (7): VTS/App/View.lean was not checked: a module it imports failed, or the file stopped at an error in its imports
-
-✗ NOT VERIFIED  91/131 obligations proved, 1 failed, 39 unchecked; components: 4/6 verified  (5.7s)
+✗ NOT VERIFIED  130/131 obligations proved, 1 failed; components: 6/6 verified  (22.0s)

@@ -1,27 +1,27 @@
 hole 1/2 in quotePrice: int | null   scope: q, q.bid, q.bidQty, q.ask, q.askQty, side
-  candidate passes 203 random tests: q.bid   (1 candidate(s) tested in 0.0s)
+  candidate passes 191 random tests: q.bid   (1 candidate(s) tested in 0.0s)
   … proof pending the other hole(s) of quotePrice: searching hole 2 with this fill
-hole 2/2 in quotePrice (with hole 1 = q.bid): int | null   scope: q, q.bid, q.bidQty, q.ask, q.askQty, side
-  candidate passes 400 random tests: q.ask   (2 candidate(s) tested in 0.0s)
+hole 2/2 in quotePrice: int | null   scope: q, q.bid, q.bidQty, q.ask, q.askQty, side
+  candidate passes 221 random tests: q.ask   (2 candidate(s) tested in 0.0s)
   ✔ proved by Lean: quotePrice with q.bid / q.ask
 hole in midPrice: int | null   scope: q, q.bid, q.bidQty, q.ask, q.askQty
-  11824 candidates tested in 28.0s, up to size 9; stopped: all candidates up to size 9 were tried (sub-expression lists were capped at 3000 per type and size, so some larger candidates were never built)
+  10143 candidates tested in 33.6s, up to size 9; stopped: all candidates up to size 9 were tried (sub-expression lists were capped at 3000 per type and size, so some larger candidates were never built)
   no verified solution for hole in midPrice: no candidate passed the tests
-  most common failure (11824×): q.bid: postcondition fails on [{"bid":null,"bidQty":3,"ask":10,"askQty":3}] ↦ null
+  most common failure (10143×): q.bid: postcondition fails on [{"bid":1,"bidQty":2,"ask":-2,"askQty":2}] ↦ 1
   write this one by hand (synth builds straight-line expressions; guarded updates need an `if`), or check that the spec is satisfiable
 hole in atmIndex: int   scope: ks, price
-  24522 candidates tested in 60.0s, up to size 7; stopped: the 60s time limit was reached at size 7
+  18258 candidates tested in 60.0s, up to size 7; stopped: the 60s time limit was reached at size 7
   no verified solution for hole in atmIndex: no candidate passed the tests
-  most common failure (24522×): price: postcondition fails on [[],10] ↦ 10
+  most common failure (18258×): price: postcondition fails on [[{"strike":5,"call":{"bid":1,"bidQty":4,"ask":10,"askQty":4},"put":{"bid":10,"bidQty":-2,"ask":-10,"askQty":2},"callTheo":4,"putTheo":-5,"vol":2}],7] ↦ 7
   write this one by hand (synth builds straight-line expressions; guarded updates need an `if`), or check that the spec is satisfiable
 hole in strikeWindow: Span   scope: n, atm, levels
-  5776 candidates tested in 14.0s, up to size 9; stopped: all candidates up to size 9 were tried (sub-expression lists were capped at 3000 per type and size, so some larger candidates were never built)
+  5184 candidates tested in 17.5s, up to size 9; stopped: all candidates up to size 9 were tried (sub-expression lists were capped at 3000 per type and size, so some larger candidates were never built)
   no verified solution for hole in strikeWindow: no candidate passed the tests
-  most common failure (5776×): { lo: n, hi: n }: postcondition fails on [7,5,3] ↦ {"lo":7,"hi":7}
+  most common failure (5184×): { lo: n, hi: n }: postcondition fails on [7,1,0] ↦ {"lo":7,"hi":7}
   write this one by hand (synth builds straight-line expressions; guarded updates need an `if`), or check that the spec is satisfiable
 hole in heatOf: Heat   scope: side, price, theo, t
   4 candidates tested in 0.0s, up to size 9; stopped: all candidates up to size 9 were tried
   no verified solution for hole in heatOf: no candidate passed the tests
-  most common failure (4×): "none": postcondition fails on ["bid",10,4,3] ↦ "none"
+  most common failure (4×): "none": postcondition fails on ["ask",1,7,5] ↦ "none"
   write this one by hand (synth builds straight-line expressions; guarded updates need an `if`), or check that the spec is satisfiable
 wrote src/model.ts

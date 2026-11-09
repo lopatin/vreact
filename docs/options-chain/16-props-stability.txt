@@ -5,7 +5,9 @@ Components
   TRUSTED            StrikeRow              src/StrikeRow.tsx:18
   TRUSTED            OrderTicket            src/OrderTicket.tsx:16
   INCOMPLETE         OptionsChain           src/OptionsChain.tsx:32
-  UNCHECKED          App                    src/App.tsx:79
+      ↳ an obligation of it failed
+  INCOMPLETE         App                    src/App.tsx:79
+      ↳ it uses OptionsChain (src/OptionsChain.tsx), which is not verified: an obligation of it failed
 Functions
   VERIFIED           validChain
   VERIFIED           legOf
@@ -47,12 +49,13 @@ Functions
   VERIFIED           cancel
   VERIFIED           chainReducer
 App certificates (VReact.run_allInv instantiated)
-  UNCHECKED          VTS.App.App.certificate  axioms: none
+  INCOMPLETE         VTS.App.App.certificate  axioms: propext, sorryAx, Classical.choice, Quot.sound, VTS.OrderTicket.OrderTicket.init_inv, VTS.OrderTicket.OrderTicket.renderTrusted, VTS.OrderTicket.OrderTicket.stable, VTS.StrikeRow.StrikeRow.init_inv, VTS.StrikeRow.StrikeRow.renderTrusted, VTS.StrikeRow.StrikeRow.stable, VTS.TermRow.TermRow.init_inv, VTS.TermRow.TermRow.renderTrusted, VTS.TermRow.TermRow.stable
+      ↳ it uses OptionsChain (src/OptionsChain.tsx), which is not verified: an obligation of it failed
 Obligations by file
   ✓ src/model.ts                             22/22
   ✓ src/reducer.ts                           22/22
   ✗ src/OptionsChain.tsx                     28/29
-  ? src/App.tsx                              1/5  (4 not checked)
+  ✓ src/App.tsx                              5/5
 
 Failed obligations
 ✗ src/OptionsChain.tsx:32:17  [props-stability] OptionsChain: invariant survives a re-render with new props (state is preserved)
@@ -76,9 +79,6 @@ Failed obligations
     │ ticket_1 : model.Ticket
     │   …
 
-4 obligation(s) not checked:
-  src/App.tsx:79:17, src/App.tsx:79:17, src/App.tsx:86:7, src/App.tsx:79:1: VTS/App/View.lean was not checked: a module it imports failed, or the file stopped at an error in its imports
-
 trusted (not verified, contracts assumed): TermRow, StrikeRow, OrderTicket
 
-✗ NOT VERIFIED  73/78 obligations proved, 1 failed, 4 unchecked; components: 0/5 verified  (16.7s)
+✗ NOT VERIFIED  77/78 obligations proved, 1 failed; components: 0/5 verified  (21.8s)

@@ -13,8 +13,10 @@ Functions
   VERIFIED           dist
   VERIFIED           nearest
   INCOMPLETE         atmIndex
+      ↳ 2 obligations of it failed
   VERIFIED           inWindow
   INCOMPLETE         strikeWindow
+      ↳ 2 obligations of it failed
   VERIFIED           levelsOf
   VERIFIED           edge
   VERIFIED           heatOf
@@ -23,31 +25,9 @@ Functions
   VERIFIED           fmtPrice
   VERIFIED           fmtVol
 Obligations by file
-  ✗ src/model.ts                             18/24
+  ✗ src/model.ts                             16/24  (4 not checked)
 
 Failed obligations
-✗ src/model.ts:119:11  [postcondition] postcondition of atmIndex: r < 0 || nearest(ks, ks[r], price)
-    │ vreact: (deterministic) timeout: the automation did not finish within this obligation's budget of 1000000 heartbeats (set "heartbeats" in vreact.json to change it)
-✗ src/model.ts:121:11  [postcondition] postcondition of atmIndex: implies(ks.length > 0, r >= 0)
-    │ vreact_auto could not prove the goal (grind stopped at Lean's recursion limit)
-    │   case isTrue
-    │   ks : List Strike
-    │   price : Int
-    │   h₂₂✝ : ↑ks.length > 0
-    │   hcontract✝⁶ :
-    │     (-1 ≤
-    │         if
-    │             price - ks[((JS.findIndex ks fun s => JS.le price s.strike) - 1).toNat].strike ≤
-    │               ks[(JS.findIndex ks fun s => JS.le price s.strike).toNat].strike - price then
-    │           (JS.findIndex ks fun s => JS.le price s.strike) - 1
-    │         else JS.findIndex ks fun s => JS.le price s.strike) ∧
-    │       (if
-    │             price - ks[((JS.findIndex ks fun s => JS.le price s.strike) - 1).toNat].strike ≤
-    │               ks[(JS.findIndex ks fun s => JS.le price s.strike).toNat].strike - price then
-    │           (JS.findIndex ks fun s => JS.le price s.strike) - 1
-    │         else JS.findIndex ks fun s => JS.le price s.strike) <
-    │         ↑ks.length
-    │   …
 ✗ src/model.ts:125:18  [index] index k - 1 is within bounds of ks
     │ `grind` failed
     │ case grind.1.2
@@ -75,7 +55,7 @@ Failed obligations
     │ `grind` failed
     │ case grind.2
     │ n atm levels : Int
-    │ h_pre : (0 ≤ atm ∧ atm < n) ∧ levels ≥ 0
+    │ h_pre_1 h_pre : (0 ≤ atm ∧ atm < n) ∧ levels ≥ 0
     │ h : -1 * atm + min n (atm + levels) ≤ 0
     │ h_1 : ¬n + -1 * atm + -1 * levels ≤ 0
     │ ⊢ False
@@ -83,10 +63,11 @@ Failed obligations
     │ `grind` failed
     │ case grind.2.2.2.1
     │ n atm levels : Int
-    │ h_pre : (0 ≤ atm ∧ atm < n) ∧ levels ≥ 0
+    │ h_pre_1 : (0 ≤ atm ∧ atm < n) ∧ levels ≥ 0
     │ i : Int
     │ h : 0 ≤ i
     │ h_1 : i < n
+    │ h_pre : (0 ≤ atm ∧ atm < n) ∧ levels ≥ 0
     │ hcontract :
     │   ((0 ≤ max 0 (atm - levels) ∧ max 0 (atm - levels) ≤ atm) ∧ atm < min n (atm + levels)) ∧ min n (atm + levels) ≤ n
     │ h_2 :
@@ -97,7 +78,9 @@ Failed obligations
     │ right_1 : JS.le i (atm + levels) = true
     │ h_4 : JS.lt i (min n (atm + levels)) = false
     │ h_5 : ¬n + -1 * atm + -1 * levels ≤ 0
-    │ h_6 : -1 * atm + levels ≤ 0
     │   …
 
-✗ NOT VERIFIED  18/24 obligations proved, 6 failed; components: 0/0 verified  (38.3s)
+4 obligation(s) not checked:
+  src/model.ts:116:11, src/model.ts:119:44, src/model.ts:119:11, src/model.ts:121:11: it depends on `sorry` from a failure elsewhere (a failed obligation, a declaration with an error, or a hole()) that its goal or its proof contains, so Lean could not check it on its own: fix that first
+
+✗ NOT VERIFIED  16/24 obligations proved, 4 failed, 4 unchecked; components: 0/0 verified  (18.3s)
