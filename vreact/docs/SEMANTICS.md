@@ -927,7 +927,10 @@ hook rules hold (static checks). For every function: its body is safe and its
   with its own heartbeat budget (per obligation also under parallel elaboration:
   Lean's heartbeat counter is per thread, and an obligation runs on one thread; the
   cost of realizing an auxiliary declaration that several obligations share goes to
-  the first one that needs it), and reports its result at its marker: the
+  the first one that needs it; heartbeats count allocations, so the automation's own
+  walks over a goal — which allocate little — visit each distinct subterm once:
+  their cost is the size of the goal as Lean shares it, not as a tree, which nested
+  `%` or `let`s can make exponentially larger), and reports its result at its marker: the
   information `vreact:ok` when the automation proved it; otherwise a *warning*
   `vreact: …` (failed: the failure text and the goal) or `vreact:blocked …`
   (it depends on `sorry` from a failure elsewhere: its goal contains one, the

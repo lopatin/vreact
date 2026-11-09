@@ -22,6 +22,27 @@ def contractsOf (env : Environment) (f : Name) : List Name :=
   let names := (List.range 8).map (fun k => if k == 0 then f ++ `post else f ++ Name.mkSimple s!"post{k + 1}")
   names.filter env.contains
 
+private partial def forEachSubtermAux (seen : IO.Ref (Std.HashSet Expr)) (f : Expr → MetaM Unit) (e : Expr) : MetaM Unit := do
+  if (← seen.get).contains e then return
+  seen.modify (·.insert e)
+  f e
+  match e with
+  | .forallE _ d b _ | .lam _ d b _ => forEachSubtermAux seen f d; forEachSubtermAux seen f b
+  | .letE _ t v b _ => forEachSubtermAux seen f t; forEachSubtermAux seen f v; forEachSubtermAux seen f b
+  | .app g a => forEachSubtermAux seen f g; forEachSubtermAux seen f a
+  | .mdata _ b | .proj _ _ b => forEachSubtermAux seen f b
+  | _ => pure ()
+
+/-- Run `f` on each subterm of the expressions `es`, once per distinct subterm (one that occurs
+many times, shared or copied, is visited once), without opening binders: a subterm under a binder
+that mentions the bound variable has loose bound variables (`hasLooseBVars`), every other one is
+closed in the goal's context.  The cost is the number of distinct subterms, not the size of the
+expressions as trees, which can be exponentially larger: the contract instances of a chain of
+nested `%` (`x₁ = (x₀ * 75 + 74) % 65537`, …) repeat each remainder's argument. -/
+def forEachSubterm (es : Array Expr) (f : Expr → MetaM Unit) : MetaM Unit := do
+  let seen ← IO.mkRef ({} : Std.HashSet Expr)
+  for e in es do forEachSubtermAux seen f e
+
 def addContractFacts : TacticM Unit := withMainContext do
   let env ← getEnv
   let goal ← getMainGoal
@@ -30,17 +51,16 @@ def addContractFacts : TacticM Unit := withMainContext do
     if !d.isImplementationDetail then targets := targets.push (← instantiateMVars d.type)
   let lctx ← getLCtx
   let calls ← IO.mkRef (#[] : Array Expr)
-  for t in targets do
-    forEachExpr t fun sub => do
-      if sub.hasLooseBVars || sub.hasMVar then return
-      -- binders visited by `forEachExpr` become temporary fvars: only use closed calls
-      if sub.hasAnyFVar (fun fv => !lctx.contains fv) then return
-      if let .const f _ := sub.getAppFn then
-        if !(contractsOf env f).isEmpty then
-          let some fi := env.find? f | return
-          if sub.getAppNumArgs != fi.type.getForallArity then return
-          let cs ← calls.get
-          unless cs.any (· == sub) do calls.set (cs.push sub)
+  forEachSubterm targets fun sub => do
+    -- only closed calls (a call under a binder that mentions the bound variable has loose bound
+    -- variables: `vreact_open` makes such calls closed first)
+    if sub.hasLooseBVars || sub.hasMVar then return
+    if let .const f _ := sub.getAppFn then
+      if !(contractsOf env f).isEmpty then
+        let some fi := env.find? f | return
+        if sub.getAppNumArgs != fi.type.getForallArity then return
+        let cs ← calls.get
+        unless cs.any (· == sub) do calls.set (cs.push sub)
   let mut g := goal
   -- `vreact_auto` runs this more than once: do not add a fact that is already a hypothesis
   let mut have_ : Array Expr := #[]

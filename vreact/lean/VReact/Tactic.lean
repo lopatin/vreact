@@ -278,15 +278,14 @@ elab "vreact_keyfacts" : tactic => withMainContext do
   for d in lctx do
     if !d.isImplementationDetail then targets := targets.push (← instantiateMVars d.type)
   let found ← IO.mkRef (#[] : Array (Expr × Expr))
-  for t in targets do
-    forEachExpr t fun sub => do
-      if sub.hasLooseBVars || sub.hasMVar then return
-      if sub.hasAnyFVar (fun fv => !lctx.contains fv) then return
-      let_expr List.length _ fl := sub | return
-      let_expr List.filter _ p l := fl | return
-      unless p.isLambda do return
-      let cur ← found.get
-      unless cur.any (· == (p, l)) do found.set (cur.push (p, l))
+  -- (closed counts only: no loose bound variables, see `forEachSubterm`)
+  forEachSubterm targets fun sub => do
+    if sub.hasLooseBVars || sub.hasMVar then return
+    let_expr List.length _ fl := sub | return
+    let_expr List.filter _ p l := fl | return
+    unless p.isLambda do return
+    let cur ← found.get
+    unless cur.any (· == (p, l)) do found.set (cur.push (p, l))
   if (← found.get).isEmpty then return
   let mut have_ : Array Expr := #[]
   for d in lctx do
@@ -332,24 +331,24 @@ private def isBoundedForall (ty : Expr) : MetaM Bool := do
 
 /-- The `Int` index terms of the goal and hypotheses: `c` of `xs[c.toNat]` and of `JS.get xs c _`,
 and `k` of `xs[k]` for a numeral `k`. -/
-private def indexTerms (targets : Array Expr) (lctx : LocalContext) : MetaM (Array Expr) := do
+private def indexTerms (targets : Array Expr) : MetaM (Array Expr) := do
   let found ← IO.mkRef (#[] : Array Expr)
   let add (c : Expr) : MetaM Unit := do
     let cur ← found.get
     if cur.size < 12 && !cur.contains c then found.set (cur.push c)
-  -- the list and the index must be closed; the bound proof may be a bound variable (`∀ (hp : 0 <
-  -- xs.length), xs[0]'hp …`, a goal after `genGoal`)
-  let closed (e : Expr) : Bool := !e.hasLooseBVars && !e.hasMVar && !e.hasAnyFVar (fun fv => !lctx.contains fv)
-  for t in targets do
-    forEachExpr t fun e => do
-      if e.isAppOfArity ``GetElem.getElem 8 then
-        let n := e.getArg! 6
-        unless closed n && closed (e.getArg! 5) do return
-        if n.isAppOfArity ``Int.toNat 1 then add n.appArg!
-        else if let some k := n.nat? then add (toExpr (k : Int))
-        else if let .lit (.natVal k) := n then add (toExpr (k : Int))
-      else if e.isAppOfArity ``JS.get 4 then
-        if closed (e.getArg! 2) && closed (e.getArg! 1) then add (e.getArg! 2)
+  -- the list and the index must be closed (no loose bound variables, see `forEachSubterm`); the
+  -- bound proof may be a bound variable (`∀ (hp : 0 < xs.length), xs[0]'hp …`, a goal after
+  -- `genGoal`)
+  let closed (e : Expr) : Bool := !e.hasLooseBVars && !e.hasMVar
+  forEachSubterm targets fun e => do
+    if e.isAppOfArity ``GetElem.getElem 8 then
+      let n := e.getArg! 6
+      unless closed n && closed (e.getArg! 5) do return
+      if n.isAppOfArity ``Int.toNat 1 then add n.appArg!
+      else if let some k := n.nat? then add (toExpr (k : Int))
+      else if let .lit (.natVal k) := n then add (toExpr (k : Int))
+    else if e.isAppOfArity ``JS.get 4 then
+      if closed (e.getArg! 2) && closed (e.getArg! 1) then add (e.getArg! 2)
   return (← found.get)
 
 /-- `∀ xs, B` with the proofs in `B` that use its propositional binders made binders of their own,
@@ -688,7 +687,7 @@ private def boundedRound : TacticM Bool := withMainContext do
   let mut targets : Array Expr := #[tgt]
   for d in lctx do
     if !d.isImplementationDetail then targets := targets.push (← instantiateMVars d.type)
-  let idxs ← indexTerms targets lctx
+  let idxs ← indexTerms targets
   let mut again := false
   for (pf, _) in parts.toList.take 8 do
     for c in idxs do
@@ -806,18 +805,17 @@ elab "vreact_subperm" : tactic => withMainContext do
     if !d.isImplementationDetail then targets := targets.push (← instantiateMVars d.type)
   let nodups ← IO.mkRef (#[] : Array Expr)
   let filters ← IO.mkRef (#[] : Array Expr)
-  for t in targets do
-    forEachExpr t fun e => do
-      if e.hasLooseBVars || e.hasMVar then return
-      if e.hasAnyFVar (fun fv => !lctx.contains fv) then return
-      if e.isAppOfArity ``List.Nodup 2 then
-        let l := e.appArg!
-        let l := if l.isAppOfArity ``List.map 4 then l.appArg! else l
-        if l.isAppOfArity ``List.filter 3 || l.isAppOfArity ``JS.slice 4 || l.isAppOfArity ``JS.toSorted 3 ||
-            l.isAppOfArity ``List.reverse 2 || l.isAppOfArity ``List.take 3 || l.isAppOfArity ``List.drop 3 then
-          nodups.modify fun a => if a.contains e || a.size ≥ 16 then a else a.push e
-      if e.isAppOfArity ``List.filter 3 then
-        filters.modify fun a => if a.contains e || a.size ≥ 32 then a else a.push e
+  -- (closed terms only: no loose bound variables, see `forEachSubterm`)
+  forEachSubterm targets fun e => do
+    if e.hasLooseBVars || e.hasMVar then return
+    if e.isAppOfArity ``List.Nodup 2 then
+      let l := e.appArg!
+      let l := if l.isAppOfArity ``List.map 4 then l.appArg! else l
+      if l.isAppOfArity ``List.filter 3 || l.isAppOfArity ``JS.slice 4 || l.isAppOfArity ``JS.toSorted 3 ||
+          l.isAppOfArity ``List.reverse 2 || l.isAppOfArity ``List.take 3 || l.isAppOfArity ``List.drop 3 then
+        nodups.modify fun a => if a.contains e || a.size ≥ 16 then a else a.push e
+    if e.isAppOfArity ``List.filter 3 then
+      filters.modify fun a => if a.contains e || a.size ≥ 32 then a else a.push e
   let mut facts : Array Expr := #[]
   -- distinct keys: `mk pf` turns a proof of `Nodup (map f cur)` into one of `Nodup (map f L)`
   for nd in ← nodups.get do
@@ -1297,6 +1295,24 @@ def withHeartbeatBudget {α : Type} (b : Nat) (k : TacticM α) : TacticM α :=
     let now ← IO.getNumHeartbeats
     withReader (fun ctx => { ctx with initHeartbeats := now, maxHeartbeats := b }) (runInBase k)
 
+open Lean in
+private partial def treeSizeAux (e : Expr) : StateM (Std.HashMap Expr Nat) Nat := do
+  if let some n := (← get)[e]? then return n
+  let n ← match e with
+    | .forallE _ d b _ | .lam _ d b _ => do pure (1 + (← treeSizeAux d) + (← treeSizeAux b))
+    | .letE _ t v b _ => do pure (1 + (← treeSizeAux t) + (← treeSizeAux v) + (← treeSizeAux b))
+    | .app f a => do pure (1 + (← treeSizeAux f) + (← treeSizeAux a))
+    | .mdata _ b | .proj _ _ b => do pure (1 + (← treeSizeAux b))
+    | _ => pure 1
+  modify (·.insert e n)
+  pure n
+
+open Lean in
+/-- `e.sizeWithoutSharing`, the size of `e` as a tree (the order in which `timeoutCases` tries the
+cases), computed with the size of each distinct subterm cached: the cost is the number of distinct
+subterms, where `sizeWithoutSharing` walks the whole tree, which can be exponentially larger. -/
+def treeSize (e : Expr) : Nat := Id.run ((treeSizeAux e).run' {})
+
 open Lean Meta Elab Tactic in
 /-- Where `vreact_auto` fails on the main goal, after it ran out of the obligation's budget
 `budget` (Lean's raw heartbeats): `vreact_prep` (with a quarter of the budget), then
@@ -1321,7 +1337,7 @@ def timeoutCases (budget : Nat) : TacticM (Option MessageData) := do
     let mut sized : Array (Nat × Nat × MVarId) := #[]
     let mut i : Nat := 0
     for g in goals do
-      sized := sized.push ((← instantiateMVars (← g.getType)).sizeWithoutSharing, i, g)
+      sized := sized.push (treeSize (← instantiateMVars (← g.getType)), i, g)
       i := i + 1
     let sorted := sized.qsort fun a b => a.1 < b.1 || (a.1 == b.1 && a.2.1 < b.2.1)
     let per := budget / 10
