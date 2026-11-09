@@ -14,7 +14,10 @@ import VReact.Simprocs
    facts about that field syntactically unchanged;
 2. split `if`/`match` in the goal, normalise again (a goal with a membership in a map-update
    also with the lemmas of `Lists.lean` that state it about the updated elements,
-   `vreact_memmap`); add the facts `grind` cannot find by E-matching: counts of filters by key
+   `vreact_memmap`); instantiate the contracts of the calls in the goal and its hypotheses
+   (`vreact_contracts`), after opening the binders that a call is under (`vreact_open`: the state
+   of a robust update, the element of a `map`/`every`); add the facts `grind` cannot find by
+   E-matching: counts of filters by key
    (`vreact_keyfacts`), the parts and instances of bounded quantifiers and guarded existentials,
    with a goal's own guarded binders made plain implications (`vreact_bounded`), distinct keys
    and counts through chains of list operations, maps that keep the key included
@@ -1219,6 +1222,40 @@ def vreactFinish : TacticM Unit := vreactFinishAux 3
 
 elab "vreact_finish" : tactic => vreactFinish
 
+open Lean Meta Elab Tactic in
+/-- `vreact_open`: make the calls of program functions with contracts that occur under a binder of
+the goal closed, so that `vreact_contracts` can instantiate their contracts (see "Calls under
+binders" in `Contracts.lean`): substitute a timer callback's equation `t = fun _ => …` (and
+normalise), open `∃` hypotheses, introduce `∀`/`→` and split `∧` of the goal — each only where
+such a call is under the binder.  Does nothing on a goal without one. -/
+elab "vreact_open" : tactic => withMainContext do
+  let env ← getEnv
+  let g ← getMainGoal
+  let bound ← g.withContext do
+    let tgt ← instantiateMVars (← g.getType)
+    if targetOpens env tgt then return true
+    (← getLCtx).anyM fun d => do
+      if d.isImplementationDetail || d.isLet then return false
+      let ty ← instantiateMVars d.type
+      return existsOpens env ty || (ty.isEq && hasBoundCall env ty)
+  unless bound do return
+  let mut g := g
+  let mut substituted := false
+  repeat
+    let some g' ← substBoundFnEq? g | break
+    g := g'
+    substituted := true
+  replaceMainGoal [g]
+  if substituted then
+    -- the callback applied to its event: beta-reduce, push the record projections through
+    evalTactic (← `(tactic| vreact_norm))
+    if (← getUnsolvedGoals).isEmpty then return
+  g ← getMainGoal
+  repeat
+    let some g' ← casesBoundExists? g | break
+    g := g'
+  replaceMainGoal (← openBoundTarget g)
+
 syntax "vreact_auto" : tactic
 macro_rules
   | `(tactic| vreact_auto) => `(tactic|
@@ -1227,11 +1264,14 @@ macro_rules
        vreact_contracts
        vreact_splits
        all_goals vreact_norm
+       -- calls under binders (the updates of a robust outcome, `map`/`every` lambdas)
+       all_goals vreact_open
        all_goals vreact_contracts
        all_goals vreact_norm
        all_goals (
          vreact_splits
          all_goals vreact_norm
+         all_goals vreact_open
          -- calls exposed by the last split (e.g. in match arms of a transparent reducer)
          all_goals vreact_contracts
          all_goals vreact_norm

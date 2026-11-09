@@ -538,6 +538,16 @@ Every expression maps to a Lean term whose value is the JavaScript value.
 | `/** @trusted */`                 | body not verified; contract assumed (reported, appears as a Lean axiom); not on a generic function |
 | `hole<T>()`                       | a placeholder for `vreact synth`: `sorry`; while a function has one, its `ensures` theorems are `sorry` too (reported INCOMPLETE) |
 
+A caller uses a contract through its instances: for each call `f a₁ … aₙ` in a goal or a
+hypothesis, the automation adds `f.post a₁ … aₙ` — the proved theorem at the call's actual
+arguments (`vreact_contracts`). A call under a binder has no actual arguments yet, so the
+binders that make it closed are opened first, by ordinary proof steps (`vreact_open`): the
+`∀ s` of a robust or rebase-safe outcome (a timer callback, a continuous handler, a functional
+update, a dispatch to a transparent reducer whose arm calls `f`), the `∃ a` that
+`y ∈ xs.map((x) => f(x))` normalises to, the element of a goal `xs.every((x) => … f(x) …)`.
+A call that stays under a binder — inside a quantified hypothesis, which `grind` instantiates
+itself — gets no instance there.
+
 A contract is a proposition with JS's evaluation order: the right operand of
 `a && b` is translated under the hypothesis `a` (`∃ (h : a), b` when `b` has
 proof obligations, plain `a ∧ b` otherwise), `a || b` as `a ∨ ∃ (h : ¬a), b`,
