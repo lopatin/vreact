@@ -1019,10 +1019,47 @@ export function judge(obligations: Obligation[], messages: LeanMessage[], marker
   return { proved, failed, unchecked, internal, axioms, assumedOutside, reasons, declErrors, brokenDecls, sorries: sorries.filter((s) => !admitted(s)), checkedFiles, blocked: blockedObs };
 }
 
-/** Keep the informative part of a Lean failure (the goal). */
+/**
+ * Keep the informative part of a Lean failure (the goal), in at most `maxLines` lines (plus the
+ * `…` marker). A message that fits is kept as it is. A longer one is shortened in two ways:
+ * the contract instances that span several lines (`hcontract…`, the facts `vreact_contracts`
+ * adds for each call of a function with `ensures`: long arithmetic when the callee's body is in
+ * scope) become one line that names them, where the first of them was, so the short hypotheses
+ * after them — usually the ones that decide the case — stay in view; and the conclusion (the last
+ * `⊢ …`) is always kept, after the `…` that marks the lines left out. `--full` prints the message
+ * unchanged.
+ */
 export function summarizeLeanError(text: string, maxLines = 30): string {
   const lines = text.split("\n");
   const cut = lines.findIndex((l) => /\[grind\] Goal diagnostics|\[grind\] Diagnostics/.test(l));
   const kept = (cut > 0 ? lines.slice(0, cut) : lines).filter((l) => l.trim() !== "");
-  return kept.slice(0, maxLines).join("\n") + (kept.length > maxLines ? "\n  …" : "");
+  if (kept.length <= maxLines) return kept.join("\n");
+  // blocks: a line at column 0 and the indented lines that continue it (a hypothesis `h : …`
+  // whose type Lean broke over several lines, the conclusion `⊢ …`)
+  const blocks: string[][] = [];
+  for (const l of kept) {
+    if (/^\s/.test(l) && blocks.length) blocks[blocks.length - 1].push(l);
+    else blocks.push([l]);
+  }
+  const names = (b: string[]) => /^((?:[^\s:]+ )*[^\s:]+) :(?: |$)/.exec(b[0])?.[1].split(" ") ?? [];
+  const isContract = (b: string[]) => b.length > 1 && names(b).length > 0 && names(b).every((n) => /^hcontract/.test(n));
+  const contracts = blocks.filter(isContract);
+  let out: string[][] = blocks;
+  if (contracts.length) {
+    const all = contracts.flatMap(names);
+    const n = contracts.reduce((k, b) => k + b.length, 0);
+    const line = `${all.join(", ")} : …  (${all.length === 1 ? "a contract instance" : `${all.length} contract instances`}, ${n} lines: --full shows ${all.length === 1 ? "it" : "them"})`;
+    const first = blocks.indexOf(contracts[0]);
+    out = blocks.filter((b, i) => i === first || !isContract(b)).map((b, i) => (i === first ? [line] : b));
+  }
+  const flat = out.flat();
+  if (flat.length <= maxLines) return flat.join("\n");
+  // the conclusion: the last `⊢` block, at most 3 lines
+  const ti = out.map((b) => b[0].startsWith("⊢")).lastIndexOf(true);
+  if (ti < 0) return flat.slice(0, maxLines).join("\n") + "\n  …";
+  const target = out[ti].length > 3 ? [...out[ti].slice(0, 3), "  …"] : out[ti];
+  const before = out.slice(0, ti).flat();
+  const room = Math.max(0, maxLines - target.length);
+  if (before.length <= room) return [...before, ...target].join("\n") + (ti < out.length - 1 ? "\n  …" : "");
+  return [...before.slice(0, room), "  …", ...target].join("\n");
 }

@@ -21,7 +21,7 @@ import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { loadConfig, verify, reportFrom, CAUSE_LABEL, type Report } from "../src/cli.ts";
 import { translate, moduleNs } from "../src/module.ts";
-import { parseMessages, judge, findMarkers, leanDecls, leanBin, runLake } from "../src/lean.ts";
+import { parseMessages, judge, findMarkers, leanDecls, leanBin, runLake, summarizeLeanError } from "../src/lean.ts";
 import { editorProject, LAKEFILE_MARKER } from "../src/ide.ts";
 import { honestyChecks } from "./honesty.ts";
 
@@ -251,6 +251,26 @@ console.log("message attribution (judge)");
   else bad("parseMessages job logs", `forged: ${JSON.stringify(forged)}, proof message: ${JSON.stringify(host?.text)}`);
   if (v.declErrors.has("VTS.m.f.post") && v.declErrors.has("VTS.m.render") && !v.declErrors.has("VTS.m.g.post") && !v.declErrors.has("VTS.m.k.post")) ok("judge: declarations with errors (a `vreact_ob` failure is not one)");
   else bad("judge declErrors", [...v.declErrors.keys()].join(","));
+}
+
+// the short report's goal (step 35 of the options-chain walkthrough): long contract instances are
+// collapsed into one line, so the short hypotheses that decide the case and the conclusion stay
+// in view; a goal that fits is unchanged
+{
+  const contract = (n: string, k: number) => [`${n} :`, ...Array.from({ length: k }, (_, i) => `  (0 ≤ s.feed.seed * 75 + ${i}) →`)];
+  const msg = ["`grind` failed", "case grind.1.1.2.2", "s : Sim", ...contract("hcontract", 40), ...contract("hcontract_1", 40),
+    "h₁₆ : ¬s.rally = true", "h : ¬s.paused = true", "h_1 : ¬40 ≤ s.feed.offset", ...contract("hcontract_2", 8), "hcontract_3 : True",
+    ...Array.from({ length: 12 }, (_, i) => `left_${i} : -1 * s.feed.seed ≤ ${i}`), "⊢ False", "[grind] Goal diagnostics", "  [facts] …"].join("\n");
+  const got = summarizeLeanError(msg, 18).split("\n");
+  const short = "`grind` failed\ncase grind.1\ns : Sim\nhcontract :\n  0 ≤ s.feed.seed →\n  0 ≤ 1\n⊢ False";
+  const want = [
+    "s : Sim",
+    "hcontract, hcontract_1, hcontract_2 : …  (3 contract instances, 91 lines: --full shows them)",
+    "h₁₆ : ¬s.rally = true", "h : ¬s.paused = true", "h_1 : ¬40 ≤ s.feed.offset", "hcontract_3 : True",
+  ];
+  if (got.length === 19 && got.slice(2, 8).join("\n") === want.join("\n") && got[17] === "  …" && got[18] === "⊢ False" && summarizeLeanError(short, 18) === short)
+    ok("summarizeLeanError: long contract instances collapsed, deciding hypotheses and the conclusion kept; a short goal unchanged");
+  else bad("summarizeLeanError", got.join(" / "));
 }
 
 // declarations of a generated file: escaped keywords (`end'`, `namespace'`, `def'`) that start a

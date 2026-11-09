@@ -946,7 +946,12 @@ hook rules hold (static checks). For every function: its body is safe and its
   one fails; the failure text adds how many were proved, did not finish or were
   not tried, and the goal of the case that failed (or of the first that did not
   finish). The obligation stays failed; a declaration's `maxHeartbeats` counts
-  each of its obligations twice to leave room for this. (A proof that refers to another declaration whose
+  each of its obligations twice to leave room for this. `vreact verify` prints a
+  failure's text in at most 18 lines (`--full`: all of it): a text that is
+  longer has its multi-line contract instances (`hcontract…`, the facts of the
+  callees' `ensures`) collapsed into one line that names them, so the short
+  hypotheses after them stay in view, and keeps the conclusion `⊢ …` after the
+  `…` that marks the lines left out. (A proof that refers to another declaration whose
   proof was admitted — a callee's failed contract — is a proof modulo that
   contract and counts as proved; the item is `INCOMPLETE` by its axioms.) A failure is not a Lean error, so the module and every module
   importing it are still built and checked; the admitted goal shows as
