@@ -428,6 +428,38 @@ export function reportFrom(cfg: Config, tr: TranslateResult, messages: LeanMessa
   // proof. Otherwise Lean admitted something without saying why, and nothing in the item is
   // counted as proved.
   const troubled = new Set(all.filter((x) => ownTrouble(x) !== undefined || broken.has(x.key)).map((x) => x.key));
+  // the generated file that prints a declaration's axioms (`#print axioms q`): a postcondition
+  // theorem of a module with user proofs is in its Posts.lean, which imports the proofs, so a
+  // broken user proof leaves the axioms of a function whose body (Defs.lean) was checked unreported
+  let axiomFiles: Map<string, string> | undefined;
+  const axiomFile = (q: string): string | undefined => {
+    if (!axiomFiles) {
+      const found = new Map<string, string>();
+      const walk = (d: string) => {
+        if (!fs.existsSync(d)) return;
+        for (const f of fs.readdirSync(d)) {
+          const p = path.join(d, f);
+          if (fs.statSync(p).isDirectory()) walk(p);
+          else if (f.endsWith(".lean"))
+            for (const l of fs.readFileSync(p, "utf8").split("\n")) {
+              const m = /^#print axioms (\S+)\s*$/.exec(l.trim());
+              if (m && !found.has(m[1])) found.set(m[1], path.normalize(path.relative(cfg.outDir, p)));
+            }
+        }
+      };
+      walk(path.join(cfg.outDir, "VTS"));
+      axiomFiles = found;
+    }
+    return axiomFiles.get(q);
+  };
+  /** why the axioms of `q` are missing: its file was not checked to the end (the reason the
+   * obligations of that file got, when it has some), or else Lean may not have added it */
+  const missingAxioms = (q: string): string => {
+    const f = axiomFile(q);
+    if (f === undefined || v.checkedFiles.has(f)) return `Lean reported no axioms for ${q}, so it may not have been added: the obligation is not counted as proved`;
+    const same = [...v.reasons.values()].find((r) => r.startsWith(`${f} was not checked`) || r.startsWith(`Lean did not get to the end of ${f}:`));
+    return same ?? `${f} was not checked to the end, so Lean reported no axioms for ${q} (a module it imports failed, or the file stopped at an error in its imports)`;
+  };
   for (const it of all) {
     const ids = new Set(it.ownObs);
     const mine = v.proved.filter((o) => ids.has(o.id));
@@ -436,14 +468,14 @@ export function reportFrom(cfg: Config, tr: TranslateResult, messages: LeanMessa
     const sorry = it.axiomNames.find((q) => v.axioms.get(q)?.includes("sorryAx"));
     const native = it.axiomNames.find((q) => v.axioms.get(q)?.some(isNativeAxiom));
     const why =
-      missing !== undefined ? `Lean reported no axioms for ${missing}, so it may not have been added`
-      : sorry !== undefined && !proofTrouble && !cone(it).some((x) => troubled.has(x.key)) ? `${sorry} depends on sorryAx, but Lean reported no failure or sorry it could come from`
-      : native !== undefined ? `${native} depends on ${v.axioms.get(native)!.find(isNativeAxiom)}, an axiom of native evaluation (it trusts Lean's compiler instead of its kernel)`
+      missing !== undefined ? missingAxioms(missing)
+      : sorry !== undefined && !proofTrouble && !cone(it).some((x) => troubled.has(x.key)) ? `${sorry} depends on sorryAx, but Lean reported no failure or sorry it could come from: the obligation is not counted as proved`
+      : native !== undefined ? `${native} depends on ${v.axioms.get(native)!.find(isNativeAxiom)}, an axiom of native evaluation (it trusts Lean's compiler instead of its kernel): the obligation is not counted as proved`
       : undefined;
     if (why === undefined) continue;
     for (const ob of mine) {
       v.unchecked.push(ob);
-      v.reasons.set(ob.id, `${why}: the obligation is not counted as proved`);
+      v.reasons.set(ob.id, why);
     }
     v.proved = v.proved.filter((o) => !ids.has(o.id));
   }

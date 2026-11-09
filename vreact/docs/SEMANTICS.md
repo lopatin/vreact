@@ -966,7 +966,10 @@ hook rules hold (static checks). For every function: its body is safe and its
   the end (the `vreact:checked` sentinel), its declaration has no other error,
   and its item's axioms are reported, with any `sorryAx` among them coming from
   a reported failure, hole or error (of the item, an item it uses, or a user
-  proof); missing evidence means *not checked*, never proved. Every component,
+  proof); missing evidence means *not checked*, never proved (an obligation
+  proved in a file whose item's axioms are printed by a file Lean did not check
+  to the end — a postcondition theorem in `Posts.lean`, after a user proof it
+  imports failed — gets that file's reason). Every component,
   certificate, function, contract, constant and fact has a `#print axioms`;
   `sorryAx`, a `declaration uses 'sorry'` warning (other than an admitted
   goal's) or an error in one of its declarations makes it `INCOMPLETE`: an item

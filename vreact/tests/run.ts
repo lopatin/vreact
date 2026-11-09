@@ -6,7 +6,8 @@
  * report checks (see `checkReport`): `Name=<status>` for a component/function/constant of
  * the case, `verdict=…`, `proved=N`, `unchecked=N`, `errors=<cause>`, `failtext=<text>`
  * (every failure's Lean text contains it; `~` stands for a space),
- * `faildesc=<text>` (every failure's description; `~` stands for a space),
+ * `faildesc=<text>` (every failure's description; `~` stands for a space), `uncheckedwhy=<text>`
+ * (every not-checked obligation's reason; `~` stands for a space),
  * `why.Name=<text>` (the item's reported reason mentions the text; `~` stands for a space).
  * A directory `cases/<Name>/` is a multi-file case with its own project: its .ts/.tsx files
  * and subdirectories go to src/, `proofs/` and `vreact.json` are copied, `_node_modules/` becomes
@@ -160,6 +161,11 @@ function checkReport(r: Report, files: string[], expect: string[], whole: boolea
       const want = v.replace(/~/g, " ");
       const fs_ = r.failures.filter((f) => mine(f.where));
       if (!fs_.length || !fs_.every((f) => f.leanFull.includes(want))) why.push(`expected every failure to mention "${want}": ${fs_.map((f) => f.where + " " + f.lean.split("\n")[0]).join(" | ")}`);
+    } else if (k === "uncheckedwhy") {
+      // uncheckedwhy=<text>: every obligation of the case that was not checked has a reason that contains the text (`~` for a space)
+      const want = v.replace(/~/g, " ");
+      const us = r.notChecked.filter((u) => mine(u.where));
+      if (!us.length || !us.every((u) => u.reason.includes(want))) why.push(`expected every not-checked obligation's reason to mention "${want}": ${us.map((u) => u.where + " " + u.reason).join(" | ") || "none"}`);
     } else if (k === "faildesc") {
       // faildesc=<text>: every failure's description (what the report prints after [kind]) contains the text (`~` for a space)
       const want = v.replace(/~/g, " ");
