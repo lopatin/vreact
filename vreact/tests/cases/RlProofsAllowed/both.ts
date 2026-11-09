@@ -3,7 +3,9 @@
 // form — module doc, set_option of resource/linter options (as commands, `… in`, in terms and
 // tactics), namespace/section/variable/end, private def, abbrev, example, theorem with
 // @[vreact_simp]/@[simp]/@[grind =], attribute [local simp] and [-simp], grind_pattern, open
-// … in, #check, #print, noncomputable section — and proofs/Base.lean (no imports) a generic
+// … in, #check, #print, noncomputable section, the attributes simp, vreact_simp and grind on
+// library lemmas (the kernel re-check refused these: Lean.indirectModUseExt) — and
+// proofs/Base.lean (no imports) a generic
 // lemma. The lemma total_append is what proves totalBoth's ensures and the component's
 // invariant, so the files are really imported and used.
 import { ensures, type int } from "vreact/spec";

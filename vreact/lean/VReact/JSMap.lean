@@ -456,6 +456,27 @@ theorem length_keys_lt_of_subset_of_not_mem (a : JSMap K V) (b : JSMap K V) (h :
   have h3 : 1 ≤ b.keys.length := List.length_pos_of_mem hb
   omega
 
+omit [DecidableEq K] in
+/-- A key of `m` is the key of an entry (`keys` lists the entries' keys), so an invariant over
+the entries, `[...m].every(([k, v]) => …)`, applies to every key tested with `m.has(k)`. -/
+theorem entry_of_mem_keys {m : JSMap K V} {k : K} (h : k ∈ m.keys) : ∃ v, (k, v) ∈ m.entries := by
+  simp only [keys, List.mem_map] at h
+  obtain ⟨⟨k', v⟩, hp, rfl⟩ := h
+  exact ⟨v, hp⟩
+
+omit [DecidableEq K] in
+/-- A value of `m` is the value of an entry, so an invariant over the entries applies to
+`[...m.values()]`. -/
+theorem entry_of_mem_values {m : JSMap K V} {v : V} (h : v ∈ m.values) : ∃ k, (k, v) ∈ m.entries := by
+  simp only [values, List.mem_map] at h
+  obtain ⟨⟨k, v'⟩, hp, rfl⟩ := h
+  exact ⟨k, hp⟩
+
+omit [DecidableEq K] in
+/-- The key of an entry is a key (`[...m].some(([j]) => j === k)` is `m.has(k)`). -/
+theorem mem_keys_of_mem_entries {m : JSMap K V} {p : K × V} (h : p ∈ m.entries) : p.1 ∈ m.keys :=
+  List.mem_map_of_mem h
+
 end JSMap
 
 /-- A JS `Set` with primitive elements: its elements in insertion order, distinct. -/
@@ -593,6 +614,7 @@ attribute [grind =] JSMap.get_set JSMap.get_delete JSMap.get_empty JSMap.mem_key
   JSMap.mem_entries_set
 attribute [grind →] JSMap.get_of_mem_entries JSMap.mem_values_of_mem_delete JSMap.mem_values_of_get
   JSMap.mem_keys_of_get JSMap.mem_entries_of_get JSMap.mem_entries_setAll JSMap.mem_values_setAll
+  JSMap.entry_of_mem_keys JSMap.entry_of_mem_values JSMap.mem_keys_of_mem_entries
 attribute [vreact_simp] JSMap.delete_empty
 attribute [grind =] JSMap.delete_empty JSMap.values_empty JSMap.entries_empty
 grind_pattern JSMap.keys_nodup => m.keys

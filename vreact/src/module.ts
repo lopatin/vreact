@@ -445,6 +445,20 @@ function isOpaque(n: ts.Node): boolean {
 }
 
 export function translate(cfg: Config): TranslateResult {
+  const res = translateAll(cfg);
+  // (one problem reached twice — a type alias checked where it is declared and again where it is
+  // used — is reported once)
+  const seen = new Set<string>();
+  res.errors = res.errors.filter((e) => {
+    const key = `${e.file}:${e.line}:${e.col}:${e.message}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+  return res;
+}
+
+function translateAll(cfg: Config): TranslateResult {
   const { program, diags } = loadProgram(cfg);
   const res: TranslateResult = { ok: false, tsDiagnostics: diags, errors: [], modules: [], obligations: [] };
   if (diags.length) return res;

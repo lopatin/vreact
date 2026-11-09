@@ -16,7 +16,7 @@ first one that fails.
 | `effect-robust` | an effect / timer callback keeps the invariant from any valid state (stale closure); a timer callback may use the early returns (`if (c) return;`) and `assert`/`assume` before its top-level registration | functional update over the whole related state (one record); an early return on the captured value before `setTimeout` |
 | `init-invariant` | initial state satisfies the invariant | initial values; literal data in `useState(...)` |
 | `props-stability` | the invariant survives a re-render with new props (React keeps state) | do not tie state invariants to changeable props; clamp in render |
-| `unique-keys` | keys of a rendered list are distinct | add `distinct(...)` to the invariant or the child's `requires` |
+| `unique-keys` | keys of a rendered list are distinct | add `distinct(...)` to the invariant or the child's `requires`; for the values of a Map, key by the Map key (`[...m].map(([k, v]) => <li key={k}>…)`) or add `[...m].every(([k, v]) => v.id === k)` to the invariant |
 | `child-precondition` | props passed to `<C/>` satisfy `C`'s `requires` | establish it from your invariant / data; or weaken `C`'s requires |
 | `callback` | the function you pass as a child's callback keeps **your** invariant, assuming the child's `callbackRequires` | strengthen the child's contract, or guard in your handler |
 | `callback-contract` | this call of a callback prop satisfies its `callbackRequires` | the arguments you pass (e.g. trim/validate first) |
@@ -221,7 +221,10 @@ xs.length) console.log(xs[i].name)`).
    `v.id` when an invariant says `[...m.entries()].every(([k, v]) => k === v.id)`), the position
    of a key after `set` (`[...r.keys()].indexOf(k)`: kept for a present key, last for a new one),
    every value after a `set` (`[...r.values()].every(…)`), that a value read with `m.get(k)` is
-   the value of `k`'s entry (an invariant over `[...m.entries()]` applies to it), the entries and
+   the value of `k`'s entry (an invariant over `[...m.entries()]` applies to it), that every key
+   and every value belongs to an entry (an invariant over `[...m]` applies to `m.has(k)` and to
+   `[...m.values()]`; `[...m].some(([j]) => j === k)` is `m.has(k)`; merging two Maps keeps
+   the keys of both), the entries and
    values of `new Map`/`new Set` of literals, of `new Map(pairs)` (also of a filtered `[...m]`)
    and of the loops `for (const x of xs) n.set(f(x), g(x))` / `n.add(f(x))` / `n.add(x)` (as `new Map`/`new
    Set` of the mapped list: every entry is one of the pairs), `[...m].length` and

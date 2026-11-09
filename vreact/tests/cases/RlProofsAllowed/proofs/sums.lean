@@ -55,3 +55,9 @@ theorem len_nonneg (l : List Int) : 0 ≤ (l.length : Int) := by omega
 
 noncomputable section
 end
+
+/-! Library lemmas tagged by a proof file (Lean records, for the import linter, that their users may
+need this module: `Lean.indirectModUseExt`, which the kernel re-check allows). -/
+attribute [simp] VReact.JS.emod_nonneg_of_ne
+attribute [vreact_simp] VReact.JS.emod_nonneg_of_ne
+attribute [grind =] VReact.JS.JSSet.mem_add

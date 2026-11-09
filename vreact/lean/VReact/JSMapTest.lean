@@ -255,3 +255,34 @@ example : True := by
   vreact_fails_showing_goal (∀ (xs : List Row), ∀ x ∈ xs, (JSMap.ofList (xs.map (fun x => (x.id, x)))).get x.id = some x)
   trivial
 end VReact.JSMapTest.T13
+
+namespace VReact.JSMapTest.T14
+open VReact VReact.JS
+/-! Keys and values linked to entries: an invariant over `[...m]` applies to `m.has(k)` and to
+`[...m.values()]`; merging two Maps keeps both key sets (round-5 findings MU-01, GXMX-F1). -/
+structure Ord where
+  qty : Int
+-- an id bound over the entries: a fresh id is not a key; the size grows by one
+example (m : JSMap Int Ord) (next : Int) (h : ∀ p ∈ m.entries, p.1 < next) : m.has next = false := by vreact_ob vreact_auto
+example (m : JSMap Int Ord) (next : Int) (o : Ord) (h : ∀ p ∈ m.entries, p.1 < next) :
+    (m.set next o).size = m.size + 1 := by vreact_ob vreact_auto
+-- a bound over the entries' values holds for the values
+example (m : JSMap Int Ord) (h : ∀ p ∈ m.entries, p.2.qty > 0) : (m.values.all fun o => decide (o.qty > 0)) = true := by
+  vreact_ob vreact_auto
+-- `[...m].some(([j]) => j === k)` is `m.has(k)`
+example {K V : Type} [DecidableEq K] (m : JSMap K V) (k : K) : m.entries.any (fun p => JS.eq p.1 k) = m.has k := by
+  vreact_ob vreact_auto
+-- merge: new Map([...a, ...b]) and the loop over b's entries keep the keys of both
+example {K V : Type} [DecidableEq K] (a b : JSMap K V) :
+    (b.keys.all fun k => (JSMap.ofList (a.entries ++ b.entries)).has k) = true ∧
+      (a.keys.all fun k => (JSMap.ofList (a.entries ++ b.entries)).has k) = true := by vreact_ob vreact_auto
+example {K V : Type} [DecidableEq K] (a b : JSMap K V) :
+    (b.keys.all fun k => (b.entries.foldl (fun acc p => acc.set p.1 p.2) a).has k) = true := by vreact_ob vreact_auto
+example (a b : JSMap Int JS.Str) (k : Int) : (!b.has k || (JSMap.ofList (a.entries ++ b.entries)).has k) = true := by
+  vreact_ob vreact_auto
+-- still false: an entries bound says nothing about a missing key; a key of the merge need not be one of b's
+example : True := by
+  vreact_fails_showing_goal (∀ (m : JSMap Int Ord) (next : Int), (∀ p ∈ m.entries, p.1 < next) → m.has (next - 1) = true)
+  vreact_fails_showing_goal (∀ (a b : JSMap Int Int) (k : Int), (JSMap.ofList (a.entries ++ b.entries)).has k = true → b.has k = true)
+  trivial
+end VReact.JSMapTest.T14

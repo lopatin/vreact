@@ -173,12 +173,17 @@ inherited member, not `undefined`. Such names are fine for required fields.
 * Arrays: `length map filter some every find findIndex includes indexOf slice
   concat join reduce(f, init) toSorted(cmp) toReversed with at flatMap`, spread.
   Lambdas inline: `xs.filter((x) => x.id !== id)` (they may ignore parameters:
-  `xs.map(() => "")`). Exact arities: optional arguments that are not modelled
+  `xs.map(() => "")`). Callbacks take the element only (and `reduce`'s the accumulator and
+  the element), except `map`, which may take the index (`xs.map((x, i) => …)`): a condition
+  on positions is `forall(0, xs.length, (i) => … xs[i] …)` (e.g. `a.length === b.length &&
+  forall(0, a.length, (i) => a[i] === b[i])`). Exact arities: optional arguments that are not modelled
   are rejected (`thisArg`; `includes(v, fromIndex)` → `xs.slice(k).includes(v)`;
   `indexOf(v, fromIndex)`). `includes`, `indexOf` and `distinct(xs)` without a
   key need primitive elements (`boolean`, `int`, `string`, enums, options of
   them): on records/arrays/tuples JS compares identity (use `some`/a key), on
-  `number` SameValueZero. `find`/`at` on arrays of optional values are rejected
+  `number` SameValueZero. Searching for the nullish value, `xs.includes(null)` /
+  `xs.indexOf(undefined)` on optional elements, works for every element type
+  (a present value is never null). `find`/`at` on arrays of optional values are rejected
   (a found `null` and "not found" would be conflated).
   `toSorted`: proofs know the result is a permutation (length, membership,
   `distinct` keys); the *order* is known only for a consistent comparator
@@ -253,11 +258,14 @@ appear: parameters, results, state, props, record fields, array elements, reduce
 * Iterate where the iteration is consumed at once: `[...m]` / `[...m.entries()]` (`[k, v]`
   pairs), `[...m.keys()]`, `[...m.values()]`, `[...s]`, `Array.from(it)` (one argument),
   `for (const [k, v] of m)`, `for (const k of m.keys())`, `for (const x of s)`, and the argument
-  of `new Map(…)` / `new Set(…)`. An iterator anywhere else (stored in a `const`, passed,
+  of `new Map(…)` / `new Set(…)` — also `m.get(k) ?? fallback` for a Map of Maps or Sets
+  (`new Set(m.get(k) ?? [])` is a copy of the stored Set, or an empty one; kept as a value, write
+  `m.get(k) ?? new Set<E>()`). An iterator anywhere else (stored in a `const`, passed,
   rendered) is rejected: a JS iterator is used up once and sees later changes. Render a Map as
   a keyed list: `{[...m.values()].map((it) => <li key={it.id}>…</li>)}`.
-* Tuples destructure exactly: `([k, v]) => …`, `for (const [k, v] of m)`, `const [k, v] = pair`
-  (all elements; `[, v]` skips one).
+* Tuples destructure by position: `([k, v]) => …`, `for (const [k, v] of m)`, `const [k, v] = pair`;
+  `[, v]` skips an element, and a shorter pattern binds a prefix, as in JS (`([k]) => k`,
+  `toSorted(([a], [b]) => a - b)`). A pattern longer than the tuple is rejected.
 * Update in an expression with `.set` / `.add` chains on a fresh copy:
   `new Map(m).set(k, v)`, `new Set(s).add(x).add(y)`. As statements, mutate a local copy:
   `const n = new Map(m); n.set(k, v); n.delete(j); n.clear(); return n;` — only a `const`

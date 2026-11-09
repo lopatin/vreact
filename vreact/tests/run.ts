@@ -5,6 +5,7 @@
  * must be refused by the translator with the given message. Tokens `key=value` add
  * report checks (see `checkReport`): `Name=<status>` for a component/function/constant of
  * the case, `verdict=…`, `proved=N`, `unchecked=N`, `errors=<cause>`, `failtext=<word>`,
+ * `faildesc=<text>` (every failure's description; `~` stands for a space),
  * `why.Name=<text>` (the item's reported reason mentions the text; `~` stands for a space).
  * A directory `cases/<Name>/` is a multi-file case with its own project: its .ts/.tsx files
  * and subdirectories go to src/, `proofs/` and `vreact.json` are copied, `_node_modules/` becomes
@@ -61,7 +62,11 @@ for (const c of cases.filter((c) => c.expect[0] === "reject")) {
   const tr = translate(loadConfig(dir));
   const want = c.expect.slice(1).join(" ");
   const msgs = [...tr.tsDiagnostics, ...tr.errors.map((e) => e.message)];
-  if (!tr.ok && msgs.some((m) => m.includes(want))) ok(c.name, `"${want}"`);
+  // (a problem is reported once, also when the translation reaches it twice: MxRejectOptValueOnce)
+  const at = tr.errors.map((e) => `${e.line}:${e.col}: ${e.message}`);
+  const dup = at.find((x, i) => at.indexOf(x) !== i);
+  if (dup) bad(c.name, `error reported twice: ${dup}`);
+  else if (!tr.ok && msgs.some((m) => m.includes(want))) ok(c.name, `"${want}"`);
   else bad(c.name, `expected rejection containing "${want}", got: ${msgs.join(" | ") || "accepted"}`);
 }
 
@@ -151,6 +156,11 @@ function checkReport(r: Report, files: string[], expect: string[], whole: boolea
     } else if (k === "failtext") {
       const fs_ = r.failures.filter((f) => mine(f.where));
       if (!fs_.length || !fs_.every((f) => f.leanFull.includes(v))) why.push(`expected every failure to mention "${v}": ${fs_.map((f) => f.where + " " + f.lean.split("\n")[0]).join(" | ")}`);
+    } else if (k === "faildesc") {
+      // faildesc=<text>: every failure's description (what the report prints after [kind]) contains the text (`~` for a space)
+      const want = v.replace(/~/g, " ");
+      const fs_ = r.failures.filter((f) => mine(f.where));
+      if (!fs_.length || !fs_.every((f) => f.desc.includes(want))) why.push(`expected every failure description to mention "${want}": ${fs_.map((f) => f.where + " " + f.desc).join(" | ")}`);
     } else if (k.startsWith("why.")) {
       // why.<Name>=<text>: the reported reason of the item contains the text (`~` for a space)
       const it = items.find((x) => x.name === k.slice(4)) as { reason?: string } | undefined;

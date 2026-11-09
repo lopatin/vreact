@@ -11,7 +11,7 @@
  * duplicate the continuation; `for…of` loops become folds.
  */
 import ts from "typescript";
-import { T, type VType, type TypeEnv, type Field, type Param, sameType, showType, leanType, sharedFields, type Variant, typeOfNode, kindsOfType, nullShape, checkValueType, propertyNameText, propertyName, isEqType, mentionsTVar, substType, type TField, type NamedType, collectionKind, collectionTypeArgs, isLibSymbol, mapType, setType } from "./types.ts";
+import { T, type VType, type TypeEnv, type Field, type Param, sameType, showType, leanType, sharedFields, type Variant, typeOfNode, kindsOfType, nullShape, checkValueType, propertyNameText, propertyName, isEqType, mentionsTVar, substType, type TField, type NamedType, collectionKind, collectionTypeArgs, isLibSymbol, mapType, setType, nonValuePart } from "./types.ts";
 import { type Env, type Val, ModCtx, type Binding, type StateVar, type CompCtx, type HandlerAcc, type FnInfo, type CompInfo, type Global, type Narrowed, type DomSite, bind, extend, freshLocal, refSymbol } from "./ctx.ts";
 import { VtsError, fail, leanField, leanAccessor, leanIdent, leanStr, jsStr, leanInt, paren, nodeText, capitalize, relLoc, decodeJsxEntities } from "./util.ts";
 
@@ -788,8 +788,27 @@ function boolOperand(e: ts.Expression, env: Env): Val {
         ? `truthiness of ${showType(t!)} is not supported: a present value of the type parameter ${tv.name} may be falsy too (0, "", false); compare with null explicitly (x !== null)`
         : `truthiness of a value of the type parameter ${tv.name} is not supported: whether it is truthy depends on the type ${tv.name} is instantiated with (0, "" and false are falsy, objects are truthy), and its values are abstract in the generic function; compare explicitly${tv.eq ? ` (x === y with another ${tv.name})` : ""}, or pass a boolean`);
     }
+    if (t?.k === "opt" && err.message.startsWith("type mismatch: expected boolean")) {
+      // (shown with the nullish value TypeScript gives it: `m.get(k)` is undefined, never null)
+      const k = nullishKinds(e, env);
+      const test = !k || (k.null && k.undef) ? "!= null" : k.undef ? "!== undefined" : "!== null";
+      const what = nodeText(e, 30);
+      fail(e, `\`${what}\` is ${showWithKinds(t, tsTypeOf(e, env), env)}, and a boolean is needed here: JS would test its truthiness (null and undefined are falsy, and so are 0, "", false and NaN); compare explicitly (${what} ${test}), or give a default with ?? (${what} ?? …)`);
+    }
     throw err;
   }
+}
+
+/**
+ * An index (or array) parameter of an array-method callback other than `map`'s: JS passes
+ * `(element, index, array)`, VTS models the element only (`n` parameters: 2 for `reduce`'s
+ * accumulator and element).  Rejected with what to write instead.
+ */
+function noIndexParam(name: string, fn: ts.Expression | undefined, n = 1) {
+  if (!fn || !(ts.isArrowFunction(fn) || ts.isFunctionExpression(fn)) || fn.parameters.length <= n) return;
+  const p = fn.parameters[n];
+  const what = n === 2 ? "the accumulator and the element" : "the element";
+  fail(p, `${name} callbacks take only ${what} in VTS (an index parameter is supported for map only, \`xs.map((x, i) => …)\`): for a condition on positions write forall(0, xs.length, (i) => … xs[i] …)${name === "every" ? " (e.g. a.length === b.length && forall(0, a.length, (i) => a[i] === b[i]))" : ""}`);
 }
 
 /** Element comparisons of `includes`/`indexOf`/`distinct` are by value only for primitive elements. */
@@ -805,6 +824,27 @@ function checkPrimitiveElems(node: ts.Node, arr: ts.Expression, elem: VType, wha
     const k = et ? kindsOfType(et) : null;
     if (!k || (k.null && k.undef)) fail(node, `${what} on elements that may be null or undefined is not supported (VTS does not distinguish them)`);
   }
+}
+
+/**
+ * `xs.includes(null)` / `xs.indexOf(undefined)` on optional elements: JS compares each element
+ * with the nullish value only, and a present value (a type parameter's, a record's, a number's)
+ * never equals it, so the search is a nullishness test for every element type (no equality
+ * constraint needed).  The literal must be the nullish value the elements can hold (JS `undefined`
+ * is not `null`).  Whether `arg` is such a literal (then the caller tests `Option.isNone`).
+ */
+function nullishSearch(node: ts.Node, arr: ts.Expression, elem: VType, arg: ts.Expression | undefined, what: string, env: Env): boolean {
+  if (!arg || elem.k !== "opt" || !isNullLit(stripParens(arg), env)) return false;
+  const et = elemTsType(arr, env);
+  const k = et ? kindsOfType(et) : null;
+  if (!k || (k.null && k.undef)) fail(node, `${what} on elements that may be null or undefined is not supported (VTS does not distinguish them)`);
+  const lit = stripParens(arg).kind === ts.SyntaxKind.NullKeyword ? "null" : "undefined";
+  const never = lit === "null" ? !k.null : !k.undef;
+  if (never) {
+    const other = lit === "null" ? "undefined" : "null";
+    fail(node, `the elements can be ${other} but never ${lit}, so ${what}(${lit}) ${what === "includes" ? "is always false" : "is always -1"} in JS (${other} !== ${lit}): search for ${other}`);
+  }
+  return true;
 }
 
 /** The TypeScript type of the elements of an array expression (null when unknown). */
@@ -1571,8 +1611,18 @@ function binary(b: ts.BinaryExpression, env: Env, expected?: VType): Val {
       const r = expr(b.right, env, l.type);
       return { code: `(Option.or ${paren(l.code)} ${paren(r.code)})`, type: l.type };
     }
-    const r = expr(b.right, env, l.type.elem);
-    return { code: `(Option.getD ${paren(l.code)} ${paren(r.code)})`, type: l.type.elem };
+    const le = l.type.elem;
+    if (le.k === "map" || le.k === "set") {
+      // `m.get(k) ?? []` outside an iteration is a Map/Set or an array in JS
+      const r0 = stripParens(b.right);
+      const rts = tsTypeOf(b.right, env);
+      if (ts.isArrayLiteralExpression(r0) || (rts && (env.m.checker.isArrayType(rts) || env.m.checker.isTupleType(rts)))) {
+        const ctor = le.k === "map" ? `new Map<${showType(le.key)}, ${showType(le.val)}>()` : `new Set<${showType(le.elem)}>()`;
+        fail(b, `${nodeText(b, 40)} is a ${le.k === "map" ? "Map" : "Set"} or an array in JS: give a ${le.k === "map" ? "Map" : "Set"} as the default (${nodeText(b.left, 30)} ?? ${ctor}), or iterate it at once (new ${le.k === "map" ? "Map" : "Set"}(${nodeText(b.left, 30)} ?? []), [...(${nodeText(b.left, 30)} ?? [])])`);
+      }
+    }
+    const r = expr(b.right, env, le);
+    return { code: `(Option.getD ${paren(l.code)} ${paren(r.code)})`, type: le };
   }
   if (op === K.EqualsToken || op === K.PlusEqualsToken || op === K.MinusEqualsToken) {
     fail(b, "assignments are statements in VTS (and only to local `let` variables)");
@@ -1737,11 +1787,22 @@ function eqOperands(b: ts.BinaryExpression, env: Env): { l: Val; r: Val } {
   }
   if (l.type.k !== "num" && !isPrimitiveEq(l.type)) {
     const t = l.type.k === "opt" ? l.type.elem : l.type;
+    // (an optional operand shown with the nullish value TypeScript gives it: `m.get(k)` is
+    // `V | undefined`, never null)
+    const kl = nullishKinds(b.left, env);
+    const optE = l.type.k === "opt" && !(kl && (kl.null || kl.undef)) ? b.right : b.left;
+    const shown = showWithKinds(l.type, tsTypeOf(optE, env), env);
     if (t.k === "tvar") fail(b, noEqMsg(t, "==="));
-    if (["rec", "arr", "union", "tuple"].includes(t.k)) fail(b, `=== on ${showType(l.type)} compares object identity in JS; compare keys/fields instead`);
-    if (t.k === "map" || t.k === "set") fail(b, `=== on ${showType(l.type)} compares object identity in JS (a copy with the same entries is a different ${t.k === "map" ? "Map" : "Set"}); compare the contents instead (size, has, get, or the entries one by one)`);
-    if (t.k === "num") fail(b, `=== on ${showType(l.type)} is not supported: narrow with !== null first, then compare the numbers`);
-    fail(b, `=== is not supported on ${showType(l.type)}`);
+    if (["rec", "arr", "union", "tuple"].includes(t.k)) fail(b, `=== on ${shown} compares object identity in JS; compare keys/fields instead`);
+    if (t.k === "map" || t.k === "set") fail(b, `=== on ${shown} compares object identity in JS (a copy with the same entries is a different ${t.k === "map" ? "Map" : "Set"}); compare the contents instead (size, has, get, or the entries one by one)`);
+    if (t.k === "num") {
+      const k = nullishKinds(optE, env);
+      const test = !k || (k.null && k.undef) ? "!= null" : k.undef ? "!== undefined" : "!== null";
+      const what = nodeText(optE, 30);
+      const simple = ts.isIdentifier(stripParens(optE)) || ts.isPropertyAccessExpression(stripParens(optE));
+      fail(b, `=== on ${shown} is not supported: narrow it first (${simple ? `if (${what} ${test}) …` : `const v = ${what}; if (v ${test}) …`}), then compare the numbers`);
+    }
+    fail(b, `=== is not supported on ${shown}`);
   }
   if (l.type.k === "opt") checkOptionalEquality(b, b.left, b.right, env);
   return { l, r };
@@ -1959,6 +2020,25 @@ function iterated(e: ts.Expression, env: Env, expectedArr?: VType): { v: Val; co
     if (rt && (ck.isArrayType(rt) || ck.isTupleType(rt))) fail(e0, `array iterators (keys/values/entries) are not modelled: use the array itself, or xs.map((x, i) => …) for the indices`);
   }
   if (kindOf(e0)) return ofColl(expr(e0, env), e0, null);
+  // `o ?? fallback` with an optional Map/Set `o` (`new Set(m.get(k) ?? [])`, `[...(m.get(k) ?? [])]`):
+  // JS iterates `o` when it is present, else the fallback (an iterable of the same elements);
+  // with an empty array literal as the fallback it is a copy of `o` or an empty Map/Set
+  if (ts.isBinaryExpression(e0) && e0.operatorToken.kind === ts.SyntaxKind.QuestionQuestionToken && kindOf(e0.left)) {
+    const l = expr(e0.left, env);
+    if (l.type.k === "opt" && (l.type.elem.k === "map" || l.type.elem.k === "set")) {
+      const c = l.type.elem;
+      const elemT: VType = c.k === "map" ? { k: "tuple", elems: [c.key, c.val] } : c.elem;
+      const J = c.k === "map" ? "JSMap" : "JSSet";
+      const listOf = c.k === "map" ? "VReact.JS.JSMap.entries" : "VReact.JS.JSSet.elems";
+      const r0 = stripParens(e0.right);
+      if (ts.isArrayLiteralExpression(r0) && r0.elements.length === 0) {
+        const coll: Val = { code: `(Option.getD ${paren(l.code)} (VReact.JS.${J}.empty : ${leanType(c)}))`, type: c };
+        return { v: { code: `(${listOf} ${coll.code})`, type: T.arr(elemT) }, coll };
+      }
+      const r = coerce(iterated(e0.right, env, T.arr(elemT)).v, T.arr(elemT), e0.right, env);
+      return { v: { code: `(Option.getD (Option.map ${listOf} ${paren(l.code)}) ${paren(r.code)})`, type: T.arr(elemT) } };
+    }
+  }
   const v = expr(e0, env, expectedArr);
   if (v.type.k === "str" || v.type.k === "enum") {
     fail(e0, `iterating a string visits its code points (a character outside the BMP is one element), while VTS strings are UTF-16 code units: not modelled`);
@@ -1993,6 +2073,7 @@ function newCollection(ne: ts.NewExpression, env: Env, expected?: VType): Val {
       if (ta.length !== 1) fail(ne, `write new Set<T>(…) with one type argument`);
       t = setType(typeOfNode(ta[0], tenv, "SetItem"), ne);
     }
+    checkValueType(ne, t, m.reg, `new ${Name}<…>`);
   } else {
     const exp = expected?.k === "opt" ? expected.elem : expected;
     if (exp?.k === kind) t = exp;
@@ -2246,10 +2327,12 @@ export function bindParam(name: ts.BindingName, t: VType, env: Env, realTs?: ts.
     return { env: e2, binder: ln };
   }
   if (ts.isArrayBindingPattern(name)) {
-    // `([k, v]) => …`, `for (const [k, v] of m)`: the components of a tuple, exactly
+    // `([k, v]) => …`, `for (const [k, v] of m)`: the components of a tuple; a shorter pattern
+    // binds a prefix (`([k]) => k`: JS leaves the other elements unbound), a longer one is
+    // rejected (JS would bind `undefined` to the extra names)
     if (t.k !== "tuple") fail(name, `array destructuring is only supported on tuples (this value is a ${showType(t)})`);
     const n = t.elems.length;
-    if (name.elements.length !== n) fail(name, `destructure all ${n} elements of the tuple ${showType(t)} (an omitted element skips one, e.g. [, v])`);
+    if (name.elements.length > n) fail(name, `the tuple ${showType(t)} has only ${n} elements, but this pattern names ${name.elements.length} (JS would bind undefined to the extra ones): destructure at most ${n}`);
     const { env: e1, name: ln } = freshLocal(env, "tup");
     let e2 = e1;
     name.elements.forEach((el, i) => {
@@ -2546,17 +2629,24 @@ function fieldTsTypeOf(t: VType, name: string, env: Env): ts.Type | null {
  */
 function checkInstantiation(info: FnInfo, σ: Map<number, VType>, c: ts.CallExpression, env: Env) {
   const ck = env.m.checker;
-  for (const p of info.tparams) {
+  info.tparams.forEach((p, i) => {
     const t = σ.get(p.id)!;
-    // (shown with the nullish values TypeScript gives the argument it comes from: `int | undefined`)
-    const tt = tsTypeAtTVar(info, p.id, c, env);
+    // (shown with the nullish values TypeScript gives it: from the explicit type argument
+    // `size<int | undefined>(…)`, or else from the argument it comes from, `int | undefined`)
+    const explicit = c.typeArguments?.[i];
+    const tt = explicit ? ck.getTypeFromTypeNode(explicit) : tsTypeAtTVar(info, p.id, c, env);
     const at = `${info.name}: its type parameter ${p.name} would be ${showWithKinds(t, tt, env)}`;
     if (t.k === "opt") {
       const k = tt ? kindsOfType(tt) : null;
       const nullish = k && k.undef && !k.null ? "undefined" : "null";
-      fail(c, `${at}, which includes null/undefined: a type parameter is never instantiated with a nullable type (JS has one nullish value, while ${p.name} | ${nullish} would nest two in the model); pass present values, or give ${info.name} a parameter of type ${p.name} | ${nullish}`);
+      const why = `a type parameter is never instantiated with a nullable type (JS has one nullish value, while ${p.name} | ${nullish} would nest two in the model)`;
+      fail(c, explicit
+        ? `${at}, which includes null/undefined: ${why}; write a type argument without null/undefined (e.g. ${info.name}<${info.tparams.map((q, j) => (j === i ? showType(t.elem) : q.name)).join(", ")}>(…)), or give ${info.name} a parameter of type ${p.name} | ${nullish}`
+        : `${at}, which includes null/undefined: ${why}; pass present values, or give ${info.name} a parameter of type ${p.name} | ${nullish}`);
     }
     if (t.k === "void" || t.k === "unit" || t.k === "fn" || t.k === "node") fail(c, `${at}, which is not a value type`);
+    const np = nonValuePart(t, env.m.reg);
+    if (np) fail(c, `${at}, which has ${np}: not data (functions are not first-class in VTS, and React nodes are only rendered)`);
     if (p.eq && !isEqType(t)) {
       fail(c, t.k === "num"
         ? `${at}: ${p.name} has an equality constraint, and number has no usable equality (NaN !== NaN, and SameValueZero equates -0 and 0); use int`
@@ -2579,7 +2669,7 @@ function checkInstantiation(info: FnInfo, σ: Map<number, VType>, c: ts.CallExpr
         }
       }
     }
-  }
+  });
 }
 
 /**
@@ -2831,6 +2921,7 @@ function arrayMethod(name: string, xs: Val, c: ts.CallExpression, env: Env, expe
     case "every":
     case "find": {
       callbackArity();
+      noIndexParam(name, args[0]);
       if (name === "find" && elem.k === "opt") fail(c, "find on an array of optional values is not supported (a found null and \"not found\" (undefined) would be conflated)");
       const lam = withAttach(args[0], [elem], T.bool);
       const lean = { filter: "filter", some: "any", every: "all", find: "find?" }[name];
@@ -2846,18 +2937,25 @@ function arrayMethod(name: string, xs: Val, c: ts.CallExpression, env: Env, expe
     }
     case "findIndex": {
       callbackArity();
+      noIndexParam(name, args[0]);
       const lam = lambda(args[0], env, [elem], T.bool, [elT]);
       if (lam.obligations) fail(args[0], "findIndex predicates cannot contain proof obligations");
       return { code: `(VReact.JS.findIndex ${X} ${lamCode(lam.typed, lam.body.code)})`, type: T.int };
     }
     case "includes": {
       arity(c, "includes", 1, 1, "a fromIndex is not supported: write xs.slice(k).includes(v)");
+      if (nullishSearch(c, (c.expression as ts.PropertyAccessExpression).expression, elem, args[0], "includes", env)) {
+        return { code: `(${X}.any Option.isNone)`, type: T.bool };
+      }
       checkPrimitiveElems(c, (c.expression as ts.PropertyAccessExpression).expression, elem, "includes", env);
       const v = expr(args[0], env, elem);
       return { code: `(${X}.contains ${paren(v.code)})`, type: T.bool };
     }
     case "indexOf": {
       arity(c, "indexOf", 1, 1, "a fromIndex is not supported");
+      if (nullishSearch(c, (c.expression as ts.PropertyAccessExpression).expression, elem, args[0], "indexOf", env)) {
+        return { code: `(VReact.JS.findIndex ${X} Option.isNone)`, type: T.int };
+      }
       checkPrimitiveElems(c, (c.expression as ts.PropertyAccessExpression).expression, elem, "indexOf", env);
       const v = expr(args[0], env, elem);
       return { code: `(VReact.JS.indexOf ${X} ${paren(v.code)})`, type: T.int };
@@ -2881,6 +2979,7 @@ function arrayMethod(name: string, xs: Val, c: ts.CallExpression, env: Env, expe
     }
     case "reduce": {
       if (args.length !== 2) fail(c, "reduce needs an initial value");
+      noIndexParam(name, args[0], 2);
       const init = expr(args[1], env, expected);
       // (the accumulator's annotation is the type TypeScript checks every accumulated value against)
       const lam = lambda(args[0], env, [init.type, elem], init.type, [undefined, elT]);
@@ -2920,6 +3019,7 @@ function arrayMethod(name: string, xs: Val, c: ts.CallExpression, env: Env, expe
     }
     case "flatMap": {
       callbackArity();
+      noIndexParam(name, args[0]);
       const lam = lambda(args[0], env, [elem], expected, [elT]);
       if (lam.obligations) fail(args[0], "flatMap callbacks cannot contain proof obligations");
       if (lam.body.type.k !== "arr") fail(args[0], "flatMap callback must return an array");
@@ -3369,11 +3469,13 @@ export function prop(e0: ts.Expression, env: Env): string {
         const mname = e.expression.name.text;
         if (mname === "includes") {
           arity(e, "includes", 1, 1, "a fromIndex is not supported: write xs.slice(k).includes(v)");
+          if (nullishSearch(e, e.expression.expression, xs.type.elem, args[0], "includes", env)) return `(none ∈ ${paren(xs.code)})`;
           checkPrimitiveElems(e, e.expression.expression, xs.type.elem, "includes", env);
           return `(${expr(args[0], env, xs.type.elem).code} ∈ ${paren(xs.code)})`;
         }
         arity(e, mname, 1, 1, "a thisArg argument is not supported");
         const fn = args[0];
+        noIndexParam(mname, fn);
         if (!fn || !(ts.isArrowFunction(fn) || ts.isFunctionExpression(fn)) || fn.parameters.length !== 1 || ts.isBlock(fn.body)) {
           fail(e, `${mname}((x) => condition) with an expression body`);
         }

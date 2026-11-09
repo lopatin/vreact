@@ -116,6 +116,16 @@ def tryTactic (tac : TacticM Unit) : TacticM (Option Exception) := do
 elab "vreact_try " tac:tacticSeq : tactic => do
   let _ ← tryTactic (Lean.Elab.Tactic.evalTactic tac)
 
+/-- `repeat' split`, each split followed by `simp only []` (iota: a `match` on a constructor
+reduces, an impossible case `some p = none` closes).  A `match` of the goal can stay after `split`
+when it occurs under a binder: `holds(r, j, o)` in a frame `[...m].every(([j, o]) => … holds(r, j, o))`
+with `r` the result of `const o = m.get(k); if (o === undefined) return m; …` is
+`match h : (match h' : m.get k with …).get j with …`, and `split` on the inner match left
+`match h' : some p with …` in the goal, which the next `split` split again, forever (until the
+obligation's budget ran out). -/
+macro "vreact_splits" : tactic => `(tactic|
+  (vreact_try (repeat' (split <;> vreact_try simp (config := { failIfUnchanged := false }) only [] at *))))
+
 /-- Normalise hypotheses and goal with the model's simp set. -/
 macro "vreact_norm" : tactic => `(tactic|
   (vreact_try simp (config := { zetaDelta := true, failIfUnchanged := false }) only [vreact_simp] at *))
@@ -897,6 +907,39 @@ private def attemptClose (tac : TSyntax `tactic) : TacticM (Option Exception) :=
   evalTactic tac
   unless (← getUnsolvedGoals).isEmpty do throwError "unsolved goals"
 
+open Lean Meta in
+/-- Arithmetic arguments of calls of the program's functions (`upd s k (q - 1)`, a call of an
+`@opaque` function whose contracts are hypotheses), generalised to fresh variables with their
+equations (`hx : q - 1 = x`).  `grind`'s arithmetic normaliser rewrites `q - 1` inside such a call
+wherever it occurs, also under a bounded quantifier whose index proofs mention the call
+(`(upd s k (q - 1)).m.keys[i]'h` of a contract `forall(0, n, (i) => …)`), and there it ran into
+Lean's recursion limit; with `x` for `q - 1` the call is an atom again.  none if there is no
+such argument. -/
+private def genArithArgs (g : MVarId) : MetaM (Option MVarId) := g.withContext do
+  let lctx ← getLCtx
+  let mut targets := #[← instantiateMVars (← g.getType)]
+  for d in lctx do
+    if !d.isImplementationDetail && !d.isLet then targets := targets.push (← instantiateMVars d.type)
+  let found ← IO.mkRef (#[] : Array Expr)
+  let isArith (a : Expr) : Bool :=
+    a.isAppOfArity ``HSub.hSub 6 || a.isAppOfArity ``HAdd.hAdd 6 || a.isAppOfArity ``HMul.hMul 6 ||
+      a.isAppOfArity ``Neg.neg 3
+  for tgt in targets do
+    forEachExpr tgt fun e => do
+      if e.hasLooseBVars || e.hasMVar then return
+      -- binders visited by `forEachExpr` become temporary fvars: only closed terms
+      if e.hasAnyFVar (fun fv => !lctx.contains fv) then return
+      let .const fn _ := e.getAppFn | return
+      unless (`VTS).isPrefixOf fn do return
+      for a in e.getAppArgs do
+        if isArith a && !(← found.get).contains a then found.modify (·.push a)
+  let args ← found.get
+  if args.isEmpty then return none
+  let hyps := lctx.foldl (init := #[]) fun acc d => if d.isImplementationDetail then acc else acc.push d.fvarId
+  let gargs := args.map fun a => ({ expr := a, xName? := `x, hName? := `hx } : GeneralizeArg)
+  let (_, _, g') ← g.generalizeHyp gargs hyps
+  return some g'
+
 open Lean Meta Elab Tactic in
 /-- The cheap alternatives (`done`, `grind`, `omega`) on the main goal.  `none` if one closes
 it, otherwise the error to report: `grind`'s (it shows the hypotheses and the case it got
@@ -906,6 +949,14 @@ private def finishCheap : TacticM (Option Exception) := withMainContext do
   if (← attemptClose (← `(tactic| done))).isNone then return none
   let grindErr ← attemptClose (← `(tactic| grind))
   if grindErr.isNone then return none
+  -- `grind` at the recursion limit: again with the arithmetic arguments of calls generalised
+  if grindErr.any (·.isRuntime) then
+    let r ← tryTactic do
+      let some g' ← genArithArgs (← getMainGoal) | throwError "no arithmetic arguments"
+      replaceMainGoal [g']
+      evalTactic (← `(tactic| grind))
+      unless (← getUnsolvedGoals).isEmpty do throwError "unsolved goals"
+    if r.isNone then return none
   if (← attemptClose (← `(tactic| omega))).isNone then return none
   match grindErr with
   | some e =>
@@ -1067,12 +1118,43 @@ private def enumBounded? (g : MVarId) : TacticM (Option (List MVarId)) := do
       return some out
     return none
 
+open Lean Meta in
+/-- Case splits on the `if`s (and `match`es) of hypotheses, one hypothesis after the other, at most
+`fuel` splits and `cap` goals: a guarded Bool function of a contract (`m.has(k) && … m.get(k)!.qty …`,
+a dependent `if h : … then … (o.get ⋯) … else false`, which `dite_eq_ite` cannot turn into a
+conjunction) or an `if`-chain of a body that the `split` of a `match` on it moved into an
+equation `heq : (if … then … else …).get k = some p`: `grind` does not split inside those, and
+its arithmetic under the dependent proofs ran into the recursion limit.  none if no hypothesis
+has one. -/
+private def splitHyps? (g : MVarId) (fuel : Nat := 8) (cap : Nat := 16) : MetaM (Option (List MVarId)) := do
+  let step (g : MVarId) : MetaM (Option (List MVarId)) := g.withContext do
+    for d in ← getLCtx do
+      if d.isImplementationDetail || d.isLet then continue
+      unless ← isProp d.type do continue
+      if let some gs ← splitLocalDecl? g d.fvarId then return some gs
+    return none
+  let some first ← step g | return none
+  let mut done : List MVarId := []
+  let mut todo := first
+  let mut n := fuel
+  while !todo.isEmpty do
+    let gi :: rest := todo | break
+    todo := rest
+    if n == 0 || done.length + todo.length + 1 ≥ cap then
+      done := done ++ [gi]
+      continue
+    match ← step gi with
+    | some gs => n := n - 1; todo := gs ++ todo
+    | none => done := done ++ [gi]
+  return some done
+
 open Lean Meta Elab Tactic in
 /-- `vreact_finish` (see `finishCore`), with fallbacks for the goals it fails on, each case
 normalised again and finished at most `depth` levels deep:
 * a conjunction: the fallbacks on each conjunct that needs them (no level used);
 * a guarded existential goal `∃ (h : a), b h`: `a`, then `b h` (`splitExistsProp?`);
 * a bounded quantifier with numeral bounds: one case per value (`enumBounded?`);
+* a hypothesis with an `if` or `match`: one case per branch (`splitHyps?`);
 * a goal that mentions a small enumeration or union (`c : Color`, `t : T` of a discriminated
   union, `σ.mode`): one case per constructor (the `match`es and `===` tests on it reduce).
   `grind` does not split such a variable itself, so a true three-way disjunctive postcondition
@@ -1090,7 +1172,7 @@ partial def vreactFinishAux (depth : Nat) : TacticM Unit := do
       if ← gi.isAssigned then continue
       setGoals [gi]
       evalTactic (← `(tactic| vreact_norm))
-      evalTactic (← `(tactic| vreact_try (repeat' split)))
+      evalTactic (← `(tactic| vreact_splits))
       evalTactic (← `(tactic| all_goals vreact_norm))
       evalTactic (← `(tactic| all_goals vreact_memmap))
       evalTactic (← `(tactic| all_goals vreact_keyfacts))
@@ -1119,6 +1201,11 @@ partial def vreactFinishAux (depth : Nat) : TacticM Unit := do
       let some goals ← enumBounded? g | throwError "no"
       finishAll goals).isNone then return
   s.restore
+  -- `if`s in hypotheses
+  if (← tryTactic do
+      let some goals ← splitHyps? g | throwError "no"
+      finishAll goals).isNone then return
+  s.restore
   -- enumerations and unions
   let cands ← splitCandidates g
   let some e := cands[0]? | throw err
@@ -1138,12 +1225,12 @@ macro_rules
       (intros
        vreact_expose
        vreact_contracts
-       vreact_try (repeat' split)
+       vreact_splits
        all_goals vreact_norm
        all_goals vreact_contracts
        all_goals vreact_norm
        all_goals (
-         vreact_try (repeat' split)
+         vreact_splits
          all_goals vreact_norm
          -- calls exposed by the last split (e.g. in match arms of a transparent reducer)
          all_goals vreact_contracts

@@ -540,7 +540,10 @@ export function nonValuePart(t: VType, reg: TypeRegistry, seen = new Set<string>
       return "a React node (ReactNode / JSX.Element)";
     case "arr":
     case "opt":
+    case "set":
       return nonValuePart(t.elem, reg, seen);
+    case "map":
+      return nonValuePart(t.key, reg, seen) ?? nonValuePart(t.val, reg, seen);
     case "tuple":
       for (const e of t.elems) {
         const p = nonValuePart(e, reg, seen);
@@ -559,7 +562,15 @@ export function nonValuePart(t: VType, reg: TypeRegistry, seen = new Set<string>
       }
       return null;
     }
-    default:
+    case "bool":
+    case "int":
+    case "num":
+    case "str":
+    case "unit":
+    case "void":
+    case "enum":
+    case "tvar":
+      // (no `default`: a new kind must say here whether it can hold a function or a node)
       return null;
   }
 }

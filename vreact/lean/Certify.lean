@@ -35,7 +35,10 @@ namespace VReactCertify
 /-- Extensions whose entries a user proof module may have: what theorems, definitions (with
 their equation lemmas, matchers, compiled code and documentation), the attributes `simp`,
 `vreact_simp`, `grind`, `local`/erased attributes, `grind_pattern`, `namespace`/`section` and
-`private`/`protected` names add. Any other extension with entries (instances, syntax,
+`private`/`protected` names add (`Lean.indirectModUseExt` and `extraModUses` only record, for
+the import linter `shake`, which modules a module uses — e.g. `attribute [simp] VReact.JS.foo` on
+a library lemma records that `VReact.JS.foo`'s users may need this module — and change nothing
+about how later modules elaborate). Any other extension with entries (instances, syntax,
 macros, elaborators, aliases, options, initializers, …) means the module changed more than
 lemmas. -/
 def allowedExtensions : List String :=
@@ -43,7 +46,7 @@ def allowedExtensions : List String :=
    "_private.Lean.Namespace.0.Lean.namespacesExt", "Lean.protectedExt", "Lean.noncomputableExt",
    "reducibilityCore", "recExt", "Lean.Compiler.inlineAttrs",
    "_private.Lean.Util.CollectAxioms.0.Lean.exportedAxiomsExt", "_private.Lean.Compiler.ModPkgExt.0.Lean.modPkgExt",
-   "_private.Lean.ExtraModUses.0.Lean.extraModUses", "Lean.deprecatedModuleExt",
+   "_private.Lean.ExtraModUses.0.Lean.extraModUses", "Lean.indirectModUseExt", "Lean.deprecatedModuleExt",
    "Lean.Meta.Match.Extension.extension", "Lean.Elab.Structural.eqnInfoExt", "Lean.Elab.WF.eqnInfoExt",
    "Lean.backwardDefeqAttr", "Lean.defeqAttr", "Lean.Meta.simpExtension"]
 

@@ -74,11 +74,11 @@ allows it: an `int` to a `number`, a present value to an optional one, an array
 elementwise (`int[]` to `(int | null)[]`), an enum member to its string.
 
 Function types and React nodes have no Lean value type: a function parameter or
-result, constant, state, local, data prop, callback parameter or `hole<T>()` whose
-type contains one (also inside an array, option, tuple or a record's fields) is
-rejected; only a direct field of a component's props may be a function (a
-callback, §2.4), and a record containing one is only a props type (it is not
-emitted as a Lean type). Types declared by a library (`Date`, `HTMLElement`, React's
+result, constant, state, local, data prop, callback parameter, `hole<T>()`, type argument
+of `new Map<…>`/`new Set<…>` or of a generic call whose type contains one (also inside an
+array, option, tuple, Map, Set or a record's fields) is rejected; only a direct
+field of a component's props may be a function (a callback, §2.4), and a record
+containing one is only a props type (it is not emitted as a Lean type). Types declared by a library (`Date`, `HTMLElement`, React's
 other types) are not VTS types, and an interface declared twice (TypeScript merges
 the declarations) is rejected.
 
@@ -200,7 +200,11 @@ Every expression maps to a Lean term whose value is the JavaScript value.
   with Lean equality, which is JS's SameValueZero/`===` only for primitive
   elements (`boolean`, `int`, `string`, enums, equality-constrained type
   parameters, options of these); on objects (identity) and `number` (NaN) they
-  are rejected.
+  are rejected — except a search for the nullish value on optional elements
+  (`xs.includes(null)`, `xs.indexOf(undefined)`: `Option.isNone` of each element, for
+  every element type, since a present value is never `null`). A callback takes the
+  element only (`reduce`'s the accumulator and the element), `map`'s also the index
+  (`zipIdx`); an index parameter of the others is rejected with the `forall` form to use.
 * String methods `trim includes startsWith endsWith slice repeat length` are
   exact on UTF-16 code units; `toLowerCase/toUpperCase` are opaque (Unicode case
   mapping is not modelled: proofs cannot depend on them). A literal is its cooked
@@ -259,7 +263,9 @@ Every expression maps to a Lean term whose value is the JavaScript value.
   `new Map(entries)` is `set` of each pair in turn (a repeated key keeps its first position and
   its last value), `new Set(xs)` keeps first occurrences, `new Map(m)` is a copy (the same
   value); `get` is an `Option`, `size` the number of entries; `keys()`, `values()`, `entries()`,
-  spread, `Array.from` and `for…of` list them in order. An iterator is translated only where it
+  spread, `Array.from` and `for…of` list them in order (also of `o ?? fallback` with an optional
+  Map/Set `o`, `new Set(m.get(k) ?? [])`: the entries of `o` when it is present, else those of
+  the fallback). An iterator is translated only where it
   is consumed at once (spread, `Array.from(it)`, `for…of`, the argument of `new Map/Set`): JS
   iterators are one-shot and live (they see later mutations), a list is neither. JS Maps are
   mutable objects shared by reference, so a mutation is exact on the value model only when
@@ -980,7 +986,10 @@ hook rules hold (static checks). For every function: its body is safe and its
   module it also checks what the module added besides its declarations: entries
   of environment extensions other than those of theorems, definitions (equation
   lemmas, matchers, compiled code, documentation), `@[simp]`/`@[vreact_simp]`/
-  `@[grind …]` and `grind_pattern` (so no syntax, macro, elaborator, instance,
+  `@[grind …]` and `grind_pattern` (also on a library lemma, `attribute [simp]
+  VReact.JS.…`: Lean records, for its import linter, that the lemma's users may need
+  the module, `Lean.indirectModUseExt`, which changes nothing else; `RlProofsAllowed`)
+  (so no syntax, macro, elaborator, instance,
   alias, coercion, simproc, initializer, …), axioms, definitions in the
   namespaces `VTS`/`VReact`, and declarations that use an axiom other than
   Lean's standard ones, `sorryAx` and the generated `@trusted` axioms (in

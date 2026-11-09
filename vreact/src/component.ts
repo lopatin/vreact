@@ -8,7 +8,7 @@
  *   useEffect        ↦ VReact.Effect with robust outcomes
  */
 import ts from "typescript";
-import { T, type VType, type Param, type Field, leanType, showType, typeOfNode, checkValueType, propertyName, isLibSymbol } from "./types.ts";
+import { T, type VType, type Param, type Field, leanType, showType, typeOfNode, checkValueType, propertyName, isLibSymbol, collectionKind } from "./types.ts";
 import { type Env, ModCtx, type CompCtx, type CompInfo, type StateVar, type FnInfo, type Binding, bind, freshLocal, refSymbol } from "./ctx.ts";
 import { expr, prop, propAll, block, branch, handlerFn, checkDeps, hookName, specFn, isGlobal, symbolOf, bindParam, type BlockCtx, typeOf, valueBlock, lambda, outcome, checkClosures, topLevelHookDecls, fnParamTsTypes, stripParens, isNumeric, evalArgs, isDocumentTitle, jsxAttrText, checkPlainParams, isNullLit, ARRAY_MUTATORS } from "./translate.ts";
 import { fail, leanField, leanIdent, leanStr, jsStr, paren, nodeText, indent, VtsError, jsxTextValue, asciiLower } from "./util.ts";
@@ -1661,6 +1661,23 @@ function componentElement(tagNode: ts.JsxTagNameExpression, e: ts.JsxElement | t
   return withKey(key, `(${info.ns}.component.node ${dataLit}\n    ${cbLit}\n    ${ob})`);
 }
 
+/**
+ * For a list of a Map's values (`[...m.values()]`, `Array.from(m.values())`) keyed by a field of
+ * the value: the usual ways to prove the keys distinct, for the failure report.
+ */
+function mapValuesKeyHint(list: ts.Expression, keyE: ts.Expression, env: Env): string {
+  let e = stripParens(list);
+  if (ts.isArrayLiteralExpression(e) && e.elements.length === 1 && ts.isSpreadElement(e.elements[0])) e = stripParens(e.elements[0].expression);
+  else if (ts.isCallExpression(e) && ts.isPropertyAccessExpression(e.expression) && e.expression.name.text === "from" && e.arguments.length === 1) e = stripParens(e.arguments[0]);
+  else return "";
+  if (!ts.isCallExpression(e) || !ts.isPropertyAccessExpression(e.expression) || e.expression.name.text !== "values") return "";
+  const recv = e.expression.expression;
+  const ck = env.m.checker;
+  if (collectionKind(ck.getNonNullableType(ck.getTypeAtLocation(recv)), env.m.prog.typeEnv) !== "map") return "";
+  const mt = nodeText(recv, 30);
+  return ` (for the values of a Map: key by the Map key, [...${mt}].map(([k, v]) => <… key={k}>), or add [...${mt}].every(([k, v]) => v.${ts.isPropertyAccessExpression(keyE) ? keyE.name.text : "id"} === k) to the invariant)`;
+}
+
 /** xs.map(x => <El key={…} …/>) — a keyed list with a distinct-keys obligation. */
 function keyedMap(c: ts.CallExpression, env: Env): string {
   const m = env.m;
@@ -1705,6 +1722,6 @@ function keyedMap(c: ts.CallExpression, env: Env): string {
     const bc: BlockCtx = { kind: "render", fnNode: fn, onReturn: (e, e2) => jsxNode(e!, e2), jsxConst: jsxConstCtx(env.comp!) };
     nodeCode = block(fn.body.statements, 0, nEnvR.env, bc, () => fail(fn, "missing return"));
   } else nodeCode = jsxNode(fn.body, nEnvR.env);
-  const ob = m.ob(keyAttr, "unique-keys", `keys ${nodeText(keyE)} are distinct across ${nodeText(pa.expression)}`);
+  const ob = m.ob(keyAttr, "unique-keys", `keys ${nodeText(keyE)} are distinct across ${nodeText(pa.expression)}${mapValuesKeyHint(pa.expression, keyE, env)}`);
   return `(VReact.VNode.keyedMap ${paren(xs.code)} (fun ${kEnvR.binder} => ${keyCode})\n  (fun ${nEnvR.binder} ${hm} => ${nodeCode})\n  ${ob})`;
 }
