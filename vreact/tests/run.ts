@@ -399,6 +399,15 @@ console.log("message attribution (judge)");
     if (t.length > 120 || !t.endsWith(end) || !t.includes("…")) why.push(`${what} of ${nodeText(e, 400).length} characters: ${JSON.stringify(t)}`);
   }
   if (!exprText(imp).startsWith("implies(u.orders.has(id) && price")) why.push(`implies: the start: ${JSON.stringify(exprText(imp))}`);
+  // inside literals, escapes as written and line terminators as escapes (`a\\` + line break was
+  // shown `a\b`, another escape; a lone CR or a U+2028 was printed as it is, breaking the line);
+  // a long call by its parts keeps its type arguments (`same<int>(…)` was shown `same(…)`)
+  const src2 = "f(`a\\\\\nb`, `c\rd`, 'e\u2028f', same<int>(r.filter((x) => x > 0 && x < 1000000 && x !== 7), xs.filter((x) => x > 0 && x < 1000000 && x !== 7 && x !== 3)));";
+  const [esc, cr, ls, targs] = (((ts.createSourceFile("u.ts", src2, ts.ScriptTarget.Latest, true).statements[0] as ts.ExpressionStatement).expression) as ts.CallExpression).arguments;
+  want("an escaped backslash before a line break", nodeText(esc), "`a\\\\\\nb`");
+  want("a lone CR in a template", nodeText(cr), "`c\\nd`");
+  want("a U+2028 in a string", nodeText(ls), "'e\\u2028f'");
+  if (!exprText(targs).startsWith("same<int>(r.filter(") || exprText(targs).length > 120) why.push(`type arguments: ${JSON.stringify(exprText(targs))}`);
   if (!why.length) ok("descriptions: literal contents exact; a contract whole up to 120 characters, a longer one by its parts, each with its start and end");
   else bad("descriptions", why.join("; "));
 }

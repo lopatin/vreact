@@ -982,7 +982,8 @@ hook rules hold (static checks). For every function: its body is safe and its
   arguments of its outer call or the operands of its outer operator, the short
   ones whole and each longer one by its start and its end; whitespace is
   collapsed except inside string, template and regular-expression literals,
-  whose contents are shown exactly. (A proof that refers to another declaration whose
+  whose contents are shown as written (a line break as `\n`); a call shown by
+  its arguments keeps its type arguments. (A proof that refers to another declaration whose
   proof was admitted — a callee's failed contract — is a proof modulo that
   contract and counts as proved; the item is `INCOMPLETE` by its axioms.) A failure is not a Lean error, so the module and every module
   importing it are still built and checked; the admitted goal shows as

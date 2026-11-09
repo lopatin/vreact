@@ -40,9 +40,9 @@ export function relLoc(node: ts.Node, root: string): string {
 
 /**
  * The source text of `node` on one line: runs of whitespace become one space, except inside
- * string, template and regular expression literals, whose contents stay exact (a line break of a
- * template literal is shown as `\n`, a line continuation `\` + line break is left out: the same
- * value).
+ * string, template and regular expression literals, whose contents stay exact (escape sequences
+ * as written; a line break of a template literal is shown as `\n`, a line continuation `\` +
+ * line break is left out: the same value).
  */
 export function flatText(node: ts.Node): string {
   const sf = node.getSourceFile();
@@ -57,10 +57,17 @@ export function flatText(node: ts.Node): string {
     ts.forEachChild(n, visit);
   };
   visit(node);
+  // inside a literal, from left to right: an escape sequence stays as written (`\\` then a line
+  // break is a backslash, then a line break), a line continuation is left out, and a line
+  // terminator is shown as its escape, so the text stays on one line (a template's CR, CRLF or
+  // LF is an LF in its value: `\n`; U+2028 and U+2029: `\u2028`, `\u2029`)
+  const lit = (t: string) =>
+    t.replace(/\\(?:\r\n|[\r\n\u2028\u2029])|\\[^]|\r\n|[\r\n\u2028\u2029]/g, (m) =>
+      m[0] === "\\" ? (/^\\[\r\n\u2028\u2029]/.test(m) ? "" : m) : m === "\u2028" ? "\\u2028" : m === "\u2029" ? "\\u2029" : "\\n");
   let out = "";
   let at = 0;
   for (const [s, e] of lits) {
-    out += text.slice(at, s).replace(/\s+/g, " ") + text.slice(s, e).replace(/\\\r?\n/g, "").replace(/\r?\n/g, "\\n");
+    out += text.slice(at, s).replace(/\s+/g, " ") + lit(text.slice(s, e));
     at = e;
   }
   return out + text.slice(at).replace(/\s+/g, " ");
@@ -108,7 +115,8 @@ export function exprText(node: ts.Node, max = 120): string {
   let sep = ", ";
   let parts: ts.Node[] = [];
   if (ts.isCallExpression(node) && node.arguments.length) {
-    open = `${flatText(node.expression)}(`;
+    // (with its type arguments and `?.`, as written)
+    open = `${flatText(node.expression)}${node.questionDotToken ? "?." : ""}${node.typeArguments ? `<${node.typeArguments.map(flatText).join(", ")}>` : ""}(`;
     close = ")";
     parts = [...node.arguments];
   } else if (ts.isBinaryExpression(node)) {
