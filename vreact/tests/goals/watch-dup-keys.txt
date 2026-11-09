@@ -1,0 +1,255 @@
+`grind` failed
+case grind.1.1.1.1.1
+E : Type
+props : Props
+κ : Cb props E
+σ : State
+ui : reducer.ChainUi := σ.ui
+ticket : Option model.Ticket := σ.ticket
+levels : Option Int := model.levelsOf ui.filter
+tExp : Option model.Expiry :=
+  match h₂ : ticket with
+  | some ticket_1 => collections.byId (fun x₃ => x₃.id) props.expiries ticket_1.expiry
+  | none => none
+allOpen : Bool := props.expiries.all fun e => !ui.collapsed.has e.id
+ids : List Int := List.map (fun e => e.id) props.expiries
+e : model.Expiry
+hmem₁₈ : e ∈ props.expiries
+live : Option Int := model.midPrice e.future
+held : Option Int := ui.held.get e.id
+center : Option Int :=
+  match h₁₂ : held with
+  | some held_1 => some held_1
+  | none => live
+n : Int := ↑e.strikes.length
+atm : Int :=
+  match h₁₂ : center with
+  | some center_1 => model.atmIndex e.strikes center_1
+  | none => -1
+span : model.Span :=
+  if h₂₁ : JS.lt atm 0 = true then { lo := 0, hi := n }
+  else
+    match h₁₂ : levels with
+    | some levels_1 => model.strikeWindow n atm levels_1 ⋯
+    | none => { lo := 0, hi := n }
+rows : List model.Strike :=
+  JS.slice e.strikes span.lo (some span.hi) ++ List.filter (fun s => ui.watch.has s.strike) e.strikes
+liveAtm : Int :=
+  match h₁₂ : live with
+  | some live_1 => model.atmIndex e.strikes live_1
+  | none => -1
+atmStrike : Option Int := if h₂₄ : JS.lt liveAtm 0 = true then none else some (JS.get e.strikes liveAtm ⋯).strike
+open' : Bool := !ui.collapsed.has e.id
+hpre :
+  (List.map (fun e => e.id) props.expiries).Nodup ∧
+    ∀ (x : model.Expiry), x ∈ props.expiries → (List.map (fun s => s.strike) x.strikes).Nodup
+hinv :
+  (((1 ≤ σ.ui.heat ∧ σ.ui.heat ≤ 5) ∧
+        ∀ (x : Int × model.Order),
+          x ∈ σ.ui.orders.entries → ((1 ≤ x.snd.qty ∧ x.snd.qty ≤ 500) ∧ 0 < x.snd.price) ∧ x.fst < σ.ui.nextId) ∧
+      model.openQty σ.ui.orders.values ≤ 1000) ∧
+    match σ.ticket with
+    | some ticket => ticket.price > 0
+    | none => True
+h₃₁ : ¬e.id ∈ σ.ui.collapsed.elems
+hcontract : σ.ui.watch.elems.Nodup
+hcontract_1 : (List.map Prod.fst σ.ui.orders.entries).Nodup
+hcontract_2 : σ.ui.collapsed.elems.Nodup
+a : Key
+w : model.Strike
+left :
+  w ∈
+    JS.slice e.strikes
+      (if
+          JS.lt
+              (match h₁₂ :
+                match h₁₂ : σ.ui.held.get e.id with
+                | some held_1 => some held_1
+                | none =>
+                  match h₈ : e.future.bid with
+                  | some b_1 =>
+                    match h₈ : e.future.ask with
+                    | some a_1 => some ((b_1 + a_1) / 2)
+                    | none => some b_1
+                  | none =>
+                    match h₁₅ : e.future.bid, ⋯ with
+                    | some b_1, h₁₃ => some b_1
+                    | none, h₁₃ => e.future.ask with
+              | some center_1 => JS.findIndex e.strikes fun s => model.nearest e.strikes s center_1
+              | none => -1)
+              0 =
+            true then
+        0
+      else
+        (match h₁₂ :
+            match h₂₂ : σ.ui.filter with
+            | model.StrikeFilter.s3 => some 3
+            | model.StrikeFilter.s7 => some 7
+            | model.StrikeFilter.s11 => some 11
+            | model.StrikeFilter.s99 => some 99
+            | model.StrikeFilter.all => none with
+          | some levels_1 =>
+            {
+              lo :=
+                max 0
+                  (-1 * levels_1 +
+                    match h₁₂ :
+                      match h₁₂ : σ.ui.held.get e.id with
+                      | some held_1 => some held_1
+                      | none =>
+                        match h₈ : e.future.bid with
+                        | some b_1 =>
+                          match h₈ : e.future.ask with
+                          | some a_1 => some ((b_1 + a_1) / 2)
+                          | none => some b_1
+                        | none =>
+                          match h₁₅ : e.future.bid, ⋯ with
+                          | some b_1, h₁₃ => some b_1
+                          | none, h₁₃ => e.future.ask with
+                    | some center_1 => JS.findIndex e.strikes fun s => model.nearest e.strikes s center_1
+                    | none => -1),
+              hi :=
+                min (↑e.strikes.length)
+                  ((levels_1 +
+                      match h₁₂ :
+                        match h₁₂ : σ.ui.held.get e.id with
+                        | some held_1 => some held_1
+                        | none =>
+                          match h₈ : e.future.bid with
+                          | some b_1 =>
+                            match h₈ : e.future.ask with
+                            | some a_1 => some ((b_1 + a_1) / 2)
+                            | none => some b_1
+                          | none =>
+                            match h₁₅ : e.future.bid, ⋯ with
+                            | some b_1, h₁₃ => some b_1
+                            | none, h₁₃ => e.future.ask with
+                      | some center_1 => JS.findIndex e.strikes fun s => model.nearest e.strikes s center_1
+                      | none => -1) +
+                    1) }
+          | none => { lo := 0, hi := ↑e.strikes.length }).lo)
+      (some
+        (if
+            JS.lt
+                (match h₁₂ :
+                  match h₁₂ : σ.ui.held.get e.id with
+                  | some held_1 => some held_1
+                  | none =>
+                    match h₈ : e.future.bid with
+                    | some b_1 =>
+                      match h₈ : e.future.ask with
+                      | some a_1 => some ((b_1 + a_1) / 2)
+                      | none => some b_1
+                    | none =>
+                      match h₁₅ : e.future.bid, ⋯ with
+                      | some b_1, h₁₃ => some b_1
+                      | none, h₁₃ => e.future.ask with
+                | some center_1 => JS.findIndex e.strikes fun s => model.nearest e.strikes s center_1
+                | none => -1)
+                0 =
+              true then
+          ↑e.strikes.length
+        else
+          (match h₁₂ :
+              match h₂₂ : σ.ui.filter with
+              | model.StrikeFilter.s3 => some 3
+              | model.StrikeFilter.s7 => some 7
+              | model.StrikeFilter.s11 => some 11
+              | model.StrikeFilter.s99 => some 99
+              | model.StrikeFilter.all => none with
+            | some levels_1 =>
+              {
+                lo :=
+                  max 0
+                    (-1 * levels_1 +
+                      match h₁₂ :
+                        match h₁₂ : σ.ui.held.get e.id with
+                        | some held_1 => some held_1
+                        | none =>
+                          match h₈ : e.future.bid with
+                          | some b_1 =>
+                            match h₈ : e.future.ask with
+                            | some a_1 => some ((b_1 + a_1) / 2)
+                            | none => some b_1
+                          | none =>
+                            match h₁₅ : e.future.bid, ⋯ with
+                            | some b_1, h₁₃ => some b_1
+                            | none, h₁₃ => e.future.ask with
+                      | some center_1 => JS.findIndex e.strikes fun s => model.nearest e.strikes s center_1
+                      | none => -1),
+                hi :=
+                  min (↑e.strikes.length)
+                    ((levels_1 +
+                        match h₁₂ :
+                          match h₁₂ : σ.ui.held.get e.id with
+                          | some held_1 => some held_1
+                          | none =>
+                            match h₈ : e.future.bid with
+                            | some b_1 =>
+                              match h₈ : e.future.ask with
+                              | some a_1 => some ((b_1 + a_1) / 2)
+                              | none => some b_1
+                            | none =>
+                              match h₁₅ : e.future.bid, ⋯ with
+                              | some b_1, h₁₃ => some b_1
+                              | none, h₁₃ => e.future.ask with
+                        | some center_1 => JS.findIndex e.strikes fun s => model.nearest e.strikes s center_1
+                        | none => -1) +
+                      1) }
+            | none => { lo := 0, hi := ↑e.strikes.length }).hi))
+right : Key.int w.strike = a
+b : Key
+w_1 : model.Strike
+left_1 : w_1 ∈ e.strikes
+left_2 : w_1.strike ∈ σ.ui.watch.elems
+right_2 : Key.int w_1.strike = b
+h_4 : a = b
+h_5 :
+  JS.lt
+      (match h₁₂ :
+        match h₁₂ : σ.ui.held.get e.id with
+        | some held_1 => some held_1
+        | none =>
+          match h₈ : e.future.bid with
+          | some b_1 =>
+            match h₈ : e.future.ask with
+            | some a_1 => some ((b_1 + a_1) / 2)
+            | none => some b_1
+          | none =>
+            match h₁₅ : e.future.bid, ⋯ with
+            | some b_1, h₁₃ => some b_1
+            | none, h₁₃ => e.future.ask with
+      | some center_1 => JS.findIndex e.strikes fun s => model.nearest e.strikes s center_1
+      | none => -1)
+      0 =
+    true
+held_1 : Int
+h₁₂ h_6 : σ.ui.held.get e.id = some held_1
+held_2 : Int
+h₁₂_1 h_7 :
+  (match h₁₂ : σ.ui.held.get e.id with
+    | some held_1 => some held_1
+    | none =>
+      match h₈ : e.future.bid with
+      | some b_1 =>
+        match h₈ : e.future.ask with
+        | some a_1 => some ((b_1 + a_1) / 2)
+        | none => some b_1
+      | none =>
+        match h₁₅ : e.future.bid, ⋯ with
+        | some b_1, h₁₃ => some b_1
+        | none, h₁₃ => e.future.ask) =
+    some held_2
+ticket_1 : model.Ticket
+h_8 : σ.ticket = some ticket_1
+w_2 : Int
+h_9 : (e.id, w_2) ∈ σ.ui.held.entries
+w_3 : Int
+h_10 : (w_3, held_1) ∈ σ.ui.held.entries
+h_11 : (fun s => model.nearest e.strikes s held_2) = fun s => model.nearest e.strikes s held_1
+w_4 : Int
+h_12 : (w_3, w_4) ∈ σ.ui.held.entries
+⊢ False
+[grind] Goal diagnostics
+  [facts] Asserted facts
+    [prop] e ∈ props.expiries

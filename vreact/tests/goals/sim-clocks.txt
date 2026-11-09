@@ -1,0 +1,146 @@
+`grind` failed
+case grind.1.1.2.2
+s : Sim
+hcontract :
+  ((0 ≤
+        if 0 ≤ s.feed.seed * 75 + 74 then (s.feed.seed * 75 + 74) % ↑(Int.natAbs 65537)
+        else -(-(s.feed.seed * 75 + 74) % ↑(Int.natAbs 65537))) →
+      (0 ≤
+          if
+              0 ≤
+                if 0 ≤ s.feed.seed * 75 + 74 then (s.feed.seed * 75 + 74) % ↑(Int.natAbs 65537)
+                else -(-(s.feed.seed * 75 + 74) % ↑(Int.natAbs 65537)) then
+            (if 0 ≤ s.feed.seed * 75 + 74 then (s.feed.seed * 75 + 74) % ↑(Int.natAbs 65537)
+              else -(-(s.feed.seed * 75 + 74) % ↑(Int.natAbs 65537))) %
+              ↑(Int.natAbs 5)
+          else
+            -((-if 0 ≤ s.feed.seed * 75 + 74 then (s.feed.seed * 75 + 74) % ↑(Int.natAbs 65537)
+                  else -(-(s.feed.seed * 75 + 74) % ↑(Int.natAbs 65537))) %
+                ↑(Int.natAbs 5))) ∧
+        (if
+              0 ≤
+                if 0 ≤ s.feed.seed * 75 + 74 then (s.feed.seed * 75 + 74) % ↑(Int.natAbs 65537)
+                else -(-(s.feed.seed * 75 + 74) % ↑(Int.natAbs 65537)) then
+            (if 0 ≤ s.feed.seed * 75 + 74 then (s.feed.seed * 75 + 74) % ↑(Int.natAbs 65537)
+              else -(-(s.feed.seed * 75 + 74) % ↑(Int.natAbs 65537))) %
+              ↑(Int.natAbs 5)
+          else
+            -((-if 0 ≤ s.feed.seed * 75 + 74 then (s.feed.seed * 75 + 74) % ↑(Int.natAbs 65537)
+                  else -(-(s.feed.seed * 75 + 74) % ↑(Int.natAbs 65537))) %
+                ↑(Int.natAbs 5))) <
+          ↑(Int.natAbs 5)) ∧
+    ((if 0 ≤ s.feed.seed * 75 + 74 then (s.feed.seed * 75 + 74) % ↑(Int.natAbs 65537)
+        else -(-(s.feed.seed * 75 + 74) % ↑(Int.natAbs 65537))) <
+        0 →
+      (-↑(Int.natAbs 5) <
+          if
+              0 ≤
+                if 0 ≤ s.feed.seed * 75 + 74 then (s.feed.seed * 75 + 74) % ↑(Int.natAbs 65537)
+                else -(-(s.feed.seed * 75 + 74) % ↑(Int.natAbs 65537)) then
+            (if 0 ≤ s.feed.seed * 75 + 74 then (s.feed.seed * 75 + 74) % ↑(Int.natAbs 65537)
+              else -(-(s.feed.seed * 75 + 74) % ↑(Int.natAbs 65537))) %
+              ↑(Int.natAbs 5)
+          else
+            -((-if 0 ≤ s.feed.seed * 75 + 74 then (s.feed.seed * 75 + 74) % ↑(Int.natAbs 65537)
+                  else -(-(s.feed.seed * 75 + 74) % ↑(Int.natAbs 65537))) %
+                ↑(Int.natAbs 5))) ∧
+        (if
+              0 ≤
+                if 0 ≤ s.feed.seed * 75 + 74 then (s.feed.seed * 75 + 74) % ↑(Int.natAbs 65537)
+                else -(-(s.feed.seed * 75 + 74) % ↑(Int.natAbs 65537)) then
+            (if 0 ≤ s.feed.seed * 75 + 74 then (s.feed.seed * 75 + 74) % ↑(Int.natAbs 65537)
+              else -(-(s.feed.seed * 75 + 74) % ↑(Int.natAbs 65537))) %
+              ↑(Int.natAbs 5)
+          else
+            -((-if 0 ≤ s.feed.seed * 75 + 74 then (s.feed.seed * 75 + 74) % ↑(Int.natAbs 65537)
+                  else -(-(s.feed.seed * 75 + 74) % ↑(Int.natAbs 65537))) %
+                ↑(Int.natAbs 5))) ≤
+          0)
+hcontract_1 :
+  ((0 ≤
+        if 0 ≤ s.feed.seed * 75 + 74 then (s.feed.seed * 75 + 74) % ↑(Int.natAbs 65537)
+        else -(-(s.feed.seed * 75 + 74) % ↑(Int.natAbs 65537))) →
+      (if 0 ≤ s.feed.seed * 75 + 74 then (s.feed.seed * 75 + 74) % ↑(Int.natAbs 65537)
+          else -(-(s.feed.seed * 75 + 74) % ↑(Int.natAbs 65537))) <
+          ↑(Int.natAbs 5) →
+        (if
+              0 ≤
+                if 0 ≤ s.feed.seed * 75 + 74 then (s.feed.seed * 75 + 74) % ↑(Int.natAbs 65537)
+                else -(-(s.feed.seed * 75 + 74) % ↑(Int.natAbs 65537)) then
+            (if 0 ≤ s.feed.seed * 75 + 74 then (s.feed.seed * 75 + 74) % ↑(Int.natAbs 65537)
+              else -(-(s.feed.seed * 75 + 74) % ↑(Int.natAbs 65537))) %
+              ↑(Int.natAbs 5)
+          else
+            -((-if 0 ≤ s.feed.seed * 75 + 74 then (s.feed.seed * 75 + 74) % ↑(Int.natAbs 65537)
+                  else -(-(s.feed.seed * 75 + 74) % ↑(Int.natAbs 65537))) %
+                ↑(Int.natAbs 5))) =
+          if 0 ≤ s.feed.seed * 75 + 74 then (s.feed.seed * 75 + 74) % ↑(Int.natAbs 65537)
+          else -(-(s.feed.seed * 75 + 74) % ↑(Int.natAbs 65537))) ∧
+    ((-↑(Int.natAbs 5) <
+          if 0 ≤ s.feed.seed * 75 + 74 then (s.feed.seed * 75 + 74) % ↑(Int.natAbs 65537)
+          else -(-(s.feed.seed * 75 + 74) % ↑(Int.natAbs 65537))) →
+        (if 0 ≤ s.feed.seed * 75 + 74 then (s.feed.seed * 75 + 74) % ↑(Int.natAbs 65537)
+            else -(-(s.feed.seed * 75 + 74) % ↑(Int.natAbs 65537))) ≤
+            0 →
+          (if
+                0 ≤
+                  if 0 ≤ s.feed.seed * 75 + 74 then (s.feed.seed * 75 + 74) % ↑(Int.natAbs 65537)
+                  else -(-(s.feed.seed * 75 + 74) % ↑(Int.natAbs 65537)) then
+              (if 0 ≤ s.feed.seed * 75 + 74 then (s.feed.seed * 75 + 74) % ↑(Int.natAbs 65537)
+                else -(-(s.feed.seed * 75 + 74) % ↑(Int.natAbs 65537))) %
+                ↑(Int.natAbs 5)
+            else
+              -((-if 0 ≤ s.feed.seed * 75 + 74 then (s.feed.seed * 75 + 74) % ↑(Int.natAbs 65537)
+                    else -(-(s.feed.seed * 75 + 74) % ↑(Int.natAbs 65537))) %
+                  ↑(Int.natAbs 5))) =
+            if 0 ≤ s.feed.seed * 75 + 74 then (s.feed.seed * 75 + 74) % ↑(Int.natAbs 65537)
+            else -(-(s.feed.seed * 75 + 74) % ↑(Int.natAbs 65537))) ∧
+      ((if 0 ≤ s.feed.seed * 75 + 74 then (s.feed.seed * 75 + 74) % ↑(Int.natAbs 65537)
+            else -(-(s.feed.seed * 75 + 74) % ↑(Int.natAbs 65537))) =
+            5 ∨
+          (if 0 ≤ s.feed.seed * 75 + 74 then (s.feed.seed * 75 + 74) % ↑(Int.natAbs 65537)
+            else -(-(s.feed.seed * 75 + 74) % ↑(Int.natAbs 65537))) =
+            -5 →
+        (if
+              0 ≤
+                if 0 ≤ s.feed.seed * 75 + 74 then (s.feed.seed * 75 + 74) % ↑(Int.natAbs 65537)
+                else -(-(s.feed.seed * 75 + 74) % ↑(Int.natAbs 65537)) then
+            (if 0 ≤ s.feed.seed * 75 + 74 then (s.feed.seed * 75 + 74) % ↑(Int.natAbs 65537)
+              else -(-(s.feed.seed * 75 + 74) % ↑(Int.natAbs 65537))) %
+              ↑(Int.natAbs 5)
+          else
+            -((-if 0 ≤ s.feed.seed * 75 + 74 then (s.feed.seed * 75 + 74) % ↑(Int.natAbs 65537)
+                  else -(-(s.feed.seed * 75 + 74) % ↑(Int.natAbs 65537))) %
+                ↑(Int.natAbs 5))) =
+          0)
+h₁₆ : ¬s.rally = true
+h : ¬s.paused = true
+h_1 : ¬40 ≤ s.feed.offset
+hcontract_2 :
+  ((-40 ≤ s.feed.offset ∧ s.feed.offset ≤ 40) ∧ 0 ≤ s.feed.seed) ∧ s.feed.seed < 65537 →
+    (((-40 ≤
+            if s.paused = true then s.feed.offset
+            else if 40 ≤ s.feed.offset then s.feed.offset else s.feed.offset + 1) ∧
+          (if s.paused = true then s.feed.offset else if 40 ≤ s.feed.offset then s.feed.offset else s.feed.offset + 1) ≤
+            40) ∧
+        0 ≤ s.feed.seed) ∧
+      s.feed.seed < 65537
+hcontract_3 :
+  s.paused = true →
+    (if s.paused = true then s.feed.offset else if 40 ≤ s.feed.offset then s.feed.offset else s.feed.offset + 1) =
+      s.feed.offset
+hcontract_4 : True
+left : -1 * s.feed.offset + -40 ≤ 0
+left_1 : s.feed.offset + -40 ≤ 0
+left_2 : -1 * s.feed.seed ≤ 0
+right_2 : s.feed.seed + -65536 ≤ 0
+h_4 :
+  (if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537 else -1 * ((-75 * s.feed.seed + -74) % 65537)) + -4 ≤ 0
+h_5 :
+  ¬((if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537 else -1 * ((-75 * s.feed.seed + -74) % 65537)) = 5 ∨
+      (if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537 else -1 * ((-75 * s.feed.seed + -74) % 65537)) = -5)
+h_6 : ¬s.feed.seed + -872 ≤ 0
+⊢ False
+[grind] Goal diagnostics
+  [facts] Asserted facts
+    [prop] ((-1 *

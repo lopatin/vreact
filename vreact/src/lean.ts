@@ -1020,17 +1020,24 @@ export function judge(obligations: Obligation[], messages: LeanMessage[], marker
 }
 
 /**
- * Keep the informative part of a Lean failure (the goal), in at most `maxLines` lines (plus the
- * `…` marker). A message that fits is kept as it is. A longer one is shortened in three ways:
- * a message with several goals (after a timeout: the goal as stated, then the case of it that
- * failed; several unsolved goals) keeps only the last goal, after the lines before the first one
- * (what failed), so the hypotheses shown are always those of the conclusion shown; the contract
- * instances that span several lines (`hcontract…`, the facts `vreact_contracts` adds for each
- * call of a function with `ensures`: long arithmetic when the callee's body is in scope) become
- * one line that names them, where the first of them was, so the short hypotheses after them —
- * usually the ones that decide the case — stay in view; and the conclusion (the last `⊢ …`) is
- * always kept, after the `…` that marks the lines left out (with up to 2 lines that follow it).
- * `--full` prints the message unchanged.
+ * Keep the informative part of a Lean failure (the goal), in at most `maxLines` lines. A message
+ * that fits is kept as it is (without `grind`'s diagnostics). A longer one is shortened step by
+ * step, each step only while it is still too long:
+ *   1. a message with several goals (after a timeout: the goal as stated, then the case of it
+ *      that failed; several unsolved goals) keeps only the last goal, after the lines before the
+ *      first one (what failed), so the hypotheses shown are always those of the conclusion shown;
+ *   2. the contract instances that span several lines (`hcontract…`, the facts `vreact_contracts`
+ *      adds for each call of a function with `ensures`) become one line that names and counts
+ *      them, where the first of them was;
+ *   3. then the let-definitions that span several lines (`x : T :=` and its value, code that the
+ *      source shows), from the top and only as many as needed, likewise one line;
+ *   4. then the other hypotheses that span several lines, likewise;
+ *   5. last, the conclusion (the last `⊢ …`) is cut to 3 lines and what follows it to 2, and the
+ *      hypotheses farthest from the conclusion are left out, named and counted by one line
+ *      `… (k earlier hypotheses: …)` (the lines of steps 2-4 stay).
+ * So the short hypotheses next to the conclusion (usually the ones that decide the case: branch
+ * conditions, the negated goal) and the conclusion stay in view, and every line that stands for
+ * others says so (`--full shows …`). `--full` prints the message unchanged.
  */
 export function summarizeLeanError(text: string, maxLines = 30): string {
   const lines = text.split("\n");
@@ -1044,10 +1051,13 @@ export function summarizeLeanError(text: string, maxLines = 30): string {
     if (/^\s/.test(l) && blocks.length) blocks[blocks.length - 1].push(l);
     else blocks.push([l]);
   }
-  const names = (b: string[]) => /^((?:[^\s:]+ )*[^\s:]+) :(?: |$)/.exec(b[0])?.[1].split(" ") ?? [];
+  // (the lines that stand for others, with the names they stand for)
+  const notes = new Map<string[], string[]>();
+  const names = (b: string[]) => notes.get(b) ?? /^((?:[^\s:]+ )*[^\s:]+) :(?: |$)/.exec(b[0])?.[1].split(" ") ?? [];
   const isTarget = (b: string[]) => b[0].startsWith("⊢");
-  // several goals: the last one only (cut anywhere else, the hypotheses of one goal would stand
-  // above the conclusion of another: after a timeout, the goal as stated above the failing case's)
+  // 1. several goals: the last one only (cut anywhere else, the hypotheses of one goal would
+  // stand above the conclusion of another: after a timeout, the goal as stated above the failing
+  // case's)
   const targets = blocks.flatMap((b, i) => (isTarget(b) ? [i] : []));
   if (targets.length >= 2) {
     const prev = targets[targets.length - 2];
@@ -1056,27 +1066,91 @@ export function summarizeLeanError(text: string, maxLines = 30): string {
     const what = /^The goal splits into \d+ cases/.test(rest[0][0]) ? "the goal as stated" : targets.length === 2 ? "an earlier goal" : `${targets.length - 1} earlier goals`;
     blocks = [...blocks.slice(0, start), [`  … (${what}: --full shows ${targets.length === 2 ? "it" : "them"})`], ...rest];
   }
-  const isContract = (b: string[]) => b.length > 1 && names(b).length > 0 && names(b).every((n) => /^hcontract/.test(n));
-  const contracts = blocks.filter(isContract);
-  let out: string[][] = blocks;
-  if (contracts.length) {
-    const all = contracts.flatMap(names);
-    const n = contracts.reduce((k, b) => k + b.length, 0);
-    const line = `${all.join(", ")} : …  (${all.length === 1 ? "a contract instance" : `${all.length} contract instances`}, ${n} lines: --full shows ${all.length === 1 ? "it" : "them"})`;
-    const first = blocks.indexOf(contracts[0]);
-    out = blocks.filter((b, i) => i === first || !isContract(b)).map((b, i) => (i === first ? [line] : b));
+  const size = (bs: string[][]) => bs.reduce((k, b) => k + b.length, 0);
+  // the lines before the first hypothesis (what failed, the case's name), the hypotheses, and
+  // the conclusion with what follows it
+  const ti = blocks.map(isTarget).lastIndexOf(true);
+  const end = ti < 0 ? blocks.length : ti;
+  let h0 = blocks.findIndex((b) => names(b).length > 0 || isTarget(b));
+  if (h0 < 0 || h0 > end) h0 = end;
+  const head = blocks.slice(0, h0);
+  let hyps = blocks.slice(h0, end);
+  const rest = blocks.slice(end);
+  const a = (k: number, one: string, many: string) => (k === 1 ? `a ${one}` : `${k} ${many}`);
+  /** `base` with the blocks `picked` as one line that names and counts them, where the first was */
+  const collapsed = (base: string[][], picked: string[][], sep: string, one: string, many: string): string[][] => {
+    if (!picked.length) return base;
+    const all = picked.flatMap(names);
+    const line = [`${all.join(", ")} ${sep} …  (${a(all.length, one, many)}, ${size(picked)} lines: --full shows ${all.length === 1 ? "it" : "them"})`];
+    notes.set(line, all);
+    return base.flatMap((b) => (b === picked[0] ? [line] : picked.includes(b) ? [] : [b]));
+  };
+  const long = (b: string[]) => b.length > 1 && names(b).length > 0 && !notes.has(b);
+  // 2. the contract instances, all of them
+  const isContract = (b: string[]) => long(b) && names(b).every((n) => /^hcontract/.test(n));
+  hyps = collapsed(hyps, hyps.filter(isContract), ":", "contract instance", "contract instances");
+  if (size(head) + size(hyps) + size(rest) <= maxLines) return [...head, ...hyps, ...rest].flat().join("\n");
+  if (ti < 0) return [...head, ...hyps].flat().slice(0, maxLines).join("\n") + "\n  …";
+  // the conclusion, at most 3 lines; what follows it (after a timeout without a failing case: how
+  // far the cases got), at most 2
+  const target = rest[0].length > 3 ? [...rest[0].slice(0, 3), "  …"] : rest[0];
+  const after = rest.slice(1).flat();
+  const tail = after.length <= 2 ? after : ["  …"];
+  const over = (hs: string[][]) => size(head) + size(hs) + target.length + tail.length - maxLines;
+  const shown = () => [...head.flat(), ...hyps.flat(), ...target, ...tail].join("\n");
+  if (over(hyps) <= 0) return shown();
+  // 3. let-definitions: `x : T :=` (at the top level of the line: not the `:=` of a structure
+  // instance `{ f := … }` in a hypothesis's type), from the top, as many as needed
+  const isDef = (b: string[]) => {
+    const m = /^(?:[^\s:]+ )*[^\s:]+ : /.exec(b[0]);
+    if (!m) return false;
+    const s = b[0].slice(m[0].length);
+    let depth = 0;
+    for (let i = 0; i < s.length; i++) {
+      if ("([{⟨".includes(s[i])) depth++;
+      else if (")]}⟩".includes(s[i])) depth--;
+      else if (depth === 0 && s.startsWith(" :=", i) && (i + 3 === s.length || s[i + 3] === " ")) return true;
+    }
+    return false;
+  };
+  const defs = hyps.filter((b) => long(b) && isDef(b));
+  const before = hyps;
+  for (let k = 1; k <= defs.length; k++) {
+    hyps = collapsed(before, defs.slice(0, k), ":=", "definition", "definitions");
+    if (over(hyps) <= 0) return shown();
   }
-  const flat = out.flat();
-  if (flat.length <= maxLines) return flat.join("\n");
-  // the conclusion: the last `⊢` block, at most 3 lines
-  const ti = out.map(isTarget).lastIndexOf(true);
-  if (ti < 0) return flat.slice(0, maxLines).join("\n") + "\n  …";
-  const target = out[ti].length > 3 ? [...out[ti].slice(0, 3), "  …"] : out[ti];
-  // what follows the conclusion (after a timeout without a failing case: how far the cases got)
-  const tail = out.slice(ti + 1).flat();
-  const end = tail.length <= 2 ? tail : ["  …"];
-  const before = out.slice(0, ti).flat();
-  const room = Math.max(0, maxLines - target.length - end.length);
-  if (before.length <= room) return [...before, ...target, ...end].join("\n");
-  return [...before.slice(0, room), "  …", ...target, ...end].join("\n");
+  // 4. the other long hypotheses, from the top, each one whose line frees no more lines than are
+  // still needed: one near the conclusion (often the negated goal, the one that decides) stays
+  // when leaving out a few short lines above is enough
+  const base = hyps;
+  const picked: string[][] = [];
+  for (const b of base.filter(long)) {
+    const trial = collapsed(base, [...picked, b], ":", "long hypothesis", "long hypotheses");
+    if (size(hyps) - size(trial) > over(hyps)) continue;
+    picked.push(b);
+    hyps = trial;
+    if (over(hyps) <= 0) return shown();
+  }
+  // 5. the hypotheses nearest the conclusion, and the lines that stand for others; one line names
+  // and counts the hypotheses left out
+  const room = Math.max(0, maxLines - size(head) - target.length - tail.length);
+  const keep = new Set<string[]>();
+  let left = room - 1;
+  const standIns = hyps.filter((b) => notes.has(b));
+  if (size(standIns) <= left) {
+    for (const b of standIns) keep.add(b);
+    left -= size(standIns);
+  }
+  for (let i = hyps.length - 1; i >= 0; i--) {
+    const b = hyps[i];
+    if (keep.has(b)) continue;
+    if (b.length > left) break;
+    keep.add(b);
+    left -= b.length;
+  }
+  const dropped = hyps.filter((b) => !keep.has(b));
+  const ns = dropped.flatMap(names);
+  const what = ns.length ? `${a(ns.length, "earlier hypothesis", "earlier hypotheses")}: ${[...ns.slice(0, 8), ...(ns.length > 8 ? ["…"] : [])].join(", ")}` : a(size(dropped), "earlier line", "earlier lines");
+  const marker = `  … (${what}: --full shows ${ns.length === 1 ? "it" : "them"})`;
+  return [...head.flat(), marker, ...hyps.filter((b) => keep.has(b)).flat(), ...target, ...tail].join("\n");
 }

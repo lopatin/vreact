@@ -1,0 +1,135 @@
+(deterministic) timeout: the automation did not finish within this obligation's budget of 300000 heartbeats (set "heartbeats" in vreact.json to change it)
+f : feed.Feed
+paused : Bool
+k : Int
+⊢ paused = true → (stepChain f paused k).offset = f.offset ∧ (stepChain f paused k).seed = f.seed
+The goal splits into 13 cases. A case's name lists the branches that lead to it, outermost first: `isTrue`/`isFalse` are the two branches of an `if` (a `switch` on a number or a string is a chain of `if`s, one per body), `h_k` is the k-th alternative of a `match` (a `switch` on a union or an enum has one per `case` label, in the order written, then one for the rest: `default`, wherever it is written); conditions in the translation (such as the sign test of `%`) split the same way. Each case alone, smallest first, with up to 30000 heartbeats: 0 proved, 0 did not finish, then case isFalse.isFalse.isTrue.isFalse failed (12 not tried):
+`grind` failed
+case grind.1.1.1.2
+f : feed.Feed
+paused : Bool
+k : Int
+h₅ : paused = true
+hcontract :
+  ((0 ≤
+        if 0 ≤ f.seed * 75 + 74 then (f.seed * 75 + 74) % ↑(Int.natAbs 65537)
+        else -(-(f.seed * 75 + 74) % ↑(Int.natAbs 65537))) →
+      (0 ≤
+          if
+              0 ≤
+                if 0 ≤ f.seed * 75 + 74 then (f.seed * 75 + 74) % ↑(Int.natAbs 65537)
+                else -(-(f.seed * 75 + 74) % ↑(Int.natAbs 65537)) then
+            (if 0 ≤ f.seed * 75 + 74 then (f.seed * 75 + 74) % ↑(Int.natAbs 65537)
+              else -(-(f.seed * 75 + 74) % ↑(Int.natAbs 65537))) %
+              ↑(Int.natAbs 5)
+          else
+            -((-if 0 ≤ f.seed * 75 + 74 then (f.seed * 75 + 74) % ↑(Int.natAbs 65537)
+                  else -(-(f.seed * 75 + 74) % ↑(Int.natAbs 65537))) %
+                ↑(Int.natAbs 5))) ∧
+        (if
+              0 ≤
+                if 0 ≤ f.seed * 75 + 74 then (f.seed * 75 + 74) % ↑(Int.natAbs 65537)
+                else -(-(f.seed * 75 + 74) % ↑(Int.natAbs 65537)) then
+            (if 0 ≤ f.seed * 75 + 74 then (f.seed * 75 + 74) % ↑(Int.natAbs 65537)
+              else -(-(f.seed * 75 + 74) % ↑(Int.natAbs 65537))) %
+              ↑(Int.natAbs 5)
+          else
+            -((-if 0 ≤ f.seed * 75 + 74 then (f.seed * 75 + 74) % ↑(Int.natAbs 65537)
+                  else -(-(f.seed * 75 + 74) % ↑(Int.natAbs 65537))) %
+                ↑(Int.natAbs 5))) <
+          ↑(Int.natAbs 5)) ∧
+    ((if 0 ≤ f.seed * 75 + 74 then (f.seed * 75 + 74) % ↑(Int.natAbs 65537)
+        else -(-(f.seed * 75 + 74) % ↑(Int.natAbs 65537))) <
+        0 →
+      (-↑(Int.natAbs 5) <
+          if
+              0 ≤
+                if 0 ≤ f.seed * 75 + 74 then (f.seed * 75 + 74) % ↑(Int.natAbs 65537)
+                else -(-(f.seed * 75 + 74) % ↑(Int.natAbs 65537)) then
+            (if 0 ≤ f.seed * 75 + 74 then (f.seed * 75 + 74) % ↑(Int.natAbs 65537)
+              else -(-(f.seed * 75 + 74) % ↑(Int.natAbs 65537))) %
+              ↑(Int.natAbs 5)
+          else
+            -((-if 0 ≤ f.seed * 75 + 74 then (f.seed * 75 + 74) % ↑(Int.natAbs 65537)
+                  else -(-(f.seed * 75 + 74) % ↑(Int.natAbs 65537))) %
+                ↑(Int.natAbs 5))) ∧
+        (if
+              0 ≤
+                if 0 ≤ f.seed * 75 + 74 then (f.seed * 75 + 74) % ↑(Int.natAbs 65537)
+                else -(-(f.seed * 75 + 74) % ↑(Int.natAbs 65537)) then
+            (if 0 ≤ f.seed * 75 + 74 then (f.seed * 75 + 74) % ↑(Int.natAbs 65537)
+              else -(-(f.seed * 75 + 74) % ↑(Int.natAbs 65537))) %
+              ↑(Int.natAbs 5)
+          else
+            -((-if 0 ≤ f.seed * 75 + 74 then (f.seed * 75 + 74) % ↑(Int.natAbs 65537)
+                  else -(-(f.seed * 75 + 74) % ↑(Int.natAbs 65537))) %
+                ↑(Int.natAbs 5))) ≤
+          0)
+hcontract_1 :
+  ((0 ≤
+        if 0 ≤ f.seed * 75 + 74 then (f.seed * 75 + 74) % ↑(Int.natAbs 65537)
+        else -(-(f.seed * 75 + 74) % ↑(Int.natAbs 65537))) →
+      (if 0 ≤ f.seed * 75 + 74 then (f.seed * 75 + 74) % ↑(Int.natAbs 65537)
+          else -(-(f.seed * 75 + 74) % ↑(Int.natAbs 65537))) <
+          ↑(Int.natAbs 5) →
+        (if
+              0 ≤
+                if 0 ≤ f.seed * 75 + 74 then (f.seed * 75 + 74) % ↑(Int.natAbs 65537)
+                else -(-(f.seed * 75 + 74) % ↑(Int.natAbs 65537)) then
+            (if 0 ≤ f.seed * 75 + 74 then (f.seed * 75 + 74) % ↑(Int.natAbs 65537)
+              else -(-(f.seed * 75 + 74) % ↑(Int.natAbs 65537))) %
+              ↑(Int.natAbs 5)
+          else
+            -((-if 0 ≤ f.seed * 75 + 74 then (f.seed * 75 + 74) % ↑(Int.natAbs 65537)
+                  else -(-(f.seed * 75 + 74) % ↑(Int.natAbs 65537))) %
+                ↑(Int.natAbs 5))) =
+          if 0 ≤ f.seed * 75 + 74 then (f.seed * 75 + 74) % ↑(Int.natAbs 65537)
+          else -(-(f.seed * 75 + 74) % ↑(Int.natAbs 65537))) ∧
+    ((-↑(Int.natAbs 5) <
+          if 0 ≤ f.seed * 75 + 74 then (f.seed * 75 + 74) % ↑(Int.natAbs 65537)
+          else -(-(f.seed * 75 + 74) % ↑(Int.natAbs 65537))) →
+        (if 0 ≤ f.seed * 75 + 74 then (f.seed * 75 + 74) % ↑(Int.natAbs 65537)
+            else -(-(f.seed * 75 + 74) % ↑(Int.natAbs 65537))) ≤
+            0 →
+          (if
+                0 ≤
+                  if 0 ≤ f.seed * 75 + 74 then (f.seed * 75 + 74) % ↑(Int.natAbs 65537)
+                  else -(-(f.seed * 75 + 74) % ↑(Int.natAbs 65537)) then
+              (if 0 ≤ f.seed * 75 + 74 then (f.seed * 75 + 74) % ↑(Int.natAbs 65537)
+                else -(-(f.seed * 75 + 74) % ↑(Int.natAbs 65537))) %
+                ↑(Int.natAbs 5)
+            else
+              -((-if 0 ≤ f.seed * 75 + 74 then (f.seed * 75 + 74) % ↑(Int.natAbs 65537)
+                    else -(-(f.seed * 75 + 74) % ↑(Int.natAbs 65537))) %
+                  ↑(Int.natAbs 5))) =
+            if 0 ≤ f.seed * 75 + 74 then (f.seed * 75 + 74) % ↑(Int.natAbs 65537)
+            else -(-(f.seed * 75 + 74) % ↑(Int.natAbs 65537))) ∧
+      ((if 0 ≤ f.seed * 75 + 74 then (f.seed * 75 + 74) % ↑(Int.natAbs 65537)
+            else -(-(f.seed * 75 + 74) % ↑(Int.natAbs 65537))) =
+            5 ∨
+          (if 0 ≤ f.seed * 75 + 74 then (f.seed * 75 + 74) % ↑(Int.natAbs 65537)
+            else -(-(f.seed * 75 + 74) % ↑(Int.natAbs 65537))) =
+            -5 →
+        (if
+              0 ≤
+                if 0 ≤ f.seed * 75 + 74 then (f.seed * 75 + 74) % ↑(Int.natAbs 65537)
+                else -(-(f.seed * 75 + 74) % ↑(Int.natAbs 65537)) then
+            (if 0 ≤ f.seed * 75 + 74 then (f.seed * 75 + 74) % ↑(Int.natAbs 65537)
+              else -(-(f.seed * 75 + 74) % ↑(Int.natAbs 65537))) %
+              ↑(Int.natAbs 5)
+          else
+            -((-if 0 ≤ f.seed * 75 + 74 then (f.seed * 75 + 74) % ↑(Int.natAbs 65537)
+                  else -(-(f.seed * 75 + 74) % ↑(Int.natAbs 65537))) %
+                ↑(Int.natAbs 5))) =
+          0)
+h : ¬k = 0
+h_1 : ¬k = 1
+h_2 : k = 2
+h_3 : ¬40 ≤ f.offset
+h_6 : (if -1 * f.seed ≤ 0 then (75 * f.seed + 74) % 65537 else -1 * ((-75 * f.seed + -74) % 65537)) = 5
+h_7 : -1 * f.seed ≤ 0
+h_8 : ¬f.seed + -872 ≤ 0
+⊢ False
+[grind] Goal diagnostics
+  [facts] Asserted facts
+    [prop] paused = true

@@ -259,24 +259,94 @@ console.log("message attribution (judge)");
   else bad("judge declErrors", [...v.declErrors.keys()].join(","));
 }
 
-// the short report's goal (step 35 of the options-chain walkthrough): long contract instances are
-// collapsed into one line, so the short hypotheses that decide the case and the conclusion stay
-// in view; a goal that fits is unchanged
+// the short report's goal (summarizeLeanError, 18 lines), on real failure texts of the
+// options-chain walkthrough (tests/goals/, cut after grind's first diagnostics lines): what stands
+// for other lines names and counts them, every other line is a whole hypothesis of the goal (the
+// conclusion may end in `…`), and the hypotheses that decide the case stay in view
 {
-  const contract = (n: string, k: number) => [`${n} :`, ...Array.from({ length: k }, (_, i) => `  (0 ≤ s.feed.seed * 75 + ${i}) →`)];
-  const msg = ["`grind` failed", "case grind.1.1.2.2", "s : Sim", ...contract("hcontract", 40), ...contract("hcontract_1", 40),
-    "h₁₆ : ¬s.rally = true", "h : ¬s.paused = true", "h_1 : ¬40 ≤ s.feed.offset", ...contract("hcontract_2", 8), "hcontract_3 : True",
-    ...Array.from({ length: 12 }, (_, i) => `left_${i} : -1 * s.feed.seed ≤ ${i}`), "⊢ False", "[grind] Goal diagnostics", "  [facts] …"].join("\n");
-  const got = summarizeLeanError(msg, 18).split("\n");
+  const goal = (f: string) => fs.readFileSync(path.join(here, "goals", f), "utf8");
+  const blocksOf = (lines: string[]) => {
+    const bs: string[][] = [];
+    for (const l of lines) {
+      if (/^\s/.test(l) && bs.length) bs[bs.length - 1].push(l);
+      else bs.push([l]);
+    }
+    return bs.map((b) => b.join("\n"));
+  };
+  const standIn = (l: string) => /: --full shows (it|them)\)$/.test(l);
+  /** why `out` is not made of stand-ins and whole blocks of `text` ("" if it is) */
+  const pieces = (text: string, out: string[]) => {
+    const lines = text.split("\n");
+    const cut = lines.findIndex((l) => /\[grind\] Goal diagnostics/.test(l));
+    const ins = new Set(blocksOf((cut > 0 ? lines.slice(0, cut) : lines).filter((l) => l.trim() !== "")));
+    const outs = blocksOf(out.filter((l) => !standIn(l)));
+    const cutTarget = (b: string) => b.startsWith("⊢") && b.endsWith("\n  …") && [...ins].some((i) => i.startsWith(b.slice(0, -"\n  …".length) + "\n"));
+    const odd = outs.filter((b) => !ins.has(b) && !cutTarget(b));
+    return odd.length ? `not a whole hypothesis: ${JSON.stringify(odd[0].slice(0, 80))}` : "";
+  };
+  const why: string[] = [];
+  const check = (f: string, conds: [string, (o: string[]) => boolean][]) => {
+    const text = goal(f);
+    const out = summarizeLeanError(text, 18).split("\n");
+    if (out.length > 18) why.push(`${f}: ${out.length} lines`);
+    const p = pieces(text, out);
+    if (p) why.push(`${f}: ${p}`);
+    for (const [what, c] of conds) if (!c(out)) why.push(`${f}: ${what}`);
+  };
+  const above = (o: string[], line: string) => o[o.indexOf("⊢ False") - 1] === line;
+  // step 20: the deciding `h` stays; the 4-line definition `marketable := match …` is one line
+  check("orderticket-price.txt", [
+    ["h right above the conclusion", (o) => above(o, "h : σ.price + -1 ≤ 0")],
+    ["marketable as one line", (o) => o.includes("marketable := …  (a definition, 4 lines: --full shows it)") && !o.some((l) => l.includes("match h₁ : m with"))],
+    ["the short hypotheses before it", (o) => ["hpre : props.ticket.price > 0", "m : Option model.Quote := props.market", "hinv : (1 ≤ σ.qty ∧ σ.qty ≤ 500) ∧ σ.price > 0"].every((l) => o.includes(l))],
+  ]);
+  // step 40: the 8-line `h_1` next to the conclusion (the total after `set`) stays whole: a
+  // 3-line hypothesis above it becomes one line, and two short lines at the top are left out
+  check("place-cap.txt", [
+    ["h_1 whole", (o) => { const i = o.indexOf("h_1 :"); return i > 0 && o[i + 7] === "    0" && o[i + 8] === "left : JS.eq t.side model.Side.ask = true"; }],
+    ["h₂₇ as one line", (o) => o.includes("h₂₇ : …  (a long hypothesis, 3 lines: --full shows it)")],
+    ["u and t named as left out", (o) => o[2] === "  … (2 earlier hypotheses: u, t: --full shows them)"],
+  ]);
+  // step 14: definitions and long hypotheses become one line each; `h` (atmIndex returned -1) and
+  // the filter's case stay, the hypotheses farthest from the conclusion are named as left out
+  check("atm-edge.txt", [
+    ["h and h₂₂ h_7 kept", (o) => o.includes("h : (JS.findIndex e.strikes fun s => model.nearest e.strikes s held_1) + 1 ≤ 0") && o.includes("h₂₂ h_7 : σ.ui.filter = model.StrikeFilter.s3")],
+    ["center, atm as one line", (o) => o.includes("center, atm := …  (2 definitions, 8 lines: --full shows them)")],
+    ["long hypotheses as one line", (o) => o.some((l) => /^h₁₀, hpre, hinv, heq, h₈, h_5 : …  \(6 long hypotheses, \d+ lines: --full shows them\)$/.test(l))],
+    ["the earlier ones named", (o) => /^  … \(\d+ earlier hypotheses: E, props, κ, σ, ui, ticket, levels, allOpen, …: --full shows them\)$/.test(o[2])],
+  ]);
+  // step 45: a 180-line hypothesis (`left`) and 6 multi-line definitions; what is shown is whole
+  check("watch-dup-keys.txt", [
+    ["ends with the conclusion", (o) => o[o.length - 1] === "⊢ False"],
+    ["definitions as one line", (o) => o.includes("tExp, center, atm, span, rows, liveAtm := …  (6 definitions, 24 lines: --full shows them)")],
+    ["left among the long hypotheses", (o) => o.some((l) => /^hpre, hinv, left, .* : …  \(\d+ long hypotheses, \d+ lines: --full shows them\)$/.test(l))],
+  ]);
+  // step 35: the contract instances (125 lines) become one line; the rest fits
+  check("sim-clocks.txt", [
+    ["contracts as one line", (o) => o.includes("hcontract, hcontract_1, hcontract_2, hcontract_3 : …  (4 contract instances, 125 lines: --full shows them)")],
+    ["the deciding hypotheses", (o) => ["h₁₆ : ¬s.rally = true", "h : ¬s.paused = true", "h_1 : ¬40 ≤ s.feed.offset"].every((l) => o.includes(l))],
+  ]);
+  // (6491f44) after a timeout with a failing case: the case's own hypotheses above its conclusion,
+  // none of the goal as stated (its hypotheses are lines of the text before the case's)
+  {
+    const text = goal("timeout-failing-case.txt");
+    const caseStart = text.indexOf("\n`grind` failed\n");
+    const caseLines = new Set(text.slice(caseStart).split("\n"));
+    check("timeout-failing-case.txt", [
+      ["the stated goal is one line", (o) => o[1] === "  … (the goal as stated: --full shows it)" && !o.some((l) => l.startsWith("⊢ paused = true"))],
+      ["the case's name, then its hypotheses", (o) => { const c = o.indexOf("case grind.1.1.1.2"); return c > 0 && o.slice(c, o.indexOf("⊢ False")).every((l) => standIn(l) || caseLines.has(l)); }],
+      ["the case's last hypothesis above its conclusion", (o) => above(o, "h_8 : ¬f.seed + -872 ≤ 0")],
+    ]);
+  }
+  // a timeout whose first unfinished case has a long conclusion: cut to 3 lines and `…`
+  check("timeout-unfinished-case.txt", [
+    ["the case", (o) => o.includes("case h_1.isFalse.isTrue") && o[1] === "  … (the goal as stated: --full shows it)"],
+    ["the conclusion cut", (o) => o[o.length - 1] === "  …" && o[o.length - 4].startsWith("⊢ ")],
+  ]);
   const short = "`grind` failed\ncase grind.1\ns : Sim\nhcontract :\n  0 ≤ s.feed.seed →\n  0 ≤ 1\n⊢ False";
-  const want = [
-    "s : Sim",
-    "hcontract, hcontract_1, hcontract_2 : …  (3 contract instances, 91 lines: --full shows them)",
-    "h₁₆ : ¬s.rally = true", "h : ¬s.paused = true", "h_1 : ¬40 ≤ s.feed.offset", "hcontract_3 : True",
-  ];
-  if (got.length === 19 && got.slice(2, 8).join("\n") === want.join("\n") && got[17] === "  …" && got[18] === "⊢ False" && summarizeLeanError(short, 18) === short)
-    ok("summarizeLeanError: long contract instances collapsed, deciding hypotheses and the conclusion kept; a short goal unchanged");
-  else bad("summarizeLeanError", got.join(" / "));
+  if (summarizeLeanError(short, 18) !== short) why.push("a goal that fits was changed");
+  if (!why.length) ok("summarizeLeanError: contract instances, long definitions and long hypotheses become one line each, the hypotheses next to the conclusion stay whole, the left-out ones are named; after a timeout only the case's goal; a goal that fits is unchanged");
+  else bad("summarizeLeanError", why.join("; "));
 }
 
 // declarations of a generated file: escaped keywords (`end'`, `namespace'`, `def'`) that start a

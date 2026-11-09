@@ -952,13 +952,21 @@ hook rules hold (static checks). For every function: its body is safe and its
   not tried, and the goal of the case that failed (or of the first that did not
   finish). The obligation stays failed; a declaration's `maxHeartbeats` counts
   each of its obligations twice to leave room for this. `vreact verify` prints a
-  failure's text in at most 18 lines (`--full`: all of it): a text that is
-  longer has its multi-line contract instances (`hcontract…`, the facts of the
-  callees' `ensures`) collapsed into one line that names them, so the short
-  hypotheses after them stay in view, and keeps the conclusion `⊢ …` after the
-  `…` that marks the lines left out; a text with several goals (after a timeout:
-  the goal as stated, then the case that failed) is shortened to the last one,
-  so the hypotheses shown are those of the conclusion shown. Each failed or not-checked obligation is
+  failure's text in at most 18 lines (`--full`: all of it). A longer text is
+  shortened step by step, each step only while it is still too long: a text with
+  several goals (after a timeout: the goal as stated, then the case that failed)
+  keeps only the last one, so the hypotheses shown are those of the conclusion
+  shown; its multi-line contract instances (`hcontract…`, the facts of the
+  callees' `ensures`) become one line that names and counts them; then its
+  multi-line let-definitions (`x : T := match …`, code the source shows), from
+  the top, likewise; then its other multi-line hypotheses, from the top, each one
+  only if that frees no more lines than are still needed (a long hypothesis next
+  to the conclusion, often the negated goal, stays); last, the conclusion is cut
+  to 3 lines and the hypotheses farthest from it are left out, named and counted
+  by one line `… (k earlier hypotheses: …)`. Every line that stands for others
+  ends in `--full shows it` (or `them`); every other line is a whole line of
+  Lean's text, so the short hypotheses next to the conclusion (usually the
+  branch conditions that decide the case) stay in view. Each failed or not-checked obligation is
   listed with its position, its kind (`[precondition]`, `[handler]`, …) and, for
   a failure, a description; an argument in a description is shown whole up to
   40 characters (an action dispatched to a reducer up to 100), a longer object or
