@@ -59,7 +59,9 @@ builds `.vreact/` again (it counts only builds it made itself). `lake build` in 
 builds nothing (the app's package has no targets).
 vreact keeps its own `lakefile.toml` (first line `# vreact: Lean editor support`) and
 `lean-toolchain` up to date, and never writes either over a `lakefile.toml` without that line
-or a `lakefile.lean` (the user's own Lean project).
+or a `lakefile.lean` (the user's own Lean project). Such a lakefile needs a `[[require]]` of the
+package `vts` at the `"out"` directory (`require vts from ".vreact"` in a `lakefile.lean`);
+`setup.sh` says so when it has none.
 
 ## The workflow
 

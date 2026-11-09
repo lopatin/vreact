@@ -25,17 +25,20 @@ export interface EditorProject {
   notes: string[];
   /** the user's own lakefile (never written), relative to the app folder */
   userLakefile: string | null;
+  /** whether the user's lakefile requires the package `vts` at the generated project (`out`) */
+  requiresOut: boolean;
 }
 
 export function editorProject(root: string, outDir: string, proofsDir: string, leanLib: string): EditorProject {
   root = path.resolve(root);
-  const res: EditorProject = { notes: [], userLakefile: null };
+  const res: EditorProject = { notes: [], userLakefile: null, requiresOut: false };
   // `"out": "."`: the generated project is the app folder itself
   if (path.resolve(outDir) === root) return res;
   for (const f of ["lakefile.lean", "lakefile.toml"]) {
     const p = path.join(root, f);
     if (fs.existsSync(p) && (f === "lakefile.lean" || !fs.readFileSync(p, "utf8").startsWith(LAKEFILE_MARKER))) {
       res.userLakefile = f;
+      res.requiresOut = requiresPackage(p, "vts", outDir);
       return res;
     }
   }
@@ -79,6 +82,50 @@ export function editorProject(root: string, outDir: string, proofsDir: string, l
   return res;
 }
 
+/**
+ * Whether a lakefile requires the package `name` from the directory `dir`: a `[[require]]` table
+ * of a lakefile.toml with `name = "…"` and `path = "…"`, or `require name from "…"` in a
+ * lakefile.lean (false when it cannot be read, or says it some other way).
+ */
+export function requiresPackage(lakefile: string, name: string, dir: string): boolean {
+  let text: string;
+  try {
+    text = fs.readFileSync(lakefile, "utf8");
+  } catch {
+    return false;
+  }
+  const same = (p: string) => {
+    const a = path.resolve(path.dirname(lakefile), p);
+    const b = path.resolve(dir);
+    if (a === b) return true;
+    try {
+      return fs.realpathSync(a) === fs.realpathSync(b);
+    } catch {
+      return false;
+    }
+  };
+  if (lakefile.endsWith(".lean")) {
+    const re = /^\s*require\s+(?:«([^»]+)»|([\w.]+))\s+from\s+"([^"]*)"/gm;
+    for (const m of text.matchAll(re)) if ((m[1] ?? m[2]) === name && same(m[3])) return true;
+    return false;
+  }
+  // lakefile.toml: the key/value lines of each [[require]] table (basic or literal strings)
+  const str = (v: string) => /^"((?:[^"\\]|\\.)*)"\s*(?:#.*)?$/.exec(v)?.[1].replace(/\\(.)/g, "$1") ?? /^'([^']*)'\s*(?:#.*)?$/.exec(v)?.[1] ?? null;
+  let table: Record<string, string | null> | null = null;
+  const tables: Record<string, string | null>[] = [];
+  for (const raw of text.split(/\r?\n/)) {
+    const l = raw.trim();
+    if (l.startsWith("[")) {
+      table = /^\[\[\s*require\s*\]\]\s*(?:#.*)?$/.test(l) ? {} : null;
+      if (table) tables.push(table);
+      continue;
+    }
+    const kv = /^([A-Za-z0-9_-]+|"[^"]*")\s*=\s*(.*)$/.exec(l);
+    if (table && kv) table[kv[1].replace(/^"|"$/g, "")] = str(kv[2]);
+  }
+  return tables.some((t) => t.name === name && typeof t.path === "string" && same(t.path));
+}
+
 /** Whether a lake manifest names each package of `deps` at that directory (false when it cannot be read). */
 export function manifestMatches(manifest: string, deps: Record<string, string>): boolean {
   try {
@@ -117,5 +164,6 @@ if (process.argv[1] && fs.realpathSync(process.argv[1]) === fs.realpathSync(file
   const leanLib = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "lean");
   const r = editorProject(root, path.resolve(root, str(pc.out, ".vreact")), path.resolve(root, str(pc.proofs, "proofs")), leanLib);
   for (const n of r.notes) console.log(`  ${n}`);
-  if (r.userLakefile) console.log(`  kept your ${r.userLakefile}: for Lean editor support it needs a [[require]] of the package "vts" at ${str(pc.out, ".vreact")}`);
+  // (only when the user's lakefile does not already require it)
+  if (r.userLakefile && !r.requiresOut) console.log(`  kept your ${r.userLakefile}: for Lean editor support it needs a [[require]] of the package "vts" at ${str(pc.out, ".vreact")}`);
 }

@@ -531,6 +531,26 @@ if (r && !only.length) {
     if (res.userLakefile !== f || res.notes.length || read(d, f) !== text || read(d, "lean-toolchain") !== "leanprover/lean4:v4.0.0\n" || (f === "lakefile.lean" && fs.existsSync(path.join(d, "lakefile.toml"))))
       why.push(`a user's ${f} or its lean-toolchain was written`);
   }
+  // whether a user's lakefile already requires "vts" at "out" (setup.sh's note only when it does not)
+  for (const [f, text, want] of [
+    ["lakefile.toml", 'name = "app"\n\n# editor support\n[[require]]\nname = "vts"\npath = ".vreact"\n', true],
+    ["lakefile.toml", "name = 'app'\n[[require]]\nname = 'vts'\npath = './.vreact/'  # generated\n", true],
+    ["lakefile.toml", 'name = "app"\n[[require]]\nname = "batteries"\npath = ".vreact"\n\n[[require]]\nname = "vts"\npath = "other"\n', false],
+    ["lakefile.toml", 'name = "app"\n[[lean_lib]]\nname = "vts"\npath = ".vreact"\n', false],
+    ["lakefile.lean", 'import Lake\nopen Lake DSL\npackage app\nrequire vts from ".vreact"\n', true],
+    ["lakefile.lean", 'import Lake\nopen Lake DSL\npackage app\n-- require vts from ".vreact"\n', false],
+  ] as [string, string, boolean][]) {
+    reset();
+    fs.writeFileSync(path.join(d, f), text);
+    const res = ed();
+    if (res.requiresOut !== want || res.notes.length) why.push(`requiresOut of ${JSON.stringify(text)}: ${res.requiresOut}`);
+  }
+  for (const [text, note] of [['name = "app"\n[[require]]\nname = "vts"\npath = ".vreact"\n', false], ['name = "app"\n', true]] as [string, boolean][]) {
+    reset();
+    fs.writeFileSync(path.join(d, "lakefile.toml"), text);
+    const sp = spawnSync(process.execPath, ["--no-warnings", "--experimental-strip-types", path.join(here, "..", "src", "ide.ts"), d], { encoding: "utf8" });
+    if (sp.status !== 0 || /kept your lakefile\.toml/.test(sp.stdout) !== note) why.push(`setup.sh's note for ${JSON.stringify(text)} (exit ${sp.status}): ${JSON.stringify(sp.stdout)}`);
+  }
   reset();
   ed(".");
   if (fs.readdirSync(d).length) why.push(`"out": "." (the generated project is the folder) got editor files: ${fs.readdirSync(d).join(", ")}`);
@@ -539,7 +559,7 @@ if (r && !only.length) {
   fs.writeFileSync(path.join(d, "vreact.json"), '{ "out": "build/lean" }\n');
   const sp = spawnSync(process.execPath, ["--no-warnings", "--experimental-strip-types", path.join(here, "..", "skill", "verified-react", "tool", "src", "ide.ts"), d], { encoding: "utf8" });
   if (sp.status !== 0 || !lakefileOk(d, "build/lean") || read(d, "lean-toolchain") !== toolchain) why.push(`setup.sh's ide.ts step (exit ${sp.status}): ${sp.stdout}${sp.stderr}`);
-  if (!why.length) ok("editor files: written fresh, idempotent, follow the library and \"out\", stale manifest removed, a user's lakefile.toml/lakefile.lean untouched, setup.sh's script step");
+  if (!why.length) ok("editor files: written fresh, idempotent, follow the library and \"out\", stale manifest removed, a user's lakefile.toml/lakefile.lean untouched (its require of \"vts\" recognized), setup.sh's script step and its note");
   else bad("editor files", why.join("; "));
 }
 
