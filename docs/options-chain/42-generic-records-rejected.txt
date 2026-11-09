@@ -1,0 +1,1 @@
+✗ VTS src/collections.ts:29:35: === on values of the type parameter V is not supported: V has no equality constraint, and JS compares objects and arrays by identity (and numbers by IEEE rules); declare V extends int | string | boolean (or a string-literal enum type) to compare its values

@@ -1,0 +1,134 @@
+translated 8 module(s), 192 proof obligation(s) → .vreact/ ; checking with Lean…
+
+Components
+  VERIFIED           PriceCell              src/StrikeRow.tsx:12
+  VERIFIED           StrikeRow              src/StrikeRow.tsx:41
+  VERIFIED           TermRow                src/TermRow.tsx:19
+  VERIFIED           OrderTicket            src/OrderTicket.tsx:19
+  INCOMPLETE         OptionsChain           src/OptionsChain.tsx:33
+      ↳ it uses amend (src/reducer.ts), which is not verified: 2 obligations of it failed
+  INCOMPLETE         App                    src/App.tsx:156
+      ↳ it uses amend (src/reducer.ts), which is not verified: 2 obligations of it failed
+Functions
+  VERIFIED           sameMembers
+  VERIFIED           sameMembersExcept
+  VERIFIED           toggleIn
+  VERIFIED           sameEntries
+  VERIFIED           agreeExcept
+  VERIFIED           sameList
+  VERIFIED           byId
+  VERIFIED           validChain
+  VERIFIED           legOf
+  VERIFIED           theoOf
+  VERIFIED           quotePrice
+  VERIFIED           withinSpread
+  VERIFIED           isMid
+  VERIFIED           midPrice
+  VERIFIED           inTheMoney
+  VERIFIED           dist
+  VERIFIED           nearest
+  VERIFIED           atmIndex
+  VERIFIED           inWindow
+  VERIFIED           strikeWindow
+  VERIFIED           filterLabel
+  VERIFIED           levelsOf
+  VERIFIED           edge
+  VERIFIED           heatOf
+  VERIFIED           legFor
+  VERIFIED           labelOf
+  VERIFIED           marketOf
+  VERIFIED           validQty
+  VERIFIED           validOrder
+  VERIFIED           openQty
+  VERIFIED           fmtPrice
+  VERIFIED           contractText
+  VERIFIED           quoteText
+  VERIFIED           crosses
+  VERIFIED           fmtVol
+  VERIFIED           wellFormed
+  VERIFIED           sameView
+  VERIFIED           sameOrder
+  VERIFIED           keepsOrders
+  VERIFIED           keepsOrdersExcept
+  VERIFIED           sameOrders
+  VERIFIED           orderFor
+  VERIFIED           toggle
+  VERIFIED           setCollapsed
+  VERIFIED           setFilter
+  VERIFIED           watchStrike
+  VERIFIED           holdAt
+  VERIFIED           follow
+  VERIFIED           jump
+  VERIFIED           setHeat
+  VERIFIED           accepts
+  VERIFIED           place
+  VERIFIED           repriced
+  INCOMPLETE         amend
+      ↳ 2 obligations of it failed
+  VERIFIED           cancel
+  VERIFIED           validAction
+  INCOMPLETE         chainReducer
+      ↳ it uses amend, which is not verified: 2 obligations of it failed
+  VERIFIED           shiftQuote
+  VERIFIED           moveFutures
+  VERIFIED           nextSeed
+  VERIFIED           validFeed
+  VERIFIED           stepFeed
+  VERIFIED           sameFeed
+  VERIFIED           simReducer
+App certificates (VReact.run_allInv instantiated)
+  INCOMPLETE         VTS.App.App.certificate  axioms: propext, sorryAx, Classical.choice, Quot.sound
+      ↳ it uses amend (src/reducer.ts), which is not verified: 2 obligations of it failed
+Obligations by file
+  ✓ src/collections.ts                       6/6
+  ✓ src/model.ts                             22/22
+  ✗ src/reducer.ts                           48/50
+  ✓ src/StrikeRow.tsx                        24/24
+  ✓ src/TermRow.tsx                          12/12
+  ✓ src/OrderTicket.tsx                      12/12
+  ✓ src/OptionsChain.tsx                     46/46
+  ✓ src/App.tsx                              20/20
+
+Failed obligations
+✗ src/reducer.ts:256:11  [postcondition] postcondition of amend: implies(wellFormed(u), wellFormed(r))
+    │ `grind` failed
+    │ case grind.2.1.1.1
+    │ u : ChainUi
+    │ id' price : Int
+    │ p_1 : model.Order
+    │ heq : u.orders.get id' = some p_1
+    │ h₄₃ :
+    │   ((1 ≤ u.heat ∧ u.heat ≤ 5) ∧
+    │       ∀ (x : Int × model.Order),
+    │         x ∈ u.orders.entries → ((1 ≤ x.snd.qty ∧ x.snd.qty ≤ 500) ∧ 0 < x.snd.price) ∧ x.fst < u.nextId) ∧
+    │     model.openQty u.orders.values ≤ 1000
+    │ h : ¬price ≤ 0
+    │ hcontract : (List.map Prod.fst u.orders.entries).Nodup
+    │ h_1 :
+    │   -1 *
+    │         model.openQty
+    │           ((u.orders.delete id').set id'
+    │               { expiry := p_1.expiry, leg := p_1.leg, strike := p_1.strike, buy := p_1.buy, qty := p_1.qty,
+    │   …
+✗ src/reducer.ts:261:11  [postcondition] postcondition of amend: sameList([...r.orders.keys()], [...u.orders.keys()])
+    │ (deterministic) timeout: the automation did not finish within this obligation's budget of 1000000 heartbeats (set "heartbeats" in vreact.json to change it)
+    │ u : ChainUi
+    │ id' price : Int
+    │ ⊢ collections.sameList
+    │       (have o := u.orders.get id';
+    │           match h₁ : o with
+    │           | some o_1 =>
+    │             if h₄₂ : JS.le price 0 = true then u
+    │             else
+    │               have orders := u.orders;
+    │               have orders_1 := orders.delete id';
+    │               have orders_2 :=
+    │                 orders_1.set id'
+    │                   { expiry := o_1.expiry, leg := o_1.leg, strike := o_1.strike, buy := o_1.buy, qty := o_1.qty,
+    │                     price := price };
+    │               { collapsed := u.collapsed, filter := u.filter, watch := u.watch, held := u.held, focus := u.focus,
+    │                 heat := u.heat, orders := orders_2, nextId := u.nextId }
+    │           | none => u).orders.keys
+    │   …
+
+✗ NOT VERIFIED  190/192 obligations proved, 2 failed; components: 4/6 verified  (65.8s)

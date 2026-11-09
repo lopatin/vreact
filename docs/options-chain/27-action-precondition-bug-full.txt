@@ -1,0 +1,576 @@
+translated 7 module(s), 142 proof obligation(s) → .vreact/ ; checking with Lean…
+
+Components
+  VERIFIED           PriceCell              src/StrikeRow.tsx:12
+  VERIFIED           StrikeRow              src/StrikeRow.tsx:39
+  VERIFIED           TermRow                src/TermRow.tsx:19
+  VERIFIED           OrderTicket            src/OrderTicket.tsx:19
+  INCOMPLETE         OptionsChain           src/OptionsChain.tsx:32
+      ↳ an obligation of it failed
+  INCOMPLETE         App                    src/App.tsx:115
+      ↳ it uses OptionsChain (src/OptionsChain.tsx), which is not verified: an obligation of it failed
+Functions
+  VERIFIED           validChain
+  VERIFIED           legOf
+  VERIFIED           theoOf
+  VERIFIED           quotePrice
+  VERIFIED           withinSpread
+  VERIFIED           isMid
+  VERIFIED           midPrice
+  VERIFIED           inTheMoney
+  VERIFIED           dist
+  VERIFIED           nearest
+  VERIFIED           atmIndex
+  VERIFIED           inWindow
+  VERIFIED           strikeWindow
+  VERIFIED           filterLabel
+  VERIFIED           levelsOf
+  VERIFIED           edge
+  VERIFIED           heatOf
+  VERIFIED           legFor
+  VERIFIED           labelOf
+  VERIFIED           marketOf
+  VERIFIED           validQty
+  VERIFIED           validOrder
+  VERIFIED           openQty
+  VERIFIED           fmtPrice
+  VERIFIED           contractText
+  VERIFIED           quoteText
+  VERIFIED           crosses
+  VERIFIED           fmtVol
+  VERIFIED           wellFormed
+  VERIFIED           heldPrice
+  VERIFIED           sameView
+  VERIFIED           keepsHolds
+  VERIFIED           keepsAllHolds
+  VERIFIED           keepsOrders
+  VERIFIED           orderFor
+  VERIFIED           toggle
+  VERIFIED           setCollapsed
+  VERIFIED           setFilter
+  VERIFIED           holdAt
+  VERIFIED           follow
+  VERIFIED           jump
+  VERIFIED           setHeat
+  VERIFIED           place
+  VERIFIED           cancel
+  VERIFIED           validAction
+  VERIFIED           chainReducer
+  VERIFIED           shiftQuote
+  VERIFIED           moveFutures
+  VERIFIED           nextSeed
+  VERIFIED           validFeed
+  VERIFIED           stepFeed
+App certificates (VReact.run_allInv instantiated)
+  INCOMPLETE         VTS.App.App.certificate  axioms: propext, sorryAx, Classical.choice, Quot.sound
+      ↳ it uses OptionsChain (src/OptionsChain.tsx), which is not verified: an obligation of it failed
+Obligations by file
+  ✓ src/model.ts                             22/22
+  ✓ src/reducer.ts                           25/25
+  ✓ src/StrikeRow.tsx                        22/22
+  ✓ src/TermRow.tsx                          12/12
+  ✓ src/OrderTicket.tsx                      12/12
+  ✗ src/OptionsChain.tsx                     35/37  (1 not checked)
+  ✓ src/App.tsx                              12/12
+
+Failed obligations
+✗ src/OptionsChain.tsx:151:13  [precondition] precondition of chainReducer(…, { kind: "place", ticket: ticket, qty: q…)
+    │ `grind` failed
+    │ case grind.1.1.1
+    │ E : Type
+    │ props : Props
+    │ κ : Cb props E
+    │ σ : State
+    │ ui : reducer.ChainUi := σ.ui
+    │ ticket : Option model.Ticket := σ.ticket
+    │ levels : Option Int := model.levelsOf ui.filter
+    │ tExp : Option model.Expiry :=
+    │   match h₂ : ticket with
+    │   | some ticket_1 => List.find? (fun e => JS.eq e.id ticket_1.expiry) props.expiries
+    │   | none => none
+    │ allOpen : Bool := props.expiries.all fun e => !ui.collapsed.contains e.id
+    │ ids : List Int := List.map (fun e => e.id) props.expiries
+    │ ticket_1 : model.Ticket
+    │ h₃₃ : σ.ticket = some ticket_1
+    │ tExp_1 : model.Expiry
+    │ h₃₄ :
+    │   (match h₂ : σ.ticket with
+    │     | some ticket_1 => List.find? (fun e => JS.eq e.id ticket_1.expiry) props.expiries
+    │     | none => none) =
+    │     some tExp_1
+    │ qty price : Int
+    │ τ : State
+    │ hpre :
+    │   (List.map (fun e => e.id) props.expiries).Nodup ∧
+    │     ∀ (x : model.Expiry), x ∈ props.expiries → (List.map (fun s => s.strike) x.strikes).Nodup
+    │ hinv :
+    │   (((1 ≤ σ.ui.heat ∧ σ.ui.heat ≤ 5) ∧ (List.map (fun o => o.id) σ.ui.orders).Nodup) ∧
+    │       ∀ (x : model.Order), x ∈ σ.ui.orders → ((1 ≤ x.qty ∧ x.qty ≤ 500) ∧ 0 < x.price) ∧ x.id < σ.ui.nextId) ∧
+    │     match σ.ticket with
+    │     | some ticket => ticket.price > 0
+    │     | none => True
+    │ hcb₃₅ : (1 ≤ qty ∧ qty ≤ 500) ∧ 0 < price
+    │ h : qty + -1 ≤ 0
+    │ w : model.Expiry
+    │ h_2 : ¬(w ∈ props.expiries → JS.eq w.id ticket_1.expiry = false)
+    │ ticket_2 : model.Ticket
+    │ h_3 : σ.ticket = some ticket_2
+    │ w_1 : model.Expiry
+    │ h_5 : ¬(w_1 ∈ props.expiries → JS.eq w_1.id ticket_2.expiry = false)
+    │ ticket_3 : model.Ticket
+    │ h₂ h_6 : σ.ticket = some ticket_3
+    │ h_7 : (fun e => JS.eq e.id ticket_2.expiry) = fun e => JS.eq e.id ticket_1.expiry
+    │ ⊢ False
+    │ [grind] Goal diagnostics
+    │   [facts] Asserted facts
+    │     [prop] σ.ticket = some ticket_1
+    │     [prop] (match h₂ : σ.ticket with
+    │           | some ticket_1 => List.find? (fun e => JS.eq e.id ticket_1.expiry) props.expiries
+    │           | none => none) =
+    │           some tExp_1
+    │     [prop] (List.map (fun e => e.id) props.expiries).Nodup ∧
+    │           ∀ (x : model.Expiry), x ∈ props.expiries → (List.map (fun s => s.strike) x.strikes).Nodup
+    │     [prop] -1 * σ.ui.heat + 1 ≤ 0 ∧
+    │           σ.ui.heat + -5 ≤ 0 ∧
+    │             (List.map (fun o => o.id) σ.ui.orders).Nodup ∧
+    │               (∀ (x : model.Order), x ∈ σ.ui.orders → -1 * x.qty + 1 ≤ 0) ∧
+    │                 (∀ (x : model.Order), x ∈ σ.ui.orders → x.qty + -500 ≤ 0) ∧
+    │                   (∀ (x : model.Order), x ∈ σ.ui.orders → -1 * x.price + 1 ≤ 0) ∧
+    │                     (∀ (x : model.Order), x ∈ σ.ui.orders → x.id + -1 * σ.ui.nextId + 1 ≤ 0) ∧
+    │                       match σ.ticket with
+    │                       | some ticket => -1 * ticket.price + 1 ≤ 0
+    │                       | none => True
+    │     [prop] -1 * qty + 1 ≤ 0 ∧ qty + -500 ≤ 0 ∧ -1 * price + 1 ≤ 0
+    │     [prop] qty + -1 ≤ 0
+    │     [prop] (match h₂ : σ.ticket with
+    │           | some ticket_1 => List.find? (fun e => JS.eq e.id ticket_1.expiry) props.expiries
+    │           | none => none) =
+    │           List.find? (fun e => JS.eq e.id ticket_1.expiry) props.expiries
+    │     [prop] (List.map (fun o => o.id) σ.ui.orders).Nodup =
+    │           ∀ (a : Int), List.count a (List.map (fun o => o.id) σ.ui.orders) ≤ 1
+    │     [prop] (List.map (fun e => e.id) props.expiries).Nodup =
+    │           ∀ (a : Int), List.count a (List.map (fun e => e.id) props.expiries) ≤ 1
+    │     [prop] (List.map (fun o => o.id) σ.ui.orders).Nodup =
+    │           List.Pairwise (fun x1 x2 => ¬x1 = x2) (List.map (fun o => o.id) σ.ui.orders)
+    │     [prop] (List.map (fun e => e.id) props.expiries).Nodup =
+    │           List.Pairwise (fun x1 x2 => ¬x1 = x2) (List.map (fun e => e.id) props.expiries)
+    │     [prop] (match σ.ticket with
+    │           | some ticket => -1 * ticket.price + 1 ≤ 0
+    │           | none => True) =
+    │           (-1 * ticket_1.price + 1 ≤ 0)
+    │     [prop] List.find? (fun e => JS.eq e.id ticket_1.expiry) props.expiries = some tExp_1 → tExp_1 ∈ props.expiries
+    │     [prop] List.find? (fun e => JS.eq e.id ticket_1.expiry) props.expiries = some tExp_1 →
+    │           JS.eq tExp_1.id ticket_1.expiry = true
+    │     [prop] (List.find? (fun e => JS.eq e.id ticket_1.expiry) props.expiries = none) =
+    │           ∀ (x : model.Expiry), x ∈ props.expiries → JS.eq x.id ticket_1.expiry = false
+    │     [prop] List.Pairwise (fun x1 x2 => ¬x1 = x2) (List.map (fun e => e.id) props.expiries) =
+    │           List.Pairwise (fun a b => ¬a.id = b.id) props.expiries
+    │     [prop] List.Pairwise (fun x1 x2 => ¬x1 = x2) (List.map (fun o => o.id) σ.ui.orders) =
+    │           List.Pairwise (fun a b => ¬a.id = b.id) σ.ui.orders
+    │     [prop] ¬(w ∈ props.expiries → JS.eq w.id ticket_1.expiry = false)
+    │     [prop] w ∈ props.expiries → (List.map (fun s => s.strike) w.strikes).Nodup
+    │     [prop] tExp_1 ∈ props.expiries → (List.map (fun s => s.strike) tExp_1.strikes).Nodup
+    │     [prop] (∀ (a b : model.Order), True) →
+    │           List.Pairwise (fun a b => ¬a.id = b.id) σ.ui.orders →
+    │             List.Pairwise (fun x1 x2 => ¬x1 = x2) (List.map (fun o => o.id) σ.ui.orders)
+    │     [prop] (∀ (a b : model.Expiry), True) →
+    │           List.Pairwise (fun a b => ¬a.id = b.id) props.expiries →
+    │             List.Pairwise (fun x1 x2 => ¬x1 = x2) (List.map (fun e => e.id) props.expiries)
+    │     [prop] (JS.eq w.id ticket_1.expiry = false) = ¬w.id = ticket_1.expiry
+    │     [prop] (JS.eq tExp_1.id ticket_1.expiry = false) = ¬tExp_1.id = ticket_1.expiry
+    │     [prop] (JS.eq w.id ticket_1.expiry = true) = (w.id = ticket_1.expiry)
+    │     [prop] (JS.eq tExp_1.id ticket_1.expiry = true) = (tExp_1.id = ticket_1.expiry)
+    │     [prop] (List.map (fun s => s.strike) tExp_1.strikes).Nodup =
+    │           ∀ (a : Int), List.count a (List.map (fun s => s.strike) tExp_1.strikes) ≤ 1
+    │     [prop] (List.map (fun s => s.strike) w.strikes).Nodup =
+    │           ∀ (a : Int), List.count a (List.map (fun s => s.strike) w.strikes) ≤ 1
+    │     [prop] (List.map (fun s => s.strike) tExp_1.strikes).Nodup =
+    │           List.Pairwise (fun x1 x2 => ¬x1 = x2) (List.map (fun s => s.strike) tExp_1.strikes)
+    │     [prop] (List.map (fun s => s.strike) w.strikes).Nodup =
+    │           List.Pairwise (fun x1 x2 => ¬x1 = x2) (List.map (fun s => s.strike) w.strikes)
+    │     [prop] List.Pairwise (fun x1 x2 => ¬x1 = x2) (List.map (fun s => s.strike) w.strikes) =
+    │           List.Pairwise (fun a b => ¬a.strike = b.strike) w.strikes
+    │     [prop] List.Pairwise (fun x1 x2 => ¬x1 = x2) (List.map (fun s => s.strike) tExp_1.strikes) =
+    │           List.Pairwise (fun a b => ¬a.strike = b.strike) tExp_1.strikes
+    │     [prop] σ.ticket = some ticket_2
+    │     [prop] (match h₂ : σ.ticket with
+    │           | some ticket_1 => List.find? (fun e => JS.eq e.id ticket_1.expiry) props.expiries
+    │           | none => none) =
+    │           List.find? (fun e => JS.eq e.id ticket_2.expiry) props.expiries
+    │     [prop] (match σ.ticket with
+    │           | some ticket => -1 * ticket.price + 1 ≤ 0
+    │           | none => True) =
+    │           (-1 * ticket_2.price + 1 ≤ 0)
+    │     [prop] (∀ (a b : model.Strike), True) →
+    │           List.Pairwise (fun a b => ¬a.strike = b.strike) tExp_1.strikes →
+    │             List.Pairwise (fun x1 x2 => ¬x1 = x2) (List.map (fun s => s.strike) tExp_1.strikes)
+    │     [prop] (∀ (a b : model.Strike), True) →
+    │           List.Pairwise (fun a b => ¬a.strike = b.strike) w.strikes →
+    │             List.Pairwise (fun x1 x2 => ¬x1 = x2) (List.map (fun s => s.strike) w.strikes)
+    │     [prop] List.find? (fun e => JS.eq e.id ticket_2.expiry) props.expiries = some tExp_1 → tExp_1 ∈ props.expiries
+    │     [prop] List.find? (fun e => JS.eq e.id ticket_2.expiry) props.expiries = some tExp_1 →
+    │           JS.eq tExp_1.id ticket_2.expiry = true
+    │     [prop] (List.find? (fun e => JS.eq e.id ticket_2.expiry) props.expiries = none) =
+    │           ∀ (x : model.Expiry), x ∈ props.expiries → JS.eq x.id ticket_2.expiry = false
+    │     [prop] ¬(w_1 ∈ props.expiries → JS.eq w_1.id ticket_2.expiry = false)
+    │     [prop] w_1 ∈ props.expiries → (List.map (fun s => s.strike) w_1.strikes).Nodup
+    │     [prop] (JS.eq w_1.id ticket_2.expiry = false) = ¬w_1.id = ticket_2.expiry
+    │     [prop] (JS.eq w_1.id ticket_2.expiry = true) = (w_1.id = ticket_2.expiry)
+    │     [prop] (List.map (fun s => s.strike) w_1.strikes).Nodup =
+    │           ∀ (a : Int), List.count a (List.map (fun s => s.strike) w_1.strikes) ≤ 1
+    │     [prop] (List.map (fun s => s.strike) w_1.strikes).Nodup =
+    │           List.Pairwise (fun x1 x2 => ¬x1 = x2) (List.map (fun s => s.strike) w_1.strikes)
+    │     [prop] List.Pairwise (fun x1 x2 => ¬x1 = x2) (List.map (fun s => s.strike) w_1.strikes) =
+    │           List.Pairwise (fun a b => ¬a.strike = b.strike) w_1.strikes
+    │     [prop] σ.ticket = some ticket_3
+    │     [prop] σ.ticket = some ticket_3
+    │     [prop] (∀ (a b : model.Strike), True) →
+    │           List.Pairwise (fun a b => ¬a.strike = b.strike) w_1.strikes →
+    │             List.Pairwise (fun x1 x2 => ¬x1 = x2) (List.map (fun s => s.strike) w_1.strikes)
+    │     [prop] (fun e => JS.eq e.id ticket_2.expiry) = fun e => JS.eq e.id ticket_1.expiry
+    │   [eqc] True propositions
+    │     [prop] (List.map (fun e => e.id) props.expiries).Nodup ∧
+    │           ∀ (x : model.Expiry), x ∈ props.expiries → (List.map (fun s => s.strike) x.strikes).Nodup
+    │     [prop] (List.map (fun o => o.id) σ.ui.orders).Nodup ∧
+    │           (∀ (x : model.Order), x ∈ σ.ui.orders → -1 * x.qty + 1 ≤ 0) ∧
+    │             (∀ (x : model.Order), x ∈ σ.ui.orders → x.qty + -500 ≤ 0) ∧
+    │               (∀ (x : model.Order), x ∈ σ.ui.orders → -1 * x.price + 1 ≤ 0) ∧
+    │                 (∀ (x : model.Order), x ∈ σ.ui.orders → x.id + -1 * σ.ui.nextId + 1 ≤ 0) ∧
+    │                   match σ.ticket with
+    │                   | some ticket => -1 * ticket.price + 1 ≤ 0
+    │                   | none => True
+    │     [prop] qty + -500 ≤ 0 ∧ -1 * price + 1 ≤ 0
+    │     [prop] σ.ui.heat + -5 ≤ 0 ∧
+    │           (List.map (fun o => o.id) σ.ui.orders).Nodup ∧
+    │             (∀ (x : model.Order), x ∈ σ.ui.orders → -1 * x.qty + 1 ≤ 0) ∧
+    │               (∀ (x : model.Order), x ∈ σ.ui.orders → x.qty + -500 ≤ 0) ∧
+    │                 (∀ (x : model.Order), x ∈ σ.ui.orders → -1 * x.price + 1 ≤ 0) ∧
+    │                   (∀ (x : model.Order), x ∈ σ.ui.orders → x.id + -1 * σ.ui.nextId + 1 ≤ 0) ∧
+    │                     match σ.ticket with
+    │                     | some ticket => -1 * ticket.price + 1 ≤ 0
+    │                     | none => True
+    │     [prop] -1 * qty + 1 ≤ 0 ∧ qty + -500 ≤ 0 ∧ -1 * price + 1 ≤ 0
+    │     [prop] -1 * σ.ui.heat + 1 ≤ 0 ∧
+    │           σ.ui.heat + -5 ≤ 0 ∧
+    │             (List.map (fun o => o.id) σ.ui.orders).Nodup ∧
+    │               (∀ (x : model.Order), x ∈ σ.ui.orders → -1 * x.qty + 1 ≤ 0) ∧
+    │                 (∀ (x : model.Order), x ∈ σ.ui.orders → x.qty + -500 ≤ 0) ∧
+    │                   (∀ (x : model.Order), x ∈ σ.ui.orders → -1 * x.price + 1 ≤ 0) ∧
+    │                     (∀ (x : model.Order), x ∈ σ.ui.orders → x.id + -1 * σ.ui.nextId + 1 ≤ 0) ∧
+    │                       match σ.ticket with
+    │                       | some ticket => -1 * ticket.price + 1 ≤ 0
+    │                       | none => True
+    │     [prop] (∀ (x : model.Order), x ∈ σ.ui.orders → x.qty + -500 ≤ 0) ∧
+    │           (∀ (x : model.Order), x ∈ σ.ui.orders → -1 * x.price + 1 ≤ 0) ∧
+    │             (∀ (x : model.Order), x ∈ σ.ui.orders → x.id + -1 * σ.ui.nextId + 1 ≤ 0) ∧
+    │               match σ.ticket with
+    │               | some ticket => -1 * ticket.price + 1 ≤ 0
+    │               | none => True
+    │     [prop] (∀ (x : model.Order), x ∈ σ.ui.orders → x.id + -1 * σ.ui.nextId + 1 ≤ 0) ∧
+    │           match σ.ticket with
+    │           | some ticket => -1 * ticket.price + 1 ≤ 0
+    │           | none => True
+    │     [prop] (∀ (x : model.Order), x ∈ σ.ui.orders → -1 * x.price + 1 ≤ 0) ∧
+    │           (∀ (x : model.Order), x ∈ σ.ui.orders → x.id + -1 * σ.ui.nextId + 1 ≤ 0) ∧
+    │             match σ.ticket with
+    │             | some ticket => -1 * ticket.price + 1 ≤ 0
+    │             | none => True
+    │     [prop] (∀ (x : model.Order), x ∈ σ.ui.orders → -1 * x.qty + 1 ≤ 0) ∧
+    │           (∀ (x : model.Order), x ∈ σ.ui.orders → x.qty + -500 ≤ 0) ∧
+    │             (∀ (x : model.Order), x ∈ σ.ui.orders → -1 * x.price + 1 ≤ 0) ∧
+    │               (∀ (x : model.Order), x ∈ σ.ui.orders → x.id + -1 * σ.ui.nextId + 1 ≤ 0) ∧
+    │                 match σ.ticket with
+    │                 | some ticket => -1 * ticket.price + 1 ≤ 0
+    │                 | none => True
+    │     [prop] (List.map (fun e => e.id) props.expiries).Nodup
+    │     [prop] (List.map (fun o => o.id) σ.ui.orders).Nodup
+    │     [prop] qty + -1 ≤ 0
+    │     [prop] qty + -500 ≤ 0
+    │     [prop] σ.ui.heat + -5 ≤ 0
+    │     [prop] -1 * qty + 1 ≤ 0
+    │     [prop] -1 * price + 1 ≤ 0
+    │     [prop] -1 * σ.ui.heat + 1 ≤ 0
+    │     [prop] match σ.ticket with
+    │         | some ticket => -1 * ticket.price + 1 ≤ 0
+    │         | none => True
+    │     [prop] ∀ (x : model.Expiry), x ∈ props.expiries → (List.map (fun s => s.strike) x.strikes).Nodup
+    │     [prop] ∀ (x : model.Order), x ∈ σ.ui.orders → x.qty + -500 ≤ 0
+    │     [prop] ∀ (x : model.Order), x ∈ σ.ui.orders → x.id + -1 * σ.ui.nextId + 1 ≤ 0
+    │     [prop] ∀ (x : model.Order), x ∈ σ.ui.orders → -1 * x.price + 1 ≤ 0
+    │     [prop] ∀ (x : model.Order), x ∈ σ.ui.orders → -1 * x.qty + 1 ≤ 0
+    │     [prop] (List.map (fun e => e.id) props.expiries).Nodup =
+    │           List.Pairwise (fun x1 x2 => ¬x1 = x2) (List.map (fun e => e.id) props.expiries)
+    │     [prop] (List.map (fun e => e.id) props.expiries).Nodup =
+    │           ∀ (a : Int), List.count a (List.map (fun e => e.id) props.expiries) ≤ 1
+    │     [prop] (List.map (fun o => o.id) σ.ui.orders).Nodup =
+    │           List.Pairwise (fun x1 x2 => ¬x1 = x2) (List.map (fun o => o.id) σ.ui.orders)
+    │     [prop] (List.map (fun o => o.id) σ.ui.orders).Nodup =
+    │           ∀ (a : Int), List.count a (List.map (fun o => o.id) σ.ui.orders) ≤ 1
+    │     [prop] (match σ.ticket with
+    │           | some ticket => -1 * ticket.price + 1 ≤ 0
+    │           | none => True) =
+    │           (-1 * ticket_1.price + 1 ≤ 0)
+    │     [prop] List.Pairwise (fun x1 x2 => ¬x1 = x2) (List.map (fun e => e.id) props.expiries)
+    │     [prop] List.Pairwise (fun x1 x2 => ¬x1 = x2) (List.map (fun o => o.id) σ.ui.orders)
+    │     [prop] -1 * ticket_1.price + 1 ≤ 0
+    │     [prop] ∀ (a : Int), List.count a (List.map (fun e => e.id) props.expiries) ≤ 1
+    │     [prop] ∀ (a : Int), List.count a (List.map (fun o => o.id) σ.ui.orders) ≤ 1
+    │     [prop] (List.find? (fun e => JS.eq e.id ticket_1.expiry) props.expiries = none) =
+    │           ∀ (x : model.Expiry), x ∈ props.expiries → JS.eq x.id ticket_1.expiry = false
+    │     [prop] List.Pairwise (fun x1 x2 => ¬x1 = x2) (List.map (fun e => e.id) props.expiries) =
+    │           List.Pairwise (fun a b => ¬a.id = b.id) props.expiries
+    │     [prop] List.Pairwise (fun x1 x2 => ¬x1 = x2) (List.map (fun o => o.id) σ.ui.orders) =
+    │           List.Pairwise (fun a b => ¬a.id = b.id) σ.ui.orders
+    │     [prop] (match σ.ticket with
+    │           | some ticket => -1 * ticket.price + 1 ≤ 0
+    │           | none => True) =
+    │           (-1 * ticket_2.price + 1 ≤ 0)
+    │     [prop] JS.eq tExp_1.id ticket_1.expiry = true
+    │     [prop] List.find? (fun e => JS.eq e.id ticket_1.expiry) props.expiries = some tExp_1
+    │     [prop] (fun e => JS.eq e.id ticket_2.expiry) = fun e => JS.eq e.id ticket_1.expiry
+    │     [prop] List.Pairwise (fun a b => ¬a.id = b.id) props.expiries
+    │     [prop] List.Pairwise (fun a b => ¬a.id = b.id) σ.ui.orders
+    │     [prop] -1 * ticket_2.price + 1 ≤ 0
+    │     [prop] tExp_1 ∈ props.expiries
+    │     [prop] w ∈ props.expiries
+    │     [prop] List.find? (fun e => JS.eq e.id ticket_1.expiry) props.expiries = some tExp_1 →
+    │           JS.eq tExp_1.id ticket_1.expiry = true
+    │     [prop] List.find? (fun e => JS.eq e.id ticket_1.expiry) props.expiries = some tExp_1 → tExp_1 ∈ props.expiries
+    │     [prop] (List.map (fun s => s.strike) tExp_1.strikes).Nodup
+    │     [prop] (List.map (fun s => s.strike) w.strikes).Nodup
+    │     [prop] (JS.eq tExp_1.id ticket_1.expiry = false) = ¬tExp_1.id = ticket_1.expiry
+    │     [prop] (JS.eq tExp_1.id ticket_1.expiry = true) = (tExp_1.id = ticket_1.expiry)
+    │     [prop] (JS.eq w.id ticket_1.expiry = false) = ¬w.id = ticket_1.expiry
+    │     [prop] (JS.eq w.id ticket_1.expiry = true) = (w.id = ticket_1.expiry)
+    │     [prop] (List.find? (fun e => JS.eq e.id ticket_2.expiry) props.expiries = none) =
+    │           ∀ (x : model.Expiry), x ∈ props.expiries → JS.eq x.id ticket_2.expiry = false
+    │     [prop] JS.eq tExp_1.id ticket_2.expiry = true
+    │     [prop] JS.eq w.id ticket_1.expiry = true
+    │     [prop] tExp_1.id = ticket_1.expiry
+    │     [prop] w.id = ticket_1.expiry
+    │     [prop] List.find? (fun e => JS.eq e.id ticket_2.expiry) props.expiries = some tExp_1
+    │     [prop] w_1 ∈ props.expiries
+    │     [prop] List.find? (fun e => JS.eq e.id ticket_2.expiry) props.expiries = some tExp_1 →
+    │           JS.eq tExp_1.id ticket_2.expiry = true
+    │     [prop] List.find? (fun e => JS.eq e.id ticket_2.expiry) props.expiries = some tExp_1 → tExp_1 ∈ props.expiries
+    │     [prop] List.Pairwise (fun a b => ¬a.id = b.id) props.expiries →
+    │           List.Pairwise (fun x1 x2 => ¬x1 = x2) (List.map (fun e => e.id) props.expiries)
+    │     [prop] List.Pairwise (fun a b => ¬a.id = b.id) σ.ui.orders →
+    │           List.Pairwise (fun x1 x2 => ¬x1 = x2) (List.map (fun o => o.id) σ.ui.orders)
+    │     [prop] tExp_1 ∈ props.expiries → (List.map (fun s => s.strike) tExp_1.strikes).Nodup
+    │     [prop] w ∈ props.expiries → (List.map (fun s => s.strike) w.strikes).Nodup
+    │     [prop] (∀ (a b : model.Expiry), True) →
+    │           List.Pairwise (fun a b => ¬a.id = b.id) props.expiries →
+    │             List.Pairwise (fun x1 x2 => ¬x1 = x2) (List.map (fun e => e.id) props.expiries)
+    │     [prop] (∀ (a b : model.Order), True) →
+    │           List.Pairwise (fun a b => ¬a.id = b.id) σ.ui.orders →
+    │             List.Pairwise (fun x1 x2 => ¬x1 = x2) (List.map (fun o => o.id) σ.ui.orders)
+    │     [prop] (List.map (fun s => s.strike) w_1.strikes).Nodup
+    │     [prop] (List.map (fun s => s.strike) tExp_1.strikes).Nodup =
+    │           List.Pairwise (fun x1 x2 => ¬x1 = x2) (List.map (fun s => s.strike) tExp_1.strikes)
+    │     [prop] (List.map (fun s => s.strike) tExp_1.strikes).Nodup =
+    │           ∀ (a : Int), List.count a (List.map (fun s => s.strike) tExp_1.strikes) ≤ 1
+    │     [prop] (List.map (fun s => s.strike) w.strikes).Nodup =
+    │           List.Pairwise (fun x1 x2 => ¬x1 = x2) (List.map (fun s => s.strike) w.strikes)
+    │     [prop] (List.map (fun s => s.strike) w.strikes).Nodup =
+    │           ∀ (a : Int), List.count a (List.map (fun s => s.strike) w.strikes) ≤ 1
+    │     [prop] (JS.eq w_1.id ticket_2.expiry = false) = ¬w_1.id = ticket_2.expiry
+    │     [prop] (JS.eq w_1.id ticket_2.expiry = true) = (w_1.id = ticket_2.expiry)
+    │     [prop] JS.eq w_1.id ticket_2.expiry = true
+    │     [prop] w_1.id = ticket_2.expiry
+    │     [prop] List.Pairwise (fun x1 x2 => ¬x1 = x2) (List.map (fun s => s.strike) tExp_1.strikes)
+    │     [prop] List.Pairwise (fun x1 x2 => ¬x1 = x2) (List.map (fun s => s.strike) w.strikes)
+    │     [prop] ∀ (a : Int), List.count a (List.map (fun s => s.strike) tExp_1.strikes) ≤ 1
+    │     [prop] ∀ (a : Int), List.count a (List.map (fun s => s.strike) w.strikes) ≤ 1
+    │     [prop] w_1 ∈ props.expiries → (List.map (fun s => s.strike) w_1.strikes).Nodup
+    │     [prop] (List.map (fun s => s.strike) w_1.strikes).Nodup =
+    │           List.Pairwise (fun x1 x2 => ¬x1 = x2) (List.map (fun s => s.strike) w_1.strikes)
+    │     [prop] (List.map (fun s => s.strike) w_1.strikes).Nodup =
+    │           ∀ (a : Int), List.count a (List.map (fun s => s.strike) w_1.strikes) ≤ 1
+    │     [prop] List.Pairwise (fun x1 x2 => ¬x1 = x2) (List.map (fun s => s.strike) tExp_1.strikes) =
+    │           List.Pairwise (fun a b => ¬a.strike = b.strike) tExp_1.strikes
+    │     [prop] List.Pairwise (fun x1 x2 => ¬x1 = x2) (List.map (fun s => s.strike) w.strikes) =
+    │           List.Pairwise (fun a b => ¬a.strike = b.strike) w.strikes
+    │     [prop] List.Pairwise (fun x1 x2 => ¬x1 = x2) (List.map (fun s => s.strike) w_1.strikes)
+    │     [prop] List.Pairwise (fun a b => ¬a.strike = b.strike) tExp_1.strikes
+    │     [prop] List.Pairwise (fun a b => ¬a.strike = b.strike) w.strikes
+    │     [prop] ∀ (a : Int), List.count a (List.map (fun s => s.strike) w_1.strikes) ≤ 1
+    │     [prop] List.Pairwise (fun x1 x2 => ¬x1 = x2) (List.map (fun s => s.strike) w_1.strikes) =
+    │           List.Pairwise (fun a b => ¬a.strike = b.strike) w_1.strikes
+    │     [prop] List.Pairwise (fun a b => ¬a.strike = b.strike) w_1.strikes
+    │     [prop] List.Pairwise (fun a b => ¬a.strike = b.strike) tExp_1.strikes →
+    │           List.Pairwise (fun x1 x2 => ¬x1 = x2) (List.map (fun s => s.strike) tExp_1.strikes)
+    │     [prop] List.Pairwise (fun a b => ¬a.strike = b.strike) w.strikes →
+    │           List.Pairwise (fun x1 x2 => ¬x1 = x2) (List.map (fun s => s.strike) w.strikes)
+    │     [prop] (∀ (a b : model.Strike), True) →
+    │           List.Pairwise (fun a b => ¬a.strike = b.strike) tExp_1.strikes →
+    │             List.Pairwise (fun x1 x2 => ¬x1 = x2) (List.map (fun s => s.strike) tExp_1.strikes)
+    │     [prop] (∀ (a b : model.Strike), True) →
+    │           List.Pairwise (fun a b => ¬a.strike = b.strike) w.strikes →
+    │             List.Pairwise (fun x1 x2 => ¬x1 = x2) (List.map (fun s => s.strike) w.strikes)
+    │     [prop] List.Pairwise (fun a b => ¬a.strike = b.strike) w_1.strikes →
+    │           List.Pairwise (fun x1 x2 => ¬x1 = x2) (List.map (fun s => s.strike) w_1.strikes)
+    │     [prop] (∀ (a b : model.Strike), True) →
+    │           List.Pairwise (fun a b => ¬a.strike = b.strike) w_1.strikes →
+    │             List.Pairwise (fun x1 x2 => ¬x1 = x2) (List.map (fun s => s.strike) w_1.strikes)
+    │   [eqc] False propositions
+    │     [prop] JS.eq w.id ticket_1.expiry = false
+    │     [prop] List.find? (fun e => JS.eq e.id ticket_1.expiry) props.expiries = none
+    │     [prop] ∀ (x : model.Expiry), x ∈ props.expiries → JS.eq x.id ticket_1.expiry = false
+    │     [prop] w ∈ props.expiries → JS.eq w.id ticket_1.expiry = false
+    │     [prop] ¬tExp_1.id = ticket_1.expiry
+    │     [prop] ¬w.id = ticket_1.expiry
+    │     [prop] JS.eq tExp_1.id ticket_1.expiry = false
+    │     [prop] JS.eq w_1.id ticket_2.expiry = false
+    │     [prop] List.find? (fun e => JS.eq e.id ticket_2.expiry) props.expiries = none
+    │     [prop] ∀ (x : model.Expiry), x ∈ props.expiries → JS.eq x.id ticket_2.expiry = false
+    │     [prop] w_1 ∈ props.expiries → JS.eq w_1.id ticket_2.expiry = false
+    │     [prop] ¬w_1.id = ticket_2.expiry
+    │   [eqc] Equivalence classes
+    │     [eqc] {κ, { }}
+    │     [eqc] {ticket_1, ticket_2, ticket_3}
+    │     [eqc] {qty, 1}
+    │       [eqc] {↑1}
+    │     [eqc] {true,
+    │         JS.eq tExp_1.id ticket_1.expiry,
+    │         JS.eq w.id ticket_1.expiry,
+    │         JS.eq tExp_1.id ticket_2.expiry,
+    │         JS.eq w_1.id ticket_2.expiry}
+    │     [eqc] {model.Expiry.id, fun e => e.id}
+    │     [eqc] {model.Order.id, fun o => o.id}
+    │     [eqc] {model.Strike.strike, fun s => s.strike}
+    │     [eqc] {σ.ticket, some ticket_1, some ticket_2, some ticket_3}
+    │     [eqc] {some tExp_1,
+    │         List.find? (fun e => JS.eq e.id ticket_1.expiry) props.expiries,
+    │         List.find? (fun e => JS.eq e.id ticket_2.expiry) props.expiries}
+    │       [eqc] {match h₂ : σ.ticket with
+    │           | some ticket_1 => List.find? (fun e => JS.eq e.id ticket_1.expiry) props.expiries
+    │           | none => none}
+    │     [eqc] {List.map (fun e => e.id) props.expiries, List.map model.Expiry.id props.expiries}
+    │     [eqc] {List.map (fun o => o.id) σ.ui.orders, List.map model.Order.id σ.ui.orders}
+    │     [eqc] {ticket_1.price, ticket_2.price}
+    │     [eqc] {List.find? fun e => JS.eq e.id ticket_1.expiry, List.find? fun e => JS.eq e.id ticket_2.expiry}
+    │     [eqc] {-1 * ticket_1.price + 1, -1 * ticket_2.price + 1}
+    │     [eqc] {-1 * ticket_1.price, -1 * ticket_2.price}
+    │     [eqc] {fun e => JS.eq e.id ticket_1.expiry, fun e => JS.eq e.id ticket_2.expiry}
+    │     [eqc] {tExp_1.id, w.id, ticket_1.expiry, w_1.id, ticket_2.expiry}
+    │     [eqc] {List.map (fun s => s.strike) tExp_1.strikes, List.map model.Strike.strike tExp_1.strikes}
+    │     [eqc] {List.map (fun s => s.strike) w.strikes, List.map model.Strike.strike w.strikes}
+    │     [eqc] {List.map (fun s => s.strike) w_1.strikes, List.map model.Strike.strike w_1.strikes}
+    │   [cases] Case analyses
+    │     [cases] [1/2]: match σ.ticket with
+    │         | some ticket => -1 * ticket.price + 1 ≤ 0
+    │         | none => True
+    │       [cases] source: Initial goal
+    │     [cases] [1/2]: match h₂ : σ.ticket with
+    │         | some ticket_1 => List.find? (fun e => JS.eq e.id ticket_1.expiry) props.expiries
+    │         | none => none
+    │       [cases] source: Initial goal
+    │     [cases] [1/2]: (fun e => JS.eq e.id ticket_2.expiry) = fun e => JS.eq e.id ticket_1.expiry
+    │       [cases] source: E-matching `render.match_1.congr_eq_1`
+    │   [ematch] E-matching patterns
+    │     [thm] render.match_1.congr_eq_1: [render.match_1 #5 (@Lean.Grind.genPattern `[Option
+    │             model.Ticket] #0 #4 (@some `[model.Ticket] #1)) #3 #2]
+    │     [thm] render.match_1.congr_eq_2: [render.match_1 #4 (@Lean.Grind.genPattern `[Option
+    │             model.Ticket] #0 #3 `[none]) #2 #1]
+    │     [thm] List.nodup_iff_count: [@List.Nodup #3 #0]
+    │     [thm] List.nodup_iff_pairwise_ne: [@List.Nodup #1 #0]
+    │     [thm] List.map_map: [@List.map #5 #4 #2 (@List.map #3 _ #1 #0)]
+    │     [thm] local_0: [@Membership.mem `[model.Expiry] `[List model.Expiry] `[List.instMembership] `[props.expiries] #1]
+    │     [thm] local_0: [@List.Nodup `[Int] (@List.map `[model.Strike] `[Int] `[fun s =>
+    │             s.strike] (model.Expiry.strikes #1))]
+    │     [thm] local_0: [@List.map `[model.Strike] `[Int] `[fun s => s.strike] (model.Expiry.strikes #1)]
+    │     [thm] local_0: [model.Expiry.strikes #1]
+    │     [thm] Option.some_le_some: [@LE.le (Option #3) _ (@some _ #1) (@some _ #0)]
+    │     [thm] Option.not_some_le_none: [@LE.le (Option #2) _ (@some _ #0) (@none _)]
+    │     [thm] Option.none_le: [@LE.le (Option #2) _ (@none _) #0]
+    │     [thm] inv.match_1.congr_eq_1: [inv.match_1 #5 (@Lean.Grind.genPattern `[Option
+    │             model.Ticket] #0 #4 (@some `[model.Ticket] #1)) #3 #2]
+    │     [thm] inv.match_1.congr_eq_2: [inv.match_1 #4 (@Lean.Grind.genPattern `[Option model.Ticket] #0 #3 `[none]) #2 #1]
+    │     [thm] local_1: [@Membership.mem `[model.Order] `[List model.Order] `[List.instMembership] `[σ.ui.orders] #1]
+    │     [thm] local_1: [@LE.le `[Int] `[Int.instLEInt] (@HAdd.hAdd `[Int] `[Int] `[Int] `[instHAdd] (@HAdd.hAdd `[Int] `[Int] `[Int] `[instHAdd] (model.Order.id #1) `[-1 *
+    │              σ.ui.nextId]) `[1]) `[0]]
+    │     [thm] local_1: [model.Order.id #1]
+    │     [thm] local_2: [@Membership.mem `[model.Order] `[List model.Order] `[List.instMembership] `[σ.ui.orders] #1]
+    │     [thm] local_2: [@LE.le `[Int] `[Int.instLEInt] (@HAdd.hAdd `[Int] `[Int] `[Int] `[instHAdd] (@HMul.hMul `[Int] `[Int] `[Int] `[instHMul] `[-1] (model.Order.price #1)) `[1]) `[0]]
+    │     [thm] local_2: [model.Order.price #1]
+    │     [thm] local_3: [@Membership.mem `[model.Order] `[List model.Order] `[List.instMembership] `[σ.ui.orders] #1]
+    │     [thm] local_3: [@LE.le `[Int] `[Int.instLEInt] (@HAdd.hAdd `[Int] `[Int] `[Int] `[instHAdd] (model.Order.qty #1) `[-500]) `[0]]
+    │     [thm] local_3: [model.Order.qty #1]
+    │     [thm] local_4: [@Membership.mem `[model.Order] `[List model.Order] `[List.instMembership] `[σ.ui.orders] #1]
+    │     [thm] local_4: [@LE.le `[Int] `[Int.instLEInt] (@HAdd.hAdd `[Int] `[Int] `[Int] `[instHAdd] (@HMul.hMul `[Int] `[Int] `[Int] `[instHMul] `[-1] (model.Order.qty #1)) `[1]) `[0]]
+    │     [thm] local_4: [model.Order.qty #1]
+    │     [thm] List.mem_of_find?_eq_some: [@List.find? #4 #3 #1, @some _ #2]
+    │     [thm] List.find?_map: [@List.find? #3 #2 (@List.map #4 _ #1 #0)]
+    │     [thm] List.mem_of_find?_eq_some: [@List.find? #4 #3 #1, @some _ #2]
+    │     [thm] List.find?_some: [@List.find? #4 #3 #1, @some _ #2]
+    │     [thm] List.find?_eq_none: [@List.find? #2 #1 #0, @none _]
+    │     [thm] local_5: [@LE.le `[Nat] `[instLENat] (@List.count `[Int] `[Int.instLinearOrderPackage.toBEq] #0 `[List.map
+    │             (fun o => o.id) σ.ui.orders]) `[1]]
+    │     [thm] local_5: [@List.count `[Int] `[Int.instLinearOrderPackage.toBEq] #0 `[List.map (fun o => o.id) σ.ui.orders]]
+    │     [thm] local_5: [@List.count `[Int] `[Int.instLinearOrderPackage.toBEq] #0 `[List.map model.Order.id σ.ui.orders]]
+    │     [thm] local_6: [@LE.le `[Nat] `[instLENat] (@List.count `[Int] `[Int.instLinearOrderPackage.toBEq] #0 `[List.map
+    │             (fun e => e.id) props.expiries]) `[1]]
+    │     [thm] local_6: [@List.count `[Int] `[Int.instLinearOrderPackage.toBEq] #0 `[List.map (fun e => e.id)
+    │            props.expiries]]
+    │     [thm] local_6: [@List.count `[Int] `[Int.instLinearOrderPackage.toBEq] #0 `[List.map model.Expiry.id
+    │            props.expiries]]
+    │     [thm] List.Pairwise.map: [@List.Pairwise #7 #3 (@List.map #6 _ #2 #4), @List.Pairwise _ #5 #4]
+    │     [thm] List.pairwise_map: [@List.Pairwise #3 #1 (@List.map #4 _ #2 #0)]
+    │     [thm] List.mem_map: [@Membership.mem #3 (List _) _ (@List.map #4 _ #1 #0) #2]
+    │     [thm] Option.not_mem_none: [@Membership.mem #1 (Option _) _ (@none _) #0]
+    │     [thm] Option.mem_some: [@Membership.mem #2 (Option _) _ (@some _ #0) #1]
+    │     [thm] JS.eq_false: [@JS.eq #3 #2 #1 #0, false]
+    │     [thm] JS.eq_iff: [@JS.eq #3 #2 #1 #0, true]
+    │     [thm] local_7: [@LE.le `[Nat] `[instLENat] (@List.count `[Int] `[Int.instLinearOrderPackage.toBEq] #0 `[List.map
+    │             (fun s => s.strike) tExp_1.strikes]) `[1]]
+    │     [thm] local_7: [@List.count `[Int] `[Int.instLinearOrderPackage.toBEq] #0 `[List.map (fun s => s.strike)
+    │            tExp_1.strikes]]
+    │     [thm] local_7: [@List.count `[Int] `[Int.instLinearOrderPackage.toBEq] #0 `[List.map model.Strike.strike
+    │            tExp_1.strikes]]
+    │     [thm] local_8: [@LE.le `[Nat] `[instLENat] (@List.count `[Int] `[Int.instLinearOrderPackage.toBEq] #0 `[List.map
+    │             (fun s => s.strike) w.strikes]) `[1]]
+    │     [thm] local_8: [@List.count `[Int] `[Int.instLinearOrderPackage.toBEq] #0 `[List.map (fun s => s.strike) w.strikes]]
+    │     [thm] local_8: [@List.count `[Int] `[Int.instLinearOrderPackage.toBEq] #0 `[List.map model.Strike.strike w.strikes]]
+    │     [thm] local_9: [@LE.le `[Nat] `[instLENat] (@List.count `[Int] `[Int.instLinearOrderPackage.toBEq] #0 `[List.map
+    │             (fun s => s.strike) w_1.strikes]) `[1]]
+    │     [thm] local_9: [@List.count `[Int] `[Int.instLinearOrderPackage.toBEq] #0 `[List.map (fun s => s.strike)
+    │            w_1.strikes]]
+    │     [thm] local_9: [@List.count `[Int] `[Int.instLinearOrderPackage.toBEq] #0 `[List.map model.Strike.strike
+    │            w_1.strikes]]
+    │   [cutsat] Assignment satisfying linear constraints
+    │     [assign] qty := 1
+    │     [assign] price := 1
+    │     [assign] σ.ui.heat := 1
+    │     [assign] σ.ui.nextId := 0
+    │     [assign] ticket_1.price := 1
+    │     [assign] tExp_1.id := 13
+    │     [assign] w.id := 13
+    │     [assign] ticket_1.expiry := 13
+    │     [assign] ticket_2.price := 1
+    │     [assign] w_1.id := 13
+    │     [assign] ticket_2.expiry := 13
+    │   [ring] Ring `Int`
+    │     [basis] Basis
+    │       [_] qty + -1 = 0
+    │       [_] ticket_1.price + -1 * ticket_2.price = 0
+    │ [grind] Diagnostics
+    │   [ematch] E-matching Diagnostics
+    │     [thm] Theorem Instance Count
+    │       [thm] List.nodup_iff_count ↦ 5
+    │       [thm] List.nodup_iff_pairwise_ne ↦ 5
+    │       [thm] List.pairwise_map ↦ 5
+    │       [thm] List.Pairwise.map ↦ 5
+    │       [thm] local_0 ↦ 3
+    │       [thm] JS.eq_false ↦ 3
+    │       [thm] JS.eq_iff ↦ 3
+    │       [thm] List.find?_eq_none ↦ 2
+    │       [thm] List.find?_some ↦ 2
+    │       [thm] List.mem_of_find?_eq_some ↦ 2
+    │       [thm] inv.match_1.congr_eq_1 ↦ 2
+    │       [thm] render.match_1.congr_eq_1 ↦ 2
+
+1 obligation(s) not checked:
+  src/OptionsChain.tsx:150:11: it depends on `sorry` from a failure elsewhere (a failed obligation, a declaration with an error, or a hole()) that its goal or its proof contains, so Lean could not check it on its own: fix that first
+
+✗ NOT VERIFIED  140/142 obligations proved, 1 failed, 1 unchecked; components: 4/6 verified  (32.9s)

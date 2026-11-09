@@ -1,0 +1,73 @@
+translated 7 module(s), 142 proof obligation(s) → .vreact/ ; checking with Lean…
+
+Components
+  VERIFIED           PriceCell              src/StrikeRow.tsx:12
+  VERIFIED           StrikeRow              src/StrikeRow.tsx:39
+  VERIFIED           TermRow                src/TermRow.tsx:19
+  VERIFIED           OrderTicket            src/OrderTicket.tsx:19
+  VERIFIED           OptionsChain           src/OptionsChain.tsx:32
+  VERIFIED           App                    src/App.tsx:115
+Functions
+  VERIFIED           validChain
+  VERIFIED           legOf
+  VERIFIED           theoOf
+  VERIFIED           quotePrice
+  VERIFIED           withinSpread
+  VERIFIED           isMid
+  VERIFIED           midPrice
+  VERIFIED           inTheMoney
+  VERIFIED           dist
+  VERIFIED           nearest
+  VERIFIED           atmIndex
+  VERIFIED           inWindow
+  VERIFIED           strikeWindow
+  VERIFIED           filterLabel
+  VERIFIED           levelsOf
+  VERIFIED           edge
+  VERIFIED           heatOf
+  VERIFIED           legFor
+  VERIFIED           labelOf
+  VERIFIED           marketOf
+  VERIFIED           validQty
+  VERIFIED           validOrder
+  VERIFIED           openQty
+  VERIFIED           fmtPrice
+  VERIFIED           contractText
+  VERIFIED           quoteText
+  VERIFIED           crosses
+  VERIFIED           fmtVol
+  VERIFIED           wellFormed
+  VERIFIED           heldPrice
+  VERIFIED           sameView
+  VERIFIED           keepsHolds
+  VERIFIED           keepsAllHolds
+  VERIFIED           keepsOrders
+  VERIFIED           orderFor
+  VERIFIED           toggle
+  VERIFIED           setCollapsed
+  VERIFIED           setFilter
+  VERIFIED           holdAt
+  VERIFIED           follow
+  VERIFIED           jump
+  VERIFIED           setHeat
+  VERIFIED           place
+  VERIFIED           cancel
+  VERIFIED           validAction
+  VERIFIED           chainReducer
+  VERIFIED           shiftQuote
+  VERIFIED           moveFutures
+  VERIFIED           nextSeed
+  VERIFIED           validFeed
+  VERIFIED           stepFeed
+App certificates (VReact.run_allInv instantiated)
+  VERIFIED           VTS.App.App.certificate  axioms: propext, Classical.choice, Quot.sound
+Obligations by file
+  ✓ src/model.ts                             22/22
+  ✓ src/reducer.ts                           25/25
+  ✓ src/StrikeRow.tsx                        22/22
+  ✓ src/TermRow.tsx                          12/12
+  ✓ src/OrderTicket.tsx                      12/12
+  ✓ src/OptionsChain.tsx                     37/37
+  ✓ src/App.tsx                              12/12
+
+✔ VERIFIED  142/142 obligations proved; components: 6/6 verified  (25.2s)

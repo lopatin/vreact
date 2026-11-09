@@ -1,0 +1,2 @@
+✗ VTS src/reducer.ts:85:28: u.collapsed.delete(…) mutates u.collapsed, which is not a local variable of this function (a parameter, prop, state value, constant, or a value read from one: the caller, React or other code holds the same object, and would see the change); mutate a fresh copy instead: const next = new Set(u.collapsed); next.delete(…);
+✗ VTS src/OptionsChain.tsx:119:23: `held` can be undefined but never null (optional fields, find(), at(), a Map's get() and ?. give undefined), so `!== null` is always true in JS: write !== undefined or != null

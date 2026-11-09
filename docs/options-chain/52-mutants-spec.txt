@@ -1,0 +1,136 @@
+translated 8 module(s), 195 proof obligation(s) → .vreact/ ; checking with Lean…
+
+Components
+  VERIFIED           PriceCell              src/StrikeRow.tsx:12
+  VERIFIED           StrikeRow              src/StrikeRow.tsx:41
+  VERIFIED           TermRow                src/TermRow.tsx:19
+  VERIFIED           OrderTicket            src/OrderTicket.tsx:19
+  VERIFIED           OptionsChain           src/OptionsChain.tsx:34
+  VERIFIED           App                    src/App.tsx:156
+Functions
+  VERIFIED           sameMembers
+  VERIFIED           sameMembersExcept
+  VERIFIED           toggleIn
+  VERIFIED           sameEntries
+  VERIFIED           agreeExcept
+  VERIFIED           sameList
+  VERIFIED           byId
+  VERIFIED           validChain
+  VERIFIED           legOf
+  VERIFIED           theoOf
+  VERIFIED           quotePrice
+  VERIFIED           withinSpread
+  VERIFIED           isMid
+  VERIFIED           midPrice
+  VERIFIED           inTheMoney
+  VERIFIED           dist
+  VERIFIED           nearest
+  VERIFIED           atmIndex
+  VERIFIED           inWindow
+  VERIFIED           strikeWindow
+  INCOMPLETE         shownRows
+      ↳ 2 obligations of it failed
+  VERIFIED           filterLabel
+  VERIFIED           levelsOf
+  VERIFIED           edge
+  VERIFIED           heatOf
+  VERIFIED           legFor
+  VERIFIED           labelOf
+  VERIFIED           marketOf
+  VERIFIED           validQty
+  VERIFIED           validOrder
+  VERIFIED           openQty
+  VERIFIED           fmtPrice
+  VERIFIED           contractText
+  VERIFIED           quoteText
+  VERIFIED           crosses
+  VERIFIED           fmtVol
+  VERIFIED           wellFormed
+  VERIFIED           sameView
+  VERIFIED           sameOrder
+  VERIFIED           keepsOrders
+  VERIFIED           keepsOrdersExcept
+  VERIFIED           sameOrders
+  VERIFIED           orderFor
+  VERIFIED           toggle
+  VERIFIED           setCollapsed
+  INCOMPLETE         setFilter
+      ↳ an obligation of it failed
+  VERIFIED           watchStrike
+  VERIFIED           holdAt
+  VERIFIED           follow
+  VERIFIED           jump
+  VERIFIED           setHeat
+  VERIFIED           accepts
+  VERIFIED           place
+  VERIFIED           repriced
+  VERIFIED           amend
+  VERIFIED           cancel
+  VERIFIED           validAction
+  VERIFIED           chainReducer
+  VERIFIED           shiftQuote
+  VERIFIED           moveFutures
+  VERIFIED           nextSeed
+  VERIFIED           validFeed
+  VERIFIED           stepFeed
+  VERIFIED           sameFeed
+  VERIFIED           simReducer
+App certificates (VReact.run_allInv instantiated)
+  VERIFIED           VTS.App.App.certificate  axioms: propext, Classical.choice, Quot.sound
+Obligations by file
+  ✓ src/collections.ts                       6/6
+  ✗ src/model.ts                             24/26
+  ✗ src/reducer.ts                           48/49
+  ✓ src/StrikeRow.tsx                        24/24
+  ✓ src/TermRow.tsx                          12/12
+  ✓ src/OrderTicket.tsx                      12/12
+  ✓ src/OptionsChain.tsx                     46/46
+  ✓ src/App.tsx                              20/20
+
+Failed obligations
+✗ src/model.ts:154:11  [postcondition] postcondition of shownRows: ks.slice(span.lo, span.hi).every((s) => r.some((x) => x.strike === s.…
+    │ `grind` failed
+    │ case grind
+    │ ks : List Strike
+    │ span : Span
+    │ watch : JS.JSSet Int
+    │ s : Strike
+    │ h : s ∈ JS.slice ks span.lo (some span.hi)
+    │ hcontract : watch.elems.Nodup
+    │ h_1 :
+    │   ∀ (a a_1 : Strike),
+    │     a_1 ∈ JS.slice ks span.lo (some span.hi) →
+    │       a_1.strike = a.strike → a ∈ ks → a.strike ∈ watch.elems → ¬a.strike = s.strike
+    │ ⊢ False
+✗ src/model.ts:155:11  [postcondition] postcondition of shownRows: ks.every((s) => !watch.has(s.strike) || r.some((x) => x.strike === s.…
+    │ `grind` failed
+    │ case grind
+    │ ks : List Strike
+    │ span : Span
+    │ watch : JS.JSSet Int
+    │ s : Strike
+    │ h : s ∈ ks
+    │ hcontract : watch.elems.Nodup
+    │ hcontract_1 :
+    │   ∀ (s : Strike),
+    │     s ∈ JS.slice ks span.lo (some span.hi) →
+    │       ∃ x,
+    │         (x ∈ ks ∧ (∃ a, a ∈ JS.slice ks span.lo (some span.hi) ∧ a.strike = x.strike) ∧ x.strike ∈ watch.elems) ∧
+    │           x.strike = s.strike
+    │ left : s.strike ∈ watch.elems
+    │ right :
+    │   ∀ (a a_1 : Strike),
+    │     a_1 ∈ JS.slice ks span.lo (some span.hi) →
+    │   …
+✗ src/reducer.ts:136:11  [postcondition] postcondition of setFilter: sameView(u, { ...r, filter: u.filter })
+    │ `grind` failed
+    │ case grind
+    │ u : ChainUi
+    │ f : model.StrikeFilter
+    │ hcontract : u.collapsed.elems.Nodup
+    │ hcontract_1 : u.watch.elems.Nodup
+    │ x : Int
+    │ h : x ∈ u.watch.elems
+    │ ⊢ False
+
+✗ NOT VERIFIED  192/195 obligations proved, 3 failed; components: 6/6 verified  (39.7s)

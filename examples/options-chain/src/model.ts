@@ -6,6 +6,7 @@
 //
 // Theoretical values and volatilities are *input data* (no pricing model is verified here).
 import { requires, ensures, implies, distinct, forall, idiv, type int } from "vreact/spec";
+import { byId } from "./collections";
 
 export type Right = "call" | "put";
 /** A side of a market: the best bid (buyers) or the best ask (sellers). */
@@ -143,6 +144,22 @@ export function strikeWindow(n: int, atm: int, levels: int): Span {
   return { lo: Math.max(0, atm - levels), hi: Math.min(n, atm + levels + 1) };
 }
 
+/**
+ * The strike rows an expiry shows: the rows of the filter's window, and every watched strike,
+ * whatever the filter. One pass over the ladder, in its order, so a watched strike inside the
+ * window is one row.
+ */
+export function shownRows(ks: readonly Strike[], span: Span, watch: ReadonlySet<int>): readonly Strike[] {
+  // every row of the window is shown, and every watched strike ...
+  ensures((r: readonly Strike[]) => ks.slice(span.lo, span.hi).every((s) => r.some((x) => x.strike === s.strike)));
+  ensures((r: readonly Strike[]) => ks.every((s) => !watch.has(s.strike) || r.some((x) => x.strike === s.strike)));
+  // ... and nothing else, each strike once
+  ensures((r: readonly Strike[]) => r.every((x) => watch.has(x.strike) || ks.slice(span.lo, span.hi).some((s) => s.strike === x.strike)));
+  ensures((r: readonly Strike[]) => implies(distinct(ks, (s) => s.strike), distinct(r, (s) => s.strike)));
+  const win = new Set(ks.slice(span.lo, span.hi).map((s) => s.strike));
+  return ks.filter((s) => win.has(s.strike) || watch.has(s.strike));
+}
+
 /** Quick strike filter: 3, 7, 11 or 99 strikes above and below the price, or all strikes. */
 export type StrikeFilter = "s3" | "s7" | "s11" | "s99" | "all";
 
@@ -212,7 +229,7 @@ export function legFor(right: Right): Leg {
 
 /** The label of an expiry ("?" when it is not listed). */
 export function labelOf(es: readonly Expiry[], id: int): string {
-  const e = es.find((x) => x.id === id);
+  const e = byId(es, id);
   return e === undefined ? "?" : `${e.symbol} ${e.label}`;
 }
 
@@ -233,9 +250,11 @@ export function marketOf(e: Expiry, t: Ticket): Quote | null {
   return t.leg === "call" ? s.call : s.put;
 }
 
-/** A working order. Clicking a bid prepares a sell (hit the bid), an ask a buy (lift the offer). */
+/**
+ * A working order. Clicking a bid prepares a sell (hit the bid), an ask a buy (lift the offer).
+ * It has no id field: the working orders are a Map from id to order, and the key is the id.
+ */
 export type Order = {
-  readonly id: int;
   readonly expiry: int;
   readonly leg: Leg;
   readonly strike: int;

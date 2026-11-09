@@ -1,0 +1,341 @@
+:root {
+  --bg: #f6f7f9;
+  --panel: #ffffff;
+  --ink: #1d232b;
+  --muted: #6b7480;
+  --line: #e2e5ea;
+  --accent: #2f6fdb;
+  --itm: #eef3fb;
+  --atm: #fff7d6;
+  --near: #d7ecff; /* theo approaching the market */
+  --cross: #fff2a8; /* theo slightly crossed: lighter yellow */
+  --deep: #f5cf3b; /* theo crossed by more: darker yellow */
+  --buy: #1f7a3f;
+  --sell: #b3261e;
+  --watch: #c98a00; /* watched strikes */
+  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  color: var(--ink);
+  background: var(--bg);
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+}
+
+.app {
+  max-width: 1080px;
+  margin: 0 auto;
+  padding: 16px;
+}
+
+header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px 16px;
+  margin-bottom: 12px;
+}
+
+h1 {
+  font-size: 20px;
+  margin: 0;
+}
+
+.muted {
+  color: var(--muted);
+  font-size: 13px;
+  margin: 0;
+}
+
+button {
+  font: inherit;
+  font-size: 13px;
+  border: 1px solid var(--line);
+  background: var(--panel);
+  border-radius: 4px;
+  padding: 3px 8px;
+  cursor: pointer;
+}
+
+button:hover:not(:disabled) {
+  border-color: var(--accent);
+}
+
+button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+button.on {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+.chain {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 12px;
+}
+
+.toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 16px;
+  margin-bottom: 10px;
+  font-size: 13px;
+}
+
+.toolbar > div {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.expiry {
+  display: inline-block;
+  padding: 3px 10px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  color: var(--ink);
+  text-decoration: none;
+}
+
+.expiry.on {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.grid {
+  width: 100%;
+  border-collapse: collapse;
+  font-variant-numeric: tabular-nums;
+  font-size: 13px;
+}
+
+.grid th {
+  color: var(--muted);
+  font-weight: 500;
+  padding: 4px 6px;
+  border-bottom: 1px solid var(--line);
+}
+
+.grid td {
+  padding: 2px 6px;
+  text-align: right;
+  border-bottom: 1px solid var(--line);
+}
+
+.grid td.strike {
+  text-align: center;
+  font-weight: 600;
+  background: #f0f2f5;
+}
+
+.grid td.vol,
+.grid td.qty {
+  color: var(--muted);
+}
+
+.grid td.itm {
+  background: var(--itm);
+}
+
+.grid tr.atm td {
+  border-top: 2px solid #e2b93b;
+}
+
+.grid tr.atm td.strike {
+  background: var(--atm);
+}
+
+.grid td.strike button.watch,
+.grid td.strike button.watch.on {
+  border: none;
+  background: transparent;
+  padding: 0 4px 0 0;
+  color: var(--muted);
+}
+
+.grid td.strike button.watch.on {
+  color: var(--watch);
+}
+
+.grid tr.watched td.strike {
+  box-shadow: inset 3px 0 0 var(--watch);
+}
+
+.toolbar .watching {
+  flex-wrap: wrap;
+}
+
+.toolbar .chip {
+  border-radius: 12px;
+  color: var(--watch);
+}
+
+.grid td.px button {
+  border: none;
+  background: transparent;
+  padding: 1px 4px;
+  width: 100%;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.grid td.px button:hover {
+  outline: 1px solid var(--accent);
+}
+
+.grid td.heat-near {
+  background: var(--near);
+}
+
+.grid td.heat-cross {
+  background: var(--cross);
+}
+
+.grid td.heat-deep {
+  background: var(--deep);
+}
+
+.grid tr.term td {
+  background: #e9edf3;
+  font-weight: 600;
+  border-top: 8px solid var(--panel);
+}
+
+.grid tr.term.focus td {
+  background: #dbe6fb;
+}
+
+.grid tr.term td.name {
+  text-align: left;
+}
+
+.grid tr.term td.held {
+  color: var(--muted);
+  font-weight: 400;
+  font-size: 12px;
+}
+
+.grid tr.term td.toggle,
+.grid tr.term td.lock {
+  text-align: center;
+}
+
+.grid tr.term td.toggle button,
+.grid tr.term td.lock button {
+  border: none;
+  background: transparent;
+}
+
+.ticket {
+  margin-top: 12px;
+  border: 1px solid var(--line);
+  border-left: 4px solid var(--accent);
+  border-radius: 6px;
+  padding: 10px 12px;
+  max-width: 460px;
+}
+
+.ticket.buy {
+  border-left-color: var(--buy);
+}
+
+.ticket.sell {
+  border-left-color: var(--sell);
+}
+
+.ticket h3 {
+  margin: 0 0 8px;
+  font-size: 15px;
+}
+
+.ticket .field {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 6px 0;
+  font-size: 13px;
+}
+
+.ticket .field > span {
+  width: 64px;
+  color: var(--muted);
+}
+
+.ticket .field b {
+  min-width: 56px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
+.ticket .market {
+  font-size: 13px;
+  color: var(--muted);
+  margin: 6px 0;
+}
+
+.ticket .warn {
+  font-size: 13px;
+  color: #8a5a00;
+  margin: 6px 0;
+}
+
+.ticket .actions {
+  display: flex;
+  gap: 8px;
+}
+
+.ticket .submit {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+.orders h3 {
+  font-size: 14px;
+  margin: 16px 0 6px;
+}
+
+.orders ul {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  font-size: 13px;
+}
+
+.orders li {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 0;
+  border-bottom: 1px solid var(--line);
+  font-variant-numeric: tabular-nums;
+}
+
+.orders li .acts {
+  margin-left: auto;
+  display: flex;
+  gap: 4px;
+}
+
+.buy {
+  color: var(--buy);
+  font-weight: 600;
+}
+
+.sell {
+  color: var(--sell);
+  font-weight: 600;
+}
+
+@media (max-width: 720px) {
+  .chain {
+    overflow-x: auto;
+  }
+}

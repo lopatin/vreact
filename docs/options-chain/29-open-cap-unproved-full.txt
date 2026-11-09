@@ -1,0 +1,693 @@
+translated 7 module(s), 142 proof obligation(s) → .vreact/ ; checking with Lean…
+
+Components
+  VERIFIED           PriceCell              src/StrikeRow.tsx:12
+  VERIFIED           StrikeRow              src/StrikeRow.tsx:39
+  VERIFIED           TermRow                src/TermRow.tsx:19
+  VERIFIED           OrderTicket            src/OrderTicket.tsx:19
+  INCOMPLETE         OptionsChain           src/OptionsChain.tsx:32
+      ↳ an obligation of it failed
+  INCOMPLETE         App                    src/App.tsx:115
+      ↳ it uses OptionsChain (src/OptionsChain.tsx), which is not verified: an obligation of it failed
+Functions
+  VERIFIED           validChain
+  VERIFIED           legOf
+  VERIFIED           theoOf
+  VERIFIED           quotePrice
+  VERIFIED           withinSpread
+  VERIFIED           isMid
+  VERIFIED           midPrice
+  VERIFIED           inTheMoney
+  VERIFIED           dist
+  VERIFIED           nearest
+  VERIFIED           atmIndex
+  VERIFIED           inWindow
+  VERIFIED           strikeWindow
+  VERIFIED           filterLabel
+  VERIFIED           levelsOf
+  VERIFIED           edge
+  VERIFIED           heatOf
+  VERIFIED           legFor
+  VERIFIED           labelOf
+  VERIFIED           marketOf
+  VERIFIED           validQty
+  VERIFIED           validOrder
+  VERIFIED           openQty
+  VERIFIED           fmtPrice
+  VERIFIED           contractText
+  VERIFIED           quoteText
+  VERIFIED           crosses
+  VERIFIED           fmtVol
+  VERIFIED           wellFormed
+  VERIFIED           heldPrice
+  VERIFIED           sameView
+  VERIFIED           keepsHolds
+  VERIFIED           keepsAllHolds
+  VERIFIED           keepsOrders
+  VERIFIED           orderFor
+  VERIFIED           toggle
+  VERIFIED           setCollapsed
+  VERIFIED           setFilter
+  VERIFIED           holdAt
+  VERIFIED           follow
+  VERIFIED           jump
+  VERIFIED           setHeat
+  VERIFIED           accepts
+  INCOMPLETE         place
+      ↳ an obligation of it failed
+  INCOMPLETE         cancel
+      ↳ an obligation of it failed
+  VERIFIED           validAction
+  INCOMPLETE         chainReducer
+      ↳ it uses place, which is not verified: an obligation of it failed
+  VERIFIED           shiftQuote
+  VERIFIED           moveFutures
+  VERIFIED           nextSeed
+  VERIFIED           validFeed
+  VERIFIED           stepFeed
+App certificates (VReact.run_allInv instantiated)
+  INCOMPLETE         VTS.App.App.certificate  axioms: propext, sorryAx, Classical.choice, Quot.sound
+      ↳ it uses OptionsChain (src/OptionsChain.tsx), which is not verified: an obligation of it failed
+Obligations by file
+  ✓ src/model.ts                             22/22
+  ✗ src/reducer.ts                           23/25
+  ✓ src/StrikeRow.tsx                        22/22
+  ✓ src/TermRow.tsx                          12/12
+  ✓ src/OrderTicket.tsx                      12/12
+  ✗ src/OptionsChain.tsx                     36/37
+  ✓ src/App.tsx                              12/12
+
+Failed obligations
+✗ src/OptionsChain.tsx:32:17  [init-invariant] OptionsChain: initial state satisfies the invariant
+    │ `grind` failed
+    │ case grind
+    │ props : Props
+    │ hpre hpre_1 :
+    │   (List.map (fun e => e.id) props.expiries).Nodup ∧
+    │     ∀ (x : model.Expiry), x ∈ props.expiries → (List.map (fun s => s.strike) x.strikes).Nodup
+    │ h : -1 * model.openQty [] + 1001 ≤ 0
+    │ ⊢ False
+    │ [grind] Goal diagnostics
+    │   [facts] Asserted facts
+    │     [prop] (List.map (fun e => e.id) props.expiries).Nodup ∧
+    │           ∀ (x : model.Expiry), x ∈ props.expiries → (List.map (fun s => s.strike) x.strikes).Nodup
+    │     [prop] (List.map (fun e => e.id) props.expiries).Nodup ∧
+    │           ∀ (x : model.Expiry), x ∈ props.expiries → (List.map (fun s => s.strike) x.strikes).Nodup
+    │     [prop] -1 * model.openQty [] + 1001 ≤ 0
+    │     [prop] (List.map (fun e => e.id) props.expiries).Nodup =
+    │           ∀ (a : Int), List.count a (List.map (fun e => e.id) props.expiries) ≤ 1
+    │     [prop] (List.map (fun e => e.id) props.expiries).Nodup =
+    │           List.Pairwise (fun x1 x2 => ¬x1 = x2) (List.map (fun e => e.id) props.expiries)
+    │     [prop] List.Pairwise (fun x1 x2 => ¬x1 = x2) (List.map (fun e => e.id) props.expiries) =
+    │           List.Pairwise (fun a b => ¬a.id = b.id) props.expiries
+    │     [prop] (∀ (a b : model.Expiry), True) →
+    │           List.Pairwise (fun a b => ¬a.id = b.id) props.expiries →
+    │             List.Pairwise (fun x1 x2 => ¬x1 = x2) (List.map (fun e => e.id) props.expiries)
+    │   [eqc] True propositions
+    │     [prop] (List.map (fun e => e.id) props.expiries).Nodup ∧
+    │           ∀ (x : model.Expiry), x ∈ props.expiries → (List.map (fun s => s.strike) x.strikes).Nodup
+    │     [prop] (List.map (fun e => e.id) props.expiries).Nodup
+    │     [prop] -1 * model.openQty [] + 1001 ≤ 0
+    │     [prop] ∀ (x : model.Expiry), x ∈ props.expiries → (List.map (fun s => s.strike) x.strikes).Nodup
+    │     [prop] (List.map (fun e => e.id) props.expiries).Nodup =
+    │           List.Pairwise (fun x1 x2 => ¬x1 = x2) (List.map (fun e => e.id) props.expiries)
+    │     [prop] (List.map (fun e => e.id) props.expiries).Nodup =
+    │           ∀ (a : Int), List.count a (List.map (fun e => e.id) props.expiries) ≤ 1
+    │     [prop] List.Pairwise (fun x1 x2 => ¬x1 = x2) (List.map (fun e => e.id) props.expiries)
+    │     [prop] ∀ (a : Int), List.count a (List.map (fun e => e.id) props.expiries) ≤ 1
+    │     [prop] List.Pairwise (fun x1 x2 => ¬x1 = x2) (List.map (fun e => e.id) props.expiries) =
+    │           List.Pairwise (fun a b => ¬a.id = b.id) props.expiries
+    │     [prop] List.Pairwise (fun a b => ¬a.id = b.id) props.expiries
+    │     [prop] List.Pairwise (fun a b => ¬a.id = b.id) props.expiries →
+    │           List.Pairwise (fun x1 x2 => ¬x1 = x2) (List.map (fun e => e.id) props.expiries)
+    │     [prop] (∀ (a b : model.Expiry), True) →
+    │           List.Pairwise (fun a b => ¬a.id = b.id) props.expiries →
+    │             List.Pairwise (fun x1 x2 => ¬x1 = x2) (List.map (fun e => e.id) props.expiries)
+    │   [eqc] Equivalence classes
+    │     [eqc] {model.Expiry.id, fun e => e.id}
+    │     [eqc] {model.Strike.strike, fun s => s.strike}
+    │     [eqc] {List.map (fun e => e.id) props.expiries, List.map model.Expiry.id props.expiries}
+    │   [ematch] E-matching patterns
+    │     [thm] List.nodup_iff_count: [@List.Nodup #3 #0]
+    │     [thm] List.nodup_iff_pairwise_ne: [@List.Nodup #1 #0]
+    │     [thm] List.map_map: [@List.map #5 #4 #2 (@List.map #3 _ #1 #0)]
+    │     [thm] local_0: [@Membership.mem `[model.Expiry] `[List model.Expiry] `[List.instMembership] `[props.expiries] #1]
+    │     [thm] local_0: [@List.Nodup `[Int] (@List.map `[model.Strike] `[Int] `[fun s =>
+    │             s.strike] (model.Expiry.strikes #1))]
+    │     [thm] local_0: [@List.map `[model.Strike] `[Int] `[fun s => s.strike] (model.Expiry.strikes #1)]
+    │     [thm] local_0: [model.Expiry.strikes #1]
+    │     [thm] List.map_nil: [@List.map #2 #1 #0 (@List.nil _)]
+    │     [thm] List.nodup_nil: [@List.Nodup #0 (@List.nil _)]
+    │     [thm] local_1: [@LE.le `[Nat] `[instLENat] (@List.count `[Int] `[Int.instLinearOrderPackage.toBEq] #0 `[List.map
+    │             (fun e => e.id) props.expiries]) `[1]]
+    │     [thm] local_1: [@List.count `[Int] `[Int.instLinearOrderPackage.toBEq] #0 `[List.map (fun e => e.id)
+    │            props.expiries]]
+    │     [thm] local_1: [@List.count `[Int] `[Int.instLinearOrderPackage.toBEq] #0 `[List.map model.Expiry.id
+    │            props.expiries]]
+    │     [thm] List.Pairwise.map: [@List.Pairwise #7 #3 (@List.map #6 _ #2 #4), @List.Pairwise _ #5 #4]
+    │     [thm] List.pairwise_map: [@List.Pairwise #3 #1 (@List.map #4 _ #2 #0)]
+    │   [cutsat] Assignment satisfying linear constraints
+    │     [assign] model.openQty [] := 1001
+    │ [grind] Diagnostics
+    │   [ematch] E-matching Diagnostics
+    │     [thm] Theorem Instance Count
+    │       [thm] List.nodup_iff_count ↦ 1
+    │       [thm] List.nodup_iff_pairwise_ne ↦ 1
+    │       [thm] List.pairwise_map ↦ 1
+    │       [thm] List.Pairwise.map ↦ 1
+✗ src/reducer.ts:181:11  [postcondition] postcondition of place: implies(wellFormed(u), wellFormed(r))
+    │ `grind` failed
+    │ case grind.1
+    │ u : ChainUi
+    │ t : model.Ticket
+    │ qty price : Int
+    │ h_pre : 1 ≤ qty ∧ qty ≤ 500
+    │ h₁₄ :
+    │   (((1 ≤ u.heat ∧ u.heat ≤ 5) ∧ (List.map (fun o => o.id) u.orders).Nodup) ∧
+    │       ∀ (x : model.Order), x ∈ u.orders → ((1 ≤ x.qty ∧ x.qty ≤ 500) ∧ 0 < x.price) ∧ x.id < u.nextId) ∧
+    │     model.openQty u.orders ≤ 1000
+    │ h : ((1 ≤ qty ∧ qty ≤ 500) ∧ 0 < price) ∧ model.openQty u.orders + qty ≤ 1000
+    │ h_1 :
+    │   -1 *
+    │         model.openQty
+    │           (u.orders ++
+    │             [{ id := u.nextId, expiry := t.expiry, leg := t.leg, strike := t.strike, buy := JS.eq t.side model.Side.ask,
+    │                 qty := qty, price := price }]) +
+    │       1001 ≤
+    │     0
+    │ left : JS.eq t.side model.Side.ask = true
+    │ right : t.side = model.Side.ask
+    │ ⊢ False
+    │ [grind] Goal diagnostics
+    │   [facts] Asserted facts
+    │     [prop] -1 * qty + 1 ≤ 0 ∧ qty + -500 ≤ 0
+    │     [prop] -1 * u.heat + 1 ≤ 0 ∧
+    │           u.heat + -5 ≤ 0 ∧
+    │             (List.map (fun o => o.id) u.orders).Nodup ∧
+    │               (∀ (x : model.Order), x ∈ u.orders → -1 * x.qty + 1 ≤ 0) ∧
+    │                 (∀ (x : model.Order), x ∈ u.orders → x.qty + -500 ≤ 0) ∧
+    │                   (∀ (x : model.Order), x ∈ u.orders → -1 * x.price + 1 ≤ 0) ∧
+    │                     (∀ (x : model.Order), x ∈ u.orders → x.id + -1 * u.nextId + 1 ≤ 0) ∧
+    │                       model.openQty u.orders + -1000 ≤ 0
+    │     [prop] -1 * qty + 1 ≤ 0 ∧ qty + -500 ≤ 0 ∧ -1 * price + 1 ≤ 0 ∧ qty + model.openQty u.orders + -1000 ≤ 0
+    │     [prop] -1 *
+    │               model.openQty
+    │                 (u.orders ++
+    │                   [{ id := u.nextId, expiry := t.expiry, leg := t.leg, strike := t.strike,
+    │                       buy := JS.eq t.side model.Side.ask, qty := qty, price := price }]) +
+    │             1001 ≤
+    │           0
+    │     [prop] (List.map (fun o => o.id) u.orders).Nodup = ∀ (a : Int), List.count a (List.map (fun o => o.id) u.orders) ≤ 1
+    │     [prop] (List.map (fun o => o.id) u.orders).Nodup =
+    │           List.Pairwise (fun x1 x2 => ¬x1 = x2) (List.map (fun o => o.id) u.orders)
+    │     [prop] (JS.eq t.side model.Side.ask = false) = ¬t.side = model.Side.ask
+    │     [prop] (JS.eq t.side model.Side.ask = true) = (t.side = model.Side.ask)
+    │     [prop] List.Pairwise (fun x1 x2 => ¬x1 = x2) (List.map (fun o => o.id) u.orders) =
+    │           List.Pairwise (fun a b => ¬a.id = b.id) u.orders
+    │     [prop] (∀ (a b : model.Order), True) →
+    │           List.Pairwise (fun a b => ¬a.id = b.id) u.orders →
+    │             List.Pairwise (fun x1 x2 => ¬x1 = x2) (List.map (fun o => o.id) u.orders)
+    │     [prop] JS.eq t.side model.Side.ask = true
+    │     [prop] t.side = model.Side.ask
+    │   [eqc] True propositions
+    │     [prop] (List.map (fun o => o.id) u.orders).Nodup ∧
+    │           (∀ (x : model.Order), x ∈ u.orders → -1 * x.qty + 1 ≤ 0) ∧
+    │             (∀ (x : model.Order), x ∈ u.orders → x.qty + -500 ≤ 0) ∧
+    │               (∀ (x : model.Order), x ∈ u.orders → -1 * x.price + 1 ≤ 0) ∧
+    │                 (∀ (x : model.Order), x ∈ u.orders → x.id + -1 * u.nextId + 1 ≤ 0) ∧ model.openQty u.orders + -1000 ≤ 0
+    │     [prop] qty + -500 ≤ 0 ∧ -1 * price + 1 ≤ 0 ∧ qty + model.openQty u.orders + -1000 ≤ 0
+    │     [prop] u.heat + -5 ≤ 0 ∧
+    │           (List.map (fun o => o.id) u.orders).Nodup ∧
+    │             (∀ (x : model.Order), x ∈ u.orders → -1 * x.qty + 1 ≤ 0) ∧
+    │               (∀ (x : model.Order), x ∈ u.orders → x.qty + -500 ≤ 0) ∧
+    │                 (∀ (x : model.Order), x ∈ u.orders → -1 * x.price + 1 ≤ 0) ∧
+    │                   (∀ (x : model.Order), x ∈ u.orders → x.id + -1 * u.nextId + 1 ≤ 0) ∧
+    │                     model.openQty u.orders + -1000 ≤ 0
+    │     [prop] -1 * qty + 1 ≤ 0 ∧ qty + -500 ≤ 0 ∧ -1 * price + 1 ≤ 0 ∧ qty + model.openQty u.orders + -1000 ≤ 0
+    │     [prop] -1 * qty + 1 ≤ 0 ∧ qty + -500 ≤ 0
+    │     [prop] -1 * price + 1 ≤ 0 ∧ qty + model.openQty u.orders + -1000 ≤ 0
+    │     [prop] -1 * u.heat + 1 ≤ 0 ∧
+    │           u.heat + -5 ≤ 0 ∧
+    │             (List.map (fun o => o.id) u.orders).Nodup ∧
+    │               (∀ (x : model.Order), x ∈ u.orders → -1 * x.qty + 1 ≤ 0) ∧
+    │                 (∀ (x : model.Order), x ∈ u.orders → x.qty + -500 ≤ 0) ∧
+    │                   (∀ (x : model.Order), x ∈ u.orders → -1 * x.price + 1 ≤ 0) ∧
+    │                     (∀ (x : model.Order), x ∈ u.orders → x.id + -1 * u.nextId + 1 ≤ 0) ∧
+    │                       model.openQty u.orders + -1000 ≤ 0
+    │     [prop] (∀ (x : model.Order), x ∈ u.orders → x.qty + -500 ≤ 0) ∧
+    │           (∀ (x : model.Order), x ∈ u.orders → -1 * x.price + 1 ≤ 0) ∧
+    │             (∀ (x : model.Order), x ∈ u.orders → x.id + -1 * u.nextId + 1 ≤ 0) ∧ model.openQty u.orders + -1000 ≤ 0
+    │     [prop] (∀ (x : model.Order), x ∈ u.orders → x.id + -1 * u.nextId + 1 ≤ 0) ∧ model.openQty u.orders + -1000 ≤ 0
+    │     [prop] (∀ (x : model.Order), x ∈ u.orders → -1 * x.price + 1 ≤ 0) ∧
+    │           (∀ (x : model.Order), x ∈ u.orders → x.id + -1 * u.nextId + 1 ≤ 0) ∧ model.openQty u.orders + -1000 ≤ 0
+    │     [prop] (∀ (x : model.Order), x ∈ u.orders → -1 * x.qty + 1 ≤ 0) ∧
+    │           (∀ (x : model.Order), x ∈ u.orders → x.qty + -500 ≤ 0) ∧
+    │             (∀ (x : model.Order), x ∈ u.orders → -1 * x.price + 1 ≤ 0) ∧
+    │               (∀ (x : model.Order), x ∈ u.orders → x.id + -1 * u.nextId + 1 ≤ 0) ∧ model.openQty u.orders + -1000 ≤ 0
+    │     [prop] (List.map (fun o => o.id) u.orders).Nodup
+    │     [prop] qty + -500 ≤ 0
+    │     [prop] model.openQty u.orders + -1000 ≤ 0
+    │     [prop] u.heat + -5 ≤ 0
+    │     [prop] qty + model.openQty u.orders + -1000 ≤ 0
+    │     [prop] -1 * qty + 1 ≤ 0
+    │     [prop] -1 * price + 1 ≤ 0
+    │     [prop] -1 *
+    │               model.openQty
+    │                 (u.orders ++
+    │                   [{ id := u.nextId, expiry := t.expiry, leg := t.leg, strike := t.strike,
+    │                       buy := JS.eq t.side model.Side.ask, qty := qty, price := price }]) +
+    │             1001 ≤
+    │           0
+    │     [prop] -1 * u.heat + 1 ≤ 0
+    │     [prop] ∀ (x : model.Order), x ∈ u.orders → x.qty + -500 ≤ 0
+    │     [prop] ∀ (x : model.Order), x ∈ u.orders → x.id + -1 * u.nextId + 1 ≤ 0
+    │     [prop] ∀ (x : model.Order), x ∈ u.orders → -1 * x.price + 1 ≤ 0
+    │     [prop] ∀ (x : model.Order), x ∈ u.orders → -1 * x.qty + 1 ≤ 0
+    │     [prop] (List.map (fun o => o.id) u.orders).Nodup =
+    │           List.Pairwise (fun x1 x2 => ¬x1 = x2) (List.map (fun o => o.id) u.orders)
+    │     [prop] (List.map (fun o => o.id) u.orders).Nodup = ∀ (a : Int), List.count a (List.map (fun o => o.id) u.orders) ≤ 1
+    │     [prop] (JS.eq t.side model.Side.ask = false) = ¬t.side = model.Side.ask
+    │     [prop] (JS.eq t.side model.Side.ask = true) = (t.side = model.Side.ask)
+    │     [prop] JS.eq t.side model.Side.ask = true
+    │     [prop] t.side = model.Side.ask
+    │     [prop] List.Pairwise (fun x1 x2 => ¬x1 = x2) (List.map (fun o => o.id) u.orders)
+    │     [prop] ∀ (a : Int), List.count a (List.map (fun o => o.id) u.orders) ≤ 1
+    │     [prop] List.Pairwise (fun x1 x2 => ¬x1 = x2) (List.map (fun o => o.id) u.orders) =
+    │           List.Pairwise (fun a b => ¬a.id = b.id) u.orders
+    │     [prop] List.Pairwise (fun a b => ¬a.id = b.id) u.orders
+    │     [prop] List.Pairwise (fun a b => ¬a.id = b.id) u.orders →
+    │           List.Pairwise (fun x1 x2 => ¬x1 = x2) (List.map (fun o => o.id) u.orders)
+    │     [prop] (∀ (a b : model.Order), True) →
+    │           List.Pairwise (fun a b => ¬a.id = b.id) u.orders →
+    │             List.Pairwise (fun x1 x2 => ¬x1 = x2) (List.map (fun o => o.id) u.orders)
+    │   [eqc] False propositions
+    │     [prop] ¬t.side = model.Side.ask
+    │     [prop] JS.eq t.side model.Side.ask = false
+    │   [eqc] Equivalence classes
+    │     [eqc] {true, JS.eq t.side model.Side.ask}
+    │     [eqc] {model.Order.id, fun o => o.id}
+    │     [eqc] {model.Side.ask, t.side}
+    │     [eqc] {List.map (fun o => o.id) u.orders, List.map model.Order.id u.orders}
+    │   [cases] Case analyses
+    │     [cases] [1/2]: (JS.eq t.side model.Side.ask = true) = (t.side = model.Side.ask)
+    │       [cases] source: E-matching `JS.eq_iff`
+    │   [ematch] E-matching patterns
+    │     [thm] List.nodup_iff_count: [@List.Nodup #3 #0]
+    │     [thm] List.nodup_iff_pairwise_ne: [@List.Nodup #1 #0]
+    │     [thm] List.map_map: [@List.map #5 #4 #2 (@List.map #3 _ #1 #0)]
+    │     [thm] local_0: [@Membership.mem `[model.Order] `[List model.Order] `[List.instMembership] `[u.orders] #1]
+    │     [thm] local_0: [@LE.le `[Int] `[Int.instLEInt] (@HAdd.hAdd `[Int] `[Int] `[Int] `[instHAdd] (@HAdd.hAdd `[Int] `[Int] `[Int] `[instHAdd] (model.Order.id #1) `[-1 *
+    │              u.nextId]) `[1]) `[0]]
+    │     [thm] local_0: [model.Order.id #1]
+    │     [thm] local_1: [@Membership.mem `[model.Order] `[List model.Order] `[List.instMembership] `[u.orders] #1]
+    │     [thm] local_1: [@LE.le `[Int] `[Int.instLEInt] (@HAdd.hAdd `[Int] `[Int] `[Int] `[instHAdd] (@HMul.hMul `[Int] `[Int] `[Int] `[instHMul] `[-1] (model.Order.price #1)) `[1]) `[0]]
+    │     [thm] local_1: [model.Order.price #1]
+    │     [thm] local_2: [@Membership.mem `[model.Order] `[List model.Order] `[List.instMembership] `[u.orders] #1]
+    │     [thm] local_2: [@LE.le `[Int] `[Int.instLEInt] (@HAdd.hAdd `[Int] `[Int] `[Int] `[instHAdd] (model.Order.qty #1) `[-500]) `[0]]
+    │     [thm] local_2: [model.Order.qty #1]
+    │     [thm] local_3: [@Membership.mem `[model.Order] `[List model.Order] `[List.instMembership] `[u.orders] #1]
+    │     [thm] local_3: [@LE.le `[Int] `[Int.instLEInt] (@HAdd.hAdd `[Int] `[Int] `[Int] `[instHAdd] (@HMul.hMul `[Int] `[Int] `[Int] `[instHMul] `[-1] (model.Order.qty #1)) `[1]) `[0]]
+    │     [thm] local_3: [model.Order.qty #1]
+    │     [thm] List.map_append: [@List.map #4 #3 #2 (@HAppend.hAppend (List _) (List _) (List _) _ #1 #0)]
+    │     [thm] List.nodup_append: [@List.Nodup #2 (@HAppend.hAppend (List _) (List _) (List _) _ #1 #0)]
+    │     [thm] List.append_assoc: [@HAppend.hAppend (List #3) (List _) (List _) _ #2 (@HAppend.hAppend (List _) (List _) (List _) _ #1 #0)]
+    │     [thm] List.append_assoc: [@HAppend.hAppend (List #3) (List _) (List _) _ (@HAppend.hAppend (List _) (List _) (List _) _ #2 #1) #0]
+    │     [thm] List.cons_append: [@HAppend.hAppend (List #3) (List _) (List _) _ (@List.cons _ #2 #1) #0]
+    │     [thm] List.map_cons: [@List.map #4 #3 #2 (@List.cons _ #1 #0)]
+    │     [thm] List.nodup_cons: [@List.Nodup #2 (@List.cons _ #1 #0)]
+    │     [thm] List.cons_append: [@List.cons #3 #2 (@HAppend.hAppend (List _) (List _) (List _) _ #1 #0)]
+    │     [thm] JS.eq_false: [@JS.eq #3 #2 #1 #0, false]
+    │     [thm] JS.eq_iff: [@JS.eq #3 #2 #1 #0, true]
+    │     [thm] List.nil_append: [@HAppend.hAppend (List #1) (List _) (List _) _ (@List.nil _) #0]
+    │     [thm] List.append_nil: [@HAppend.hAppend (List #1) (List _) (List _) _ #0 (@List.nil _)]
+    │     [thm] List.map_nil: [@List.map #2 #1 #0 (@List.nil _)]
+    │     [thm] List.nodup_nil: [@List.Nodup #0 (@List.nil _)]
+    │     [thm] local_4: [@LE.le `[Nat] `[instLENat] (@List.count `[Int] `[Int.instLinearOrderPackage.toBEq] #0 `[List.map
+    │             (fun o => o.id) u.orders]) `[1]]
+    │     [thm] local_4: [@List.count `[Int] `[Int.instLinearOrderPackage.toBEq] #0 `[List.map (fun o => o.id) u.orders]]
+    │     [thm] local_4: [@List.count `[Int] `[Int.instLinearOrderPackage.toBEq] #0 `[List.map model.Order.id u.orders]]
+    │     [thm] List.pairwise_middle: [@List.Pairwise #5 #4 (@HAppend.hAppend (List _) (List _) (List _) _ #1 (@List.cons _ #2 #0))]
+    │     [thm] List.pairwise_append: [@List.Pairwise #3 #2 (@HAppend.hAppend (List _) (List _) (List _) _ #1 #0)]
+    │     [thm] List.Pairwise.map: [@List.Pairwise #7 #3 (@List.map #6 _ #2 #4), @List.Pairwise _ #5 #4]
+    │     [thm] List.pairwise_map: [@List.Pairwise #3 #1 (@List.map #4 _ #2 #0)]
+    │     [thm] List.pairwise_pair: [@List.Pairwise #3 #2 (@List.cons _ #1 (@List.cons _ #0 (@List.nil _)))]
+    │     [thm] List.pairwise_singleton: [@List.Pairwise #2 #1 (@List.cons _ #0 (@List.nil _))]
+    │     [thm] List.Pairwise.of_cons: [@List.Pairwise #4 #1 (@List.cons _ #3 #2)]
+    │   [cutsat] Assignment satisfying linear constraints
+    │     [assign] qty := 1
+    │     [assign] price := 1
+    │     [assign] t.expiry := 15
+    │     [assign] t.strike := 16
+    │     [assign] model.openQty u.orders := 999
+    │     [assign] model.openQty
+    │           (u.orders ++
+    │             [{ id := u.nextId, expiry := t.expiry, leg := t.leg, strike := t.strike, buy := JS.eq t.side model.Side.ask,
+    │                 qty := qty, price := price }]) := 1001
+    │     [assign] u.heat := 1
+    │     [assign] u.nextId := 0
+    │ [grind] Diagnostics
+    │   [ematch] E-matching Diagnostics
+    │     [thm] Theorem Instance Count
+    │       [thm] List.nodup_iff_count ↦ 1
+    │       [thm] List.nodup_iff_pairwise_ne ↦ 1
+    │       [thm] List.pairwise_map ↦ 1
+    │       [thm] List.Pairwise.map ↦ 1
+    │       [thm] JS.eq_false ↦ 1
+    │       [thm] JS.eq_iff ↦ 1
+✗ src/reducer.ts:198:11  [postcondition] postcondition of cancel: implies(wellFormed(u), wellFormed(r))
+    │ `grind` failed
+    │ case grind.2.1.1
+    │ u : ChainUi
+    │ id' : Int
+    │ h₁₇ :
+    │   (((1 ≤ u.heat ∧ u.heat ≤ 5) ∧ (List.map (fun o => o.id) u.orders).Nodup) ∧
+    │       ∀ (x : model.Order), x ∈ u.orders → ((1 ≤ x.qty ∧ x.qty ≤ 500) ∧ 0 < x.price) ∧ x.id < u.nextId) ∧
+    │     model.openQty u.orders ≤ 1000
+    │ hsub : (List.map (fun o => o.id) (List.filter (fun x => !JS.eq x.id id') u.orders)).Nodup
+    │ h : -1 * model.openQty (List.filter (fun x => !JS.eq x.id id') u.orders) + 1001 ≤ 0
+    │ h_1 : u.orders.length ≤ (List.filter (fun x => !JS.eq x.id id') u.orders).length + 1
+    │ h_2 : (fun a => JS.eq a.id id') = fun x => !JS.eq x.id id'
+    │ h_3 : (fun x y => (!JS.eq x.id id') = true → (!JS.eq y.id id') = true → ¬x.id = y.id) = fun a b => ¬a.id = b.id
+    │ ⊢ False
+    │ [grind] Goal diagnostics
+    │   [facts] Asserted facts
+    │     [prop] -1 * u.heat + 1 ≤ 0 ∧
+    │           u.heat + -5 ≤ 0 ∧
+    │             (List.map (fun o => o.id) u.orders).Nodup ∧
+    │               (∀ (x : model.Order), x ∈ u.orders → -1 * x.qty + 1 ≤ 0) ∧
+    │                 (∀ (x : model.Order), x ∈ u.orders → x.qty + -500 ≤ 0) ∧
+    │                   (∀ (x : model.Order), x ∈ u.orders → -1 * x.price + 1 ≤ 0) ∧
+    │                     (∀ (x : model.Order), x ∈ u.orders → x.id + -1 * u.nextId + 1 ≤ 0) ∧
+    │                       model.openQty u.orders + -1000 ≤ 0
+    │     [prop] (List.map (fun o => o.id) (List.filter (fun x => !JS.eq x.id id') u.orders)).Nodup
+    │     [prop] -1 * model.openQty (List.filter (fun x => !JS.eq x.id id') u.orders) + 1001 ≤ 0
+    │     [prop] (List.map (fun o => o.id) (List.filter (fun x => !JS.eq x.id id') u.orders)).Nodup =
+    │           ∀ (a : Int), List.count a (List.map (fun o => o.id) (List.filter (fun x => !JS.eq x.id id') u.orders)) ≤ 1
+    │     [prop] (List.map (fun o => o.id) u.orders).Nodup = ∀ (a : Int), List.count a (List.map (fun o => o.id) u.orders) ≤ 1
+    │     [prop] (List.map (fun o => o.id) (List.filter (fun x => !JS.eq x.id id') u.orders)).Nodup =
+    │           List.Pairwise (fun x1 x2 => ¬x1 = x2)
+    │             (List.map (fun o => o.id) (List.filter (fun x => !JS.eq x.id id') u.orders))
+    │     [prop] (List.map (fun o => o.id) u.orders).Nodup =
+    │           List.Pairwise (fun x1 x2 => ¬x1 = x2) (List.map (fun o => o.id) u.orders)
+    │     [prop] (List.map (fun o => o.id) u.orders).Nodup →
+    │           (List.map (fun o => o.id) (List.filter (fun x => !JS.eq x.id id') u.orders)).Nodup
+    │     [prop] (List.map (fun o => o.id) u.orders).Nodup →
+    │           (∃ x,
+    │               ¬(x ∈ u.orders →
+    │                   ∀ (y : model.Order),
+    │                     y ∈ u.orders → (!JS.eq x.id id') = false → (!JS.eq y.id id') = false → x.id = y.id)) ∨
+    │             u.orders.length ≤ (List.filter (fun x => !JS.eq x.id id') u.orders).length + 1
+    │     [prop] List.Pairwise (fun x1 x2 => ¬x1 = x2) (List.map (fun o => o.id) u.orders) =
+    │           List.Pairwise (fun a b => ¬a.id = b.id) u.orders
+    │     [prop] List.Pairwise (fun x1 x2 => ¬x1 = x2)
+    │             (List.map (fun o => o.id) (List.filter (fun x => !JS.eq x.id id') u.orders)) =
+    │           List.Pairwise (fun a b => ¬a.id = b.id) (List.filter (fun x => !JS.eq x.id id') u.orders)
+    │     [prop] (List.filter (fun x => !JS.eq x.id id') u.orders).length +
+    │             (List.filter (fun a => JS.eq a.id id') u.orders).length =
+    │           u.orders.length
+    │     [prop] (∀ (x : model.Order), True) → True
+    │     [prop] (List.filter (fun x => !JS.eq x.id id') u.orders).length ≤ u.orders.length
+    │     [prop] (List.map (fun o => o.id) u.orders).Nodup →
+    │           (∃ x,
+    │               ¬(x ∈ u.orders →
+    │                   ∀ (y : model.Order), y ∈ u.orders → JS.eq x.id id' = false → JS.eq y.id id' = false → x.id = y.id)) ∨
+    │             u.orders.length ≤ (List.filter (fun a => JS.eq a.id id') u.orders).length + 1
+    │     [prop] List.Pairwise (fun a b => ¬a.id = b.id) u.orders →
+    │           List.Pairwise (fun a b => ¬a.id = b.id) (List.filter (fun x => !JS.eq x.id id') u.orders)
+    │     [prop] List.Pairwise (fun a b => ¬a.id = b.id) (List.filter (fun x => !JS.eq x.id id') u.orders) =
+    │           List.Pairwise (fun x y => (!JS.eq x.id id') = true → (!JS.eq y.id id') = true → ¬x.id = y.id) u.orders
+    │     [prop] (∀ (a x : model.Order), True) →
+    │           List.Pairwise (fun a b => ¬a.id = b.id) (List.filter (fun x => !JS.eq x.id id') u.orders) →
+    │             List.Pairwise (fun x1 x2 => ¬x1 = x2)
+    │               (List.map (fun o => o.id) (List.filter (fun x => !JS.eq x.id id') u.orders))
+    │     [prop] (∀ (a x : model.Order), True) →
+    │           List.Pairwise (fun a b => ¬a.id = b.id) u.orders →
+    │             List.Pairwise (fun x1 x2 => ¬x1 = x2) (List.map (fun o => o.id) u.orders)
+    │     [prop] (List.filter (fun x => !JS.eq x.id id') u.orders).length +
+    │             (List.filter (fun a => JS.eq a.id id') u.orders).length =
+    │           u.orders.length
+    │     [prop] (∃ x, ¬(x ∈ u.orders → JS.eq x.id id' = true → (!JS.eq x.id id') = true)) ∨
+    │           (List.filter (fun a => JS.eq a.id id') u.orders).length ≤
+    │             (List.filter (fun x => !JS.eq x.id id') u.orders).length
+    │     [prop] (∀ (x : model.Order), True) → True
+    │     [prop] (∃ x, ¬(x ∈ u.orders → (!JS.eq x.id id') = true → JS.eq x.id id' = true)) ∨
+    │           (List.filter (fun x => !JS.eq x.id id') u.orders).length ≤
+    │             (List.filter (fun a => JS.eq a.id id') u.orders).length
+    │     [prop] (List.filter (fun a => JS.eq a.id id') u.orders).length ≤ u.orders.length
+    │     [prop] (∃ a,
+    │             ¬∀ (b : model.Order), ((!JS.eq a.id id') = true → (!JS.eq b.id id') = true → ¬a.id = b.id) → ¬a.id = b.id) ∨
+    │           (List.Pairwise (fun x y => (!JS.eq x.id id') = true → (!JS.eq y.id id') = true → ¬x.id = y.id) u.orders →
+    │             List.Pairwise (fun x1 x2 => ¬x1 = x2) (List.map (fun o => o.id) u.orders))
+    │     [prop] u.orders.length ≤ (List.filter (fun x => !JS.eq x.id id') u.orders).length + 1
+    │     [prop] (fun a => JS.eq a.id id') = fun x => !JS.eq x.id id'
+    │     [prop] (fun x y => (!JS.eq x.id id') = true → (!JS.eq y.id id') = true → ¬x.id = y.id) = fun a b => ¬a.id = b.id
+    │   [eqc] True propositions
+    │     [prop] (List.map (fun o => o.id) u.orders).Nodup ∧
+    │           (∀ (x : model.Order), x ∈ u.orders → -1 * x.qty + 1 ≤ 0) ∧
+    │             (∀ (x : model.Order), x ∈ u.orders → x.qty + -500 ≤ 0) ∧
+    │               (∀ (x : model.Order), x ∈ u.orders → -1 * x.price + 1 ≤ 0) ∧
+    │                 (∀ (x : model.Order), x ∈ u.orders → x.id + -1 * u.nextId + 1 ≤ 0) ∧ model.openQty u.orders + -1000 ≤ 0
+    │     [prop] u.heat + -5 ≤ 0 ∧
+    │           (List.map (fun o => o.id) u.orders).Nodup ∧
+    │             (∀ (x : model.Order), x ∈ u.orders → -1 * x.qty + 1 ≤ 0) ∧
+    │               (∀ (x : model.Order), x ∈ u.orders → x.qty + -500 ≤ 0) ∧
+    │                 (∀ (x : model.Order), x ∈ u.orders → -1 * x.price + 1 ≤ 0) ∧
+    │                   (∀ (x : model.Order), x ∈ u.orders → x.id + -1 * u.nextId + 1 ≤ 0) ∧
+    │                     model.openQty u.orders + -1000 ≤ 0
+    │     [prop] -1 * u.heat + 1 ≤ 0 ∧
+    │           u.heat + -5 ≤ 0 ∧
+    │             (List.map (fun o => o.id) u.orders).Nodup ∧
+    │               (∀ (x : model.Order), x ∈ u.orders → -1 * x.qty + 1 ≤ 0) ∧
+    │                 (∀ (x : model.Order), x ∈ u.orders → x.qty + -500 ≤ 0) ∧
+    │                   (∀ (x : model.Order), x ∈ u.orders → -1 * x.price + 1 ≤ 0) ∧
+    │                     (∀ (x : model.Order), x ∈ u.orders → x.id + -1 * u.nextId + 1 ≤ 0) ∧
+    │                       model.openQty u.orders + -1000 ≤ 0
+    │     [prop] (∀ (x : model.Order), x ∈ u.orders → x.qty + -500 ≤ 0) ∧
+    │           (∀ (x : model.Order), x ∈ u.orders → -1 * x.price + 1 ≤ 0) ∧
+    │             (∀ (x : model.Order), x ∈ u.orders → x.id + -1 * u.nextId + 1 ≤ 0) ∧ model.openQty u.orders + -1000 ≤ 0
+    │     [prop] (∀ (x : model.Order), x ∈ u.orders → x.id + -1 * u.nextId + 1 ≤ 0) ∧ model.openQty u.orders + -1000 ≤ 0
+    │     [prop] (∀ (x : model.Order), x ∈ u.orders → -1 * x.price + 1 ≤ 0) ∧
+    │           (∀ (x : model.Order), x ∈ u.orders → x.id + -1 * u.nextId + 1 ≤ 0) ∧ model.openQty u.orders + -1000 ≤ 0
+    │     [prop] (∀ (x : model.Order), x ∈ u.orders → -1 * x.qty + 1 ≤ 0) ∧
+    │           (∀ (x : model.Order), x ∈ u.orders → x.qty + -500 ≤ 0) ∧
+    │             (∀ (x : model.Order), x ∈ u.orders → -1 * x.price + 1 ≤ 0) ∧
+    │               (∀ (x : model.Order), x ∈ u.orders → x.id + -1 * u.nextId + 1 ≤ 0) ∧ model.openQty u.orders + -1000 ≤ 0
+    │     [prop] (List.map (fun o => o.id) u.orders).Nodup
+    │     [prop] (List.map (fun o => o.id) (List.filter (fun x => !JS.eq x.id id') u.orders)).Nodup
+    │     [prop] model.openQty u.orders + -1000 ≤ 0
+    │     [prop] u.heat + -5 ≤ 0
+    │     [prop] -1 * model.openQty (List.filter (fun x => !JS.eq x.id id') u.orders) + 1001 ≤ 0
+    │     [prop] -1 * u.heat + 1 ≤ 0
+    │     [prop] ∀ (x : model.Order), x ∈ u.orders → x.qty + -500 ≤ 0
+    │     [prop] ∀ (x : model.Order), x ∈ u.orders → x.id + -1 * u.nextId + 1 ≤ 0
+    │     [prop] ∀ (x : model.Order), x ∈ u.orders → -1 * x.price + 1 ≤ 0
+    │     [prop] ∀ (x : model.Order), x ∈ u.orders → -1 * x.qty + 1 ≤ 0
+    │     [prop] (∃ x,
+    │             ¬(x ∈ u.orders →
+    │                 ∀ (y : model.Order),
+    │                   y ∈ u.orders → (!JS.eq x.id id') = false → (!JS.eq y.id id') = false → x.id = y.id)) ∨
+    │           u.orders.length ≤ (List.filter (fun x => !JS.eq x.id id') u.orders).length + 1
+    │     [prop] (List.map (fun o => o.id) u.orders).Nodup =
+    │           List.Pairwise (fun x1 x2 => ¬x1 = x2) (List.map (fun o => o.id) u.orders)
+    │     [prop] (List.map (fun o => o.id) u.orders).Nodup = ∀ (a : Int), List.count a (List.map (fun o => o.id) u.orders) ≤ 1
+    │     [prop] (List.map (fun o => o.id) (List.filter (fun x => !JS.eq x.id id') u.orders)).Nodup =
+    │           List.Pairwise (fun x1 x2 => ¬x1 = x2)
+    │             (List.map (fun o => o.id) (List.filter (fun x => !JS.eq x.id id') u.orders))
+    │     [prop] (List.map (fun o => o.id) (List.filter (fun x => !JS.eq x.id id') u.orders)).Nodup =
+    │           ∀ (a : Int), List.count a (List.map (fun o => o.id) (List.filter (fun x => !JS.eq x.id id') u.orders)) ≤ 1
+    │     [prop] List.Pairwise (fun x1 x2 => ¬x1 = x2) (List.map (fun o => o.id) u.orders)
+    │     [prop] List.Pairwise (fun x1 x2 => ¬x1 = x2)
+    │           (List.map (fun o => o.id) (List.filter (fun x => !JS.eq x.id id') u.orders))
+    │     [prop] u.orders.length ≤ (List.filter (fun x => !JS.eq x.id id') u.orders).length + 1
+    │     [prop] ∀ (a : Int), List.count a (List.map (fun o => o.id) u.orders) ≤ 1
+    │     [prop] ∀ (a : Int), List.count a (List.map (fun o => o.id) (List.filter (fun x => !JS.eq x.id id') u.orders)) ≤ 1
+    │     [prop] (List.map (fun o => o.id) u.orders).Nodup →
+    │           (List.map (fun o => o.id) (List.filter (fun x => !JS.eq x.id id') u.orders)).Nodup
+    │     [prop] (List.map (fun o => o.id) u.orders).Nodup →
+    │           (∃ x,
+    │               ¬(x ∈ u.orders →
+    │                   ∀ (y : model.Order),
+    │                     y ∈ u.orders → (!JS.eq x.id id') = false → (!JS.eq y.id id') = false → x.id = y.id)) ∨
+    │             u.orders.length ≤ (List.filter (fun x => !JS.eq x.id id') u.orders).length + 1
+    │     [prop] List.Pairwise (fun x1 x2 => ¬x1 = x2) (List.map (fun o => o.id) u.orders) =
+    │           List.Pairwise (fun a b => ¬a.id = b.id) u.orders
+    │     [prop] List.Pairwise (fun x1 x2 => ¬x1 = x2)
+    │             (List.map (fun o => o.id) (List.filter (fun x => !JS.eq x.id id') u.orders)) =
+    │           List.Pairwise (fun a b => ¬a.id = b.id) (List.filter (fun x => !JS.eq x.id id') u.orders)
+    │     [prop] (fun a => JS.eq a.id id') = fun x => !JS.eq x.id id'
+    │     [prop] List.Pairwise (fun a b => ¬a.id = b.id) u.orders
+    │     [prop] List.Pairwise (fun a b => ¬a.id = b.id) (List.filter (fun x => !JS.eq x.id id') u.orders)
+    │     [prop] (List.filter (fun x => !JS.eq x.id id') u.orders).length ≤ u.orders.length
+    │     [prop] (∀ (x : model.Order), True) → True
+    │     [prop] (∃ x,
+    │             ¬(x ∈ u.orders →
+    │                 ∀ (y : model.Order), y ∈ u.orders → JS.eq x.id id' = false → JS.eq y.id id' = false → x.id = y.id)) ∨
+    │           u.orders.length ≤ (List.filter (fun a => JS.eq a.id id') u.orders).length + 1
+    │     [prop] (∃ x, ¬(x ∈ u.orders → (!JS.eq x.id id') = true → JS.eq x.id id' = true)) ∨
+    │           (List.filter (fun x => !JS.eq x.id id') u.orders).length ≤
+    │             (List.filter (fun a => JS.eq a.id id') u.orders).length
+    │     [prop] (∃ x, ¬(x ∈ u.orders → JS.eq x.id id' = true → (!JS.eq x.id id') = true)) ∨
+    │           (List.filter (fun a => JS.eq a.id id') u.orders).length ≤
+    │             (List.filter (fun x => !JS.eq x.id id') u.orders).length
+    │     [prop] List.Pairwise (fun a b => ¬a.id = b.id) (List.filter (fun x => !JS.eq x.id id') u.orders) =
+    │           List.Pairwise (fun x y => (!JS.eq x.id id') = true → (!JS.eq y.id id') = true → ¬x.id = y.id) u.orders
+    │     [prop] (fun x y => (!JS.eq x.id id') = true → (!JS.eq y.id id') = true → ¬x.id = y.id) = fun a b => ¬a.id = b.id
+    │     [prop] List.Pairwise (fun x y => (!JS.eq x.id id') = true → (!JS.eq y.id id') = true → ¬x.id = y.id) u.orders
+    │     [prop] u.orders.length ≤ (List.filter (fun a => JS.eq a.id id') u.orders).length + 1
+    │     [prop] (List.filter (fun x => !JS.eq x.id id') u.orders).length ≤
+    │           (List.filter (fun a => JS.eq a.id id') u.orders).length
+    │     [prop] (List.filter (fun a => JS.eq a.id id') u.orders).length ≤ u.orders.length
+    │     [prop] (List.filter (fun a => JS.eq a.id id') u.orders).length ≤
+    │           (List.filter (fun x => !JS.eq x.id id') u.orders).length
+    │     [prop] (List.map (fun o => o.id) u.orders).Nodup →
+    │           (∃ x,
+    │               ¬(x ∈ u.orders →
+    │                   ∀ (y : model.Order), y ∈ u.orders → JS.eq x.id id' = false → JS.eq y.id id' = false → x.id = y.id)) ∨
+    │             u.orders.length ≤ (List.filter (fun a => JS.eq a.id id') u.orders).length + 1
+    │     [prop] List.Pairwise (fun a b => ¬a.id = b.id) u.orders →
+    │           List.Pairwise (fun x1 x2 => ¬x1 = x2) (List.map (fun o => o.id) u.orders)
+    │     [prop] List.Pairwise (fun a b => ¬a.id = b.id) u.orders →
+    │           List.Pairwise (fun a b => ¬a.id = b.id) (List.filter (fun x => !JS.eq x.id id') u.orders)
+    │     [prop] List.Pairwise (fun a b => ¬a.id = b.id) (List.filter (fun x => !JS.eq x.id id') u.orders) →
+    │           List.Pairwise (fun x1 x2 => ¬x1 = x2)
+    │             (List.map (fun o => o.id) (List.filter (fun x => !JS.eq x.id id') u.orders))
+    │     [prop] (∀ (a x : model.Order), True) →
+    │           List.Pairwise (fun a b => ¬a.id = b.id) u.orders →
+    │             List.Pairwise (fun x1 x2 => ¬x1 = x2) (List.map (fun o => o.id) u.orders)
+    │     [prop] (∀ (a x : model.Order), True) →
+    │           List.Pairwise (fun a b => ¬a.id = b.id) (List.filter (fun x => !JS.eq x.id id') u.orders) →
+    │             List.Pairwise (fun x1 x2 => ¬x1 = x2)
+    │               (List.map (fun o => o.id) (List.filter (fun x => !JS.eq x.id id') u.orders))
+    │     [prop] (∃ a,
+    │             ¬∀ (b : model.Order), ((!JS.eq a.id id') = true → (!JS.eq b.id id') = true → ¬a.id = b.id) → ¬a.id = b.id) ∨
+    │           (List.Pairwise (fun x y => (!JS.eq x.id id') = true → (!JS.eq y.id id') = true → ¬x.id = y.id) u.orders →
+    │             List.Pairwise (fun x1 x2 => ¬x1 = x2) (List.map (fun o => o.id) u.orders))
+    │     [prop] List.Pairwise (fun x y => (!JS.eq x.id id') = true → (!JS.eq y.id id') = true → ¬x.id = y.id) u.orders →
+    │           List.Pairwise (fun x1 x2 => ¬x1 = x2) (List.map (fun o => o.id) u.orders)
+    │   [eqc] Equivalence classes
+    │     [eqc] {model.Order.id, fun o => o.id}
+    │     [eqc] {List.filter fun x => !JS.eq x.id id', List.filter fun a => JS.eq a.id id'}
+    │     [eqc] {List.filter (fun x => !JS.eq x.id id') u.orders, List.filter (fun a => JS.eq a.id id') u.orders}
+    │     [eqc] {List.map (fun o => o.id) u.orders, List.map model.Order.id u.orders}
+    │     [eqc] {List.map (fun o => o.id) (List.filter (fun x => !JS.eq x.id id') u.orders),
+    │         List.map model.Order.id (List.filter (fun x => !JS.eq x.id id') u.orders)}
+    │     [eqc] {fun x => !JS.eq x.id id', fun a => JS.eq a.id id'}
+    │     [eqc] {u.orders.length,
+    │         (List.filter (fun x => !JS.eq x.id id') u.orders).length +
+    │           (List.filter (fun a => JS.eq a.id id') u.orders).length}
+    │     [eqc] {(List.filter (fun x => !JS.eq x.id id') u.orders).length,
+    │         (List.filter (fun a => JS.eq a.id id') u.orders).length}
+    │     [eqc] {(List.filter (fun x => !JS.eq x.id id') u.orders).length + 1,
+    │         (List.filter (fun a => JS.eq a.id id') u.orders).length + 1}
+    │     [eqc] {List.Pairwise fun a b => ¬a.id = b.id,
+    │         List.Pairwise fun x y => (!JS.eq x.id id') = true → (!JS.eq y.id id') = true → ¬x.id = y.id}
+    │     [eqc] {(List.filter (fun x => !JS.eq x.id id') u.orders).length = 0,
+    │         (List.filter (fun a => JS.eq a.id id') u.orders).length = 0}
+    │     [eqc] {fun a b => ¬a.id = b.id, fun x y => (!JS.eq x.id id') = true → (!JS.eq y.id id') = true → ¬x.id = y.id}
+    │     [eqc] others
+    │       [eqc] {↑u.orders.length,
+    │           ↑((List.filter (fun x => !JS.eq x.id id') u.orders).length +
+    │               (List.filter (fun a => JS.eq a.id id') u.orders).length)}
+    │       [eqc] {↑(List.filter (fun x => !JS.eq x.id id') u.orders).length,
+    │           ↑(List.filter (fun a => JS.eq a.id id') u.orders).length}
+    │       [eqc] {↑0, 0}
+    │       [eqc] {1, ↑1}
+    │       [eqc] {↑(List.filter (fun x => !JS.eq x.id id') u.orders).length,
+    │           ↑(List.filter (fun a => JS.eq a.id id') u.orders).length}
+    │   [cases] Case analyses
+    │     [cases] [2/2]: (∃ x,
+    │             ¬(x ∈ u.orders →
+    │                 ∀ (y : model.Order),
+    │                   y ∈ u.orders → (!JS.eq x.id id') = false → (!JS.eq y.id id') = false → x.id = y.id)) ∨
+    │           u.orders.length ≤ (List.filter (fun x => !JS.eq x.id id') u.orders).length + 1
+    │       [cases] source: E-matching `length_le_length_filter_add_one`
+    │     [cases] [1/2]: (fun a => JS.eq a.id id') = fun x => !JS.eq x.id id'
+    │       [cases] source: E-matching `length_filter_add_length_filter_not`
+    │     [cases] [1/2]: (fun x y => (!JS.eq x.id id') = true → (!JS.eq y.id id') = true → ¬x.id = y.id) = fun a b =>
+    │           ¬a.id = b.id
+    │       [cases] source: E-matching `List.pairwise_filter`
+    │   [ematch] E-matching patterns
+    │     [thm] List.nodup_iff_count: [@List.Nodup #3 #0]
+    │     [thm] List.nodup_iff_pairwise_ne: [@List.Nodup #1 #0]
+    │     [thm] List.map_map: [@List.map #5 #4 #2 (@List.map #3 _ #1 #0)]
+    │     [thm] local_0: [@Membership.mem `[model.Order] `[List model.Order] `[List.instMembership] `[u.orders] #1]
+    │     [thm] local_0: [@LE.le `[Int] `[Int.instLEInt] (@HAdd.hAdd `[Int] `[Int] `[Int] `[instHAdd] (@HAdd.hAdd `[Int] `[Int] `[Int] `[instHAdd] (model.Order.id #1) `[-1 *
+    │              u.nextId]) `[1]) `[0]]
+    │     [thm] local_0: [model.Order.id #1]
+    │     [thm] local_1: [@Membership.mem `[model.Order] `[List model.Order] `[List.instMembership] `[u.orders] #1]
+    │     [thm] local_1: [@LE.le `[Int] `[Int.instLEInt] (@HAdd.hAdd `[Int] `[Int] `[Int] `[instHAdd] (@HMul.hMul `[Int] `[Int] `[Int] `[instHMul] `[-1] (model.Order.price #1)) `[1]) `[0]]
+    │     [thm] local_1: [model.Order.price #1]
+    │     [thm] local_2: [@Membership.mem `[model.Order] `[List model.Order] `[List.instMembership] `[u.orders] #1]
+    │     [thm] local_2: [@LE.le `[Int] `[Int.instLEInt] (@HAdd.hAdd `[Int] `[Int] `[Int] `[instHAdd] (model.Order.qty #1) `[-500]) `[0]]
+    │     [thm] local_2: [model.Order.qty #1]
+    │     [thm] local_3: [@Membership.mem `[model.Order] `[List model.Order] `[List.instMembership] `[u.orders] #1]
+    │     [thm] local_3: [@LE.le `[Int] `[Int.instLEInt] (@HAdd.hAdd `[Int] `[Int] `[Int] `[instHAdd] (@HMul.hMul `[Int] `[Int] `[Int] `[instHMul] `[-1] (model.Order.qty #1)) `[1]) `[0]]
+    │     [thm] local_3: [model.Order.qty #1]
+    │     [thm] nodup_map_filter: [@List.map #5 #4 #3 (@List.filter _ #2 #1), @List.Nodup _ (@List.map _ _ #3 #1)]
+    │     [thm] length_le_length_filter_add_one: [@List.Nodup #5 (@List.map #6 _ #4 #2), @List.filter _ #3 #2]
+    │     [thm] length_filter_filter_le: [@List.filter #3 #2 (@List.filter _ #1 #0)]
+    │     [thm] List.filter_map: [@List.filter #3 #1 (@List.map #4 _ #2 #0)]
+    │     [thm] local_4: [@LE.le `[Nat] `[instLENat] (@List.count `[Int] `[Int.instLinearOrderPackage.toBEq] #0 `[List.map
+    │             (fun o => o.id) (List.filter (fun x => !JS.eq x.id id') u.orders)]) `[1]]
+    │     [thm] local_4: [@List.count `[Int] `[Int.instLinearOrderPackage.toBEq] #0 `[List.map (fun o => o.id)
+    │            (List.filter (fun x => !JS.eq x.id id') u.orders)]]
+    │     [thm] local_4: [@List.count `[Int] `[Int.instLinearOrderPackage.toBEq] #0 `[List.map model.Order.id
+    │            (List.filter (fun x => !JS.eq x.id id') u.orders)]]
+    │     [thm] local_5: [@LE.le `[Nat] `[instLENat] (@List.count `[Int] `[Int.instLinearOrderPackage.toBEq] #0 `[List.map
+    │             (fun o => o.id) u.orders]) `[1]]
+    │     [thm] local_5: [@List.count `[Int] `[Int.instLinearOrderPackage.toBEq] #0 `[List.map (fun o => o.id) u.orders]]
+    │     [thm] local_5: [@List.count `[Int] `[Int.instLinearOrderPackage.toBEq] #0 `[List.map model.Order.id u.orders]]
+    │     [thm] List.Pairwise.filter: [@List.Pairwise #4 #3 (@List.filter _ #1 #2)]
+    │     [thm] List.pairwise_filter: [@List.Pairwise #3 #2 (@List.filter _ #1 #0)]
+    │     [thm] List.Pairwise.map: [@List.Pairwise #7 #3 (@List.map #6 _ #2 #4), @List.Pairwise _ #5 #4]
+    │     [thm] List.pairwise_map: [@List.Pairwise #3 #1 (@List.map #4 _ #2 #0)]
+    │     [thm] length_filter_add_length_filter_not: [@List.length #2 (@List.filter _ #1 #0),
+    │          @List.length _ (@List.filter _ _ #0)]
+    │     [thm] length_filter_le_of_imp: [@List.length #4 (@List.filter _ #2 #1), @List.length _ (@List.filter _ #3 #1)]
+    │     [thm] List.length_filter_le: [@List.length #2 (@List.filter _ #1 #0)]
+    │     [thm] List.length_map: [@List.length #2 (@List.map #3 _ #0 #1)]
+    │     [thm] List.eq_nil_of_length_eq_zero: [@List.length #2 #1]
+    │   [cutsat] Assignment satisfying linear constraints
+    │     [assign] id' := 2
+    │     [assign] model.openQty u.orders := 1000
+    │     [assign] model.openQty (List.filter (fun x => !JS.eq x.id id') u.orders) := 1001
+    │     [assign] u.heat := 1
+    │     [assign] u.nextId := 0
+    │     [assign] u.orders.length := 0
+    │     [assign] (List.filter (fun x => !JS.eq x.id id') u.orders).length := 0
+    │     [assign] (List.filter (fun a => JS.eq a.id id') u.orders).length := 0
+    │   [ring] Rings
+    │     [ring] Ring `Int`
+    │       [basis] Basis
+    │         [_] ↑(List.filter (fun x => !JS.eq x.id id') u.orders).length +
+    │                 -1 * ↑(List.filter (fun a => JS.eq a.id id') u.orders).length =
+    │               0
+    │     [ring] Ring `Lean.Grind.Ring.OfSemiring.Q Nat`
+    │       [basis] Basis
+    │         [_] ↑(List.filter (fun a => JS.eq a.id id') u.orders).length +
+    │                 -1 * ↑(List.filter (fun x => !JS.eq x.id id') u.orders).length =
+    │               0
+    │ [grind] Diagnostics
+    │   [ematch] E-matching Diagnostics
+    │     [thm] Theorem Instance Count
+    │       [thm] length_filter_le_of_imp ↦ 4
+    │       [thm] length_filter_lt_of_mem ↦ 4
+    │       [thm] List.Pairwise.map ↦ 3
+    │       [thm] local_0 ↦ 2
+    │       [thm] local_1 ↦ 2
+    │       [thm] local_2 ↦ 2
+    │       [thm] local_3 ↦ 2
+    │       [thm] List.length_filter_le ↦ 2
+    │       [thm] List.length_pos_of_mem ↦ 2
+    │       [thm] List.nodup_iff_count ↦ 2
+    │       [thm] List.nodup_iff_pairwise_ne ↦ 2
+    │       [thm] List.pairwise_map ↦ 2
+    │       [thm] length_filter_add_length_filter_not ↦ 2
+    │       [thm] length_le_length_filter_add_one ↦ 2
+    │       [thm] JS.eq_false ↦ 2
+    │       [thm] JS.eq_iff ↦ 2
+    │       [thm] List.pairwise_filter ↦ 1
+    │       [thm] nodup_map_filter ↦ 1
+    │       [thm] List.Pairwise.filter ↦ 1
+
+✗ NOT VERIFIED  139/142 obligations proved, 3 failed; components: 4/6 verified  (32.8s)

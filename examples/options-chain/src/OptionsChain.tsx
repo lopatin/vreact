@@ -1,6 +1,6 @@
 // The options chain: expiry buttons, expand/collapse all, the quick strike filter, the heat-map
-// threshold, one block per expiry (a term row and its strike rows), the order ticket and the
-// working orders.
+// threshold, the watched strikes, one block per expiry (a term row and its strike rows), the
+// order ticket and the working orders.
 import { useReducer, useState } from "react";
 import { requires, invariant, type int } from "vreact/spec";
 import {
@@ -12,6 +12,7 @@ import {
   midPrice,
   atmIndex,
   strikeWindow,
+  shownRows,
   levelsOf,
   filterLabel,
   legFor,
@@ -20,7 +21,8 @@ import {
   marketOf,
   fmtPrice,
 } from "./model";
-import { chainReducer, wellFormed, heldPrice, INITIAL_UI, MAX_HEAT } from "./reducer";
+import { chainReducer, wellFormed, INITIAL_UI, MAX_HEAT } from "./reducer";
+import { byId } from "./collections";
 import { TermRow } from "./TermRow";
 import { StrikeRow } from "./StrikeRow";
 import { OrderTicket } from "./OrderTicket";
@@ -38,8 +40,8 @@ export function OptionsChain(props: OptionsChainProps) {
 
   const levels = levelsOf(ui.filter);
   // the ticket's expiry, looked up in the current props: it may have been delisted meanwhile
-  const tExp = ticket === null ? undefined : props.expiries.find((e) => e.id === ticket.expiry);
-  const allOpen = props.expiries.every((e) => !ui.collapsed.includes(e.id));
+  const tExp = ticket === null ? undefined : byId(props.expiries, ticket.expiry);
+  const allOpen = props.expiries.every((e) => !ui.collapsed.has(e.id));
   const ids = props.expiries.map((e) => e.id);
 
   return (
@@ -73,6 +75,16 @@ export function OptionsChain(props: OptionsChainProps) {
           <button disabled={ui.heat <= 1} onClick={() => dispatch({ kind: "heat", ticks: ui.heat - 1 })}>−</button>
           <button disabled={ui.heat >= MAX_HEAT} onClick={() => dispatch({ kind: "heat", ticks: ui.heat + 1 })}>+</button>
         </div>
+        {ui.watch.size > 0 && (
+          <div className="watching">
+            <span>Watching</span>
+            {[...ui.watch].toSorted((a, b) => a - b).map((k) => (
+              <button key={k} className="chip" title="Stop watching" onClick={() => dispatch({ kind: "watch", strike: k })}>
+                ★ {fmtPrice(k)}
+              </button>
+            ))}
+          </div>
+        )}
       </div>
       <table className="grid">
         <thead>
@@ -97,16 +109,17 @@ export function OptionsChain(props: OptionsChainProps) {
         </thead>
         {props.expiries.map((e) => {
           const live = midPrice(e.future);
-          const held = heldPrice(ui.held, e.id);
+          const held = ui.held.get(e.id) ?? null;
           const center: int | null = held === null ? live : held;
           const n = e.strikes.length;
           const atm = center === null ? -1 : atmIndex(e.strikes, center);
           // no ATM row (empty ladder, or no price at all) or "All": show every strike
           const span: Span = atm < 0 || levels === null ? { lo: 0, hi: n } : strikeWindow(n, atm, levels);
-          const rows = e.strikes.slice(span.lo, span.hi);
+          // the filter's window, and the watched strikes: they are shown whatever the filter
+          const rows = shownRows(e.strikes, span, ui.watch);
           const liveAtm = live === null ? -1 : atmIndex(e.strikes, live);
           const atmStrike = liveAtm < 0 ? null : e.strikes[liveAtm].strike;
-          const open = !ui.collapsed.includes(e.id);
+          const open = !ui.collapsed.has(e.id);
           return (
             <tbody key={e.id}>
               <TermRow
@@ -132,6 +145,8 @@ export function OptionsChain(props: OptionsChainProps) {
                     atm={s.strike === atmStrike}
                     anchor={s.strike === atmStrike ? `atm-${e.id}` : undefined}
                     heat={ui.heat}
+                    watched={ui.watch.has(s.strike)}
+                    onWatch={() => dispatch({ kind: "watch", strike: s.strike })}
                     onPick={(right, side, price) => {
                       if (price > 0) setTicket({ expiry: e.id, leg: legFor(right), strike: s.strike, side: side, price: price });
                     }}
@@ -162,15 +177,23 @@ export function OptionsChain(props: OptionsChainProps) {
       )}
       <section className="orders">
         <h3>Working orders</h3>
-        {ui.orders.length === 0 ? (
+        {ui.orders.size === 0 ? (
           <p className="muted">None. Click a bid or an ask to open an order ticket.</p>
         ) : (
           <ul>
-            {ui.orders.map((o) => (
-              <li key={o.id}>
+            {[...ui.orders].map(([id, o]) => (
+              <li key={id}>
                 <span className={o.buy ? "buy" : "sell"}>{o.buy ? "Buy" : "Sell"}</span> {o.qty} {labelOf(props.expiries, o.expiry)}{" "}
                 {contractText(o.leg, o.strike)} @ {fmtPrice(o.price)}
-                <button onClick={() => dispatch({ kind: "cancel", id: o.id })}>Cancel</button>
+                <span className="acts">
+                  <button title="Lower the price by one tick" disabled={o.price <= 1} onClick={() => dispatch({ kind: "amend", id: id, price: o.price - 1 })}>
+                    ▼
+                  </button>
+                  <button title="Raise the price by one tick" onClick={() => dispatch({ kind: "amend", id: id, price: o.price + 1 })}>
+                    ▲
+                  </button>
+                  <button onClick={() => dispatch({ kind: "cancel", id: id })}>Cancel</button>
+                </span>
               </li>
             ))}
           </ul>

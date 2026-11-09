@@ -1,0 +1,126 @@
+translated 7 module(s), 142 proof obligation(s) → .vreact/ ; checking with Lean…
+
+Components
+  VERIFIED           PriceCell              src/StrikeRow.tsx:12
+  VERIFIED           StrikeRow              src/StrikeRow.tsx:39
+  VERIFIED           TermRow                src/TermRow.tsx:19
+  VERIFIED           OrderTicket            src/OrderTicket.tsx:19
+  INCOMPLETE         OptionsChain           src/OptionsChain.tsx:32
+      ↳ an obligation of it failed
+  INCOMPLETE         App                    src/App.tsx:115
+      ↳ it uses OptionsChain (src/OptionsChain.tsx), which is not verified: an obligation of it failed
+Functions
+  VERIFIED           validChain
+  VERIFIED           legOf
+  VERIFIED           theoOf
+  VERIFIED           quotePrice
+  VERIFIED           withinSpread
+  VERIFIED           isMid
+  VERIFIED           midPrice
+  VERIFIED           inTheMoney
+  VERIFIED           dist
+  VERIFIED           nearest
+  VERIFIED           atmIndex
+  VERIFIED           inWindow
+  VERIFIED           strikeWindow
+  VERIFIED           filterLabel
+  VERIFIED           levelsOf
+  VERIFIED           edge
+  VERIFIED           heatOf
+  VERIFIED           legFor
+  VERIFIED           labelOf
+  VERIFIED           marketOf
+  VERIFIED           validQty
+  VERIFIED           validOrder
+  VERIFIED           openQty
+  VERIFIED           fmtPrice
+  VERIFIED           contractText
+  VERIFIED           quoteText
+  VERIFIED           crosses
+  VERIFIED           fmtVol
+  VERIFIED           wellFormed
+  VERIFIED           heldPrice
+  VERIFIED           sameView
+  VERIFIED           keepsHolds
+  VERIFIED           keepsAllHolds
+  VERIFIED           keepsOrders
+  VERIFIED           orderFor
+  VERIFIED           toggle
+  VERIFIED           setCollapsed
+  VERIFIED           setFilter
+  VERIFIED           holdAt
+  VERIFIED           follow
+  VERIFIED           jump
+  VERIFIED           setHeat
+  VERIFIED           accepts
+  INCOMPLETE         place
+      ↳ an obligation of it failed
+  INCOMPLETE         cancel
+      ↳ an obligation of it failed
+  VERIFIED           validAction
+  INCOMPLETE         chainReducer
+      ↳ it uses place, which is not verified: an obligation of it failed
+  VERIFIED           shiftQuote
+  VERIFIED           moveFutures
+  VERIFIED           nextSeed
+  VERIFIED           validFeed
+  VERIFIED           stepFeed
+App certificates (VReact.run_allInv instantiated)
+  INCOMPLETE         VTS.App.App.certificate  axioms: propext, sorryAx, Classical.choice, Quot.sound
+      ↳ it uses OptionsChain (src/OptionsChain.tsx), which is not verified: an obligation of it failed
+Obligations by file
+  ✓ src/model.ts                             22/22
+  ✗ src/reducer.ts                           23/25
+  ✓ src/StrikeRow.tsx                        22/22
+  ✓ src/TermRow.tsx                          12/12
+  ✓ src/OrderTicket.tsx                      12/12
+  ✗ src/OptionsChain.tsx                     36/37
+  ✓ src/App.tsx                              12/12
+
+Failed obligations
+✗ src/OptionsChain.tsx:32:17  [init-invariant] OptionsChain: initial state satisfies the invariant
+    │ `grind` failed
+    │ case grind
+    │ props : Props
+    │ hpre hpre_1 :
+    │   (List.map (fun e => e.id) props.expiries).Nodup ∧
+    │     ∀ (x : model.Expiry), x ∈ props.expiries → (List.map (fun s => s.strike) x.strikes).Nodup
+    │ h : -1 * model.openQty [] + 1001 ≤ 0
+    │ ⊢ False
+✗ src/reducer.ts:181:11  [postcondition] postcondition of place: implies(wellFormed(u), wellFormed(r))
+    │ `grind` failed
+    │ case grind.1
+    │ u : ChainUi
+    │ t : model.Ticket
+    │ qty price : Int
+    │ h_pre : 1 ≤ qty ∧ qty ≤ 500
+    │ h₁₄ :
+    │   (((1 ≤ u.heat ∧ u.heat ≤ 5) ∧ (List.map (fun o => o.id) u.orders).Nodup) ∧
+    │       ∀ (x : model.Order), x ∈ u.orders → ((1 ≤ x.qty ∧ x.qty ≤ 500) ∧ 0 < x.price) ∧ x.id < u.nextId) ∧
+    │     model.openQty u.orders ≤ 1000
+    │ h : ((1 ≤ qty ∧ qty ≤ 500) ∧ 0 < price) ∧ model.openQty u.orders + qty ≤ 1000
+    │ h_1 :
+    │   -1 *
+    │         model.openQty
+    │           (u.orders ++
+    │             [{ id := u.nextId, expiry := t.expiry, leg := t.leg, strike := t.strike, buy := JS.eq t.side model.Side.ask,
+    │                 qty := qty, price := price }]) +
+    │       1001 ≤
+    │   …
+✗ src/reducer.ts:198:11  [postcondition] postcondition of cancel: implies(wellFormed(u), wellFormed(r))
+    │ `grind` failed
+    │ case grind.2.1.1
+    │ u : ChainUi
+    │ id' : Int
+    │ h₁₇ :
+    │   (((1 ≤ u.heat ∧ u.heat ≤ 5) ∧ (List.map (fun o => o.id) u.orders).Nodup) ∧
+    │       ∀ (x : model.Order), x ∈ u.orders → ((1 ≤ x.qty ∧ x.qty ≤ 500) ∧ 0 < x.price) ∧ x.id < u.nextId) ∧
+    │     model.openQty u.orders ≤ 1000
+    │ hsub : (List.map (fun o => o.id) (List.filter (fun x => !JS.eq x.id id') u.orders)).Nodup
+    │ h : -1 * model.openQty (List.filter (fun x => !JS.eq x.id id') u.orders) + 1001 ≤ 0
+    │ h_1 : u.orders.length ≤ (List.filter (fun x => !JS.eq x.id id') u.orders).length + 1
+    │ h_2 : (fun a => JS.eq a.id id') = fun x => !JS.eq x.id id'
+    │ h_3 : (fun x y => (!JS.eq x.id id') = true → (!JS.eq y.id id') = true → ¬x.id = y.id) = fun a b => ¬a.id = b.id
+    │ ⊢ False
+
+✗ NOT VERIFIED  139/142 obligations proved, 3 failed; components: 4/6 verified  (38.2s)

@@ -12,6 +12,7 @@
   --deep: #f5cf3b; /* theo crossed by more: darker yellow */
   --buy: #1f7a3f;
   --sell: #b3261e;
+  --watch: #c98a00; /* watched strikes */
   font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
   color: var(--ink);
   background: var(--bg);
@@ -149,6 +150,31 @@ button.on {
 
 .grid tr.atm td.strike {
   background: var(--atm);
+}
+
+.grid td.strike button.watch,
+.grid td.strike button.watch.on {
+  border: none;
+  background: transparent;
+  padding: 0 4px 0 0;
+  color: var(--muted);
+}
+
+.grid td.strike button.watch.on {
+  color: var(--watch);
+}
+
+.grid tr.watched td.strike {
+  box-shadow: inset 3px 0 0 var(--watch);
+}
+
+.toolbar .watching {
+  flex-wrap: wrap;
+}
+
+.toolbar .chip {
+  border-radius: 12px;
+  color: var(--watch);
 }
 
 .grid td.px button {
@@ -292,8 +318,10 @@ button.on {
   font-variant-numeric: tabular-nums;
 }
 
-.orders li button {
+.orders li .acts {
   margin-left: auto;
+  display: flex;
+  gap: 4px;
 }
 
 .buy {
