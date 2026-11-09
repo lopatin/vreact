@@ -977,7 +977,12 @@ export function coerce(v: Val, expected: VType | undefined, node: ts.Node, env: 
   if (w) return w;
   if (expected.k === "void" || expected.k === "unit") return v;
   const tv = tvarPart(v.type) ?? tvarPart(expected);
-  fail(node, `type mismatch: expected ${showType(expected)}, got ${showType(v.type)}${tv ? ` (a value of the type parameter ${tv.name} is abstract: it is a ${tv.name} and nothing else)` : ""}`);
+  // (TypeScript's ReadonlyMap / ReadonlySet are covariant: `ReadonlyMap<int, int>` where
+  // `ReadonlyMap<int, number>` or `ReadonlySet<E>` where `ReadonlySet<string>` is expected)
+  const coll = (v.type.k === "map" && expected.k === "map") || (v.type.k === "set" && expected.k === "set")
+    ? ` (VTS has no Map/Set covariance: the key, value and element types must be exactly the same; e.g. give a generic helper's arguments the same ${v.type.k === "map" ? "Map" : "Set"} types)`
+    : "";
+  fail(node, `type mismatch: expected ${showType(expected)}, got ${showType(v.type)}${tv ? ` (a value of the type parameter ${tv.name} is abstract: it is a ${tv.name} and nothing else)` : coll}`);
 }
 
 /**
@@ -2476,6 +2481,14 @@ function unify(p: VType, a: VType, σ: Map<number, VType>, own: ReadonlySet<numb
   if (p.k === "arr" && a.k === "arr") return unify(p.elem, a.elem, σ, own, conflict);
   if (p.k === "opt") return unify(p.elem, a.k === "opt" ? a.elem : a, σ, own, conflict);
   if (p.k === "tuple" && a.k === "tuple" && p.elems.length === a.elems.length) p.elems.forEach((e, i) => unify(e, a.elems[i], σ, own, conflict));
+  // Map / Set: their keys, values and elements (`ReadonlyMap<K, V>` with a `ReadonlyMap<int, Order>`
+  // argument: K = int, V = Order; VTS has no Map/Set covariance, so the argument must then have
+  // exactly the instantiated type, which `coerce` checks)
+  if (p.k === "map" && a.k === "map") {
+    unify(p.key, a.key, σ, own, conflict);
+    unify(p.val, a.val, σ, own, conflict);
+  }
+  if (p.k === "set" && a.k === "set") unify(p.elem, a.elem, σ, own, conflict);
   // (other shapes: nothing to infer; the argument is checked against the instantiated type)
 }
 
@@ -2593,6 +2606,17 @@ function tsTypeAtTVar(info: FnInfo, id: number, c: ts.CallExpression, env: Env):
         }
         return null;
       }
+      case "map":
+      case "set": {
+        const xs = collectionTypeArgs(ck.getNonNullableType(t), ck);
+        const parts = pt.k === "map" ? [pt.key, pt.val] : [pt.elem];
+        if (!xs || xs.length !== parts.length) return null;
+        for (let i = 0; i < parts.length; i++) {
+          const r = at(parts[i], xs[i]);
+          if (r) return r;
+        }
+        return null;
+      }
       default:
         return null;
     }
@@ -2645,6 +2669,16 @@ function nullishWithin(a: ts.Type, d: ts.Type, vt: VType, ck: ts.TypeChecker): b
       const xa = ck.getTypeArguments(a as ts.TypeReference);
       const xd = ck.getTypeArguments(d as ts.TypeReference);
       return xa.length === vt.elems.length && xd.length === vt.elems.length && vt.elems.every((e, i) => nullishWithin(xa[i], xd[i], e, ck));
+    }
+    case "map":
+    case "set": {
+      // (keys and elements are never optional; a Map value may have optional parts:
+      // `ReadonlyMap<K, readonly (V | null)[]>`)
+      const parts = vt.k === "map" ? [vt.key, vt.val] : [vt.elem];
+      if (!parts.some(hasOptPart)) return true;
+      const xa = collectionTypeArgs(a, ck);
+      const xd = collectionTypeArgs(d, ck);
+      return !!xa && !!xd && xa.length === parts.length && xd.length === parts.length && parts.every((e, i) => nullishWithin(xa[i], xd[i], e, ck));
     }
     default:
       // (no optional part at this position; a type parameter's value is never nullish)

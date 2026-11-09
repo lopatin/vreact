@@ -212,3 +212,46 @@ example : True := by
   vreact_fails_showing_goal (∀ (xs : List Item), (JSMap.ofList (xs.map (fun x => (x.id, x)))).size = xs.length)
   trivial
 end VReact.JSMapTest.T12
+
+namespace VReact.JSMapTest.T13
+open VReact VReact.JS
+/-! Generic collection helpers: abstract keys `{K : Type} [DecidableEq K]` (an equality-constrained
+type parameter), and the pigeonhole facts on Sets / Map keys (`sameMembers`, `sameKeys`). -/
+-- toggleIn on an abstract Set: the toggled element, every other member unchanged
+example {K : Type} [DecidableEq K] (s : JSSet K) (k : K) :
+    (if s.has k = true then s.delete k else s.add k).has k = !s.has k := by vreact_ob vreact_auto
+example {K : Type} [DecidableEq K] (s : JSSet K) (k : K) :
+    ∀ x ∈ s.elems, x = k ∨ x ∈ (if s.has k = true then s.delete k else s.add k).elems := by vreact_ob vreact_auto
+-- a Map update at an abstract key, compared through get (V with equality)
+example {K V : Type} [DecidableEq K] [DecidableEq V] (m : JSMap K V) (k : K) (v : V) :
+    (m.set k v).get k = some v ∧ ∀ p ∈ m.entries, p.1 = k ∨ (m.set k v).get p.1 = some p.2 := by vreact_ob vreact_auto
+-- pigeonhole: one inclusion and equal sizes give the other inclusion; mutual inclusion, equal sizes
+example {K : Type} [DecidableEq K] (a b : JSSet K) (h : (a.elems.all fun x => b.has x) = true) (hs : b.size ≤ a.size) :
+    (b.elems.all fun x => a.has x) = true := by vreact_ob vreact_auto
+example {K : Type} [DecidableEq K] (a b : JSSet K) (h : ∀ x ∈ a.elems, x ∈ b.elems) (h' : ∀ x ∈ b.elems, x ∈ a.elems) :
+    a.size = b.size := by vreact_ob vreact_auto
+example {K : Type} [DecidableEq K] (a b : JSSet K) :
+    (JS.eq a.size b.size && a.elems.all (fun x => b.has x)) = (a.elems.all (fun x => b.has x) && b.elems.all (fun x => a.has x)) := by
+  vreact_ob vreact_auto
+example (a b : JSMap Int JS.Str) :
+    (JS.eq a.size b.size && a.keys.all (fun x => b.has x)) = (a.keys.all (fun x => b.has x) && b.keys.all (fun x => a.has x)) := by
+  vreact_ob vreact_auto
+example (a b : JSSet Int) (x : Int) (h : ∀ y ∈ a.elems, y ∈ b.elems) (hb : b.has x = true) (ha : a.has x = false) :
+    a.size < b.size := by vreact_ob vreact_auto
+-- an index by a key function with distinct keys maps each element's key to the element
+-- (also for an abstract element type with an accessor, as in a field-constrained generic)
+example {T : Type} (T_id T_qty : T → Int) (xs : List T) (h : (xs.map (fun x => T_id x)).Nodup) :
+    ∀ x ∈ xs, ((JSMap.ofList (xs.map (fun x => (T_id x, x)))).get (T_id x)).map T_qty = some (T_qty x) := by vreact_ob vreact_auto
+structure Row where
+  id : Int
+  qty : Int
+example (xs : List Row) (h : (xs.map (fun x => x.id)).Nodup) :
+    ∀ x ∈ xs, (xs.foldl (fun acc x => acc.set x.id x) (JSMap.empty : JSMap Int Row)).get x.id = some x := by vreact_ob vreact_auto
+-- still false: without the inclusion, or with sizes alone, nothing follows
+example : True := by
+  vreact_fails_showing_goal (∀ (a b : JSSet Int) (x : Int), a.has x = false → b.has x = true → a.size < b.size)
+  vreact_fails_showing_goal (∀ (a b : JSSet Int), a.size = b.size → (b.elems.all fun x => a.has x) = true)
+  vreact_fails_showing_goal (∀ (a b : JSMap Int Int), (a.keys.all fun x => b.has x) = true → (b.keys.all fun x => a.has x) = true)
+  vreact_fails_showing_goal (∀ (xs : List Row), ∀ x ∈ xs, (JSMap.ofList (xs.map (fun x => (x.id, x)))).get x.id = some x)
+  trivial
+end VReact.JSMapTest.T13

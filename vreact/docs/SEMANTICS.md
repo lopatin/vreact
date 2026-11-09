@@ -37,7 +37,7 @@ exact, total meaning in Lean, while still covering what real React code uses.
 | `readonly T[]`, `T[]`                        | `List T`                                | immutable |
 | `T \| null`, `T \| undefined`, `f?: T`       | `Option T`                              | not both null and undefined |
 | `[A, B]`                                     | `A × B`                                 | |
-| `ReadonlyMap<K, V>`, `Map<K, V>`             | `JS.JSMap K V`: entries in insertion order, keys distinct | keys `boolean`/`int`/`string`/enum; values not optional; no type parameter inside (not yet) |
+| `ReadonlyMap<K, V>`, `Map<K, V>`             | `JS.JSMap K V`: entries in insertion order, keys distinct | keys `boolean`/`int`/`string`/enum or an equality-constrained type parameter; values not optional |
 | `ReadonlySet<T>`, `Set<T>`                   | `JS.JSSet T`: elements in insertion order, distinct | elements as Map keys |
 | `(x: A) => void` (props only)                | callback with a contract                | see §2.4; never data (a function's parameter or result, state, a constant, a local, a hole, an array element or a non-props field: rejected) |
 | type parameter `T` of a generic function     | binder `{T : Type}` (+ constraint binders) | abstract; instantiated at each call (below) |
@@ -104,8 +104,16 @@ the types whose SameValueZero (the comparison JS Maps use) is Lean equality: `bo
 `string` and string-literal enums — not `number` (NaN equals NaN, -0 equals +0), not objects,
 arrays or tuples (identity), not optional types (`null` and `undefined` are different keys). A
 Map value is never optional: `m.get(k)` is `undefined` for a missing key, which an optional
-value would make ambiguous (`JSMap.get` is an `Option V`). A type parameter of a generic
-function inside a Map or Set type is not supported yet (rejected).
+value would make ambiguous (`JSMap.get` is an `Option V`). In a generic function a key or
+element may be a type parameter with an equality constraint (`ReadonlySet<K>` with `K extends
+int | string`: Lean `JSSet K` under the function's `[DecidableEq K]` binder), and a value any
+type parameter; the body is proved for every Lean type with decidable equality, which includes
+the instantiations JS can have (booleans, ints, strings, enums, where SameValueZero is Lean
+equality), and each call's instantiation is checked to be one of them (§1.1). A key or element
+of an unconstrained or field-constrained type parameter (instantiated with numbers or records:
+SameValueZero or identity) is rejected. Maps and Sets are not covariant in VTS: TypeScript
+passes a `ReadonlyMap<int, int>` as a `ReadonlyMap<int, number>`, VTS requires the same types
+(the Lean types differ).
 
 Rejected: `any`, `as` casts, classes, `this` (also `this` parameters), mutation of
 objects/arrays (of Maps and Sets: see §1.2), `==` (except `== null`), `===` on objects,
@@ -118,8 +126,9 @@ recursion (for now), recursive types,
 Lean binder `{T : Type}` of the definition, abstract in its body, and its constraint
 adds what the body may do with values of `T`: an *equality constraint* (`K extends
 int | string | boolean | <string-literal enum>`) adds `[DecidableEq K]`, so `===`,
-`includes`, `indexOf` and `distinct` on `K` are Lean equality — exactly JS's `===` and
-SameValueZero on the types `K` may be instantiated with; a *field constraint* (`T
+`includes`, `indexOf`, `distinct` and Map keys / Set elements of type `K` (`JSMap K V`,
+`JSSet K`) are Lean equality — exactly JS's `===` and SameValueZero on the types `K` may be
+instantiated with; a *field constraint* (`T
 extends { readonly id: int; … }`) adds one explicit accessor parameter per field,
 `(T_id : T → Int)`, and `x.id` on `x : T` is `T_id x` (not a type class: after a
 transparent function is unfolded at a call, the accessor `fun x => x.id` reduces to
@@ -886,11 +895,14 @@ hook rules hold (static checks). For every function: its body is safe and its
   instantiation (the type parameters are abstract, so the body cannot depend on
   what they are); what the translator alone ensures is that the parametric model
   means what JS does at each call: the instantiation is inferred from the
-  arguments' VTS types and is never nullable, an equality-constrained one is a type
-  JS compares by value, the accessor passed for a constrained field reads that field
+  arguments' VTS types (also through Map and Set types) and is never nullable, an
+  equality-constrained one is a type JS compares by value (so a Map key or Set
+  element of that type parameter is compared by SameValueZero exactly as by Lean
+  equality), the accessor passed for a constrained field reads that field
   (`fun x => x.f`, a union's shared-field accessor, or a type parameter's own
   accessor) at exactly the constraint's type and nullish kinds, and an argument for
-  a parameter with optional parts has the nullish value its declared type names.
+  a parameter with optional parts has the nullish value its declared type names
+  (also inside arrays, tuples and Map values).
   No `@trusted` declaration is generic (§1.1): its axioms are about the closed VTS
   types of its signature, all of them inhabited, so what they assume is its type
   and contracts at those types — what the reviewer of the declaration checks. Nor
@@ -1264,7 +1276,8 @@ checked is reported as "not proved". The written text is the text Lean checked.
 A proof whose axioms include @trusted declarations, `assume(…)` facts or axioms of
 user proofs (also user-proof declarations that use `VReact.assumed`) is
 reported relative to them (`--json`: `"status": "proved-relative"` and
-`relative_to`). A generic function is tested at `int`/`string` instantiations (a
+`relative_to`). A generic function is tested at `int`/`string` instantiations (also
+as the keys, values and elements of random Maps and Sets; a
 witness record with the constrained fields for a field constraint; an optional
 constrained field absent as `undefined`, as TypeScript allows), and generic helpers
 are offered at instantiations from the hole's types; the tests only steer the

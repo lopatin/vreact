@@ -231,8 +231,11 @@ appear: parameters, results, state, props, record fields, array elements, reduce
   SameValueZero, so `number` (NaN, -0), objects, arrays and tuples (identity) and optional
   types (`null` and `undefined` are different keys) are rejected. Values: any data type but an
   optional one (`m.get(k)` is `undefined` for a missing key): no `ReadonlyMap<K, V | null>` —
-  delete the key instead. Not (yet) a type parameter of a generic function, as key, value or
-  element.
+  delete the key instead. In a generic function (see Generics), a key or element may be a type
+  parameter with an equality constraint (`ReadonlySet<K>` with `K extends int | string`), and a
+  value any type parameter (`ReadonlyMap<K, V>`, `ReadonlyMap<K, readonly V[]>`); a key of an
+  unconstrained or field-constrained type parameter is rejected ("a Map key needs equality":
+  constrain `K`, or key by a field, `ReadonlyMap<int, T>`).
 * Order is JS's insertion order, exactly: `set` on a present key keeps its position, on a new
   key appends it; `delete` then `set` moves the key to the end; `new Map(entries)` with a
   repeated key keeps its first position and its last value; `new Set(xs)` keeps first occurrences.
@@ -276,10 +279,13 @@ appear: parameters, results, state, props, record fields, array elements, reduce
   methods are only called directly, `n.set(…)`: not through an index (`m["clear"]()`), as a
   value (`const f = n.set`, `n.set.bind(n)`) or via the prototype (`Map.prototype.set.call(m, …)`),
   and a Map or Set is never indexed (`m[k]`: use `m.get(k)`).
-* Not supported: `===` on Maps/Sets (identity: compare the contents), truthiness (`if (m)` is
-  always true: test `m.size > 0`), `forEach` (use `for…of`), `entries()` of a Set, `WeakMap`,
-  `WeakSet`, `Map.groupBy`, the ES2025 Set methods, a Map or Set as a JSX child or a string.
-  Effect dependencies compare Maps by identity (a new Map re-runs the effect).
+* Not supported: `===` on Maps/Sets (identity: compare the contents; also in generic code),
+  truthiness (`if (m)` is always true: test `m.size > 0`), `forEach` (use `for…of`), `entries()`
+  of a Set, `WeakMap`, `WeakSet`, `Map.groupBy`, the ES2025 Set methods, a Map or Set as a JSX
+  child or a string, covariance (TypeScript passes a `ReadonlyMap<int, int>` where a
+  `ReadonlyMap<int, number>` or a `ReadonlyMap<K, V>` with `V = number` is expected, and a
+  `ReadonlySet<Color>` as a `ReadonlySet<string>`; in VTS the key, value and element types must
+  be the same). Effect dependencies compare Maps by identity (a new Map re-runs the effect).
 * Contracts use the same forms: `r.get(k) === v`, `r.has(k)`, `r.size`,
   `[...r.values()].every((v) => v >= 0)`, frames
   `[...m.keys()].every((j) => j === k || r.get(j) === m.get(j))`, order
@@ -293,7 +299,12 @@ appear: parameters, results, state, props, record fields, array elements, reduce
   `[...m.values()]`), `new Set(xs).size <= xs.length` (`===` when `distinct(xs)`), the size of
   `new Map(pairs)` with distinct keys, and membership in a Set after `add`/`delete` (also a Set
   stored in a Map). Other loops (a loop of `delete`s, a sum over `m.values()`) need a lemma, as
-  for arrays. Lean lemmas for `proofs/` (e.g. `JSMap.keys_set`, `JSMap.get_set`,
+  for arrays. It also knows that an index `new Map(xs.map((x) => [x.id, x]))` (or the loop
+  `for (const x of xs) n.set(x.id, x)` from an empty `n`) maps each element's id to that
+  element under `distinct(xs, (x) => x.id)`, and pigeonhole on distinct elements: a Set whose
+  members are all in `b` is no larger than `b`, and with equal sizes the inclusion goes both
+  ways (`a.size === b.size && [...a].every((x) => b.has(x))` means the same members; likewise
+  for Map keys). Lean lemmas for `proofs/` (e.g. `JSMap.keys_set`, `JSMap.get_set`,
   `JSMap.entries_set`, `JSMap.mem_entries_of_get`) are in `VReact/JSMap.lean`.
 
 ## Statements
@@ -391,10 +402,11 @@ under `K extends boolean` would be false at `Int`): state the fact as `requires(
 which each caller proves (or assumes) at its own types, or prove it with
 `assert(…)`. A type parameter may appear in parameter and return types,
 local annotations (also of helper arrows and callback parameters), `hole<T>()`,
-arrays, `T | null` and tuples — not inside object types (`{ readonly v: T }`:
-pass the value as its own parameter), and not yet inside Map or Set types
-(`ReadonlyMap<K, V>`, `new Set<K>()` in a generic function: rejected). At most one
-constraint per parameter:
+arrays, `T | null`, tuples and Map and Set types (`ReadonlyMap<K, V>`,
+`ReadonlySet<K>`, `ReadonlyMap<K, readonly V[]>`, `new Map<K, V>()`, `new Set(xs)`;
+a Map key or Set element only under an equality constraint, see below and Map
+and Set) — not inside object types (`{ readonly v: T }`: pass the value as its
+own parameter). At most one constraint per parameter:
 
 * **none** — values of `T` are abstract: they can be passed, stored (arrays,
   `T | null`, tuples), returned, given to other generic functions, and used with
@@ -403,12 +415,22 @@ constraint per parameter:
   `length`, spread, indexing).
 * **equality** — `K extends int | string | boolean | "a" | Color` (unions of
   these; `Color` a string-literal enum type): also `===`/`!==` on `K`,
-  `includes`, `indexOf`, `distinct(xs)` and `distinct(xs, x => k)` with a `K` key.
+  `includes`, `indexOf`, `distinct(xs)` and `distinct(xs, x => k)` with a `K` key,
+  and `K` as a Map key or Set element (`ReadonlySet<K>`, `ReadonlyMap<K, V>`;
+  Lean `JSSet K` / `JSMap K V` with `[DecidableEq K]`).
   `K extends number` is rejected (`NaN !== NaN`; use `int`).
 * **fields** — `T extends { readonly id: int; readonly note?: string }` (or the
   name of a record type): `x.id` on `x: T` (an optional field is `U | undefined`).
   Field types may not mention type parameters. Equality and fields cannot be
   combined (no intersections).
+
+Map and Set code in a generic body is the same as elsewhere: copies and fresh
+locals (`const n = new Set(s); if (n.has(k)) n.delete(k); else n.add(k); return
+n;`), `for (const [k, v] of m)`, spreads, `m.get(k) ?? d`, and `m.get(k) === v`
+when `V` has an equality constraint (never `===` on the Maps or Sets themselves).
+A helper such as `toggleIn<K extends int | string>(s: ReadonlySet<K>, k: K)` is
+proved once and used at `int` and `string` keys, in functions and in a
+component's functional updates (`setSel((s) => toggleIn(s, id))`).
 
 Even under `T extends int` or `T extends string` the values of `T` are abstract:
 no arithmetic, ordering, `Math.*`, string conversion (`${x}`, `+`), string
@@ -422,18 +444,24 @@ work (a type parameter is never instantiated with a nullable type).
 
 Calls infer the type arguments from the VTS types of the arguments (where
 TypeScript cannot tell `int` from `number`: `count(xs, 1.5)` instantiates
-`number`), then from the type the result must have (`const xs: readonly int[] =
-emptyOf()`), then for `[]`, `null` and literals; two arguments of `int` and
-`number` give `number`, an enum and a `string` give `string`. Otherwise write the
+`number`), also through arrays, tuples and Map and Set types (`keysOf(m)` with
+`m: ReadonlyMap<int, Order>` gives `K = int`, `V = Order`), then from the type the
+result must have (`const xs: readonly int[] = emptyOf()`, `const e:
+ReadonlyMap<int, string> = emptyMap()`), then for `[]`, `null` and literals; two
+arguments of `int` and `number` give `number`, an enum and a `string` give
+`string` (a Map or Set argument must then have exactly the instantiated type: no
+covariance). Otherwise write the
 type arguments (`emptyOf<int>()`; "cannot infer T"; an argument that cannot be
 typed reports its own error instead). Each call is checked: an
 instantiation is never nullable (`firstOr(xs, null)` with `xs: (int | null)[]` is
 rejected — give the function a `T | null` parameter instead), never `number` for
-an equality constraint, and for a field constraint is a record (or a union, in
+an equality constraint (`toggleIn(s, 1.5)` with `s: ReadonlySet<int>` is
+rejected), and for a field constraint is a record (or a union, in
 every variant, or another type parameter with that field) whose field has exactly
 the constraint's type and the same `null`/`undefined`. An argument for a parameter
 `T | null` must be `null` (not `undefined`) when absent, as the declared type says
-(TypeScript would absorb `undefined` into `T`); likewise for `T | undefined`.
+(TypeScript would absorb `undefined` into `T`); likewise for `T | undefined`, also
+inside arrays, tuples and Map values (`ReadonlyMap<int, readonly (V | null)[]>`).
 
 A generic function is proved once for every instantiation, and its `ensures`
 hold for every type: a contract that is true only at the module's own calls is
@@ -445,11 +473,15 @@ reducers (`useReducer`), generic arrow functions, function expressions and
 function types, `@trusted` generic functions, `assume(…)` in a generic function, default type arguments (`<T =
 int>`), `const` type parameters, other constraints (`unknown`, `any`, `object`,
 `keyof`, unions of object types, intersections, constraints mentioning a type
-parameter), recursion.
+parameter), a Map key or Set element of a type parameter without an equality
+constraint (`ReadonlySet<T>` with `T` unconstrained, `T extends {}` or a field
+constraint: JS would compare objects by identity), recursion.
 
 `vreact synth` tests a generic function with `int` and `string` values for an
 unconstrained or equality-constrained type parameter (they stand for every type,
-or every type with equality: the body cannot tell which) and with a witness record
+or every type with equality: the body cannot tell which; Maps and Sets of them are
+random JS Maps and Sets with distinct keys, printed as `{"Map":[[k, v], …]}` /
+`{"Set":[…]}` in counterexamples) and with a witness record
 for a field constraint (the constrained fields, an optional one absent as
 `undefined`, and one more field); Lean proves the fill once for every
 instantiation. Generic helpers of the module are offered as calls at the hole's
@@ -624,6 +656,8 @@ or a label (use `htmlFor`).
 | `children` / `ReactNode` props | compose in the parent |
 | recursion, `while` | `for…of`, array methods |
 | generic type aliases, interfaces, components, reducers and arrows | concrete types; generic top-level functions (see Generics) |
+| a Map key / Set element of an unconstrained or field-constrained type parameter (`ReadonlySet<T>`, `ReadonlyMap<T, V>` with `T extends { readonly id: int }`) | constrain it (`K extends int \| string`), or key by a field (`ReadonlyMap<int, T>` with `x.id` as the key) |
+| Map/Set covariance (`ReadonlyMap<int, int>` passed as `ReadonlyMap<int, number>`) | give the Maps / Sets the same key, value and element types |
 | `@trusted` generic functions | verify the generic function (`@opaque` hides its body from callers), or one `@trusted` function per concrete type |
 | callbacks as parameters of top-level functions (`p: (x: T) => boolean`), functions in state, locals, holes or arrays | write the arrow at the call site (`xs.find((x) => …)`); in a generic helper, read a property through a field constraint (`T extends { readonly done: boolean }`) |
 | `async`, fetch | keep I/O in an unverified module that calls verified reducers |

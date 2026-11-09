@@ -140,7 +140,8 @@ export function ItemList(props: ItemListProps) {
   No generic type aliases, components or arrows, no `@trusted` generics, and no
   callback parameters (`p: (x: T) => boolean`): use a field constraint.
 * State is immutable: spread, `filter`, `map`, `toSorted`, `with` — never `push`/`sort`/property assignment.
-* Maps/Sets (`ReadonlyMap<int, Item>`, `ReadonlySet<string>`; keys int/string/boolean/enum):
+* Maps/Sets (`ReadonlyMap<int, Item>`, `ReadonlySet<string>`; keys int/string/boolean/enum, or
+  `K extends int | string` in a generic helper such as `toggleIn<K>(s: ReadonlySet<K>, k: K)`):
   update a fresh copy — `new Map(m).set(k, v)`, or `const n = new Map(m); n.delete(k); return n;` —
   never state, props or parameters; consume iterators at once (`[...m.values()]`, `for…of`).
 * Handlers may call setters, `dispatch`, and **at most one** parent callback per path.

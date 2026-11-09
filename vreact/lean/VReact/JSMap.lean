@@ -8,7 +8,10 @@ A JS `Map` (`Set`) with keys (elements) compared by SameValueZero is modelled as
 entries (elements) **in insertion order**, with pairwise distinct keys.  VTS admits only keys whose
 SameValueZero is Lean equality: `boolean`, `int`, `string` and string-literal enums (never
 `number`: NaN, ±0; never objects: identity; never optional types: `null` and `undefined` are
-different keys).  The operations follow ECMA-262 exactly, including the observable order:
+different keys), and in a generic function a type parameter with an equality constraint
+(`K extends int | string`): its body is proved for every `K` with `[DecidableEq K]`, and it is
+instantiated only with those types.  The operations follow ECMA-262 exactly, including the
+observable order:
 
 * `m.set(k, v)` on a present key replaces the value **in place** (the key keeps its position);
   on a new key it appends the entry;
@@ -308,6 +311,14 @@ theorem get_ofList_of_nodup (xs : List (K × V)) (hn : (xs.map Prod.fst).Nodup) 
       simp only at hn1 ⊢
       simp [hn1]; grind
     · simp [hk]; grind
+/-- An index built from a list by a key function (`new Map(xs.map((x) => [x.id, x]))`, or the loop
+`for (const x of xs) n.set(x.id, x)` from an empty `n`) with distinct keys maps each element's
+key to that element (`distinct(xs, (x) => x.id)` → `r.get(x.id)` is `x`, for every `x` of `xs`). -/
+theorem get_ofList_map_of_nodup {α} (xs : List α) (h : α → K × V) (hn : (xs.map (fun y => (h y).1)).Nodup)
+    (x : α) (hx : x ∈ xs) : (empty.setAll (xs.map h)).get (h x).1 = some (h x).2 := by
+  rw [get_ofList_of_nodup]
+  · exact List.mem_map_of_mem hx
+  · simpa [List.map_map, Function.comp_def] using hn
 theorem entries_delete (m : JSMap K V) (k : K) : (m.delete k).entries = m.entries.filter (fun p => !JS.eq p.1 k) := rfl
 omit [DecidableEq K] in
 theorem nodup_entries_fst (m : JSMap K V) : (m.entries.map (fun p => p.1)).Nodup := m.nodup
@@ -423,6 +434,28 @@ theorem foldl_set {α} (m : JSMap K V) (xs : List α) (f : α → K) (g : α →
   | nil => rfl
   | cons x rest ih => simp [List.foldl, setAll, ih]
 
+omit [DecidableEq K] in
+/-- Pigeonhole on keys: when every key of `a` is a key of `b`, `a` is no larger
+(`[...a.keys()].every((k) => b.has(k))` → `a.size <= b.size`). -/
+theorem length_keys_le_of_subset (a : JSMap K V) (b : JSMap K V) (h : ∀ k ∈ a.keys, k ∈ b.keys) :
+    a.keys.length ≤ b.keys.length :=
+  List.Nodup.length_le_of_subset a.keys_nodup h
+
+omit [DecidableEq K] in
+/-- …and strictly smaller when `b` has a key `a` lacks (so keys of `b` are keys of `a` when the
+sizes are equal: `sameKeys` = equal sizes and one inclusion). -/
+theorem length_keys_lt_of_subset_of_not_mem (a : JSMap K V) (b : JSMap K V) (h : ∀ k ∈ a.keys, k ∈ b.keys)
+    (x : K) (hb : x ∈ b.keys) (hn : x ∉ a.keys) : a.keys.length < b.keys.length := by
+  classical
+  have hsub : a.keys ⊆ b.keys.erase x := by
+    intro y hy
+    have hyx : y ≠ x := fun e => hn (e ▸ hy)
+    exact (List.mem_erase_of_ne hyx).2 (h y hy)
+  have h1 := List.Nodup.length_le_of_subset a.keys_nodup hsub
+  have h2 : (b.keys.erase x).length = b.keys.length - 1 := by rw [List.length_erase]; simp [hb]
+  have h3 : 1 ≤ b.keys.length := List.length_pos_of_mem hb
+  omega
+
 end JSMap
 
 /-- A JS `Set` with primitive elements: its elements in insertion order, distinct. -/
@@ -516,6 +549,28 @@ theorem foldl_add_self (s : JSSet T) (xs : List T) :
   induction xs generalizing s with
   | nil => rfl
   | cons x rest ih => simp [List.foldl, addAll, ih]
+
+omit [DecidableEq T] in
+/-- Pigeonhole: a Set whose elements are all in `b` is no larger
+(`[...a].every((x) => b.has(x))` → `a.size <= b.size`). -/
+theorem length_le_of_subset (a b : JSSet T) (h : ∀ x ∈ a.elems, x ∈ b.elems) :
+    a.elems.length ≤ b.elems.length :=
+  List.Nodup.length_le_of_subset a.nodup h
+
+omit [DecidableEq T] in
+/-- …and strictly smaller when `b` has an element `a` lacks: with equal sizes, one inclusion
+gives the other (`sameMembers(a, b)` = `a.size === b.size && [...a].every((x) => b.has(x))`). -/
+theorem length_lt_of_subset_of_not_mem (a b : JSSet T) (h : ∀ y ∈ a.elems, y ∈ b.elems)
+    (x : T) (hb : x ∈ b.elems) (hn : x ∉ a.elems) : a.elems.length < b.elems.length := by
+  classical
+  have hsub : a.elems ⊆ b.elems.erase x := by
+    intro y hy
+    have hyx : y ≠ x := fun e => hn (e ▸ hy)
+    exact (List.mem_erase_of_ne hyx).2 (h y hy)
+  have h1 := List.Nodup.length_le_of_subset a.nodup hsub
+  have h2 : (b.elems.erase x).length = b.elems.length - 1 := by rw [List.length_erase]; simp [hb]
+  have h3 : 1 ≤ b.elems.length := List.length_pos_of_mem hb
+  omega
 end JSSet
 
 /-! ## Automation
@@ -551,6 +606,13 @@ grind_pattern JSMap.length_values => m.values.length
 grind_pattern JSMap.size_setAll_le => (m.setAll xs).size
 grind_pattern JSMap.entries_ofList_of_nodup => (JSMap.empty.setAll xs).entries
 grind_pattern JSMap.size_ofList_of_nodup => (JSMap.empty.setAll xs).size
+-- (for each element of the list the index is built from; the key function's `Nodup` is the
+-- distinct-keys fact `distinct(xs, (x) => x.id)` once `h` is instantiated and beta-reduced)
+grind_pattern JSMap.get_ofList_map_of_nodup => (JSMap.empty.setAll (xs.map h)), x ∈ xs
+-- pigeonhole (inclusion of distinct keys bounds the size), for the pairs of maps whose sizes
+-- occur; the strict form for a key of `b` tested in `a`
+grind_pattern JSMap.length_keys_le_of_subset => a.keys.length, b.keys.length
+grind_pattern JSMap.length_keys_lt_of_subset_of_not_mem => x ∈ a.keys, b.keys.length
 
 attribute [vreact_simp] JSSet.has_def JSSet.elems_add JSSet.elems_delete
   JSSet.size_eq JSSet.elems_empty JSSet.addAll_nil JSSet.addAll_cons JSSet.ofList_eq
@@ -559,6 +621,8 @@ attribute [grind =] JSSet.mem_elems_addAll JSSet.mem_add JSSet.mem_delete JSSet.
 grind_pattern JSSet.nodup_elems => s.elems
 grind_pattern JSSet.length_addAll_le => (s.addAll xs).elems.length
 grind_pattern JSSet.elems_ofList_of_nodup => (JSSet.empty.addAll xs).elems
+grind_pattern JSSet.length_le_of_subset => a.elems.length, b.elems.length
+grind_pattern JSSet.length_lt_of_subset_of_not_mem => x ∈ a.elems, b.elems.length
 
 /-- Distinct keys as a contract: `vreact_contracts` adds it as a hypothesis wherever `m.keys`
 occurs (`vreact_subperm` moves `Nodup` facts from hypotheses through list chains). -/

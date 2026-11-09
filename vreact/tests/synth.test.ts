@@ -319,6 +319,19 @@ const cases: Record<string, () => Promise<void>> = {
     check("Mx-update: counterexamples show Maps", /postcondition fails on \[\{"Map":\[/.test(out), out.split("\n").find((l) => l.includes("postcondition fails on")) ?? "(no counterexample)");
     check("Mx-update: written program translates", translate(loadConfig(dir)).ok);
   },
+  // generic holes over Maps / Sets: random Maps and Sets at the int and string instantiations,
+  // generic Set helpers offered at the hole's types, counterexamples that show the Maps / Sets
+  async "GxMx-helpers"() {
+    const dir = project("GxMx-helpers");
+    process.env.VREACT_SYNTH_DEBUG = "1";
+    const { by, out } = await synth(dir, "src/g.ts").finally(() => delete process.env.VREACT_SYNTH_DEBUG);
+    check("GxMx-helpers: withMember", solutions(by("withMember"))[0] === "new Set(s).add(k)", String(solutions(by("withMember"))[0]));
+    check("GxMx-helpers: putAt", solutions(by("putAt"))[0] === "new Map(m).set(k, v)", String(solutions(by("putAt"))[0]));
+    check("GxMx-helpers: countOf", solutions(by("countOf"))[0] === "m.size", String(solutions(by("countOf"))[0]));
+    check("GxMx-helpers: generic Set helper offered (K = int)", solutions(by("flip"))[0] === "toggleIn(sel, id)", String(solutions(by("flip"))[0]));
+    check("GxMx-helpers: tested at int and string, explained", /tested with K = int or string, standing for every type with equality; V = int or string, standing for every type/.test(out));
+    check("GxMx-helpers: counterexamples show Maps and Sets", /fails on \[\{"Map":\[/.test(out) && /fails on \[\{"Set":\[/.test(out), out.split("\n").filter((l) => l.includes("fails on")).slice(0, 2).join(" / ") || "(no counterexample)");
+  },
   // random records keep their field types: an enum or string `id` is not overwritten by a key / an int
   async "Mx-ids"() {
     const dir = project("Mx-ids");

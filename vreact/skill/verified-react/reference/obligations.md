@@ -228,8 +228,15 @@ xs.length) console.log(xs[i].name)`).
    `[...m.values()].length` as `m.size` (so `[...m][0]` under `m.size > 0`), `new Set(xs).size
    <= xs.length` (`===` under `distinct(xs)`), `new Map(pairs).size === pairs.length` under
    distinct keys, and membership in a Set after `add`/`delete`, also of a Set stored in a Map
-   (`r.get(k)!.has(x)`). Facts about other loops over Maps (a loop of `delete`s, a sum over
-   `m.values()`) need a lemma, as for arrays; the model's lemmas (`JSMap.keys_set`,
+   (`r.get(k)!.has(x)`), that an index `new Map(xs.map((x) => [x.id, x]))` (or the loop
+   `for (const x of xs) n.set(x.id, x)` from an empty Map) maps each `x.id` to `x` under
+   `distinct(xs, (x) => x.id)`, and pigeonhole on distinct elements: when every member of `a`
+   is in `b` (every key, for Maps), `a.size <= b.size`, and with `b.size <= a.size` every member
+   of `b` is in `a` (`sameMembers` = equal sizes and one inclusion). All of this holds for
+   abstract keys too (a generic helper over `ReadonlySet<K>` / `ReadonlyMap<K, V>` with
+   `K extends int | string`: Lean `[DecidableEq K]`). Facts about other loops over Maps (a loop
+   of `delete`s, a sum over `m.values()`, a count `n.set(x, (n.get(x) ?? 0) + 1)` that reads
+   `n`) need a lemma, as for arrays; the model's lemmas (`JSMap.keys_set`,
    `JSMap.entries_set`, `JSMap.get_set`, `JSMap.mem_entries_of_get`, …) are in
    `VReact/JSMap.lean`.
 9. **Bounded quantifiers.** `forall(lo, hi, i => …)` and guarded `&&` in

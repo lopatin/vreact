@@ -444,34 +444,39 @@ export function collectionKind(t: ts.Type, env: TypeEnv): "map" | "set" | null {
 
 /**
  * Map keys and Set elements: the types whose JS SameValueZero is Lean equality — booleans, ints,
- * strings and string-literal enums.  Not `number` (NaN equals NaN, -0 equals +0, and Lean's
- * Float has no decidable equality), not objects, arrays or tuples (compared by identity), not
- * optional types (`null` and `undefined` are different keys, VTS represents both as absent).
+ * strings, string-literal enums, and type parameters with an equality constraint (`isEqType`:
+ * instantiated only with those; Lean `[DecidableEq K]`).  Not `number` (NaN equals NaN, -0
+ * equals +0, and Lean's Float has no decidable equality), not objects, arrays or tuples (compared
+ * by identity), not optional types (`null` and `undefined` are different keys, VTS represents
+ * both as absent), not type parameters without an equality constraint (they may be instantiated
+ * with any of these).
  */
 export function isKeyType(t: VType): boolean {
-  return t.k === "bool" || t.k === "int" || t.k === "str" || t.k === "enum";
+  return isEqType(t);
 }
 
 /** Why `t` cannot be a Map key / Set element (`what`: "Map keys", "Set elements"). */
 export function keyTypeProblem(t: VType, what: string): string {
+  if (t.k === "tvar") {
+    const one = what === "Map keys" ? "a Map key" : "a Set element";
+    const kind = what === "Map keys" ? "Map" : "Set";
+    if (t.fields) {
+      return `${one} needs equality: the type parameter ${t.name} has a field constraint, so it may be an object type, which JS compares by identity in a ${kind} (a copy is a different key); key by a field instead (e.g. ReadonlyMap<int, ${t.name}> keyed by x.id), or constrain ${t.name} to a type with equality, e.g. ${t.name} extends int | string`;
+    }
+    return `${one} needs equality: constrain ${t.name}, e.g. ${t.name} extends int | string (an unconstrained ${t.name} may be an object or a number, which a JS ${kind} compares by identity or with SameValueZero)`;
+  }
   if (t.k === "num") return `${what} must be int, string, boolean or a string-literal enum, not number (JS compares keys with SameValueZero: NaN equals NaN and -0 equals +0, unlike number equality): use int`;
   if (t.k === "opt") return `${what} must not be optional (JS tells a null key from an undefined one, VTS represents both as absent): use a non-optional key type`;
   return `${what} must be int, string, boolean or a string-literal enum, not ${showType(t)} (JS compares objects, arrays and tuples by identity: a copy is a different key): key by an id, e.g. ReadonlyMap<int, ${showType(t)}>`;
 }
 
 /**
- * Type parameters of generic functions inside Map and Set types (`ReadonlyMap<K, V>` in a generic
- * helper) are not supported yet: rejected, rather than half-handled by inference and the
- * instantiation checks.
+ * The VTS type `ReadonlyMap<key, val>`, or a rejection at `node` (keys: `isKeyType`; values:
+ * present data).  Type parameters of a generic function may appear anywhere inside (a key only
+ * under an equality constraint); their instantiations are closed, non-optional value types that
+ * satisfy the constraint (`checkInstantiation`), so an instantiated Map type obeys these rules.
  */
-function noTVarInCollection(parts: VType[], Name: string, node: ts.Node) {
-  const tv = parts.find((p) => mentionsTVar(p));
-  if (tv) fail(node, `a type parameter inside a ${Name} type (${node.getText()}) is not supported yet: give the ${Name} concrete ${Name === "Map" ? "key and value types" : "element type"} (write the helper for the types it is used with)`);
-}
-
-/** The VTS type `ReadonlyMap<key, val>`, or a rejection at `node` (keys: `isKeyType`; values: present data). */
 export function mapType(key: VType, val: VType, node: ts.Node): VType {
-  noTVarInCollection([key, val], "Map", node);
   if (!isKeyType(key)) fail(node, keyTypeProblem(key, "Map keys"));
   if (val.k === "opt") fail(node, `Map values must not be optional: m.get(k) is undefined for a missing key, which VTS could not tell from a present value that is null/undefined; use a Map without the missing case (e.g. delete the key instead of storing null)`);
   if (val.k === "fn" || val.k === "node" || val.k === "void" || val.k === "unit") fail(node, `Map values must be data (not ${showType(val)})`);
@@ -480,7 +485,6 @@ export function mapType(key: VType, val: VType, node: ts.Node): VType {
 
 /** The VTS type `ReadonlySet<elem>`, or a rejection at `node`. */
 export function setType(elem: VType, node: ts.Node): VType {
-  noTVarInCollection([elem], "Set", node);
   if (!isKeyType(elem)) fail(node, keyTypeProblem(elem, "Set elements"));
   return { k: "set", elem };
 }
@@ -917,8 +921,9 @@ function checkNoTVarField(t: VType, at: ts.Node) {
   const names = new Set<string>();
   const collectNames = (x: VType) => {
     if (x.k === "tvar") names.add(x.name);
-    if (x.k === "arr" || x.k === "opt") collectNames(x.elem);
+    if (x.k === "arr" || x.k === "opt" || x.k === "set") collectNames(x.elem);
     if (x.k === "tuple") x.elems.forEach(collectNames);
+    if (x.k === "map") [x.key, x.val].forEach(collectNames);
   };
   collectNames(t);
   fail(at, `the type parameter ${[...names].join(", ")} appears inside an object type: generic object types are not supported in VTS (their Lean structure would depend on the type parameter); pass that value as a separate parameter of type ${[...names][0]}, or use a tuple [${[...names][0]}, …]`);
