@@ -371,6 +371,15 @@ if (r && !only.length) {
     const out = `${p.stdout}${p.stderr}`;
     if (p.status !== 2 || /^\s+at /m.test(out) || !/^vreact: /m.test(out)) bad_.push(`vreact ${args.join(" ")}: exit ${p.status}: ${out.split("\n").slice(0, 3).join(" | ")}`);
   }
+  // the short report names the kind of each obligation it did not check (ReducerActionPreLong's
+  // callback, blocked by the failed precondition)
+  const plain = run(["verify"]);
+  const lines = plain.stdout.replace(/\x1b\[[0-9;]*m/g, "").split("\n");
+  const at = lines.findIndex((l) => /^\d+ obligation\(s\) not checked:$/.test(l));
+  const listed = at < 0 ? [] : lines.slice(at + 1).filter((l, i, xs) => xs.slice(0, i + 1).every((x) => x.startsWith("  ")));
+  const kinded = /^ {2}src\/\S+:\d+:\d+ \[[a-z-]+\](, src\/\S+:\d+:\d+ \[[a-z-]+\])*(, … \(\d+\))?: /;
+  if (listed.length && listed.every((l) => kinded.test(l)) && listed.some((l) => /ReducerActionPreLong\.tsx:\d+:\d+ \[callback\]/.test(l))) ok(`command line: the "not checked" lines (${listed.length}) name each obligation's kind`);
+  else bad("not checked lines", listed.slice(0, 3).join(" | ") || "(none)");
   const help = run(["--help"]);
   if (help.status !== 0 || !help.stdout.startsWith("usage:")) bad_.push(`vreact --help: exit ${help.status}`);
   if (!bad_.length) ok(`command line: ${misuse.length} misuses print a message and the usage (exit 2), no stack trace`);

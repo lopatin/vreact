@@ -13,7 +13,7 @@
 import ts from "typescript";
 import { T, type VType, type TypeEnv, type Field, type Param, sameType, showType, leanType, sharedFields, type Variant, typeOfNode, kindsOfType, nullShape, checkValueType, propertyNameText, propertyName, isEqType, mentionsTVar, substType, type TField, type NamedType, collectionKind, collectionTypeArgs, isLibSymbol, mapType, setType, nonValuePart } from "./types.ts";
 import { type Env, type Val, ModCtx, type Binding, type StateVar, type CompCtx, type HandlerAcc, type FnInfo, type CompInfo, type Global, type Narrowed, type DomSite, bind, extend, freshLocal, refSymbol } from "./ctx.ts";
-import { VtsError, fail, leanField, leanAccessor, leanIdent, leanStr, jsStr, leanInt, paren, nodeText, capitalize, relLoc, decodeJsxEntities } from "./util.ts";
+import { VtsError, fail, leanField, leanAccessor, leanIdent, leanStr, jsStr, leanInt, paren, nodeText, argText, capitalize, relLoc, decodeJsxEntities } from "./util.ts";
 
 /* ───────────────────────────── helpers ───────────────────────────── */
 
@@ -2379,7 +2379,7 @@ function call(c: ts.CallExpression, env: Env, expected?: VType): Val {
       }
       if (info.tparams.length) return genericCall(info, c, env, expected);
       const as = args.map((a, i) => paren(expr(a, env, info.params[i].type).code));
-      const ob = info.hasPre ? " " + m.ob(c, "precondition", `precondition of ${info.name}(${args.map((a) => nodeText(a, 30)).join(", ")})`) : "";
+      const ob = info.hasPre ? " " + m.ob(c, "precondition", `precondition of ${info.name}(${args.map((a) => argText(a)).join(", ")})`) : "";
       m.deps.add(info.qname);
       return { code: `(${info.qname}${as.map((a) => " " + a).join("")}${ob})`, type: info.ret };
     }
@@ -2451,7 +2451,7 @@ function genericCall(info: FnInfo, c: ts.CallExpression, env: Env, expected?: VT
   const targs = info.tparams.map((p) => `(${p.lean} := ${leanType(σ.get(p.id)!)})`);
   const accs = info.tparams.flatMap((p) => (p.fields ?? []).map((f) => accessorArg(σ.get(p.id)!, f, c, env)));
   const as = args.map((a, i) => paren(expr(a, env, substType(info.params[i].type, σ)).code));
-  const ob = info.hasPre ? m.ob(c, "precondition", `precondition of ${info.name}(${args.map((a) => nodeText(a, 30)).join(", ")})`) : null;
+  const ob = info.hasPre ? m.ob(c, "precondition", `precondition of ${info.name}(${args.map((a) => argText(a)).join(", ")})`) : null;
   m.deps.add(info.qname);
   const parts = [...targs, ...accs, ...as, ...(ob ? [ob] : [])];
   return { code: `(${info.qname} ${parts.join(" ")})`, type: substType(info.ret, σ) };
@@ -4136,7 +4136,7 @@ function handlerEffect(t: UpdTarget, c: ts.CallExpression, env: Env, rest: (e: E
     m.deps.add(r.qname);
     // A reducer's requires is about the action alone (component.ts, actionOnlyPre): proved here,
     // where the action is built from the snapshot, and it holds for whichever state τ React applies it to.
-    const ob = r.hasPre ? " " + m.ob(c, "precondition", `precondition of ${r.name}(…, ${nodeText(c.arguments[0], 40)})`) : "";
+    const ob = r.hasPre ? " " + m.ob(c, "precondition", `precondition of ${r.name}(…, ${argText(c.arguments[0], 100)})`) : "";
     const upd = `(fun τ => { τ with ${leanField(sv.field)} := ${r.qname} τ.${leanField(sv.field)} ${paren(a.code)}${ob} })`;
     return rest({ ...env, handler: { ...h, updates: [...h.updates, upd] } });
   }
@@ -4146,7 +4146,7 @@ function handlerEffect(t: UpdTarget, c: ts.CallExpression, env: Env, rest: (e: E
   const cb = comp.info.callbacks.find((x) => x.name === t.name)!;
   if (c.arguments.length !== cb.params.length) fail(c, `${cb.name} expects ${cb.params.length} arguments`);
   const as = c.arguments.map((a, i) => paren(expr(a, env, cb.params[i].type).code));
-  const ob = m.ob(c, "callback-contract", `callback contract of ${cb.name}(${c.arguments.map((a) => nodeText(a, 30)).join(", ")})`);
+  const ob = m.ob(c, "callback-contract", `callback contract of ${cb.name}(${c.arguments.map((a) => argText(a)).join(", ")})`);
   const emit = `(${comp.cbVar}.${leanField(cb.name)}${as.map((a) => " " + a).join("")} ${ob})`;
   return rest({ ...env, handler: { ...h, emit } });
 }

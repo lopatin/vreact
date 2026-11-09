@@ -951,7 +951,12 @@ hook rules hold (static checks). For every function: its body is safe and its
   longer has its multi-line contract instances (`hcontract…`, the facts of the
   callees' `ensures`) collapsed into one line that names them, so the short
   hypotheses after them stay in view, and keeps the conclusion `⊢ …` after the
-  `…` that marks the lines left out. (A proof that refers to another declaration whose
+  `…` that marks the lines left out. Each failed or not-checked obligation is
+  listed with its position, its kind (`[precondition]`, `[handler]`, …) and, for
+  a failure, a description; an argument in a description is shown whole up to
+  40 characters (an action dispatched to a reducer up to 100), a longer object or
+  array literal field by field (each value up to 24 characters), so a field such
+  as `qty: qty - 1` stays visible. (A proof that refers to another declaration whose
   proof was admitted — a callee's failed contract — is a proof modulo that
   contract and counts as proved; the item is `INCOMPLETE` by its axioms.) A failure is not a Lean error, so the module and every module
   importing it are still built and checked; the admitted goal shows as

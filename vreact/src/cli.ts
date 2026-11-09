@@ -583,7 +583,7 @@ function printReport(r: Report, tr: TranslateResult, v: Verdict, cfg: Config, ms
     const byWhy = new Map<string, string[]>();
     for (const u of v.unchecked) {
       const why = v.reasons.get(u.id) ?? "not checked";
-      byWhy.set(why, [...(byWhy.get(why) ?? []), u.where]);
+      byWhy.set(why, [...(byWhy.get(why) ?? []), `${u.where} [${u.kind}]`]);
     }
     for (const [why, wheres] of byWhy) console.log(C.y(`  ${wheres.slice(0, 4).join(", ")}${wheres.length > 4 ? `, … (${wheres.length})` : ""}: ${why}`));
   }
