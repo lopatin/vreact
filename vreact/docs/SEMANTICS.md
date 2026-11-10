@@ -570,7 +570,10 @@ nothing in `b`. Guard them with `!a || b` (`xs.length === 0 || xs[0] > 0`,
 calls, reads `implies(a, b)` as `∀ (h : a), b`, so that `b` may index (and narrow)
 under `a` (`vreact synth`'s tests, which call it, evaluate that `implies` as
 `!a || b`: §5). (In code, likewise, `implies` evaluates both arguments; a
-`callbackRequires` predicate is translated as code.)
+`callbackRequires` predicate is translated as code.) `callbackRequires(cb, p)` is a
+call as well: JS evaluates `cb` at every render (and only creates the lambda `p`), so
+`cb` must be a read that cannot throw, `props.<name>` on the props parameter or a name
+destructured from it (§2.4).
 
 Several `requires` (or `invariant`) statements are one condition
 `c₁ && c₂ && …`: a later one may rely on the earlier ones as guards. (JS evaluates
@@ -730,6 +733,9 @@ invariant-preserving interactions.
 ### 2.4 Composition: callbacks as assume/guarantee
 
 A child declares `callbackRequires(props.onPick, (i) => 0 <= i && i < props.n)`.
+JS evaluates the first argument at every render, so it must be `props.onPick` on the
+props parameter or a name destructured from it (`{ onPick }`, `{ onPick: pick }`);
+anything else, such as `(c ? props : null)!.onPick` or `xs[i].onPick`, is rejected.
 
 * **Guarantee (child):** every call `props.onPick(e)` must prove the contract.
 * **Assume (parent):** the parent's function passed as `onPick` is verified

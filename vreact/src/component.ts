@@ -466,12 +466,28 @@ function prepass(stmts: readonly ts.Statement[], env: Env, comp: CompCtx, m: Mod
         continue;
       }
       if (sf === "callbackRequires") {
-        const cbE = c.arguments[0];
-        const name = ts.isPropertyAccessExpression(cbE) ? cbE.name.text : ts.isIdentifier(cbE) ? cbE.text : null;
-        const cb = comp.info.callbacks.find((x) => x.name === name);
-        if (!cb) fail(cbE, "callbackRequires expects a callback prop");
+        if (c.arguments.length !== 2) fail(c, "callbackRequires(cb, (args) => condition)");
+        // callbackRequires is a call: JS evaluates its first argument at every render (only the
+        // predicate is never called), and that argument is not translated as code. So it must be
+        // a read that cannot throw and that names the callback by its binding: `props.cb` on the
+        // props parameter, or a name destructured from it (`{ cb }`, `{ cb: f }`)
+        const cbE = stripParens(c.arguments[0]);
+        const cbOf = (x: ts.Expression): CompInfo["callbacks"][number] | undefined => {
+          if (ts.isPropertyAccessExpression(x) && !x.questionDotToken && ts.isIdentifier(x.expression)) {
+            const s = symbolOf(env, x.expression);
+            if (s && env.vars.get(s)?.k === "props") return comp.info.callbacks.find((cb) => cb.name === x.name.text);
+          }
+          if (ts.isIdentifier(x)) {
+            const s = symbolOf(env, x);
+            const b = s ? env.vars.get(s) : undefined;
+            if (b?.k === "callback") return b.cb;
+          }
+          return undefined;
+        };
+        const cb = cbOf(cbE);
+        if (!cb) fail(cbE, `callbackRequires(cb, (args) => condition) states the contract of a callback prop of ${comp.info.name}: write cb as props.<name> (props being the props parameter) or as a name destructured from the props parameter, not \`${nodeText(cbE)}\` (JS evaluates cb at every render)`);
         const lam = c.arguments[1];
-        if (!lam || !(ts.isArrowFunction(lam) || ts.isFunctionExpression(lam))) fail(c, "callbackRequires(cb, (args) => condition)");
+        if (!(ts.isArrowFunction(lam) || ts.isFunctionExpression(lam))) fail(c, "callbackRequires(cb, (args) => condition)");
         // (parameter annotations are checked against the callback prop's parameter types)
         const l = lambda(lam, env, cb.params.map((p) => p.type), T.bool, fnParamTsTypes(m.checker.getTypeAtLocation(cbE), cbE, env) ?? cb.params.map(() => null));
         const prop = `${paren(l.body.code)} = true`;

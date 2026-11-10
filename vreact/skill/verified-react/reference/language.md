@@ -524,7 +524,9 @@ Order inside the body:
 1. `requires(…)` — props precondition (what every parent must establish);
 2. `callbackRequires(props.cb, (args) => …)` — what this component guarantees
    about the arguments it passes to callback props (the parent may rely on it;
-   several for one callback are conjoined);
+   several for one callback are conjoined). JS evaluates the first argument at
+   every render: it must be `props.cb` on the props parameter or a name
+   destructured from it (`{ cb }`, `{ cb: f }`), anything else is rejected;
 3. hooks: `const [x, setX] = useState<T>(init)`, `const [s, dispatch] =
    useReducer(reducer, init)`, `useEffect(() => {…}, [deps])`,
    `useMemo(() => v, [deps])`, `useCallback(fn, [deps])` — top level,
