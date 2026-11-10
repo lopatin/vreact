@@ -29,7 +29,8 @@ at top level.
   files, tests (a name containing `.test.` or `.spec.`: `order.spec.ts` is
   skipped — a verified file importing it is rejected; rename it), files in
   `node_modules` or a directory starting with `.`, and those in `"exclude"`; or
-  exactly the files in `"include"`. They must be inside the project directory and
+  exactly the files in `"include"` (`.ts`/`.tsx` sources only: a `.js`/`.jsx` file
+  takes its types from JSDoc comments). They must be inside the project directory and
   must not be (or be inside) a symbolic link: Vite loads a module from its real
   path and resolves its imports from there, TypeScript from the link's path. An
   object `"browser"` field in any package.json from a source's directory up to the
@@ -607,7 +608,10 @@ Order inside the body:
    Contracts: `implies(a, b)` may index under `a`); a block body is read as code;
 3. hooks: `const [x, setX] = useState<T>(init)`, `const [s, dispatch] =
    useReducer(reducer, init)`, `useEffect(() => {…}, [deps])`,
-   `useMemo(() => v, [deps])`, `useCallback(fn, [deps])` — top level,
+   `useMemo(() => v, [deps])`, `useCallback(fn, [deps])` — declared with `const`
+   (a `var` is one hoisted binding that a later declaration rebinds, a `let` can be
+   reassigned), a state hook as exactly `[value, setter]` (no default value, rest
+   or third element: JS would bind something else) and on its own; top level,
    unconditional, before any top-level `if`/`switch` and any early return (a block
    `{ … }` before them may branch, without returning; never in branches,
    loops, handlers or closures; parentheses around the call do not matter); deps

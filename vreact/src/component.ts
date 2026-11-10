@@ -594,6 +594,9 @@ function prepass(stmts: readonly ts.Statement[], env: Env, comp: CompCtx, m: Mod
         const hh = ddc ? hookName(env, ddc.expression) : null;
         if (hh && UNMODELLED_HOOKS.has(hh)) fail(dd, unmodelledHook(hh));
         if (hh === "useEffect") fail(dd, "useEffect(…) returns nothing: call it as a statement, useEffect(() => { … }, [deps]);");
+        // (a `var` is one hoisted binding: a second `var [m, setN] = useState(…)` would rebind setN
+        // for every closure created before it, and a `let` could be reassigned)
+        if (hh && !(s.declarationList.flags & ts.NodeFlags.Const)) fail(dd, `declare the result of ${hh}(…) with const, not ${s.declarationList.flags & ts.NodeFlags.Let ? "let" : "var"} (a var is one hoisted binding that a later declaration rebinds, and a let can be reassigned)`);
         if ((hh === "useState" || hh === "useReducer") && s.declarationList.declarations.length !== 1) {
           fail(dd, `declare a ${hh} on its own (\`const [value, ${hh === "useState" ? "setValue" : "dispatch"}] = ${hh}(…);\`), not with other variables in one declaration`);
         }
@@ -747,6 +750,13 @@ function firstRead(n: ts.Node, syms: readonly ts.Symbol[], checker: ts.TypeCheck
  */
 function stateVar(d: ts.VariableDeclaration, c: ts.CallExpression, h: string, env: Env, m: ModCtx, pp: Prepass, earlier: readonly ts.Symbol[]): StateVar {
   if (!ts.isArrayBindingPattern(d.name) || d.name.elements.length < 1) fail(d, `use const [value, setValue] = ${h}(…)`);
+  // a default value or a rest element changes what JS binds (`const [n = 5] = useState<int | undefined>(undefined)`
+  // gives 5; `const [...xs] = useState(0)` gives the pair [state, setter]); a third element is undefined
+  for (const el of d.name.elements) {
+    if (ts.isBindingElement(el) && el.dotDotDotToken) fail(el, `a rest element in the destructuring of ${h}(…) is not supported (JS collects the pair [value, ${h === "useState" ? "setter" : "dispatch"}] into it): use const [value, ${h === "useState" ? "setValue" : "dispatch"}] = ${h}(…)`);
+    if (ts.isBindingElement(el) && el.initializer) fail(el, `a default value in the destructuring of ${h}(…) is not supported (JS uses it whenever the element is undefined): give ${h}(…) the initial value instead`);
+  }
+  if (d.name.elements.length > 2) fail(d.name.elements[2], `${h}(…) returns a pair: use const [value, ${h === "useState" ? "setValue" : "dispatch"}] = ${h}(…)`);
   const a = d.name.elements[0];
   if (!ts.isBindingElement(a) || !ts.isIdentifier(a.name)) fail(d, "state variable must be an identifier");
   const name = a.name.text;
@@ -854,11 +864,18 @@ function effectDepVals(d: ts.Expression, env: Env, at: ts.Expression, via: strin
   if (b?.k === "jsx") return ["VReact.DepVal.obj"];
   // the variable the path starts with, when it is declared outside the component
   let root: ts.Expression = e;
-  while (ts.isPropertyAccessExpression(root) || ts.isParenthesizedExpression(root)) root = root.expression;
+  let first: ts.Expression | null = null; // the link right after the root (`L.K` in `L.K.f`)
+  while (ts.isPropertyAccessExpression(root) || ts.isParenthesizedExpression(root)) {
+    if (ts.isPropertyAccessExpression(root)) first = root;
+    root = root.expression;
+  }
   const rs = ts.isIdentifier(root) ? symbolOf(env, root) : undefined;
   if (rs && !env.vars.has(rs)) {
     // (and `undefined`, a non-writable global: always the same value)
     if (globalOf(env, root) || (root === e && isGlobal(env, root, "undefined"))) return [];
+    // `L.K`, L a verified module's namespace: K is that module's top-level declaration, as
+    // `import { K }` gives it — created once, the same at every render
+    if (first && nsMember(env, first)?.g) return [];
     const decl = env.comp!.info.decl;
     const inComp = (x: ts.Node): boolean => {
       for (let n: ts.Node | undefined = x; n; n = n.parent) if (n === decl) return true;

@@ -237,6 +237,16 @@ export interface Env {
 /** The module of the contract functions and `int`. */
 export const SPEC_MODULE = "vreact/spec";
 /** This tool's own declarations of vreact/spec (real path). */
+/** The real directory of a file (its own path's directory when it cannot be resolved). */
+function realDir(f: string): string {
+  try {
+    return path.dirname(fs.realpathSync(f));
+  } catch {
+    return path.dirname(path.resolve(f));
+  }
+}
+/** TypeScript's lib directory (real path): where its standard library files are. */
+const TS_LIB_DIR = realDir(ts.getDefaultLibFilePath({}));
 const OWN_SPEC = (() => {
   const p = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "spec", "index.d.ts");
   try {
@@ -335,7 +345,15 @@ export class Program {
    * vreact's own spec declarations (however the project resolves them): not the project's.
    */
   isLibraryFile(sf: ts.SourceFile): boolean {
-    return this.tsProgram.isSourceFileDefaultLibrary(sf) || this.tsProgram.isSourceFileFromExternalLibrary(sf) || path.resolve(sf.fileName) === OWN_SPEC;
+    return this.isDefaultLib(sf) || this.tsProgram.isSourceFileFromExternalLibrary(sf) || path.resolve(sf.fileName) === OWN_SPEC;
+  }
+  /**
+   * A file of TypeScript's own standard library (`lib.*.d.ts` in TypeScript's lib directory).
+   * `Program.isSourceFileDefaultLibrary` alone also answers true for any declaration file with
+   * `/// <reference no-default-lib="true"/>`, which a project file could use to pass as the library.
+   */
+  isDefaultLib(sf: ts.SourceFile): boolean {
+    return this.tsProgram.isSourceFileDefaultLibrary(sf) && realDir(sf.fileName) === TS_LIB_DIR;
   }
   isReactFile(sf: ts.SourceFile): boolean {
     return this.isLibraryFile(sf) && REACT_FILE_RE.test(sf.fileName);
@@ -349,7 +367,7 @@ export class Program {
    */
   isLibSymbol(s0: ts.Symbol | undefined): boolean {
     const s = this.resolve(s0);
-    return !!s && this.declaredIn(s, (f) => this.isLibraryFile(f)) && s.declarations!.some((d) => this.tsProgram.isSourceFileDefaultLibrary(d.getSourceFile()));
+    return !!s && this.declaredIn(s, (f) => this.isLibraryFile(f)) && s.declarations!.some((d) => this.isDefaultLib(d.getSourceFile()));
   }
   /** The symbol an import alias stands for (other symbols unchanged). */
   resolve(s: ts.Symbol | undefined): ts.Symbol | undefined {

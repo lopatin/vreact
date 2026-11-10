@@ -1575,7 +1575,10 @@ hook rules hold (static checks). For every function: its body is safe and its
   `declare …`, `declare global`, `declare module`, namespaces and a project file
   in the program that is not a VTS source (a `.d.ts` reached by `/// <reference
   path>`, tsconfig `typeRoots`/`types`/`paths`) are rejected, as is
-  `/// <reference no-default-lib="true"/>`. What JSX means is configured as
+  `/// <reference no-default-lib="true"/>` (TypeScript takes any declaration file
+  carrying it for its standard library; vreact takes only the files in TypeScript's own
+  lib directory as the standard library, so such a project file is rejected as a
+  project file in the program). What JSX means is configured as
   well: only `"jsx": "react-jsx"` (React 18's automatic runtime) is accepted — no
   other `jsxImportSource`, no `@jsx…` pragmas (in any comment and any letter
   case: esbuild and Babel read them anywhere in a file, TypeScript in its leading
@@ -1649,7 +1652,7 @@ hook rules hold (static checks). For every function: its body is safe and its
   sources are the `.ts`/`.tsx` files of `"src"` (vreact.json), except declaration
   files, tests (a name containing `.test.` or `.spec.`), files in `node_modules`
   or in a directory whose name starts with `.`, and those listed in `"exclude"`
-  — or exactly the files listed in `"include"`; a verified file that imports one
+  — or exactly the files listed in `"include"` (`.ts`/`.tsx` sources only); a verified file that imports one
   of the skipped files is rejected (saying why it was skipped). A skipped file
   that nothing imports is not checked and not mentioned in the report.
 * **The JS runtime model** (`JS.lean`, `JSMap.lean`): e.g. that `Array.prototype.slice` behaves

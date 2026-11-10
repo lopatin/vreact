@@ -76,7 +76,12 @@ export function loadConfig(root: string, only?: string[]): Config {
       } else if (isSourceName(f) && !exclude.has(p)) files.push(p);
     }
   };
-  if (pc.include) for (const inc of pc.include) files.push(path.resolve(root, inc));
+  // (only TypeScript sources: a .js/.jsx file under allowJs gets its types from JSDoc comments,
+  // `/** @type {T} */ (e)` casts the translator never sees)
+  if (pc.include) for (const inc of pc.include) {
+    if (!isSourceName(inc)) throw new Error(`${path.join(root, "vreact.json")}: "include" lists ${inc}, which is not a VTS source: only .ts and .tsx files (not .d.ts, .js, .jsx or tests) can be verified`);
+    files.push(path.resolve(root, inc));
+  }
   else walk(srcDir);
   return {
     root,
