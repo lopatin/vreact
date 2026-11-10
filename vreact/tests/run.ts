@@ -15,6 +15,8 @@
  * one (a file `NO_TSCONFIG` means none); the header of its first source file applies. Files in
  * `smuggled/` replace the proof files of the same name in the generated project after the
  * translation (a proof the whitelist would reject: the report must stay honest regardless).
+ * A case whose header is `// expect: synth …` runs `vreact synth` on its (first) source file, in
+ * its own project, instead of verifying it (see `synthCase` for its tokens).
  */
 import fs from "node:fs";
 import path from "node:path";
@@ -26,6 +28,7 @@ import { translate, moduleNs } from "../src/module.ts";
 import { parseMessages, judge, findMarkers, leanDecls, leanBin, runLake, summarizeLeanError } from "../src/lean.ts";
 import { editorProject, LAKEFILE_MARKER } from "../src/ide.ts";
 import { argText, nodeText, exprText } from "../src/util.ts";
+import { synthCommand, type SynthResult } from "../src/synth.ts";
 import { honestyChecks } from "./honesty.ts";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -76,7 +79,7 @@ for (const c of cases.filter((c) => c.expect[0] === "reject")) {
 
 // verified / fail cases: one Lean build
 console.log("semantic cases (Lean)");
-const sem = cases.filter((c) => c.expect[0] !== "reject");
+const sem = cases.filter((c) => c.expect[0] !== "reject" && c.expect[0] !== "synth");
 const dir = path.join(work, "semantic");
 project(dir, sem.map((c) => c.file));
 const r = sem.length || !only.length ? verify(loadConfig(dir), { json: true }) : null;
@@ -423,6 +426,85 @@ console.log("message attribution (judge)");
   else bad("leanDecls keywords", `expected ${want}, got ${got}`);
 }
 
+/**
+ * `// expect: synth <token…>`: `vreact synth` on the case's source file `file` (in project `dir`).
+ * Tokens: `write` (--write), `size=N` (the largest candidate size), `seconds=N` (the search time
+ * of one hole), `<Fn>=<fill>` (the proved fill of the first hole of function Fn; `<Fn>#k=<fill>`
+ * of its k-th; `-`: none proved), `<Fn>.status=<status>` (of each hole of Fn), `out=<text>` /
+ * `noout=<text>` (synth's output contains / does not contain the text), `written=<text>` /
+ * `absent=<text>` (the file's code, without its `//` comments, contains / does not contain it after
+ * the run), `unchanged` (the file is as before), `maxsecs=N` (the run took less than N seconds).
+ * `~` stands for a space.
+ */
+async function synthCase(name: string, dir: string, file: string, expect: string[]) {
+  const num = (k: string) => {
+    const t = expect.find((x) => x.startsWith(`${k}=`));
+    return t === undefined ? undefined : Number(t.slice(k.length + 1));
+  };
+  const seconds = num("seconds");
+  const opts = { write: expect.includes("write"), maxSize: num("size"), timeLimitMs: seconds === undefined ? undefined : seconds * 1000 };
+  const src = path.join(dir, "src", file);
+  const before = fs.readFileSync(src, "utf8");
+  const lines: string[] = [];
+  const log = console.log;
+  console.log = (...a: unknown[]) => void lines.push(a.join(" "));
+  let res: SynthResult[] = [];
+  const t0 = Date.now();
+  const exitCode = process.exitCode;
+  try {
+    res = await synthCommand(dir, [path.join("src", file)], opts);
+  } catch (e) {
+    lines.push(`synth threw: ${(e as Error).stack}`);
+  } finally {
+    console.log = log;
+    process.exitCode = exitCode;
+  }
+  const secs = (Date.now() - t0) / 1000;
+  const out = lines.join("\n");
+  const after = fs.readFileSync(src, "utf8");
+  const afterCode = after.replace(/\/\/.*$/gm, "");
+  const why: string[] = [];
+  if (out.includes("synth threw: ")) why.push(out.slice(out.indexOf("synth threw: ")));
+  for (const t of expect.slice(1)) {
+    const at = t.indexOf("=");
+    if (at < 0) {
+      if (t === "unchanged" && after !== before) why.push("the file was written");
+      else if (t !== "write" && t !== "unchanged") why.push(`unknown synth token ${t}`);
+      continue;
+    }
+    const [k, v0] = [t.slice(0, at), t.slice(at + 1)];
+    const v = v0.replace(/~/g, " ");
+    if (["size", "seconds"].includes(k)) continue;
+    if (k === "out" && !out.includes(v)) why.push(`expected the output to mention "${v}"`);
+    else if (k === "noout" && out.includes(v)) why.push(`expected the output not to mention "${v}"`);
+    else if (k === "written" && !afterCode.includes(v)) why.push(`expected the file to contain "${v}" after the run, got:\n${after}`);
+    else if (k === "absent" && afterCode.includes(v)) why.push(`expected the file not to contain "${v}" after the run, got:\n${after}`);
+    else if (k === "maxsecs" && !(secs < Number(v))) why.push(`expected the run to take less than ${v}s, it took ${secs.toFixed(0)}s`);
+    else if (k.endsWith(".status")) {
+      const rs = res.filter((r) => r.fn === k.slice(0, -7));
+      if (!rs.length || !rs.every((r) => r.status === v)) why.push(`${k}: expected ${v}, got ${rs.map((r) => r.status).join(", ") || "no result"}`);
+    } else if (!["out", "noout", "written", "absent", "maxsecs"].includes(k)) {
+      const m = /^(.*?)(?:#(\d+))?$/.exec(k)!;
+      const r = res.filter((x) => x.fn === m[1])[m[2] ? Number(m[2]) - 1 : 0];
+      const got = r?.proved ? r.solution : "-";
+      if (!r) why.push(`no result for ${k}`);
+      else if (got !== v) why.push(`${k}: expected ${v === "-" ? "no proved fill" : v}, got ${got === "-" ? `none (${r.status}: ${r.note ?? ""})` : got}`);
+    }
+  }
+  if (!why.length) ok(name, `synth: ${expect.slice(1).join(" ")}  (${secs.toFixed(0)}s)`);
+  else bad(name, `${why.join("; ")}\n--- synth output:\n${out}`);
+}
+
+// synth cases given as single files: each in its own project
+const synthFiles = cases.filter((c) => c.expect[0] === "synth");
+if (synthFiles.length) console.log("synthesis cases");
+for (const c of synthFiles) {
+  const d = path.join(work, c.name);
+  fs.rmSync(d, { recursive: true, force: true });
+  project(d, [c.file]);
+  await synthCase(c.name, d, c.file, c.expect);
+}
+
 // directory cases: each is its own project
 const dirCases = fs.readdirSync(casesDir).filter((f) => fs.statSync(path.join(casesDir, f)).isDirectory() && selected(f)).sort();
 if (dirCases.length) console.log("multi-file cases (own project each)");
@@ -444,6 +526,10 @@ for (const name of dirCases) {
   if (fs.existsSync(path.join(src, "vreact.json"))) fs.copyFileSync(path.join(src, "vreact.json"), path.join(dir, "vreact.json"));
   if (fs.existsSync(path.join(src, "tsconfig.json"))) fs.copyFileSync(path.join(src, "tsconfig.json"), path.join(dir, "tsconfig.json"));
   else if (!fs.existsSync(path.join(src, "NO_TSCONFIG"))) fs.writeFileSync(path.join(dir, "tsconfig.json"), tsconfig);
+  if (expect[0] === "synth") {
+    await synthCase(name, dir, files[0], expect);
+    continue;
+  }
   if (expect[0] === "reject") {
     // several expected messages are separated by ` ;; `; a message is also matched with its
     // location (`proofs/m.lean:4:1: …`, relative to the case's project)

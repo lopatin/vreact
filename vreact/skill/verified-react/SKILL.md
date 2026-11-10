@@ -87,9 +87,16 @@ change (it is incremental and usually takes seconds).
    `xs.filter(x => x.k !== v)`, `xs.map(x => x.k === v ? { ...x, f: e } : x)`,
    calls of the module's total helpers (generic ones at the hole's types),
    `± 1` and comparisons — smallest first,
-   up to size 9. Each hole costs up to ~60 s of search plus up to 5 Lean checks
+   up to size 9. Each hole costs up to ~60 s of search (the limit holds while a
+   candidate is tested; one candidate's tests get at most 5 s, a slower one is
+   dropped) plus up to 5 Lean checks
    of candidates that pass the random tests; a function with n holes takes up
-   to about n times that. Guarded updates (`if … return s;`)
+   to about n times that. Holes go in code only: a hole inside a contract
+   (`requires`, `ensures`, `invariant`, `decreases`, `callbackRequires`,
+   `assert`, `assume`) is never filled — the contract is what the holes are
+   filled against, so a fill proved against it could be vacuous
+   (`requires(false)`) — and its function is not searched: write the contract
+   by hand. Guarded updates (`if … return s;`)
    are not in the grammar: write the guard by hand and leave a hole in each
    branch (or `case`) — the holes of one function are filled and proved
    together (holes in different branches or cases are searched once each,
@@ -98,10 +105,14 @@ change (it is incremental and usually takes seconds).
    `relative_to` under `--json` — means the proof assumes those @trusted
    contracts or `assume(…)` facts. A `? not proved` line names what kept Lean
    from checking it (often a failing obligation elsewhere in the module or an
-   import: fix that first); a contract whose statement depends on a function
+   import: fix that first; when it is a helper the candidate calls, the
+   candidates that do not call it are tried next); a contract whose statement depends on a function
    that still has a hole (through calls, their bodies and `requires`; not
    through `@trusted` bodies) is reported as such: fill that function first. Synth never edits the
-   file while searching; `--write` writes only proved fills. Maps and Sets only grow in its
+   file while searching; `--write` writes only proved fills (and drops the imports, and the
+   file's own non-exported types, that only the filled `hole<T>()` calls used: Lean checks that
+   exact text). A field whose name is not an identifier (`"my-field"`) is never read (VTS has no
+   `p["my-field"]`). Maps and Sets only grow in its
    grammar (`new Map(m).set(k, v)`, `new Set(s).add(x)`): a fill that deletes is written by
    hand. The random tests are reproducible: each hole's inputs come from a seeded generator
    (`--seed N` picks another seed, default 1), so two runs test the same inputs and print the
