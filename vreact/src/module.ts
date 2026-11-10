@@ -21,7 +21,7 @@ import { Program, ModCtx, SPEC_MODULE, moduleFile, isErasedType, type Obligation
 import { T, type VType, typeOfNode, typeOfDecl, emitTypeDecl, leanType, nonValuePart, checkValueType, registerTypeParams, showType } from "./types.ts";
 import { VtsError, fail, leanIdent, leanField, leanStr, paren, capitalize, nodeText, exprText, clashesWithLean } from "./util.ts";
 import { LEAN_TYPE_AUX, LEAN_ROOT_NAMES } from "./leanNames.ts";
-import { expr, prop, propAll, valueBlock, specFn, symbolOf, bindParam, typeOf, checkParamAnnotation, checkNotThisParam, numericLiteralType } from "./translate.ts";
+import { expr, prop, propAll, valueBlock, specFn, symbolOf, bindParam, typeOf, checkParamAnnotation, checkNotThisParam, numericLiteralType, checkClosures } from "./translate.ts";
 import { translateComponent, compSignature, baseEnv } from "./component.ts";
 import { leanDecls, checkProofFiles, headerImports } from "./lean.ts";
 import { manifestMatches } from "./ide.ts";
@@ -1541,6 +1541,9 @@ function docText(node: ts.Node, max: number): string {
 
 function translateConst(d: ts.VariableDeclaration, info: ConstInfo, m: ModCtx): string {
   const env = baseEnv(m);
+  // closures in the initialiser (`[1].every((x) => { let y = 1; const g = () => y; y = 2; … })`)
+  // must agree with JS, as in a function body
+  checkClosures(d.initializer!, env);
   const v = expr(d.initializer!, env, info.type);
   const short = leanIdent((d.name as ts.Identifier).text);
   // transparent constants are unfolded by automation; @opaque ones only through their facts
@@ -1553,6 +1556,7 @@ function translateFact(d: ts.VariableDeclaration, info: ConstInfo, k: number, m:
   const short = leanIdent((d.name as ts.Identifier).text);
   const f = info.facts[k];
   const name = k === 0 ? `${short}.post` : `${short}.post${k + 1}`;
+  checkClosures(f, env);
   const stmt = prop(f, env);
   // (`unfold` fails where the statement does not mention the constant)
   const unfold = stmt.includes(info.qname) ? `\n  unfold ${short}` : "";
@@ -1627,6 +1631,7 @@ function translateFunction(fn: ts.FunctionDeclaration, info: FnInfo, m: ModCtx):
   const hypNames: string[] = [];
   const reqs: ts.Expression[] = [];
   const posts: { lam: ts.ArrowFunction | ts.FunctionExpression }[] = [];
+  const contractStmts: ts.Statement[] = [];
   while (stmts.length && ts.isExpressionStatement(stmts[0]) && ts.isCallExpression(stmts[0].expression)) {
     const c = stmts[0].expression;
     const sf = specFn(env, c.expression);
@@ -1640,7 +1645,7 @@ function translateFunction(fn: ts.FunctionDeclaration, info: FnInfo, m: ModCtx):
     } else if (sf === "decreases") {
       fail(c, "recursion is not supported yet");
     } else break;
-    stmts.shift();
+    contractStmts.push(stmts.shift()!);
   }
   // a call of the function in its own `requires` is recursion: JS evaluates the condition on every
   // call (also of a @trusted function), and the precondition is part of the function's Lean
@@ -1651,6 +1656,10 @@ function translateFunction(fn: ts.FunctionDeclaration, info: FnInfo, m: ModCtx):
     const c = selfCall(r);
     if (c) fail(c, `recursion is not supported yet: the requires of ${info.name} calls ${info.name} (JS evaluates it on every call)`);
   }
+  // the contracts of a @trusted function are translated although its body is not: closures in
+  // them (a block-bodied every/some callback, read as code) must agree with JS, as in a verified
+  // body (whose check, in valueBlock, covers its contracts too)
+  if (info.trusted && fn.body) checkClosures(fn.body, env, contractStmts);
   // all requires form one precondition (each guarded by the earlier ones): call sites pass one proof
   if (reqs.length) {
     hyps.push(`(h_pre : ${propAll(reqs, env)})`);

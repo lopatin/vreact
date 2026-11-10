@@ -188,9 +188,13 @@ function isImmediateFn(fn: ts.ArrowFunction | ts.FunctionExpression, env: Env): 
  * The two agree exactly when (a) no function that runs later reads a `let`
  * that may be reassigned after the function was created, and (b) no function
  * assigns a `let` declared outside it.  Both are checked here for one
- * top-level function or component body (a `let` is only visible inside it).
+ * top-level function or component body (a `let` is only visible inside it), or for
+ * whatever else is translated: a constant's initialiser, a module-level fact.  Of a
+ * `@trusted` declaration only some statements are translated (its contracts, a
+ * component's initial state): `only` lists them, the writes being collected in the
+ * whole `body` (and the Map/Set rules applied to each of them on its own).
  */
-export function checkClosures(body: ts.Node, env: Env) {
+export function checkClosures(body: ts.Node, env: Env, only?: readonly ts.Node[]) {
   const checker = env.m.checker;
   const writes = new Map<ts.Symbol, ts.Node[]>();
   const collectWrites = (n: ts.Node) => {
@@ -237,8 +241,8 @@ export function checkClosures(body: ts.Node, env: Env) {
     }
     ts.forEachChild(n, visit);
   };
-  visit(body);
-  checkCollectionMutation(body, env);
+  for (const n of only ?? [body]) visit(n);
+  for (const n of only ?? [body]) checkCollectionMutation(n, env);
 }
 
 /* ───────────────────── Map / Set: mutation and aliasing ───────────────────── */
@@ -3711,17 +3715,20 @@ export function prop(e0: ts.Expression, env: Env): string {
       const a = prop(args[0], env);
       return `(${a} → ${prop(args[1], env)})`;
     }
-    if (sf === "forall" || sf === "exists") {
-      arity(e, sf, 3, 3);
+    // `forall(lo, hi, (i) => condition)` (an arrow with one parameter and an expression body) is a
+    // quantifier read as a contract, its body under the bounds.  Any other callback — a block body
+    // `(i) => { …; return c; }`, a `function (i) { … }`, no parameter — is left to the code reading
+    // (the calls JS makes, `rangeFrom lo hi`.all/any), as for every/some below; the bounds are not
+    // translated here first (their obligations would be registered twice)
+    const qfn = (sf === "forall" || sf === "exists") && args.length === 3 ? stripParens(args[2]) : undefined;
+    if ((sf === "forall" || sf === "exists") && qfn && ts.isArrowFunction(qfn) && qfn.parameters.length === 1 && !ts.isBlock(qfn.body)) {
       const lo = expr(args[0], env, T.int);
       const hi = expr(args[1], env, T.int);
-      const fn = args[2];
-      if (!fn || !(ts.isArrowFunction(fn) || ts.isFunctionExpression(fn)) || fn.parameters.length !== 1) fail(e, `${sf}(lo, hi, (i) => …)`);
+      const fn = qfn;
       const r = bindParam(fn.parameters[0].name, T.int, env, env.m.checker.getNumberType());
-      if (ts.isBlock(fn.body)) fail(fn.body, "quantifier body must be an expression");
       const i = r.binder;
       const before = env.m.obCount();
-      const body = prop(fn.body, r.env);
+      const body = prop(fn.body as ts.Expression, r.env);
       const guarded = env.m.obCount() > before;
       if (sf === "forall") {
         if (!guarded) return `(∀ ${i} : Int, ${paren(lo.code)} ≤ ${i} → ${i} < ${paren(hi.code)} → ${body})`;
@@ -3759,30 +3766,36 @@ export function prop(e0: ts.Expression, env: Env): string {
       }
     }
     if (ts.isPropertyAccessExpression(e.expression) && ["every", "some", "includes"].includes(e.expression.name.text)) {
-      const xs = expr(e.expression.expression, env);
-      if (xs.type.k === "arr") {
-        const mname = e.expression.name.text;
-        if (mname === "includes") {
-          arity(e, "includes", 1, 1, "a fromIndex is not supported: write xs.slice(k).includes(v)");
-          if (nullishSearch(e, e.expression.expression, xs.type.elem, args[0], "includes", env)) return `(none ∈ ${paren(xs.code)})`;
-          checkPrimitiveElems(e, e.expression.expression, xs.type.elem, "includes", env);
-          return `(${expr(args[0], env, xs.type.elem).code} ∈ ${paren(xs.code)})`;
+      const mname = e.expression.name.text;
+      // `xs.every((x) => condition)` (one argument: an arrow with one parameter and an expression
+      // body) is a quantifier read as a contract, its body under the membership.  Any other
+      // callback — a block body `(x) => { …; return c; }`, a `function (x) { … }`, no parameter,
+      // an index parameter, a thisArg — is left to the code reading below (as in a handler: the
+      // calls JS makes on the elements; `implies` in it evaluates both arguments), which also
+      // rejects what it does not model; the receiver is not translated here first (its
+      // obligations would be registered twice)
+      const fn = args.length === 1 ? stripParens(args[0]) : undefined;
+      const quantifier = !!fn && ts.isArrowFunction(fn) && fn.parameters.length === 1 && !ts.isBlock(fn.body);
+      if (mname === "includes" || quantifier) {
+        const xs = expr(e.expression.expression, env);
+        if (xs.type.k === "arr") {
+          if (mname === "includes") {
+            arity(e, "includes", 1, 1, "a fromIndex is not supported: write xs.slice(k).includes(v)");
+            if (nullishSearch(e, e.expression.expression, xs.type.elem, args[0], "includes", env)) return `(none ∈ ${paren(xs.code)})`;
+            checkPrimitiveElems(e, e.expression.expression, xs.type.elem, "includes", env);
+            return `(${expr(args[0], env, xs.type.elem).code} ∈ ${paren(xs.code)})`;
+          }
+          const f = fn as ts.ArrowFunction;
+          const r = bindParam(f.parameters[0].name, xs.type.elem, env, elemTsType(e.expression.expression, env) ?? undefined);
+          const before = env.m.obCount();
+          const body = prop(f.body as ts.Expression, r.env);
+          const x = r.binder;
+          if (env.m.obCount() === before) return mname === "every" ? `(∀ ${x} ∈ ${paren(xs.code)}, ${body})` : `(∃ ${x} ∈ ${paren(xs.code)}, ${body})`;
+          const hm = env.m.fresh("hmem");
+          return mname === "every"
+            ? `(∀ ${x}, ∀ (${hm} : ${x} ∈ ${paren(xs.code)}), ${body})`
+            : `(∃ ${x}, ∃ (${hm} : ${x} ∈ ${paren(xs.code)}), ${body})`;
         }
-        arity(e, mname, 1, 1, "a thisArg argument is not supported");
-        const fn = args[0];
-        noIndexParam(mname, fn);
-        if (!fn || !(ts.isArrowFunction(fn) || ts.isFunctionExpression(fn)) || fn.parameters.length !== 1 || ts.isBlock(fn.body)) {
-          fail(e, `${mname}((x) => condition) with an expression body`);
-        }
-        const r = bindParam(fn.parameters[0].name, xs.type.elem, env, elemTsType(e.expression.expression, env) ?? undefined);
-        const before = env.m.obCount();
-        const body = prop(fn.body as ts.Expression, r.env);
-        const x = r.binder;
-        if (env.m.obCount() === before) return mname === "every" ? `(∀ ${x} ∈ ${paren(xs.code)}, ${body})` : `(∃ ${x} ∈ ${paren(xs.code)}, ${body})`;
-        const hm = env.m.fresh("hmem");
-        return mname === "every"
-          ? `(∀ ${x}, ∀ (${hm} : ${x} ∈ ${paren(xs.code)}), ${body})`
-          : `(∃ ${x}, ∃ (${hm} : ${x} ∈ ${paren(xs.code)}), ${body})`;
       }
     }
   }

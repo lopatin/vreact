@@ -367,7 +367,10 @@ that runs later (helper arrow, handler, callback prop, `setX(prev => …)`, effe
 timer, cleanup, `useCallback`) may not read a `let` that is reassigned after the
 function is created — copy it first: `const capNow = cap;`. No function or
 callback (array callbacks included) may assign a `let` declared outside it —
-use `for…of` or `reduce`. Array callbacks may read outer `let`s.
+use `for…of` or `reduce`. Array callbacks may read outer `let`s. This holds
+wherever code is translated: also in contracts, constant initialisers and
+`assert(…)` facts, and in the contracts and initial state of a `@trusted`
+declaration (its body is not checked).
 
 ## Contracts
 
@@ -395,7 +398,10 @@ only the action (React may apply a queued action to any state): it becomes a
 guards are in scope as JS evaluates them: the right side of `&&` / `||`, the
 branches of `?:`, and quantifier bodies
 (`forall(0, xs.length, (i) => xs[i] >= 0)`, `xs.every((r) => r[0] > 0)`) may index
-under their guard.
+under their guard. Only `xs.every`/`xs.some` with `(x) => condition` and
+`forall`/`exists` with `(i) => condition` (an expression body) are such quantifiers;
+another callback (`(x) => { …; return c; }`, `function (x) { … }`) is read as code,
+as in a handler (where `implies(a, b)` evaluates both arguments).
 
 `implies(a, b)` is a function call, so JS evaluates `b` even when `a` is false. The
 arguments of `requires`, `invariant`, `assert`, `assume` and a module-level

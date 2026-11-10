@@ -542,7 +542,12 @@ Every expression maps to a Lean term whose value is the JavaScript value.
   or `useMemo` function that reads a local declared after the hook call is
   rejected: its dependency array cannot list it (temporal dead zone), so React
   could keep the function of an earlier render (the `useMemo` factory runs at the
-  call: a ReferenceError).
+  call: a ReferenceError). The checks cover everything that is
+  translated: the bodies of components and functions (their contracts included),
+  constant initialisers and module-level `assert(…)` facts, and of a `@trusted`
+  declaration, whose body is not translated, its contracts (`requires`, `ensures`,
+  `invariant`, `callbackRequires`) and a component's initial state (`useState` /
+  `useReducer` arguments), since its axioms state them.
 * A DOM handler's event parameter is `DomEvent` (`e.target.value`,
   `e.currentTarget.value`, `e.target.checked`, `e.key`: arbitrary values, fixed for
   the run of the handler). This describes JS only while the handler's own
@@ -609,6 +614,10 @@ and `xs.every(x => p)` as `∀ x, ∀ (h : x ∈ xs), p`, so an index obligation
 `p`, … sees its guard (JS calls a quantifier body only for `lo ≤ i < hi`, or for
 the array's elements; `distinct`'s key function runs on every element, and its
 obligations are proved for every value of its parameter).
+An `every`/`some` callback other than `x => p`, and a `forall`/`exists` callback
+other than `i => p`, such as a block body `x => { …; return p; }` or a
+`function (x) { … }`, is read as code: the calls JS makes on the elements, or for
+`lo ≤ i < hi`.
 
 `implies(a, b)` is a function call (vreact/spec: `return !a || b`), so JS evaluates
 `b` whatever `a` is. `requires(c)`, `invariant(c)`, `assert(c)`, `assume(c)` and a

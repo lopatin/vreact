@@ -269,8 +269,10 @@ export function translateComponent(fn: ts.FunctionDeclaration, info: CompInfo, m
   }
   const body = fn.body;
   if (!body) fail(fn, "component without body");
-  // closures (handlers, effects, updaters, callbacks) over render-local `let`s must agree with JS
-  if (!info.trusted) checkClosures(body, env);
+  // closures (handlers, effects, updaters, callbacks) over render-local `let`s must agree with JS;
+  // of a @trusted component, in what is translated although its render is not (its contracts
+  // and initial state: a block-bodied every/some callback there is read as code)
+  checkClosures(body, env, info.trusted ? body.statements.filter((s) => prepassTranslates(s, env)) : undefined);
   const pp = prepass(body.statements, env, comp, m);
   comp.stateVars = pp.stateVars;
   deferredFields.set(comp, computeDeferred(body, comp, env));
@@ -604,6 +606,25 @@ function prepass(stmts: readonly ts.Statement[], env: Env, comp: CompCtx, m: Mod
   if (reqs.length) pp.pre.push(propAll(reqs, { ...env, limits: PRE_LIMITS }));
   if (invs.length) pp.inv.push(propAll(invs, stateEnv));
   return pp;
+}
+
+/**
+ * Does `prepass` translate (part of) this statement of a component body?  Its contracts
+ * (`requires`, `invariant`, `callbackRequires`: any spec call, the others being rejected) and its
+ * `useState` / `useReducer` declarations (the initial state).  For a @trusted component, whose
+ * render is not translated, these are the statements `checkClosures` must cover.
+ */
+function prepassTranslates(s: ts.Statement, env: Env): boolean {
+  if (ts.isExpressionStatement(s) && ts.isCallExpression(s.expression)) return !!specFn(env, s.expression.expression);
+  if (ts.isVariableStatement(s)) {
+    return s.declarationList.declarations.some((d) => {
+      const init = d.initializer && stripParens(d.initializer);
+      if (!init || !ts.isCallExpression(init)) return false;
+      const h = hookName(env, init.expression);
+      return h === "useState" || h === "useReducer";
+    });
+  }
+  return false;
 }
 
 /**
