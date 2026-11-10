@@ -40,7 +40,9 @@ missing. All the app needs from npm is that `vreact` (and `react`, `@types/react
 resolve from its folder — `npm i <tool>` or a symlinked `node_modules` both work. The app needs `"strict": true`, `"jsx": "react-jsx"` and `"lib": ["ES2023", "DOM"]` in tsconfig (no other
 `jsxImportSource`, no JSX pragmas, no `@ts-ignore`/`@ts-expect-error`/`@ts-nocheck` in verified files) and `vreact.json`
 (`{"src":"src","exclude":["main.tsx"],"proofs":"proofs","out":".vreact"}`).
-Keep `main.tsx` (createRoot) outside the verified program.
+Keep `main.tsx` outside the verified program, and mount the app with `createRoot` (or
+`hydrateRoot`): certificates assume React 18's concurrent root, whose automatic batching
+the model has; a legacy `ReactDOM.render` root renders between two setters of a timer.
 
 Lean editors (WebStorm/IntelliJ with `lean4ij`, VS Code with the Lean 4 extension):
 `setup.sh /path/to/app` and every `vreact verify` write `lean-toolchain` (the tool's Lean
@@ -197,7 +199,13 @@ export function ItemList(props: ItemListProps) {
   A click's activation counts too: no `onClick` on, around or inside a submit
   button of a form with `onSubmit` (use `type="button"`) or a `<label>`, and no
   `<label>` or nested button inside such a submit button.
-  `onFocus`/`onBlur`/`onInvalid` must be robust (no parent callbacks).
+  `onFocus`/`onBlur`/`onInvalid` must be robust (no parent callbacks), and the focus
+  handlers of an `autoFocus` element, or of an element around one, may not update state.
+* `name`/`id` of form controls, `<img>`, `<object>`, `<form>`, `<iframe>`, `<embed>`:
+  not a property name of forms or the document (`parentNode`, `submit`, `title`,
+  `name`, `value`, `type`, …) nor `_…`, and statically bounded (a literal, a choice
+  between literals, an enum, or a string with a literal part holding a character other
+  than letters, digits, `_`, `$`: `` `qty-${id}` ``).
 
 ## Reading results
 

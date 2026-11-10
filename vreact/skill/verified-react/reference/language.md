@@ -563,7 +563,12 @@ checked from the render snapshot; continuous (`onMouseMove`, `onScroll`,
 `onAnimationEnd`, `onLoad`, `onError`, media events, …) must be robust and may
 not call parent callbacks — and so must `onFocus`, `onBlur` and `onInvalid`: the
 DOM also fires them inside another event's batch (`autoFocus`, a label click
-focusing its control, form validation). In a component with such handlers or with effects /
+focusing its control, form validation). The focus handlers (`onFocus`, `onBlur`,
+the composition handlers) of an `autoFocus` element, and of an element around one,
+may not update state at all: React focuses it inside the commit that mounts it and
+commits their updates at once, and if that mounts an `autoFocus` element again
+(`key={n}`, a condition on the state) the chain ends in "Maximum update depth
+exceeded" thrown from the setter. In a component with such handlers or with effects /
 timers that set state, discrete handlers and callbacks passed to children must
 also be safe when React rebases them onto those pending updates (guard inside the
 functional update: `setR(p => p.lo < p.hi ? … : p)`). Rejected: unknown handler
@@ -633,6 +638,22 @@ rejected: a `children=` attribute (it is the element's children), `contentEditab
 `value`/`defaultValue` other than `""` on an `<input>` that may be `type="file"`
 (setting a file input's value throws): its `type` must be a string, a choice
 between strings (`show ? "text" : "password"`) or an enum, without `"file"`.
+`name` and `id` are checked against HTML's named access, which makes a form's
+`form.x` its control named (or with id) `x`, and `document.x` an `<iframe>`, `<form>`,
+`<object>` or `<embed>` named `x`, before their own properties — React reads
+`form.parentNode`, `form.removeChild`, `document.createElement`, …: on `<input>`,
+`<button>`, `<select>`, `<textarea>`, `<output>`, `<fieldset>`, `<object>`, `<img>`
+(`name`, `id`) and `<form>`, `<iframe>`, `<embed>` (`name`), a value that is a
+property name of forms or of the document (`parentNode`, `submit`, `title`, `name`,
+`action`, `length`, `elements`, `on…`, …), a name react-dom reads on them (`value`,
+`type`, `data`, `checked`, `window`, `document`, …) or a name starting with `_` is
+rejected, and so is a value VTS cannot bound: write a literal, a choice between
+literals (`c ? "a" : "b"`), an enum, or a string with a literal part that holds a
+character other than letters, digits, `_` and `$` (`` `qty-${id}` ``, `"qty-" + id`:
+no property name has one). A written `id` of any element may not be `nodeName`,
+`type`, `contentEditable`, `correspondingUseElement` or start with `_` (the window
+exposes it as a global that react-dom reads); a computed id of another element is
+not checked.
 Type keywords are matched ASCII-case-insensitively, as HTML does
 (`type="CheckBox"` is a checkbox, `type="chec&#8490;box"` with a Kelvin sign is
 not: a text input). Character

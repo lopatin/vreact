@@ -18,7 +18,8 @@ const srcApp = readFileSync(SRC + "/App.tsx", "utf8");
 
 type Post = (r: unknown) => boolean;
 const T: { posts: Post[] } = { posts: [] };
-(globalThis as any).__VREACT_TEST__ = T;
+// vreact/spec's test hook (the key `vreact synth` uses; the runtime reads no string-named global)
+(globalThis as any)[Symbol.for("vreact.spec.test")] = T;
 
 /** number of `ensures(` at the top of `export function name(` in a source file */
 function ownEnsures(src: string, name: string): number {

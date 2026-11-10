@@ -15,6 +15,9 @@
  * one (a file `NO_TSCONFIG` means none); the header of its first source file applies. Files in
  * `smuggled/` replace the proof files of the same name in the generated project after the
  * translation (a proof the whitelist would reject: the report must stay honest regardless).
+ * A file `RUNTIME.mjs` in a directory case checks what the app bundle runs: once the report meets
+ * the expectations it runs as `node RUNTIME.mjs <vreact's spec/index.js> <the case's project>`
+ * and must exit with status 0.
  */
 import fs from "node:fs";
 import path from "node:path";
@@ -494,6 +497,11 @@ for (const name of dirCases) {
     if (JSON.stringify(kinds) !== JSON.stringify(want)) why.push(`expected failures [${want.join(", ")}], got [${kinds.join(", ")}]`);
   }
   if (expect[0] === "status" && rr.failures.length) why.push(`unexpected failures: ${rr.failures.map((f) => f.where).join(", ")}`);
+  const runtime = path.join(src, "RUNTIME.mjs");
+  if (!why.length && fs.existsSync(runtime)) {
+    const p = spawnSync(process.execPath, [runtime, path.join(here, "..", "spec", "index.js"), dir], { encoding: "utf8" });
+    if (p.status !== 0) why.push(`RUNTIME.mjs failed (status ${p.status}): ${(p.stdout + p.stderr).trim().split("\n").slice(-6).join(" | ")}`);
+  }
   if (!why.length) ok(name, expect.join(" "));
   else bad(name, why.join("; "));
 }

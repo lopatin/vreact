@@ -51,6 +51,10 @@ export interface DomSite {
   tag: string;
   prop: string;
   html: boolean;
+  /** the handler may not update state (a setter or dispatch call is rejected with this message) */
+  noUpdates?: string;
+  /** set when the handler updates state (a setter or dispatch call on some path) */
+  probe?: { updated: boolean };
 }
 
 /** What a parent needs to know about a child component. */
@@ -108,6 +112,9 @@ export interface HandlerAcc {
   emit: string | null;
   /** Lean name of the event parameter (if any). */
   eventVar: string | null;
+  /** `DomSite.noUpdates` / `DomSite.probe` of the handler's element */
+  noUpdates?: string;
+  probe?: { updated: boolean };
 }
 
 export type Binding =

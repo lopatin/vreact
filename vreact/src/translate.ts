@@ -4109,6 +4109,10 @@ function handlerEffect(t: UpdTarget, c: ts.CallExpression, env: Env, rest: (e: E
   const m = env.m;
   const h = env.handler!;
   const comp = env.comp!;
+  if (t.k === "setter" || t.k === "dispatch") {
+    if (h.noUpdates) fail(c, h.noUpdates);
+    if (h.probe) h.probe.updated = true;
+  }
   if (t.k === "setter") {
     const sv = t.sv;
     const arg = c.arguments[0];
@@ -4455,7 +4459,7 @@ export function handlerFn(fnExpr: ts.Expression, env: Env, kind: "discrete" | "r
     }
   }
   if (!ts.isArrowFunction(fnExpr) && !ts.isFunctionExpression(fnExpr)) fail(fnExpr, "expected a function");
-  const acc: HandlerAcc = { kind, updates: [], emit: null, eventVar: null };
+  const acc: HandlerAcc = { kind, updates: [], emit: null, eventVar: null, ...(!Array.isArray(argTypes) ? { noUpdates: argTypes.noUpdates, probe: argTypes.probe } : {}) };
   let e1: Env = { ...env, handler: acc, curState: undefined };
   const params: string[] = [];
   if (!Array.isArray(argTypes)) {

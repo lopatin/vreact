@@ -1094,6 +1094,15 @@ interface Runner {
   run(candidate: string): RunResult;
 }
 
+/**
+ * The global vreact/spec's runtime reads its test hook from (spec/index.js): a symbol key, which
+ * the page cannot define (HTML's named access on Window can define any string-named global the
+ * window lacks: an element with that id). The hook is a plain object with `posts` (an array) and
+ * `fill`; spec/index.js ignores anything else there.
+ */
+const TEST_HOOK = Symbol.for("vreact.spec.test");
+/** where a vreact/spec runtime before the symbol key looked for it (a project's older install) */
+const LEGACY_TEST_HOOK = "__VREACT_TEST__";
 const OWN_ENSURES = "__vreactOwnEnsures__";
 const OWN_REQUIRES = "__vreactOwnRequires__";
 const TARGET = "__vreactSynthTarget__";
@@ -1109,7 +1118,7 @@ function makeRunner(sb: Sandbox, target: string, fname: string, paramTypes: VTyp
     const inst = chooseInst(rand, tparams);
     return paramTypes.map((t) => gen(rand, t, prog, pools, 0, inst));
   });
-  const g = globalThis as Record<string, unknown>;
+  const g = globalThis as Record<string | symbol, unknown>;
   return {
     run(candidate) {
       let f: (...a: unknown[]) => unknown;
@@ -1126,7 +1135,7 @@ function makeRunner(sb: Sandbox, target: string, fname: string, paramTypes: VTyp
       for (let i = 0; i < samples.length; i++) {
         const args = structuredClone(samples[i]);
         const own: ((r: unknown) => boolean)[] = [];
-        g.__VREACT_TEST__ = {
+        g[TEST_HOOK] = g[LEGACY_TEST_HOOK] = {
           posts: [], // postconditions of called helpers: not this function's contract
           fill: () => {
             throw OTHER_HOLE;
@@ -1152,7 +1161,7 @@ function makeRunner(sb: Sandbox, target: string, fname: string, paramTypes: VTyp
           if ((e as Error)?.constructor?.name === "PreconditionFailed") return { ok: false, valid, why: `a call violates a precondition on ${show(args)}`, cat: "a call violates a precondition" };
           return { ok: false, valid, why: `throws on ${show(args)}: ${(e as Error)?.message}`, cat: "throws" };
         } finally {
-          g.__VREACT_TEST__ = undefined;
+          g[TEST_HOOK] = g[LEGACY_TEST_HOOK] = undefined;
           g[OWN_ENSURES] = undefined;
           g[OWN_REQUIRES] = undefined;
         }
