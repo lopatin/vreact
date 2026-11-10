@@ -242,7 +242,9 @@ Every expression maps to a Lean term whose value is the JavaScript value.
   VERIFIED although false in JS: `RlNegZero.ts`.) React compares state and effect
   dependencies with `Object.is`, which tells `-0` from `0`; that decides only
   whether a component re-renders (with equal output) and whether an effect runs
-  again, and effects are robust (§2.6), so it does not change what is verified.
+  again, and effects are robust (§2.6), so it does not change what is verified
+  (the runtime model, §3, leaves to the run whether an effect whose int dependency
+  is 0 before and after runs again).
 * `a + b` with a string operand (by its TypeScript type) is concatenation; an
   `int`, `boolean` or enum operand is converted exactly as in a template literal
   (`-5 + "a"` is `"-5a"`); a `number` or possibly-null operand is rejected.
@@ -730,9 +732,11 @@ compose two parent outcomes that were only checked separately). Several
 
 ### 2.6 Effects
 
-`useEffect(body, deps)` runs after commit when its dependency values changed.
-Its synchronous updates and the timers it registers must be robust and may not
-call parent callbacks; `deps` must be exhaustive (otherwise stale closures;
+`useEffect(body, deps)` runs after the first commit and then after every commit
+whose render gave it a dependency that differs (`Object.is`) from the one the
+previous render gave it (React 18 `updateEffectImpl` / `areHookInputsEqual`;
+after every commit when it has no dependency array). Its synchronous updates
+and the timers it registers must be robust and may not call parent callbacks; `deps` must be exhaustive (otherwise stale closures;
 the check sees every reference, including shorthand properties `{ x }`; the same
 check applies to `useMemo` / `useCallback`). The model has no cleanup step, so a
 returned cleanup is restricted statically: it must be an inline function that
@@ -808,8 +812,24 @@ Transitions:
 | `mount`          | initialisers, render, mount children |
 | `reconcile`      | match new child elements to old instances by position/key **and component identity**: same component ⇒ keep state (`mount_keeps_state`), otherwise mount fresh (`mount_fresh_state`); removed children unmount |
 | `dispatch`       | a discrete event runs one handler of the latest render; its queue is processed; its parent-callback outcome propagates up the instance path; affected instances re-render |
-| `flushEffects`   | after commit, effects whose deps changed run (robust), timers are (re)registered |
+| `flushEffects`   | after commit, each effect whose dependency array differs from the previous render's runs (robust) and registers its timers; the render's dependencies are recorded |
 | `fireTask`       | a timer callback fires against the current state |
+
+An instance records the dependency arrays its render gave its effects at its
+last flush; a flush compares each effect's new array with the recorded one at
+the same position, one dependency at a time, as React does (`Effect.fires`,
+`depsChanged`; every effect runs at the first flush after mounting, and on every
+flush when it has no array). Where the model's values do not decide `Object.is`
+— an object, array, Map, optional value or `number` (identity, `NaN` and `-0`
+are not modelled), or an int that is 0 before and after (it may be `-0`) — and no
+other dependency of the effect changed, the `flush` action chooses whether it
+runs (`Action.flush inst rerun`), so a flush can do what React does in either
+case. The model has no cleanup step: the timers of earlier runs stay
+registered, so a run may fire a timer React cleared (more runs, not fewer).
+(Before, the flush compared each effect's dependencies with themselves, so no
+run of the model ran an effect with a dependency array a second time, nor
+registered the timers of such a run: `FaRuntimeEffectRerun`, whose proof file
+shows the re-run.)
 
 **Theorem `run_allInv`.** For every sequence of actions (user events, effect
 flushes, timer firings), every mounted instance satisfies its invariant.

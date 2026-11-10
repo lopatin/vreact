@@ -203,15 +203,37 @@ macro "vreact_noemit" : tactic =>
              try simp (config := { zetaDelta := true, failIfUnchanged := false }) only []
              all_goals ((repeat' split) <;> (first | rfl | (simp_all; done)))))
 
-/-- A dependency value of `useEffect`.  Objects are compared by identity in
-React; the model treats them as "possibly changed" (`obj`), which only makes
-effects fire more often — harmless because effect outcomes are robust. -/
+/-- A dependency value of `useEffect`: an `int`, a string, a boolean or an enum
+value (as its string), or `obj` for any other value (an object, array, Map, Set,
+optional value or `number`), whose identity (or `NaN`, `-0`) the model does not
+record. -/
 inductive DepVal where
   | int (i : Int)
   | str (s : JS.Str)
   | bool (b : Bool)
   | obj
 deriving DecidableEq, Repr
+
+/-- React's `Object.is` on two dependency values, as far as the model's values
+decide it: `some true` (the same value), `some false` (different values), or
+`none` when they do not decide it — an `obj` (identity, `NaN` and `-0` are not
+modelled), or two int zeros (an `int` that is 0 may be `0` or `-0` in JS, one
+`Int` in the model). -/
+def DepVal.same : DepVal → DepVal → Option Bool
+  | .obj, _ => none
+  | _, .obj => none
+  | .int 0, .int 0 => none
+  | a, b => some (decide (a = b))
+
+/-- Whether React's `areHookInputsEqual(next, prev)` fails, i.e. an effect with
+dependency arrays `prev` (previous render) and `next` (this render) runs again
+(React 18.3.1 `updateEffectImpl`): `Object.is` fails at some position both arrays
+have (a change of length only warns, in development).  `rerun` is what React
+found when no position is decided to differ and some position is undecided
+(`DepVal.same … = none`): in a run of the model it is a choice (`Action.flush`). -/
+def depsChanged (prev next : List DepVal) (rerun : Bool) : Bool :=
+  let r := (next.zip prev).map (fun p => DepVal.same p.1 p.2)
+  r.contains (some false) || (r.contains none && rerun)
 
 /-- A `useEffect`.  The body runs after commit when `deps` changed (always, when
 `deps = none`).  Its synchronous updates and any asynchronous callbacks it
@@ -224,13 +246,16 @@ structure Effect (S E : Type) (inv : S → Prop) where
   tasks : List (DomEvent → Outcome S E) := []
   tasks_ok : ∀ t ∈ tasks, ∀ e, Robust inv (t e) ∧ (t e).emit = none
 
-/-- Whether an effect fires, given its previous dependency values. -/
-def Effect.fires {S E inv} (eff : Effect S E inv) (prev : Option (Option (List DepVal))) : Bool :=
+/-- Whether an effect runs after a commit (React 18.3.1 `updateEffectImpl`), given
+the dependency array the previous render gave it: `prev = none` at the first commit
+after mounting, `some none` when it had no array.  `rerun` decides the cases the
+model's values leave open (`depsChanged`). -/
+def Effect.fires {S E inv} (eff : Effect S E inv) (prev : Option (Option (List DepVal))) (rerun : Bool) : Bool :=
   match prev, eff.deps with
   | none, _ => true                      -- first commit after mount
   | some _, none => true                 -- no dependency array
-  | some none, some _ => true
-  | some (some old), some new => old != new || new.contains .obj
+  | some none, some _ => true            -- `areHookInputsEqual(next, null)` is false
+  | some (some old), some new => depsChanged old new rerun
 
 /-! ## Component specifications -/
 
