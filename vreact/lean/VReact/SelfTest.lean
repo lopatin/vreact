@@ -267,4 +267,26 @@ example : True := by
   vreact_fails_showing_goal (∀ (b : JS.Num), JS.Num.lt (JS.Num.ofInt 0) b = true → JS.Num.eq b (JS.Num.ofInt 0) = false)
   trivial
 
+-- keys of sibling elements, compared as strings (`VList.withKeys`): literal prefixes, integers
+example (c : Bool) : ((if _h : c = true then [JS.Str.ofString "a"] else []) ++
+    (if _h : (!c) = true then [JS.Str.ofString "a"] else [])).Nodup := by vreact_auto
+example (id : Int) : ([JS.Str.ofString "v-" ++ JS.str id] ++ [JS.Str.ofString "n-" ++ JS.str id]).Nodup := by vreact_auto
+example (id : Int) : ([JS.str id] ++ [JS.Str.ofString "title"]).Nodup := by vreact_auto
+example (id : Int) : ([JS.Str.ofString "title"] ++ [JS.str id]).Nodup := by vreact_auto
+example (n : Int) : ([JS.Str.ofString "row-" ++ JS.str n] ++ [JS.Str.ofString "row-" ++ JS.str (n + 1)]).Nodup := by vreact_auto
+example : ([JS.str (1 : Int)] ++ [JS.Str.ofString "2"]).Nodup := by vreact_auto
+example (n : Int) : ([JS.Str.ofString "n" ++ JS.str n] ++ [JS.str n]).Nodup := by vreact_auto
+example (n m : Int) : ([JS.str n ++ JS.Str.ofString "-a"] ++ [JS.Str.ofString "b" ++ JS.str m]).Nodup := by vreact_auto
+example : True := by
+  -- `key={1}` and `key="1"` are one key; so are `key={k}` and ``key={`${k}`}``
+  vreact_fails_showing_goal (([JS.str (1 : Int)] ++ [JS.Str.ofString "1"]).Nodup)
+  vreact_fails_showing_goal (∀ (k : Int), ([JS.str k] ++ [JS.str k]).Nodup)
+  vreact_fails_showing_goal (∀ (n : Int), ([JS.str n] ++ [JS.str (n * 1)]).Nodup)
+  vreact_fails_showing_goal (∀ (n : Int), ([JS.str n] ++ [JS.Str.ofString "12"]).Nodup)
+  vreact_fails_showing_goal (∀ (n : Int), ([JS.str (-n)] ++ [JS.Str.ofString "-" ++ JS.str n]).Nodup)
+  vreact_fails_showing_goal (∀ (s : JS.Str), ([s] ++ [JS.Str.ofString "a"]).Nodup)
+  vreact_fails_showing_goal (∀ (c : Bool), ((if _h : c = true then [JS.Str.ofString "a"] else []) ++
+    [JS.Str.ofString "a"]).Nodup)
+  trivial
+
 end VReact.SelfTest

@@ -607,9 +607,17 @@ JSX: intrinsic elements with string/int/bool/enum attributes (`className`,
 spread), child components with all their props, `{cond && <X/>}`, ternaries,
 `xs.map(x => <El key={…}/>)` (keys `int`, `string` or a string-literal enum, distinct), text from
 strings/ints/enums (booleans render nothing, but are checked). `key={…}` outside
-lists is checked too (JS evaluates it). A JSX const (`const row = <p>{e}</p>;`)
-is checked where it is declared, even if it is rendered only under a condition or
-not at all (JS evaluates it there); JSX only appears in a component's render.
+lists is checked too (JS evaluates it), and the keys of the children of one element or
+fragment must be distinct, compared as strings as React does (`key={1}` and `key="1"` are one
+key): two children always present with the same written key (also a JSX const rendered twice)
+are rejected, and otherwise, unless all keys are distinct strings, a `unique-keys` obligation
+covers the keys of the children present (a conditional child under its condition). A keyed list
+or a fragment is one child with keys of its own, so `<li key="head"/>` next to
+`{xs.map((x) => <li key={x}/>)}` never collide. Give siblings keys with different literal
+prefixes (`` key={`viewer-${id}`} ``, `` key={`notes-${id}`} ``): those are proved.
+A JSX const (`const row = <p>{e}</p>;`) is checked where it is declared, even if it is
+rendered only under a condition or not at all (JS evaluates it there); JSX only appears in a
+component's render.
 `children` props are not supported yet.
 Tags are plain names: a lower-case one is always the HTML element (`<p>` even
 where a variable `p` exists), a capitalised one a verified component. Rejected:

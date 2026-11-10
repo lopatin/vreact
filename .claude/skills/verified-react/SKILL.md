@@ -190,6 +190,9 @@ export function ItemList(props: ItemListProps) {
 * Invariants must not depend on props that can change (React keeps state across
   prop changes): clamp when rendering instead.
 * Lists need `key={…}` with provably distinct keys (usually from an invariant).
+  Keyed siblings in one element (`<Viewer key=…/><Notes key=…/>`) need distinct keys
+  too, compared as strings (`key={1}` = `key="1"`): use distinct literal prefixes
+  (`` key={`viewer-${id}`} ``, `` key={`notes-${id}`} ``).
 * One native event may reach only one discrete handler: no `onX` element may wrap
   a handler fired by the same native event (`onClick` around a checkbox's
   `onChange`: both run on click) or a user component, and one element may not

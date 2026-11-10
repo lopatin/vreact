@@ -696,11 +696,31 @@ function returning a view tree in which
 * every keyed list stores the proof that its keys are pairwise distinct
   (React's reconciliation requirement; `int` and `string` keys never mix; a string-literal
   enum key is its string, `Key.str (JS.str k)`),
+* the children of every element and fragment of which two or more may have an explicit
+  `key={…}` store the proof that the keys of the children present are pairwise distinct
+  (`VList.withKeys`).  React reconciles the children of one element (or fragment) as one
+  array and compares their keys as strings, `'' + key`: `key={1}` and `key="1"` are one key,
+  `key={undefined}` is none, `key={null}` is `"null"`.  With two equal keys react-dom's
+  `reconcileChildrenArray` keeps one old fiber per key, and the other is neither reused nor
+  deleted: its DOM stays, with stale handlers, and it is never unmounted — which the model's
+  reconciliation by position cannot describe.  A child contributes the keys of what it can
+  render at the top level of the array: an element, the branches of `c ? a : b` and `c && a`
+  (under their conditions), the element of a JSX const (its key as evaluated at the
+  declaration); a fragment and a keyed list are one child each, with an array — and keys — of
+  their own, so a list item's key never meets the key of a sibling of the list.  Two children
+  that are always present with the same key written as a string (`key="a"`, also a JSX const
+  rendered twice) are rejected; keys written as strings that no two children share need no
+  proof; every other case is a `unique-keys` obligation over the keys as strings (string,
+  `int`, number, boolean and string-enum keys and their optional forms; another key type next
+  to other keyed children is rejected).  The automation proves keys that differ in a literal
+  prefix (`` `viewer-${id}` `` / `` `notes-${id}` ``), an `int` key next to a string key that
+  is no integer's rendering (`key={id}` / `key="title"`), and different `int` keys,
 * every expression JavaScript evaluates during render is kept in the term with
   its obligations, including `key={…}` outside lists (`VNode.withKey`; a key
   change remounts, which is covered because both keeping the state and
-  re-initialising it are verified) and boolean children (`VNode.ofBool`, rendered
-  as nothing),
+  re-initialising it are verified — with distinct sibling keys, React moves a keyed
+  child's state only to a child of the same component, which keeping the state with
+  new props covers) and boolean children (`VNode.ofBool`, rendered as nothing),
 * every parent callback handed to a child stores the proof that, assuming the
   child's callback contract, the parent's invariant is preserved.
 
@@ -866,7 +886,8 @@ fails (indices, divisions, non-null assertions, preconditions of called
 functions — also in keys and boolean children), and neither do handlers, effects,
 timers and cleanups (also the arguments of external writes and timer delays,
 whose values are not used); keys are
-distinct; child preconditions hold; callback contracts hold in both directions;
+distinct (in keyed lists, and among the keyed children of every element and fragment,
+compared as strings); child preconditions hold; callback contracts hold in both directions;
 hook rules hold (static checks). For every function: its body is safe and its
 `ensures` hold.
 

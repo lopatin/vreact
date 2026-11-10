@@ -316,8 +316,21 @@ def VNode.keyedMap {S E inv snap} {α : Type} (xs : List α) (key : α → Key)
 render, so the term `k` (with its proof obligations) is kept; the model
 reconciles by position and component identity, and a key change (React remounts:
 fresh state, `init_inv`) is covered because both keeping and resetting the state
-are verified. -/
+are verified.  That needs the keys of siblings to be distinct, which `VList.withKeys`
+checks where two or more children of an element may have keys. -/
 def VNode.withKey {S E inv snap} {α : Type} (_k : α) (n : VNode S E inv snap) : VNode S E inv snap := n
+
+/-- The children of one element or fragment, when two or more of them may have an explicit
+`key={…}`: React reconciles them as one array and requires the keys of the elements in it to
+be pairwise distinct, compared as strings (`'' + key`, so `key={1}` and `key="1"` are one key).
+With two equal keys react-dom's `reconcileChildrenArray` keeps one old fiber per key
+(`mapRemainingChildren`), and the other is neither reused nor deleted: its DOM stays, with stale
+handlers, and it is never unmounted.  `keys` are the keys of the children present (in order;
+a child without a key, text, a fragment or a keyed list has none here: a fragment's and a list's
+keys are those of an array of their own).  Distinct keys are what makes the model's
+reconciliation by position (`withKey`) sound; the keys are only checked. -/
+def VList.withKeys {S E inv snap} (keys : List JS.Str) (_nodup : keys.Nodup) (cs : VList S E inv snap) :
+    VList S E inv snap := cs
 
 /-- A boolean JSX child `{b}`: React renders nothing, but JavaScript evaluates `b`
 (so its proof obligations are kept in the term). -/
