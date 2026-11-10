@@ -325,8 +325,10 @@ on an int is rejected; on an enum or `x.kind`: string literals), `for (const x o
 assign outer `let`s; no `return`/`continue` inside, `break` only to end a `switch`
 case), `throw` (must be provably
 unreachable), `assert(c)`, `assume(c)`. No `while`, `try`, `var`, recursion (a function
-may not call itself, in its body or in its `requires`, whose argument JS evaluates; an
-`ensures` lambda may: JS never calls it).
+may not call itself in its body — a `@trusted` function's body is not translated: it may — nor
+in its `requires`, also a `@trusted` one, whose argument JS evaluates; an `ensures` lambda may:
+JS never calls it. Functions that call each other are rejected too, also when the cycle runs
+through a `@trusted` body).
 Code after a `return` in the same block never runs and is rejected (in functions,
 components, handlers, effects, timer callbacks). Async functions and generators
 are rejected everywhere (an async predicate returns a promise, which is always
@@ -614,8 +616,9 @@ is checked where it is declared, even if it is rendered only under a condition o
 not at all (JS evaluates it there); JSX only appears in a component's render.
 `children` props are not supported yet. A component may not refer to itself: `<Tree/>`
 inside `Tree` (also in a JSX const, a map callback, a branch or a closure) is recursion and
-rejected, as is a component that renders a component rendering it (a `@trusted` component's
-body is not translated: it may render itself).
+rejected, as is a component that renders a component rendering it (also through a `@trusted`
+one, or across modules: an import cycle). A `@trusted` component's body is not translated: it
+may render itself directly.
 Tags are plain names: a lower-case one is always the HTML element (`<p>` even
 where a variable `p` exists), a capitalised one a verified component. Rejected:
 member-expression tags (`<props.as>`, `<ui.Button>`: a dynamic element type),
