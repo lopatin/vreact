@@ -116,7 +116,7 @@ function staticAttr(e: ts.JsxElement | ts.JsxSelfClosingElement, name: string): 
 function changeNatives(tag: string, e: ts.JsxElement | ts.JsxSelfClosingElement, html: boolean): string[] {
   const any = ["click", "input", "change"];
   if (!html) return any;
-  if (tag === "select") return ["change"];
+  if (tag === "select") return ["change"]; // its content is options only (CONTENT_RULES), which make no onChange
   if (tag === "textarea") return ["input", "change"];
   if (tag !== "input") return any; // a change of any form control inside bubbles here
   const t = staticAttr(e, "type");
@@ -1295,7 +1295,7 @@ function isJsx(e: ts.Node): boolean {
 
 /** How render blocks translate a JSX const at its declaration: a VNode of this render. */
 function jsxConstCtx(comp: CompCtx): NonNullable<BlockCtx["jsxConst"]> {
-  return { code: (e, env) => withBubble({ ...bubble, ns: "deferred" }, () => jsxNode(e, env)), type: `VReact.VNode ${comp.stateType} E (${comp.invName} ${comp.propsVar}) ${comp.snap}` };
+  return { code: (e, env) => withBubble({ ...bubble, ns: "deferred", content: null }, () => jsxNode(e, env)), type: `VReact.VNode ${comp.stateType} E (${comp.invName} ${comp.propsVar}) ${comp.snap}` };
 }
 
 /** A VNode term for a JSX-valued expression. */
@@ -1593,6 +1593,8 @@ interface Bubble {
   act: Activation | null;
   /** the namespace React creates the elements at this position in (`Namespace`) */
   ns: Namespace;
+  /** directly inside a `<select>`, `<optgroup>` or `<option>`: that tag, whose content is restricted (`CONTENT_RULES`); null: any content */
+  content: string | null;
 }
 interface Activation {
   /** `a <label>`, `a submit button <button> of a form with onSubmit on <form>` */
@@ -1611,7 +1613,35 @@ interface Activation {
  * the declaration is translated as HTML without the namespace's rejections.
  */
 type Namespace = "html" | "svg" | "math" | "deferred";
-const NO_BUBBLE: Bubble = { natives: new Map(), handlers: [], onClick: null, form: null, act: null, ns: "html" };
+const NO_BUBBLE: Bubble = { natives: new Map(), handlers: [], onClick: null, form: null, act: null, ns: "html", content: null };
+
+/**
+ * The content of a `<select>`, an `<optgroup>` and an `<option>` (HTML elements): the elements
+ * each may contain, besides text — react-dom 18.3.1's `validateDOMNesting`
+ * (`isTagValidWithParent`): a select holds `<option>`s and `<optgroup>`s, an optgroup
+ * `<option>`s, an option text only.  React only warns about other content and creates it with
+ * the DOM API, where it is a real event target; but VTS's event model relies on these rules.
+ * react-dom's ChangeEventPlugin picks the native events that make an `onChange` by the
+ * *target* control and collects `onChange` on the whole path from it to the root: a checkbox
+ * inside a select would run the select's `onChange` on a click, a text field on an `input`,
+ * with that control as `e.target`.  With this content, a select's `onChange` runs on the
+ * select's own `change` event only (`changeNatives`; an option or optgroup never makes an
+ * `onChange`), with the select as `e.target` (a text node is never React's target:
+ * `getEventTarget` takes its parent).  No user component either: its elements are checked as a
+ * tree of their own.
+ */
+const CONTENT_RULES: ReadonlyMap<string, readonly string[]> = new Map([
+  ["select", ["option", "optgroup"]],
+  ["optgroup", ["option"]],
+  ["option", []],
+]);
+
+/** Rejects `what` (an element, or a user component) directly inside `<parent>`, whose content `CONTENT_RULES` restricts. */
+function failContent(at: ts.Node, what: string, parent: string, component: boolean): never {
+  const allowed = CONTENT_RULES.get(parent)!;
+  const may = allowed.length ? `${allowed.map((t) => `<${t}>`).join(" and ")} elements${component ? " written in this component" : ""} and text` : "text (its label)";
+  fail(at, `${what} inside <${parent}>: ${parent === "select" ? "a" : "an"} <${parent}> may contain only ${may}, as react-dom's validateDOMNesting says (React only warns, and creates it anyway). VTS models a <select>'s onChange as run by the select's own change event, with the select as e.target, but react-dom also runs it for a click on a checkbox or an input in a text field anywhere inside the select, with that element as e.target; ${parent === "option" ? "write the option's label as text (a string or a number, also in {…})" : `put ${component ? "the component" : "the element"} next to the <select>`}`);
+}
 let bubble: Bubble = NO_BUBBLE;
 
 function withBubble<T>(b: Bubble, f: () => T): T {
@@ -1760,6 +1790,7 @@ function checkEvents(tag: string, e: ts.JsxElement | ts.JsxSelfClosingElement, h
     form: html && tag === "form" ? { submit: handlerOf("onSubmit") ?? bubble.natives.get("submit") ?? null, reset: handlerOf("onReset") ?? bubble.natives.get("reset") ?? null } : bubble.form,
     act: mine ?? passOn,
     ns: childNs,
+    content: html && CONTENT_RULES.has(tag) ? tag : null,
   };
 }
 
@@ -1810,6 +1841,7 @@ function intrinsic(tag: string, e: ts.JsxElement | ts.JsxSelfClosingElement, kid
   const comp = env.comp!;
   const tagNode = ts.isJsxElement(e) ? e.openingElement.tagName : e.tagName;
   const { ns, childNs } = namespaces(tag, tagNode);
+  if (bubble.content !== null && !CONTENT_RULES.get(bubble.content)!.includes(tag)) failContent(tagNode, `<${tag}>`, bubble.content, false);
   const html = ns === "html" || ns === "deferred";
   const handlerAttrs = attrs(e).filter(ts.isJsxAttribute).filter((a) => /^on[A-Z]/.test(a.name.getText()));
   const infos = new Map(handlerAttrs.map((a) => [a, eventInfo(a.name.getText(), tag, e, a, html)] as const));
@@ -1965,6 +1997,7 @@ function componentElement(tagNode: ts.JsxTagNameExpression, e: ts.JsxElement | t
   // its elements would be created in the enclosing <svg>'s (<math>'s) namespace, while it is
   // checked as the root of an HTML tree
   if (bubble.ns === "svg" || bubble.ns === "math") fail(e, `<${tagNode.getText()}> inside <${bubble.ns}>: React would create its elements in the ${bubble.ns === "svg" ? "SVG" : "MathML"} namespace (an <input> there is no HTML control), while it is verified as HTML; render the component outside the <${bubble.ns}>${bubble.ns === "svg" ? ", or inside a <foreignObject>" : ""}`);
+  if (bubble.content !== null) failContent(e, `<${tagNode.getText()}>`, bubble.content, true);
   if (bubble.handlers.length) fail(e, `<${tagNode.getText()}> is nested inside an element with ${bubble.handlers.join("/")}: its events would bubble into a second handler (move the handler, or the component, out)`);
   if (bubble.act) fail(e, `<${tagNode.getText()}> is nested inside ${bubble.act.what}: a click inside it would run its handlers and, through the activation of the enclosing element, another one, in one batch when a script dispatches the click (move the component out${bubble.act.label ? "; a label can name a control inside it with htmlFor" : ""})`);
   let sym = m.checker.getSymbolAtLocation(tagNode);

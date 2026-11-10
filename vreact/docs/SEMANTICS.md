@@ -442,6 +442,23 @@ Every expression maps to a Lean term whose value is the JavaScript value.
   literal `javascript:` URL in `href`, `src`, `action`, `formAction`, `data`,
   `xlinkHref`; `srcDoc` (a document with this page's origin, whose scripts reach
   `parent.document`). Other attributes are data of the element (`VNode.elem`).
+* The content of a `<select>`, an `<optgroup>` and an `<option>` is restricted
+  to what react-dom 18.3.1's `validateDOMNesting` allows without a warning
+  (`isTagValidWithParent`): a `<select>` holds `<option>` and `<optgroup>`
+  elements and text, an `<optgroup>` `<option>` elements and text, an `<option>`
+  text only (its label) — however the element gets there (a keyed list, a
+  condition, a JSX const, checked where it is used). Any other element and any user
+  component there are rejected. React only warns about such content and creates it
+  with the DOM API, where it is an event target, and react-dom's ChangeEventPlugin
+  picks the native events that make an `onChange` by the target control, then
+  collects `onChange` on the whole path from it to the root: a checkbox inside a
+  select would run the select's `onChange` on a click, a text field on an
+  `input`, with that control as `e.target`. With this content a select's
+  `onChange` runs for the select's own `change` event only (an option or optgroup
+  never makes an `onChange`, and a text node is never React's target:
+  `getEventTarget` takes its parent), with the select as `e.target`. A
+  `<datalist>`'s content is not restricted (no event modelling depends on it),
+  but the `<option>`s in it follow the rule above.
 * The parameters of a translated function (component, callback, DOM handler,
   array callback, functional update, local helper, top-level function) are bound
   to the arguments by position: a `this` parameter (TypeScript's annotation of the
@@ -529,9 +546,12 @@ Every expression maps to a Lean term whose value is the JavaScript value.
   `e.target` is the element where the native event happened (`getEventTarget`; a
   text node's parent), any element inside the one the handler is on, so it is
   read only where nothing inside the element can be a target: an `<input>` (void),
-  a `<textarea>` (text only), a `<select>`'s `onChange`/`onInput` (`change` and
-  `input` fire at the select). There `e.target` and `e.currentTarget` are the same
-  element, so the model's one `value` describes both. `e.key` is read only in
+  a `<textarea>` (text only), a `<select>`'s `onChange` (it runs for the select's
+  own `change` event only, given the restricted content above). There `e.target`
+  and `e.currentTarget` are the same element, so the model's one `value` describes
+  both. Not in a `<select>`'s `onInput`: an `input` event a script dispatches at
+  one of its options bubbles to the select with the option as its target (read
+  `e.currentTarget.value` there). `e.key` is read only in
   `onKeyDown`/`onKeyUp`/`onKeyPress` (a `SyntheticKeyboardEvent`, whose `key` is
   always a string: `getEventKey`). TypeScript's type of the field must say
   `string`/`boolean` too (it rules out a parameter annotated `any`).
@@ -1362,8 +1382,12 @@ hook rules hold (static checks). For every function: its body is safe and its
   configuration of its own, e.g. a classic-runtime preset, is not checked).
 * **DOM event fields:** which elements have a string `value` (`<input>`,
   `<select>`, `<textarea>`, `<button>`, `<option>`, `<output>`, `<data>`) and a
-  boolean `checked` (`<input>`), that nothing inside an `<input>`, a `<textarea>`
-  or (for `change`/`input`) a `<select>` is an event target, and that React 18.3.1
+  boolean `checked` (`<input>`), that nothing inside an `<input>` or a
+  `<textarea>` is an event target, that react-dom 18.3.1's ChangeEventPlugin makes
+  an `onChange` for a `<select>` from a `change` event at the select itself and
+  never for an event at an `<option>` or `<optgroup>` (`shouldUseChangeEvent`,
+  `isTextInputElement`, `shouldUseClickEvent`: VTS enforces that a select holds
+  nothing else, §1.2), and that React 18.3.1
   gives `e.currentTarget` the handler's element and `e.key` a string in keyboard
   handlers (HTML standard; react-dom `executeDispatch`, `getEventTarget`,
   `getEventKey`) — not TypeScript's bivariant handler types. These are HTML

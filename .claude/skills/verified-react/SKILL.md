@@ -206,6 +206,9 @@ export function ItemList(props: ItemListProps) {
   A click's activation counts too: no `onClick` on, around or inside a submit
   button of a form with `onSubmit` (use `type="button"`) or a `<label>`, and no
   `<label>` or nested button inside such a submit button.
+  A `<select>` holds only `<option>`/`<optgroup>` elements, an `<option>` only
+  text: no other element or user component inside (a control there would run
+  the select's `onChange`).
   `onFocus`/`onBlur`/`onInvalid` must be robust (no parent callbacks).
 
 ## Reading results

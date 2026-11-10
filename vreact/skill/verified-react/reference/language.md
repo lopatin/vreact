@@ -593,7 +593,9 @@ is a string only on `<input>`, `<select>`, `<textarea>`, `<button>`, `<option>`,
 `<output>`, `<data>` (undefined on a `<div>`, a number on an `<li>` or
 `<progress>`; HTML elements only, never inside `<svg>`), its `checked` only on `<input>`; `e.target` may be any element
 inside the one the handler is on, so `e.target.…` is accepted only on an
-`<input>`, a `<textarea>` and a `<select>`'s `onChange`/`onInput`; `e.key` only
+`<input>`, a `<textarea>` and a `<select>`'s `onChange` (not its `onInput`: an
+`input` event a script dispatches at an option reaches it with the option as
+`e.target`; read `e.currentTarget.value`); `e.key` only
 in `onKeyDown`/`onKeyUp`/`onKeyPress`. Read the event in the handler's own
 statements (array callbacks there may too): a function created in the handler —
 a functional update `setX(p => …)`, which React calls when it processes the
@@ -682,7 +684,14 @@ element with no value, type or activation), other elements count as plain conten
 for the layout checks below (an SVG `<a href>` does not stop a label), and user
 components are rejected. React throws while rendering children of a void element
 (`<input>`, `<br>`, `<hr>`, `<img>`, …, even `{false}`) and a `<textarea>` with
-children: both are rejected (a textarea's text is `value`/`defaultValue`). Also
+children: both are rejected (a textarea's text is `value`/`defaultValue`). A
+`<select>` may contain only `<option>` and `<optgroup>` elements (and text), an
+`<optgroup>` only `<option>`s, an `<option>` only text, as react-dom's
+`validateDOMNesting` says (React only warns): no other element and no user
+component there, also through a list, a condition or a JSX const. A control inside
+a select would run the select's `onChange` (react-dom collects `onChange` from
+the control that changed up to the root) and be its `e.target`. A `<datalist>`
+may hold anything (its `<option>`s follow the same rule). Also
 rejected: a `children=` attribute (it is the element's children), `contentEditable`
 (the user could delete nodes React rendered: React's next update throws),
 `suppressContentEditableWarning`, `is=` (a customized built-in element), a
