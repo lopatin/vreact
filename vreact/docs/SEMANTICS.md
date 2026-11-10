@@ -894,11 +894,16 @@ hook rules hold (static checks). For every function: its body is safe and its
   gives `_`-names meanings: declarations in a namespace `VTS._hyg`, a
   macro-scoped name, are lost); a Lean token or root name (`end`, `List`) or a
   generated name (`VTS`, `Proofs`, `VReact`, …) gets a trailing `_`, and so does a
-  module `src/Base.ts` (in any letter case: `VTS.Base_`), whose lemma file would
-  otherwise be `proofs/Base.lean`, the global lemma file every `Defs.lean`
-  imports (`proofs/Base.lean` reaching a generated module through its imports,
-  also through other proof files, would close an import cycle, and is rejected
-  with that explanation); files whose module names coincide, also up to
+  module directly in `src` named `Base` in any letter case, keeping its case
+  (`src/Base.ts` is `VTS.Base_`, lemmas `proofs/Base_.lean`; `src/base.ts` is
+  `VTS.base_`, lemmas `proofs/base_.lean`), whose lemma file would otherwise be
+  `proofs/Base.lean` (on a case-insensitive disk also as `proofs/base.lean`), the
+  global lemma file every `Defs.lean` imports (`proofs/Base.lean` reaching a
+  generated module through its imports, also through other proof files, would
+  close an import cycle, and is rejected with that explanation, at the import;
+  a proof file's imports are read by Lean's parser, in the whitelist check below,
+  never from its text, so an escaped `import «VTS».m.Defs` or an import after a
+  line comment containing `/-` counts too); files whose module names coincide, also up to
   letter case, are rejected, and so are modules whose generated directories
   differ only in case (`src/lib.ts` and `src/Lib/x.ts`) and modules that would
   generate the same Lean name (`src/a/b.ts` declaring `post` next to a function
@@ -911,8 +916,10 @@ hook rules hold (static checks). For every function: its body is safe and its
   type's fields). An inline object type, string-literal union or discriminated
   union is named after the place it occurs (a constant `config` or `Config`:
   `Config`; a function's result: `<Fn>Result`; a state `timer`: `Timer`), with a
-  subscript (`Config₂`, which no TypeScript identifier contains) when a type,
-  function, component or constant of the module has that name.
+  subscript (`Config₂`, which neither a TypeScript identifier nor a module name
+  contains) when a type, function, component or constant of the module has that
+  name, or when it is (or begins) the namespace of a nested module (a local `x`
+  of `src/m.ts` beside `src/m/X.ts`, the namespace `VTS.m.X`: `X₂`).
   Namespaces may otherwise nest (`src/ui/Board.tsx` next to a component
   `Board` of `src/ui.tsx`). User lemmas `proofs/<path>.lean` are imported by
   that module's `View.lean` and by the `Defs.lean` of every module importing it
@@ -1124,7 +1131,10 @@ hook rules hold (static checks). For every function: its body is safe and its
   as a string) —, rejects a file that does not parse completely, and accepts
   only: plain `import`s of `VTS.…` (generated modules), `Proofs.…` (other proof
   files, which must exist, without a cycle), `VReact` (the whole library, not a
-  part such as `VReact.JS`) and `Init` (not a part such as `Init.Core`);
+  part such as `VReact.JS`) and `Init` (not a part such as `Init.Core`) — the
+  check also hands `vreact` each file's imports as the parser read them, which is
+  how `vreact` knows them (for the import cycles through `proofs/Base.lean` and
+  the upstream lemma files, above, and for the build records), never from the text;
   `theorem`, `def`, `abbrev`, `example` (modifiers: doc
   comment, the attributes below, `private`, `protected`, `noncomputable`,
   `nonrec`) declared outside the namespaces `VTS` and `VReact` and not named like a

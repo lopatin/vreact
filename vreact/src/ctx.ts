@@ -262,6 +262,7 @@ export class Program {
       checker,
       reg: this.reg,
       nsOf,
+      moduleNamespaces: new Set(projectFiles.map((sf) => nsOf(sf))),
       // `int` of vreact/spec, also through aliases (`import { type int as I }`, `type Count = int`
       // resolves through typeOfDecl); a project type spelled `int` is the project's
       isSpecInt: (node) => this.specName(ts.isQualifiedName(node.typeName) ? node.typeName.right : node.typeName) === "int",

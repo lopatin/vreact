@@ -56,9 +56,13 @@ proof module added, independently of how it was written.
 
 Usage: the files arrive on stdin as a JSON array `[{"name": …, "text": …}]` (`name`, the path
 relative to the proofs directory, names the module, `sub/x.lean` is `Proofs.sub.x`, and is used in
-the messages); the result is a JSON array `[{"file", "line", "col", "msg"}]` on stdout (lines
-1-based, columns 1-based), empty when every file is acceptable. Exit code 0 unless the
-program itself failed.
+the messages); the result is a JSON object on stdout: `issues`, an array
+`[{"file", "line", "col", "msg"}]` (lines 1-based, columns 1-based), empty when every file is
+acceptable, and `imports`, the imports of each file's header as Lean's parser reads them
+(`{"<name>": [{"name": [components…], "line", "col"}]}`, at the module name; `[]` for a header
+that does not parse): `vreact` reads a proof file's imports only from here, never from its text
+(escaped names `«VTS».m.Defs`, comments, line breaks). Exit code 0 unless the program itself
+failed.
 -/
 open Lean Elab Command Parser
 
@@ -424,28 +428,29 @@ def posOf (fm : FileMap) (p : String.Pos.Raw) : Nat × Nat :=
 def moduleOfFile (name : String) : Name :=
   ("Proofs." ++ ((name.dropEnd 5).toString.replace "/" ".")).toName
 
-/-- The imports of a proof file's header, with their positions (none if it does not parse). -/
-def headerImports (name text : String) : IO (Array (Name × String.Pos.Raw)) := do
+/-- The imports of a proof file's header, each with the position (line, column, 1-based) of its
+module name (none if the header does not parse). -/
+def headerImports (name text : String) : IO (Array (Name × Nat × Nat)) := do
   let inputCtx := Parser.mkInputContext text name
   let (header, _, msgs) ← Parser.parseHeader inputCtx
   if msgs.hasErrors then return #[]
-  return header.raw[2].getArgs.map fun imp => (imp[4].getId, imp.getPos?.getD 0)
+  return header.raw[2].getArgs.map fun imp => (imp[4].getId, posOf inputCtx.fileMap (imp[4].getPos?.getD 0))
 
 /-- Whether a proof module's imports reach `VReact` (directly, through a generated module or
 through the proof files it imports), and the problems of its own imports of proof files: one
 that does not exist, or a cycle (Lean rejects both; the check reports them before Lean runs). -/
-partial def reachesLib (imports : Std.HashMap Name (Array (Name × String.Pos.Raw))) (m : Name)
+partial def reachesLib (imports : Std.HashMap Name (Array (Name × Nat × Nat))) (m : Name)
     (visiting : List Name := []) : Bool :=
   (imports.getD m #[]).any fun (i, _) =>
     i == `VReact || i.getRoot == `VTS ||
       (i.getRoot == `Proofs && !visiting.contains i && imports.contains i && reachesLib imports i (m :: visiting))
 
 /-- Whether proof module `m` is on an import cycle (through `i`, one of its imports). -/
-partial def onCycle (imports : Std.HashMap Name (Array (Name × String.Pos.Raw))) (m i : Name)
+partial def onCycle (imports : Std.HashMap Name (Array (Name × Nat × Nat))) (m i : Name)
     (seen : List Name := []) : Bool :=
   i == m || (!seen.contains i && (imports.getD i #[]).any fun (j, _) => onCycle imports m j (i :: seen))
 
-def checkFile (name text : String) (withLib : Bool) (proofMods : Std.HashMap Name (Array (Name × String.Pos.Raw)))
+def checkFile (name text : String) (withLib : Bool) (proofMods : Std.HashMap Name (Array (Name × Nat × Nat)))
     (cache : IO.Ref (Option Environment × Option Environment))
     (enableInit : IO Unit) : IO (Array (Nat × Nat × String)) := do
   let inputCtx := Parser.mkInputContext text name
@@ -522,15 +527,20 @@ unsafe def main (_args : List String) : IO UInt32 := do
   let cache ← IO.mkRef ((none, none) : Option Environment × Option Environment)
   let mut out : Array Json := #[]
   let mut inputs : Array (String × String) := #[]
-  let mut proofMods : Std.HashMap Name (Array (Name × String.Pos.Raw)) := {}
+  let mut proofMods : Std.HashMap Name (Array (Name × Nat × Nat)) := {}
+  let mut imports : Array (String × Json) := #[]
   for f in files do
     let name ← IO.ofExcept (f.getObjValAs? String "name")
     let text ← IO.ofExcept (f.getObjValAs? String "text")
     inputs := inputs.push (name, text)
-    proofMods := proofMods.insert (moduleOfFile name) (← headerImports name text)
+    let imps ← headerImports name text
+    proofMods := proofMods.insert (moduleOfFile name) imps
+    -- (each component unescaped: `«VTS».m.Defs` is ["VTS", "m", "Defs"])
+    imports := imports.push (name, Json.arr <| imps.map fun (n, l, c) =>
+      Json.mkObj [("name", Json.arr (n.components.toArray.map fun x => Json.str (x.toString (escape := false)))), ("line", l), ("col", c)])
   for (name, text) in inputs do
     let withLib := reachesLib proofMods (moduleOfFile name)
     for (l, c, msg) in ← checkFile name text withLib proofMods cache enableInitializersExecution do
       out := out.push (Json.mkObj [("file", name), ("line", l), ("col", c), ("msg", msg)])
-  IO.println (Json.arr out).compress
+  IO.println (Json.mkObj [("issues", Json.arr out), ("imports", Json.mkObj imports.toList)]).compress
   return 0

@@ -88,11 +88,13 @@ xs.length) console.log(xs[i].name)`).
    `VTS.<module>.Type'`; a module path segment gets a `_`: `src/end/Sort.tsx` is
    `VTS.end_.Sort_`, its lemmas `proofs/end_/Sort_.lean`; a segment starting with
    a digit or `_` gets a leading `M`: `src/_util.ts` is `VTS.M_util`; and
-   `src/Base.ts` is `VTS.Base_`, its lemmas `proofs/Base_.lean`, since
-   `proofs/Base.lean` is the global lemma file); an inline type is named after
+   `src/Base.ts` is `VTS.Base_`, its lemmas `proofs/Base_.lean` (`src/base.ts`:
+   `VTS.base_`, `proofs/base_.lean`), since `proofs/Base.lean` is the global
+   lemma file); an inline type is named after
    where it occurs (`const config: { … }` → `VTS.<module>.Config`, a function's
    result → `<Fn>Result`), subscripted (`Config₂`) when a type, function,
-   component or constant of the module has that name; hypotheses the translator invents
+   component or constant of the module, or a nested module (`src/m/Config.ts`),
+   has that name; hypotheses the translator invents
    are subscripted (`h₁`, `hmem₂`); all `requires` of a function form one
    hypothesis `h_pre`. Run
    `vreact explain src/<file>.tsx` to see them. `proofs/Base.lean` (no imports of

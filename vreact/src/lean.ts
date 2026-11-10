@@ -55,6 +55,25 @@ export interface ProofIssue {
   msg: string;
 }
 
+/** An import of a user proof file's header, as Lean's parser reads it (`lean/ProofCheck.lean`). */
+export interface ProofImport {
+  /** the module: its components joined by `.` (`«VTS».m.Defs` is `VTS.m.Defs`); a component
+   * that itself contains a `.` stays escaped (`VTS.«m.Defs»`), naming no module of the project */
+  name: string;
+  /** the name's components, unescaped */
+  parts: string[];
+  /** where the module name is (1-based) */
+  line: number;
+  col: number;
+}
+
+/** The result of `checkProofFiles`. */
+export interface ProofCheck {
+  issues: ProofIssue[];
+  /** each file's imports (by its path relative to the proofs directory, `/`-separated) */
+  imports: Map<string, ProofImport[]>;
+}
+
 /** Libraries this process has built (`buildLeanLib`). */
 const builtLibs = new Set<string>();
 
@@ -75,28 +94,31 @@ function buildLeanLib(leanLib: string): NodeJS.ProcessEnv {
 }
 
 /** Results of `checkProofFiles` by input (the check runs Lean: `vreact synth` translates often). */
-const proofCheckCache = new Map<string, ProofIssue[]>();
+const proofCheckCache = new Map<string, ProofCheck>();
 
 /**
  * The whitelist check of user proof files, before Lean elaborates them (they are imported by
  * the generated files, so whatever they declare — syntax, instances, options, code — takes
  * effect while the translation is checked). Runs `vreact-proofcheck` (`lean/ProofCheck.lean`),
  * which parses each file with Lean's parser and accepts only lemma-like commands; the library
- * (and the checker) are built first if needed.
+ * (and the checker) are built first if needed. Also returns every file's imports as Lean's
+ * parser reads them: vreact never reads a proof file's imports from its text (an escaped name
+ * `«VTS».m.Defs`, a `/-` inside a line comment, a name on the line after `import`).
  */
-export function checkProofFiles(leanLib: string, files: { name: string; text: string }[]): ProofIssue[] {
-  if (!files.length) return [];
-  const input = JSON.stringify(files);
+export function checkProofFiles(leanLib: string, files: { name: string; text: string }[]): ProofCheck {
+  if (!files.length) return { issues: [], imports: new Map() };
+  // (in a fixed order: one result for one set of files, however they were listed)
+  const sorted = [...files].sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+  const input = JSON.stringify(sorted);
   const cached = proofCheckCache.get(input);
   if (cached) return cached;
   const env = buildLeanLib(leanLib);
   const exe = path.join(leanLib, ".lake", "build", "bin", "vreact-proofcheck");
   const r = spawnSync("lake", ["env", exe], { cwd: leanLib, env, input, encoding: "utf8", maxBuffer: 64 * 1024 * 1024 });
   if (r.error) throw new Error(`could not run the proof file check ${exe}: ${r.error.message}`);
-  let out: ProofIssue[] | null = null;
+  let out: ProofCheck | null = null;
   try {
-    const parsed: unknown = JSON.parse(r.stdout ?? "");
-    if (Array.isArray(parsed)) out = parsed as ProofIssue[];
+    out = proofCheckResult(JSON.parse(r.stdout ?? ""), sorted.map((f) => f.name));
   } catch {
     out = null;
   }
@@ -104,6 +126,27 @@ export function checkProofFiles(leanLib: string, files: { name: string; text: st
   if (r.status !== 0 || out === null) throw new Error(`the proof file check failed (exit ${r.status}${r.signal ? `, ${r.signal}` : ""}):\n${((r.stdout ?? "") + (r.stderr ?? "")).trim().split("\n").slice(-12).join("\n")}`);
   proofCheckCache.set(input, out);
   return out;
+}
+
+/** The output of `vreact-proofcheck` (`{issues, imports}`), checked to be complete: null otherwise. */
+function proofCheckResult(parsed: unknown, names: string[]): ProofCheck | null {
+  if (typeof parsed !== "object" || parsed === null) return null;
+  const { issues, imports } = parsed as { issues?: unknown; imports?: unknown };
+  if (!Array.isArray(issues) || typeof imports !== "object" || imports === null) return null;
+  const byFile = new Map<string, ProofImport[]>();
+  for (const name of names) {
+    const list = (imports as Record<string, unknown>)[name];
+    if (!Array.isArray(list)) return null;
+    const out: ProofImport[] = [];
+    for (const i of list as unknown[]) {
+      const { name: parts, line, col } = (i ?? {}) as { name?: unknown; line?: unknown; col?: unknown };
+      if (!Array.isArray(parts) || !parts.length || !parts.every((x) => typeof x === "string") || typeof line !== "number" || typeof col !== "number") return null;
+      const ps = parts as string[];
+      out.push({ name: ps.map((x) => (x.includes(".") ? `«${x}»` : x)).join("."), parts: ps, line, col });
+    }
+    byFile.set(name, out);
+  }
+  return { issues: issues as ProofIssue[], imports: byFile };
 }
 
 /** A Lean module of the generated project: generated (`VTS…`) or a user proof (`Proofs…`). */
@@ -120,7 +163,10 @@ interface ProjectModule {
 const modOfRel = (rel: string) => rel.replace(/\.lean$/, "").split(/[\\/]/).join(".");
 const relOfMod = (mod: string) => mod.split(".").join("/") + ".lean";
 
-/** The modules a Lean file's header imports (the generator writes one `import` per line; proof files are checked to have plain imports only). */
+/**
+ * The modules a generated Lean file's header imports (the generator writes one plain `import` per
+ * line). Not for proof files, whose imports come from Lean's parser (`checkProofFiles`).
+ */
 function headerImports(text: string): string[] {
   const code = text.replace(/\/-[\s\S]*?-\//g, " ").replace(/--.*$/gm, "");
   const out: string[] = [];
@@ -132,8 +178,13 @@ function headerImports(text: string): string[] {
   return out;
 }
 
-/** The generated modules and the user proofs of a generated project. */
-function projectModules(outDir: string): ProjectModule[] {
+/**
+ * The generated modules and the user proofs of a generated project: a proof file's imports as
+ * Lean's parser reads them (`checkProofFiles`, whose result for the files the translation checked
+ * is cached), never from its text, which a `/-` in a line comment, an escaped name `«VTS».m.Defs`
+ * or a line break after `import` can make read otherwise.
+ */
+function projectModules(outDir: string, leanLib: string): ProjectModule[] {
   const out: ProjectModule[] = [];
   const add = (rel: string) => {
     const text = fs.readFileSync(path.join(outDir, rel), "utf8");
@@ -151,6 +202,9 @@ function projectModules(outDir: string): ProjectModule[] {
   if (fs.existsSync(path.join(outDir, "VTS.lean"))) add("VTS.lean");
   walk("VTS");
   walk("Proofs");
+  const proofs = out.filter((m) => m.rel.startsWith("Proofs/"));
+  const parsed = checkProofFiles(leanLib, proofs.map((m) => ({ name: m.rel.slice("Proofs/".length), text: m.text }))).imports;
+  for (const m of proofs) m.imports = (parsed.get(m.rel.slice("Proofs/".length)) ?? []).map((i) => i.name);
   return out;
 }
 
@@ -424,7 +478,7 @@ export interface LakeRun {
  */
 export function runLake(outDir: string, leanLib: string): LakeRun {
   const env = buildLeanLib(leanLib);
-  const mods = projectModules(outDir);
+  const mods = projectModules(outDir, leanLib);
   const byName = new Map(mods.map((m) => [m.name, m]));
   const keys = moduleKeys(mods, libraryFingerprint(leanLib, outDir));
   const recPath = recordPath(leanLib, outDir);
