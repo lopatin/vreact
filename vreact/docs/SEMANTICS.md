@@ -601,7 +601,7 @@ Every expression maps to a Lean term whose value is the JavaScript value.
 | `forall exists distinct implies`  | bounded quantifiers, key uniqueness (`List.Nodup`), implication |
 | `/** @opaque */` on a function    | callers see only its `ensures` (modular verification) |
 | `/** @trusted */`                 | body not verified; contract assumed (reported, appears as a Lean axiom); not on a generic function |
-| `hole<T>()`                       | a placeholder for `vreact synth`: `sorry`; while a function has one, its `ensures` theorems are `sorry` too (reported INCOMPLETE) |
+| `hole<T>()`                       | a placeholder for `vreact synth`: `sorry`; while a function has one, its `ensures` theorems are `sorry` too (reported INCOMPLETE). Synth fills holes in code only, never one inside a contract (`requires`, `ensures`, `invariant`, `decreases`, `callbackRequires`, `assert`, `assume`) nor one in a function without `ensures` that a contract depends on (its fill would be checked against nothing and become part of that contract), and reports a fill only when Lean proved the exact text it writes |
 
 A caller uses a contract through its instances: for each call `f a₁ … aₙ` in a goal or a
 hypothesis, the automation adds `f.post a₁ … aₙ` — the proved theorem at the call's actual
