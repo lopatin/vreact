@@ -683,6 +683,8 @@ export interface TypeEnv {
   reg: TypeRegistry;
   /** Lean namespace for types declared in the given source file. */
   nsOf(sf: ts.SourceFile): string;
+  /** The Lean namespaces of the program's modules (`nsOf` of every project file). */
+  moduleNamespaces: ReadonlySet<string>;
   /** Whether a type reference denotes `int` from vreact/spec (by its declaration, not its spelling). */
   isSpecInt(node: ts.TypeReferenceNode): boolean;
   /** The name, among `names`, of the TypeScript lib type a reference denotes (`ReadonlyArray`), if it does. */
@@ -1091,10 +1093,12 @@ function recordFromMembers(
 /**
  * The Lean name of an inline type, after the hint `name` (e.g. `MkResult`, `Config` for a
  * constant `Config: { … }`): subscripted when the name is taken — by another type, by a type
- * declared in the module, or by a function, component or constant of the module (the Lean
+ * declared in the module, by a function, component or constant of the module (the Lean
  * declaration `VTS.<module>.Config`, or the namespace of a component's Props, State, init, …,
- * which the type's fields would share) — so that an inline type never shares its name with
- * another generated name of the module (subscripts are not in TypeScript identifiers).
+ * which the type's fields would share), or by the namespace of a nested module (`src/m/X.ts`
+ * is the namespace `VTS.m.X`, of its declarations `VTS.m.X.a`, …, which the fields of a type
+ * `VTS.m.X` would share) — so that an inline type never shares its name with another generated
+ * name (subscripts are in neither TypeScript identifiers nor module names).
  */
 function inlineTypeName(hint: string, env: TypeEnv, sf: ts.SourceFile): string {
   const ns = env.nsOf(sf);
@@ -1103,7 +1107,9 @@ function inlineTypeName(hint: string, env: TypeEnv, sf: ts.SourceFile): string {
   const declared = sf.statements.some((st) => (ts.isTypeAliasDeclaration(st) || ts.isInterfaceDeclaration(st)) && st.name.text === name);
   const taken = (short: string) => env.reg.byName.has(`${ns}.${short}`);
   let short = leanIdent(name);
-  if (declared || moduleValueNames(sf).has(name) || taken(short)) {
+  const q = `${ns}.${short}`;
+  const nested = [...env.moduleNamespaces].some((m) => m === q || m.startsWith(q + "."));
+  if (declared || moduleValueNames(sf).has(name) || nested || taken(short)) {
     for (let k = 2; ; k++) {
       short = leanIdent(subscripted(name, k));
       if (!taken(short)) break;

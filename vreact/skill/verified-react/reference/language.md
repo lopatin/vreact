@@ -71,9 +71,10 @@ Each file becomes the Lean module `VTS.<path>`: its path under `src` without
 path segment starting with a digit or `_` gets a leading `M` (`src/_util.ts` is
 `VTS.M_util`: Lean gives `_`-names meanings), and one that is a Lean keyword or
 Lean name a trailing `_` (`src/end.ts` is `VTS.end_`). A file directly in `src`
-named `Base` (in any letter case) is `VTS.Base_`, so its lemma file is
-`proofs/Base_.lean`: `proofs/Base.lean` is the global lemma file (see
-obligations.md). Two files that map to the same module, or to names differing
+named `Base` in any letter case also gets a trailing `_` and keeps its case:
+`src/Base.ts` is `VTS.Base_` (lemma file `proofs/Base_.lean`), `src/base.ts` is
+`VTS.base_` (lemma file `proofs/base_.lean`), since `proofs/Base.lean` is the
+global lemma file (see obligations.md). Two files that map to the same module, or to names differing
 only in letter case, are rejected (`module name clash`): e.g. `limits.ts` +
 `limits.tsx`, `my-x.ts` + `my_x.ts`, `todo.ts` + `Todo.tsx`, `end.ts` +
 `end_.ts`. Rename one of them. Within a module, types and values share Lean's
@@ -82,7 +83,9 @@ module (`type Limits = …; const Limits: Limits = …`, `type Todo = …; funct
 Todo(…)`) is rejected. Inline object and union types are named by the
 translator after where they occur (`const config: { … }` → `Config`, a
 function's result → `<Fn>Result`), with a subscript (`Config₂`) when that name
-is taken by a type, function, component or constant of the module.
+is taken by a type, function, component or constant of the module, or by the
+namespace of a nested module (a local `x: { … }` in `src/m.ts` next to
+`src/m/X.ts` gives `X₂`).
 
 The tsconfig needs `"strict": true` (with every check of the strict family:
 `strictNullChecks`, `noImplicitAny`, `strictFunctionTypes`, … none set to false)

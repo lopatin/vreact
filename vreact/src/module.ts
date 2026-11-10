@@ -23,7 +23,7 @@ import { VtsError, fail, leanIdent, leanField, leanStr, paren, capitalize, nodeT
 import { LEAN_TYPE_AUX, LEAN_ROOT_NAMES } from "./leanNames.ts";
 import { expr, prop, propAll, valueBlock, specFn, symbolOf, bindParam, typeOf, checkParamAnnotation, checkNotThisParam, numericLiteralType, checkClosures } from "./translate.ts";
 import { translateComponent, compSignature, baseEnv } from "./component.ts";
-import { leanDecls, checkProofFiles, headerImports } from "./lean.ts";
+import { leanDecls, checkProofFiles, headerImports, type ProofImport } from "./lean.ts";
 import { manifestMatches } from "./ide.ts";
 
 export interface Config {
@@ -666,11 +666,11 @@ function translateAll(cfg: Config): TranslateResult {
   }
   // user proofs are imported by the generated files, so what they declare takes effect while
   // the translation is checked: only lemma-like commands may pass (lean/ProofCheck.lean)
-  const proofIssues = checkProofFiles(
+  const proofCheck = checkProofFiles(
     cfg.leanLib,
     leanFiles.map((f) => ({ name: path.relative("Proofs", f.rel).split(path.sep).join("/"), text: f.text })),
   );
-  for (const i of proofIssues) {
+  for (const i of proofCheck.issues) {
     const e = new VtsError(undefined, i.msg);
     e.file = path.join(cfg.proofsDir, ...i.file.split("/"));
     e.line = i.line;
@@ -678,9 +678,15 @@ function translateAll(cfg: Config): TranslateResult {
     res.errors.push(e);
   }
   if (res.errors.length) return res;
+  // each proof module's imports, as Lean's parser reads them (never from the text: an escaped
+  // name `«VTS».m.Defs`, a `/-` inside a line comment, a name on the line after `import`)
+  const proofImports = new Map(leanFiles.map((f) => {
+    const name = path.relative("Proofs", f.rel).split(path.sep).join("/");
+    return ["Proofs." + f.rel.replace(/\.lean$/, "").split(path.sep).slice(1).join("."), proofCheck.imports.get(name) ?? []] as const;
+  }));
   // every Defs.lean imports proofs/Base.lean: what it imports (also through other proof files)
   // cannot be generated code, which would close an import cycle (lake: "build cycle detected")
-  const baseCycle = baseProofCycle(new Map(leanFiles.map((f) => ["Proofs." + f.rel.replace(/\.lean$/, "").split(path.sep).slice(1).join("."), f.text])));
+  const baseCycle = baseProofCycle(proofImports);
   if (baseCycle) {
     const fileOf = (p: string) => path.join(path.relative(cfg.root, cfg.proofsDir), ...p.split(".").slice(1)) + ".lean";
     const via = baseCycle.chain.length > 1 ? ` (through ${baseCycle.chain.slice(1).map(fileOf).join(" → ")})` : "";
@@ -700,7 +706,7 @@ function translateAll(cfg: Config): TranslateResult {
   // every module importing it, so they help those modules' function bodies and contracts too
   const upProofs = upstreamProofs(
     order.map((sf) => ({ ns: nsOfFile(sf.fileName), deps: (importsOf.get(sf) ?? []).map((d) => nsOfFile(d.fileName)) })),
-    new Map(leanFiles.map((f) => ["Proofs." + f.rel.replace(/\.lean$/, "").split(path.sep).slice(1).join("."), f.text])),
+    new Map([...proofImports].map(([p, is]) => [p, is.map((i) => i.name)])),
   );
   // A module with a `proofs/<Mod>.lean` puts the postconditions of the functions that nothing
   // else in its Defs uses into Posts.lean, after those lemmas (which import Defs), so that the
@@ -1075,14 +1081,6 @@ function header(imports: string[]): string {
   ].join("\n");
 }
 
-/** The modules a Lean file imports (over-approximated: every `import` line, comments removed). */
-function leanImports(text: string): string[] {
-  const code = text.replace(/\/-[\s\S]*?-\//g, " ").replace(/--.*$/gm, "");
-  const out: string[] = [];
-  for (const m of code.matchAll(/^[ \t]*(?:(?:public|private|meta)\s+)*import\s+(?:all\s+)?([^\n]*)$/gm)) out.push(...m[1].trim().split(/\s+/).filter(Boolean));
-  return out;
-}
-
 /**
  * The proof files (`Proofs/…` of the generated project, named relative to the proofs directory
  * with `/`) that the root module `VTS` — the only target lake builds — does not reach through
@@ -1110,11 +1108,12 @@ function unimportedProofs(files: { rel: string; text: string }[]): string[] {
 
 /**
  * The first import of a generated module (`VTS`, `VTS.…`) that `Proofs.Base` reaches through its
- * imports and those of the proof files it imports (`proofs`: proof module → text): `file` is the
- * proof module with that import (`line`/`col` locate it, 1-based), `chain` the proof modules from
- * `Proofs.Base` to it. Every Defs.lean imports `Proofs.Base`, so such an import closes a cycle.
+ * imports and those of the proof files it imports (`proofs`: proof module → its imports, as
+ * Lean's parser reads them): `file` is the proof module with that import (`line`/`col` locate its
+ * module name, 1-based), `chain` the proof modules from `Proofs.Base` to it. Every Defs.lean
+ * imports `Proofs.Base`, so such an import closes a cycle.
  */
-function baseProofCycle(proofs: Map<string, string>): { file: string; line: number; col: number; chain: string[]; target: string } | null {
+function baseProofCycle(proofs: Map<string, readonly ProofImport[]>): { file: string; line: number; col: number; chain: string[]; target: string } | null {
   if (!proofs.has("Proofs.Base")) return null;
   const seen = new Set<string>();
   const queue: string[][] = [["Proofs.Base"]];
@@ -1123,15 +1122,9 @@ function baseProofCycle(proofs: Map<string, string>): { file: string; line: numb
     const p = chain[chain.length - 1];
     if (seen.has(p)) continue;
     seen.add(p);
-    const text = proofs.get(p)!;
-    for (const i of leanImports(text)) {
-      if (i === "VTS" || i.startsWith("VTS.")) {
-        // (comments blanked, line breaks kept: the line of the import)
-        const lines = text.replace(/\/-[\s\S]*?-\//g, (c) => c.replace(/[^\n]/g, " ")).replace(/--.*$/gm, "").split("\n");
-        const at = lines.findIndex((l) => /^\s*(?:(?:public|private|meta)\s+)*import\b/.test(l) && l.split(/\s+/).includes(i));
-        return { file: p, line: at + 1, col: at < 0 ? 0 : lines[at].indexOf(i) + 1, chain, target: i };
-      }
-      if (proofs.has(i)) queue.push([...chain, i]);
+    for (const i of proofs.get(p)!) {
+      if (i.parts[0] === "VTS") return { file: p, line: i.line, col: i.col, chain, target: i.name };
+      if (proofs.has(i.name)) queue.push([...chain, i.name]);
     }
   }
   return null;
@@ -1144,11 +1137,11 @@ function baseProofCycle(proofs: Map<string, string>): { file: string; line: numb
  * module) is left out: those lemmas then help only the views, as for the module itself
  * (`Proofs.<Mod>` imports `VTS.<Mod>.Defs`, so it can never be imported by that Defs).
  */
-function upstreamProofs(mods: { ns: string; deps: string[] }[], proofs: Map<string, string>): Map<string, string[]> {
+function upstreamProofs(mods: { ns: string; deps: string[] }[], proofs: Map<string, string[]>): Map<string, string[]> {
   const proofOf = (ns: string) => "Proofs." + ns.split(".").slice(1).join(".");
   const edges = new Map<string, string[]>();
   const add = (from: string, to: string) => edges.set(from, [...(edges.get(from) ?? []), to]);
-  for (const [p, text] of proofs) for (const i of leanImports(text)) add(p, i);
+  for (const [p, imports] of proofs) for (const i of imports) add(p, i);
   for (const { ns, deps } of mods) {
     for (const d of deps) add(`${ns}.Defs`, `${d}.Defs`), add(`${ns}.View`, `${d}.View`);
     if (proofs.has("Proofs.Base")) add(`${ns}.Defs`, "Proofs.Base");

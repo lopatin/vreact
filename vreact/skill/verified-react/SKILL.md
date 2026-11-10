@@ -283,7 +283,7 @@ postcondition, root-precondition, unreachable, assert).
 2. Split work: make a large function `@opaque` with precise `ensures`.
 3. Add an intermediate fact: `assert(cond)` (proved, then available).
 4. Write a Lean lemma in `proofs/<Module>.lean` (`import VTS.<Module>.Defs`;
-   `<Module>` is the Lean module name: `src/Base.ts` is `Base_`, `src/_util.ts`
+   `<Module>` is the Lean module name: `src/Base.ts` is `Base_`, `src/base.ts` `base_`, `src/_util.ts`
    is `M_util`, see reference/obligations.md); tag it `@[vreact_simp]` if it is a rewrite rule (or `@[grind …]`). The lemma
    helps the module's component obligations, the `ensures` of the module's functions that no other
    function or constant of the module uses (they are proved after it, in
