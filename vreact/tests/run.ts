@@ -517,7 +517,11 @@ if (r && !only.length) {
   const at = lines.findIndex((l) => /^\d+ obligation\(s\) not checked:$/.test(l));
   const listed = at < 0 ? [] : lines.slice(at + 1).filter((l, i, xs) => xs.slice(0, i + 1).every((x) => x.startsWith("  ")));
   const kinded = /^ {2}src\/\S+:\d+:\d+ \[[a-z-]+\](, src\/\S+:\d+:\d+ \[[a-z-]+\])*(, … \(\d+\))?: /;
-  if (listed.length && listed.every((l) => kinded.test(l)) && listed.some((l) => /ReducerActionPreLong\.tsx:\d+:\d+ \[callback\]/.test(l))) ok(`command line: the "not checked" lines (${listed.length}) name each obligation's kind`);
+  // (a line shows the first four obligations of its reason: when other cases sort before it,
+  // ReducerActionPreLong's callback is among the elided ones, `… (n)`, of its reason's line)
+  const witness = r.notChecked.find((u) => /^src\/ReducerActionPreLong\.tsx:\d+:\d+$/.test(u.where));
+  const witnessLine = !!witness && listed.some((l) => l.includes(`${witness.where} [callback]`) || (/, … \(\d+\): /.test(l) && l.endsWith(`: ${witness.reason}`)));
+  if (listed.length && listed.every((l) => kinded.test(l)) && witness?.kind === "callback" && witnessLine) ok(`command line: the "not checked" lines (${listed.length}) name each obligation's kind`);
   else bad("not checked lines", listed.slice(0, 3).join(" | ") || "(none)");
   const help = run(["--help"]);
   if (help.status !== 0 || !help.stdout.startsWith("usage:")) bad_.push(`vreact --help: exit ${help.status}`);
