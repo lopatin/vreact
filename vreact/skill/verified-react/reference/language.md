@@ -514,7 +514,15 @@ Order inside the body:
    useReducer(reducer, init)`, `useEffect(() => {…}, [deps])`,
    `useMemo(() => v, [deps])`, `useCallback(fn, [deps])` — top level,
    unconditional, before any `if`/`switch`/early return (never in branches,
-   loops, handlers or closures); deps exhaustive (`{ x }` reads `x`);
+   loops, handlers or closures); deps exhaustive (`{ x }` reads `x`). Deps are
+   data paths: variables, fields (`item.count`, `props.item?.count`), `length`,
+   `size`. A call `m.has(k)` reads `m` and `k`: list `m` (or a prefix of a
+   field path), never the method — `[m.has]`, `[xs.slice]`, `[s.trim]` are
+   rejected (the same function for every receiver: React would never recompute).
+   An effect may also list a setter or `dispatch` (never changes), a local
+   helper arrow (a new function each render: the effect runs after every
+   render) or a `useCallback` function (changes when its own deps do); not a
+   parent callback, nor `props` itself (list its fields);
 4. `invariant(…)` — over props and state;
 5. render-local `const`s, helper arrows, handlers;
 6. `return <JSX/>` (early returns allowed).

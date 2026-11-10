@@ -4519,7 +4519,54 @@ function forwardCallback(cb: { name: string; params: Param[] }, node: ts.Node, e
   return { code: `(VReact.Outcome.mk (S := ${comp.stateType}) (E := E) [] (some ${emit}))`, params: !Array.isArray(argTypes) ? ["_"] : names };
 }
 
-/** React hook dependency check (exhaustive deps). */
+/**
+ * Is `.name` in `pa` a data link of a dependency path: a field declared by the project (of a record,
+ * of the props: a callback prop too, whose identity the parent decides), or `length` (array, string)
+ * / `size` (Map, Set)? A library method (`m.has`, `xs.slice`, `s.trim`, `n.toFixed`) is not: it is the
+ * same function for every receiver (`Map.prototype.has`), so React's `Object.is` never sees it change
+ * when the receiver does. Unresolved (no declaration): not a data link (a shorter path is required).
+ */
+function isDataLink(env: Env, pa: ts.PropertyAccessExpression): boolean {
+  const s = env.m.checker.getSymbolAtLocation(pa.name);
+  const ds = s?.declarations;
+  if (!s || !ds?.length) return false;
+  if (!ds.some((d) => env.m.prog.typeEnv.isLibraryFile(d.getSourceFile()))) return true;
+  return (pa.name.text === "length" || pa.name.text === "size") && !!(s.flags & ts.SymbolFlags.Property) && !(s.flags & ts.SymbolFlags.Method);
+}
+
+/**
+ * The key of a dependency path (`#id.f.g`): an identifier followed by data links (`isDataLink`),
+ * each `.` or `?.` (an optional link reads the same property; `a?.b` is `undefined` only while `a`
+ * is), or null. Unlike `pathKey`, which keys narrowing facts, `?.` links are allowed.
+ */
+function depPath(env: Env, e: ts.Expression): string | null {
+  if (ts.isParenthesizedExpression(e)) return depPath(env, e.expression);
+  if (ts.isIdentifier(e)) {
+    const s = symbolOf(env, e);
+    return s ? `#${symId(s)}` : null;
+  }
+  if (ts.isPropertyAccessExpression(e) && isDataLink(env, e)) {
+    const k = depPath(env, e.expression);
+    return k ? `${k}.${e.name.text}` : null;
+  }
+  return null;
+}
+
+/** The first link of the property path `e` that is not a data link (`xs.slice` in `xs.slice.length`), if any. */
+function methodLink(env: Env, e: ts.Expression): ts.PropertyAccessExpression | null {
+  while (ts.isParenthesizedExpression(e)) e = e.expression;
+  if (!ts.isPropertyAccessExpression(e)) return null;
+  return methodLink(env, e.expression) ?? (isDataLink(env, e) ? null : e);
+}
+
+/**
+ * React hook dependency check (exhaustive deps). The model recomputes a `useMemo` value and
+ * re-creates a `useCallback` function at every render, and runs an effect with the current
+ * render's values: exact when the listed values change (by `Object.is`) whenever a value the body
+ * reads does. So the deps are data paths (`depPath`): every reactive value the body reads, as the
+ * longest data path it reads it through (`m` for `m.has(k)`, `xs.length`, `props.item?.count`), must
+ * be listed, or a prefix of it.
+ */
 export function checkDeps(fn: ts.ArrowFunction | ts.FunctionExpression, depsArg: ts.Expression | undefined, env: Env, hook: string) {
   if (!depsArg) {
     if (hook === "useEffect") return;
@@ -4528,11 +4575,23 @@ export function checkDeps(fn: ts.ArrowFunction | ts.FunctionExpression, depsArg:
   if (!ts.isArrayLiteralExpression(depsArg)) fail(depsArg, "dependency list must be an array literal");
   const listed = new Set<string>();
   for (const d of depsArg.elements) {
-    const k = pathKey(env, d);
-    if (!k) fail(d, "dependencies must be identifiers or property paths");
+    const k = depPath(env, d);
+    if (!k) {
+      const ml = methodLink(env, d);
+      if (ml && depPath(env, ml.expression)) {
+        fail(ml, `\`${nodeText(ml)}\` is a method, not a dependency: it is the same function for every receiver, so React never sees it change; list the value it is called on (\`${nodeText(ml.expression)}\`)`);
+      }
+      fail(d, "dependencies must be identifiers or property paths (fields, `length`, `size`)");
+    }
     listed.add(k);
   }
   const missing: string[] = [];
+  // the longest data path from `n` up (`m` in `m.has(k)`, `props.item?.count`)
+  const dataPath = (n: ts.Expression): ts.Expression => {
+    let full = n;
+    while (ts.isPropertyAccessExpression(full.parent) && full.parent.expression === full && isDataLink(env, full.parent)) full = full.parent;
+    return full;
+  };
   // every reference counts: identifiers anywhere in the body (template literals, spreads,
   // JSX, nested closures, element access, optional chains), shorthand properties `{ x }`
   // resolved to the variable `x`
@@ -4542,19 +4601,17 @@ export function checkDeps(fn: ts.ArrowFunction | ts.FunctionExpression, depsArg:
       const s = shorthand ? env.m.checker.getShorthandAssignmentValueSymbol(n.parent) : symbolOf(env, n);
       const b = s ? env.vars.get(s) : undefined;
       if (b && (b.k === "val" || b.k === "closure" || b.k === "callback" || b.k === "jsx")) {
-        // reactive value: covered if it, or a path starting with it, is listed
-        let full: ts.Expression = n;
-        while (!shorthand && ts.isPropertyAccessExpression(full.parent) && full.parent.expression === full) full = full.parent;
+        // reactive value: covered if it, or a data path starting with it, is listed
         const k1 = `#${symId(s!)}`;
-        const kFull = shorthand ? k1 : pathKey(env, full);
+        const kFull = shorthand ? k1 : depPath(env, dataPath(n));
         const covered = listed.has(k1) || (kFull && [...listed].some((l) => kFull === l || kFull.startsWith(l + ".")));
         if (!covered && !missing.includes(n.text)) missing.push(n.text);
       }
       if (b?.k === "props") {
-        let full: ts.Expression = n;
-        while (ts.isPropertyAccessExpression(full.parent) && full.parent.expression === full) full = full.parent;
-        const kFull = pathKey(env, full);
-        const covered = kFull && [...listed].some((l) => kFull === l || kFull.startsWith(l + ".") || l === pathKey(env, n));
+        const full = dataPath(n);
+        const kFull = depPath(env, full);
+        const kProps = depPath(env, n);
+        const covered = (kProps && listed.has(kProps)) || (kFull && [...listed].some((l) => kFull === l || kFull.startsWith(l + ".")));
         if (!covered && !missing.includes(full.getText())) missing.push(full.getText());
       }
     }

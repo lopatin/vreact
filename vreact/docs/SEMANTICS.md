@@ -734,9 +734,45 @@ compose two parent outcomes that were only checked separately). Several
 Its synchronous updates and the timers it registers must be robust and may not
 call parent callbacks; `deps` must be exhaustive (otherwise stale closures;
 the check sees every reference, including shorthand properties `{ x }`; the same
-check applies to `useMemo` / `useCallback`). The model has no cleanup step, so a
-returned cleanup is restricted statically: it must be an inline function that
-only calls `clearTimeout` / `clearInterval` and makes external writes
+check applies to `useMemo` / `useCallback`, which the model recomputes, and
+re-creates, at every render: exact only because the listed values change, by
+React's `Object.is`, whenever a value the body reads does).
+
+Dependencies are *data paths*: an identifier followed by fields declared by the
+program (of records, of the props, `?.` or `.`: an optional link reads the same
+property), and `length` (arrays, strings) or `size` (Maps, Sets). Each reactive
+value the body reads counts as the longest data path it is read through — `m`
+for `m.has(k)`, `xs` for `xs.slice(1)`, `props.item?.count`, `xs.length` — and
+must be listed, or a prefix of it (`[props.item]` covers `props.item?.count`;
+before, nothing covered a props path read with `?.`: `FaDepsOptionalChain.tsx`).
+A library method is never a dependency: `m.has` is `Map.prototype.has`, the same
+function for every Map (`xs.slice`, `s.trim` likewise), so React never sees it
+change, and before, `[m.has]` covered `m.has(2)`: a `useMemo` kept its first
+value in React while the model recomputed it, and a broken invariant was
+VERIFIED (`FaDepsMemoMethod.tsx`, `FaDepsCallbackMethod.tsx`,
+`FaDepsArraySlice.tsx`). Such a dependency is rejected, naming the receiver to
+list instead.
+
+An effect's dependency values (`VReact.DepVal`, compared with the previous
+render's) follow React's identities: a number, string, boolean or enum by value;
+another data value (array, record, Map, optional) as `obj`, "possibly changed"
+(the effect runs at least as often as in React, which changes nothing verified:
+it is robust, and so is every timer it registers, whichever render registered
+it); a setter or `dispatch` contributes nothing (React keeps one function per
+hook); a local helper arrow is `obj` (a new function at every render: the
+effect runs after every render, as in React); a `useCallback` function
+contributes the dependency values of its own dependencies (React returns the
+cached function until one of them changes, so it changes exactly when they do:
+`useCallback(f, [])` listed in an effect runs it once, as `[]` does;
+`FaDepsEffectUseCallback.tsx`, `FaDepsEffectHelper.tsx`). A parent callback
+(`props.onPick`, or destructured) is rejected as an effect dependency, also
+through a `useCallback` that lists one: an effect never calls one, and when the
+parent passes a new function is not modelled. The props object itself is not an
+effect dependency either (a `useMemo` / `useCallback` may list it: the same props
+object has the same fields): list the fields the effect reads.
+
+The model has no cleanup step, so a returned cleanup is restricted statically:
+it must be an inline function that only calls `clearTimeout` / `clearInterval` and makes external writes
 (`console.*`, `localStorage.*`, `document.title = …`) with pure arguments,
 possibly under `if`/`else` with pure conditions —
 no setters, `dispatch`, parent callbacks or local helpers. JS still evaluates

@@ -613,6 +613,64 @@ function stateVar(d: ts.VariableDeclaration, h: string, env: Env, m: ModCtx, pp:
 
 /* ───────────────────────────── effects ───────────────────────────── */
 
+/**
+ * The dependency values (`VReact.DepVal`) that the effect dependency `d` (translated in `env`)
+ * contributes; React compares each entry with `Object.is` to the previous render's. A data value by
+ * its type (an array, record, Map or optional: `obj`, "possibly changed" — effects are robust, so
+ * running one more often than React does changes nothing verified, SEMANTICS §2.6); a setter or
+ * `dispatch`: none (React keeps one function per hook, so it never changes); a local arrow: `obj`
+ * (a new function at every render: the effect runs after every render, as in React); a
+ * `useCallback` function: the values of its own dependencies (React returns the cached function
+ * until one of them changes, so it changes exactly when they do); a parent callback: rejected (an
+ * effect never calls one, and when the parent passes a new function is not modelled), and so is the
+ * props object (its fields are the dependencies). `at` is the effect's dependency `d` comes from,
+ * `via` the useCallback it was reached through.
+ */
+function effectDepVals(d: ts.Expression, env: Env, at: ts.Expression, via: string | null): string[] {
+  const e = stripParens(d);
+  const s = ts.isIdentifier(e) ? symbolOf(env, e) : undefined;
+  const b = s ? env.vars.get(s) : undefined;
+  const propsCb = (x: ts.Expression): boolean => {
+    if (!ts.isPropertyAccessExpression(x) || !ts.isIdentifier(x.expression)) return false;
+    const ps = symbolOf(env, x.expression);
+    return !!ps && env.vars.get(ps)?.k === "props" && !env.comp!.info.data.some((f) => f.name === x.name.text);
+  };
+  if (b?.k === "callback" || propsCb(e)) {
+    const why = "an effect never calls parent callbacks, and when the parent passes a new function is not modelled";
+    if (via) fail(at, `the effect depends on ${via}, a useCallback function whose dependency \`${nodeText(e)}\` is a parent callback: not supported as an effect dependency (${why})`);
+    fail(at, `\`${nodeText(e)}\` is a parent callback: it cannot be an effect dependency (${why})`);
+  }
+  if (b?.k === "props") {
+    const what = "the props object is not an effect dependency: list the fields the effect reads (props.x)";
+    if (via) fail(at, `the effect depends on ${via}, a useCallback function that lists the props object: ${what}`);
+    fail(at, what);
+  }
+  if (b?.k === "setter" || b?.k === "dispatch") return [];
+  if (b?.k === "closure") {
+    const call = b.fn.parent;
+    if (ts.isCallExpression(call) && call.arguments[0] === b.fn && hookName(b.env, call.expression) === "useCallback") {
+      const deps = call.arguments[1];
+      // (checkDeps checked an array literal at the declaration)
+      if (!deps || !ts.isArrayLiteralExpression(deps)) fail(at, "useCallback needs a dependency array");
+      return deps.elements.flatMap((x) => effectDepVals(x, b.env, at, via ?? `\`${nodeText(e)}\``));
+    }
+    return ["VReact.DepVal.obj"];
+  }
+  const v = expr(d, env);
+  switch (v.type.k) {
+    case "int":
+      return [`VReact.DepVal.int ${paren(v.code)}`];
+    case "str":
+      return [`VReact.DepVal.str ${paren(v.code)}`];
+    case "bool":
+      return [`VReact.DepVal.bool ${paren(v.code)}`];
+    case "enum":
+      return [`VReact.DepVal.str (VReact.JS.str ${paren(v.code)})`];
+    default:
+      return [`VReact.DepVal.obj`];
+  }
+}
+
 function effectCode(c: ts.CallExpression, env: Env, info: CompInfo): string {
   const m = env.m;
   const fn = c.arguments[0];
@@ -622,21 +680,7 @@ function effectCode(c: ts.CallExpression, env: Env, info: CompInfo): string {
   // deps
   let deps = "none";
   if (c.arguments[1] && ts.isArrayLiteralExpression(c.arguments[1])) {
-    const ds = c.arguments[1].elements.map((d) => {
-      const v = expr(d, env);
-      switch (v.type.k) {
-        case "int":
-          return `VReact.DepVal.int ${paren(v.code)}`;
-        case "str":
-          return `VReact.DepVal.str ${paren(v.code)}`;
-        case "bool":
-          return `VReact.DepVal.bool ${paren(v.code)}`;
-        case "enum":
-          return `VReact.DepVal.str (VReact.JS.str ${paren(v.code)})`;
-        default:
-          return `VReact.DepVal.obj`;
-      }
-    });
+    const ds = c.arguments[1].elements.flatMap((d) => effectDepVals(d, env, d, null));
     deps = `some [${ds.join(", ")}]`;
   }
   // split the body into: synchronous statements, timer registrations (tasks), cleanup
