@@ -774,7 +774,7 @@ function translateAll(cfg: Config): TranslateResult {
         const rootOb = obsOf(() => m.ob(c, "root-precondition", `<${info.name}/> can be mounted as the application root`));
         view += `theorem ${L}.root_pre : ${N}.pre ${N}.Props.mk :=\n  ${rootOb.r}\n\n`;
         view += `noncomputable def ${L}.element : VReact.CompNode Empty :=\n  ⟨${N}.spec, ${N}.Props.mk, ${N}.Cb.mk, ${N}.root_pre,\n   fun s h => ${N}.component.render ${N}.Props.mk ${N}.Cb.mk s ${N}.root_pre h⟩\n\n`;
-        view += `/-- **Certificate.** In every run of the application rooted at \`<${info.name}/>\` — any sequence of\nuser events, effect flushes and timer callbacks — every mounted component instance satisfies\nits invariant (instantiation of \`VReact.run_allInv\`). -/\n`;
+        view += `/-- **Certificate.** In every run of the application rooted at \`<${info.name}/>\` — any sequence of\nuser events, effect flushes (StrictMode's second run at mount included), remounts and timer\ncallbacks — every mounted component instance satisfies its invariant (instantiation of\n\`VReact.run_allInv\`). -/\n`;
         view += `theorem ${L}.certificate (fuel : Nat) (acts : List VReact.Action) :\n    (VReact.run fuel ${N}.element acts).AllInv :=\n  VReact.run_allInv fuel ${N}.element acts\n\n`;
         const compObs = modRes.components.find((x) => x.ns === N)?.obs ?? [];
         modRes.certificates.push({ name: info.name, qname: `${N}.certificate`, obs: [...compObs, ...rootOb.obs], refs: [N] });

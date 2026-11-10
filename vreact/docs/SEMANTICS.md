@@ -700,9 +700,10 @@ function returning a view tree in which
   enum key is its string, `Key.str (JS.str k)`),
 * every expression JavaScript evaluates during render is kept in the term with
   its obligations, including `key={…}` outside lists (`VNode.withKey`; a key
-  change remounts, which is covered because both keeping the state and
-  re-initialising it are verified) and boolean children (`VNode.ofBool`, rendered
-  as nothing),
+  change remounts — fresh state, every effect runs again — which a run of the
+  model may do to any instance at any time, `Action.remount` in §3, and both
+  keeping the state and re-initialising it are verified) and boolean children
+  (`VNode.ofBool`, rendered as nothing),
 * every parent callback handed to a child stores the proof that, assuming the
   child's callback contract, the parent's invariant is preserved.
 
@@ -770,7 +771,10 @@ are checked themselves, aside); no `new`, `delete`, `await`, tagged templates, a
 `++`/`--`, casts, `arguments` or `any`. So the code cannot mutate a state value in place
 (`xs.push(1)`, `m.get(k)!.push(x)`, `Array.prototype.push.call(xs, 1)`) or reach a setter
 (`[1].map(setN)`, `String({ toString: setN })`).
-Running a robust effect any number of times (StrictMode) is safe.
+Running a robust effect any number of times is safe; React's StrictMode, in
+development, runs every effect of a newly mounted component a second time
+(setup, cleanup, setup), which the runtime model's first flush does by the run's
+choice (§3).
 
 A timer is registered only by a statement at the top level of the effect body
 (`setTimeout(…)` / `const id = setInterval(…)`, with at most a delay argument,
@@ -812,7 +816,8 @@ Transitions:
 | `mount`          | initialisers, render, mount children |
 | `reconcile`      | match new child elements to old instances by position/key **and component identity**: same component ⇒ keep state (`mount_keeps_state`), otherwise mount fresh (`mount_fresh_state`); removed children unmount |
 | `dispatch`       | a discrete event runs one handler of the latest render; its queue is processed; its parent-callback outcome propagates up the instance path; affected instances re-render |
-| `flushEffects`   | after commit, each effect whose dependency array differs from the previous render's runs (robust) and registers its timers; the render's dependencies are recorded |
+| `flushEffects`   | after commit, each effect whose dependency array differs from the previous render's runs (robust) and registers its timers; the render's dependencies are recorded; at the first flush after mounting, every effect may run a second time (StrictMode) |
+| `remount`        | an instance is unmounted and its element mounted afresh: initial state, no recorded dependencies, no timers, children mounted afresh (React: a changed `key` outside a list, a changed enclosing host element type) |
 | `fireTask`       | a timer callback fires against the current state |
 
 An instance records the dependency arrays its render gave its effects at its
@@ -823,19 +828,39 @@ flush when it has no array). Where the model's values do not decide `Object.is`
 — an object, array, Map, optional value or `number` (identity, `NaN` and `-0`
 are not modelled), or an int that is 0 before and after (it may be `-0`) — and no
 other dependency of the effect changed, the `flush` action chooses whether it
-runs (`Action.flush inst rerun`), so a flush can do what React does in either
+runs (the `rerun` of `Action.flush inst rerun strict`), so a flush can do what React does in either
 case. The model has no cleanup step: the timers of earlier runs stay
 registered, so a run may fire a timer React cleared (more runs, not fewer).
 (Before, the flush compared each effect's dependencies with themselves, so no
 run of the model ran an effect with a dependency array a second time, nor
 registered the timers of such a run: `FaRuntimeEffectRerun`, whose proof file
-shows the re-run.)
+shows the re-run; `FaRuntimeTwoEffects` shows that each effect is compared with
+its own recorded array.)
+
+React 18's StrictMode (every example mounts its app under `<StrictMode>`) runs,
+in development, the cleanup and then the setup of every effect of a newly
+mounted component again, in the same flush and with the same closures. The
+`flush` action chooses whether it does (`Action.flush inst rerun strict`,
+`flushRuns`): at the first flush after mounting, `strict` runs every effect a
+second time, so the updates of the second setups queue after those of the first;
+at a later flush it changes nothing (`FaRuntimeStrictMount`).
+
+React unmounts an instance and mounts its element afresh when its `key` outside
+a list changes, or the type of an enclosing host element (`<div>` → `<section>`,
+a Fragment ↔ an element); the model's paths contain neither, so `reconcile`
+keeps the instance there. A run may instead remount any instance at any time
+(`Action.remount`, `Inst.remount`): initial state, no recorded dependencies (so
+its next flush runs every effect), no timers (a setter of an unmounted
+component does nothing), children mounted afresh — more runs than React has,
+not fewer (`FaRuntimeRemount`). (Before, no run of the model reset an instance
+React remounts at the same path, or ran its effects again.)
 
 **Theorem `run_allInv`.** For every sequence of actions (user events, effect
-flushes, timer firings), every mounted instance satisfies its invariant.
+flushes, remounts, timer firings), every mounted instance satisfies its
+invariant.
 
-The proof is by construction: `dispatch`, `flushEffects`, `fireTask` and
-`reconcile` can only be *defined* because each component supplies its
+The proof is by construction: `dispatch`, `flushEffects`, `fireTask`,
+`reconcile` and `mount` can only be *defined* because each component supplies its
 obligations. `vreact verify` instantiates the theorem for every root component
 as `App.certificate`; `#print axioms App.certificate` then lists every
 assumption the whole application relies on. A fully verified app depends only
