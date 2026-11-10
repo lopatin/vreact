@@ -200,12 +200,18 @@ export function ItemList(props: ItemListProps) {
   button of a form with `onSubmit` (use `type="button"`) or a `<label>`, and no
   `<label>` or nested button inside such a submit button.
   `onFocus`/`onBlur`/`onInvalid` must be robust (no parent callbacks), and the focus
-  handlers of an `autoFocus` element, or of an element around one, may not update state.
-* `name`/`id` of form controls, `<img>`, `<object>`, `<form>`, `<iframe>`, `<embed>`:
-  not a property name of forms or the document (`parentNode`, `submit`, `title`,
-  `name`, `value`, `type`, …) nor `_…`, and statically bounded (a literal, a choice
-  between literals, an enum, or a string with a literal part holding a character other
-  than letters, digits, `_`, `$`: `` `qty-${id}` ``).
+  handlers of an `autoFocus` element, or of an element around one, may not update state
+  unless every `autoFocus` element of the component is in its only `return`, not under
+  a condition or in a list, with no `key` on it or around it, and the component renders
+  no other component.
+* `name`/`id` of form controls (`<input>`, `<button>`, `<select>`, `<textarea>`,
+  `<output>`, `<fieldset>`), `<img>`, `<object>`, and `name` of `<form>`, `<iframe>`,
+  `<embed>`: no name React uses on forms or the document (`parentNode`, `removeChild`,
+  `createElement`, `value`, `type`, `length`, …; `name`, `title`, `id`, `submit` are
+  fine on controls) nor `_…`/`on…`, and statically bounded (a literal, a choice between
+  literals, an enum, or a string with a literal part holding a character other than
+  letters, digits, `_`, `$`: `` `qty-${id}` ``). A written `id` of any element may not
+  be a global React reads (`nodeName`, `type`, `jest`, …).
 
 ## Reading results
 

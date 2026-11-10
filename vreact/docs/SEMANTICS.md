@@ -447,13 +447,17 @@ Every expression maps to a Lean term whose value is the JavaScript value.
   `<object>`, … named `x`, before their own properties) is rejected: on `<input>`,
   `<button>`, `<select>`, `<textarea>`, `<output>`, `<fieldset>`, `<object>` and
   `<img>` (`name` and `id`) and on `<form>`, `<iframe>`, `<embed>` (`name`), every value
-  the attribute may take must be no property name of forms or of the document and no
-  name react-dom reads on them (`src/domNames.ts`) — a literal, a choice between
-  literals, an enum, or a string with a literal part holding a character outside
-  `[A-Za-z0-9_$]` (`` `qty-${id}` ``, which no property name has); any other expression
-  is rejected. A written `id` of any element may not be a global the app's code reads
-  (`nodeName`, `type`, `contentEditable`, …, a name starting with `_`). Other
-  attributes are data of the element (`VNode.elem`).
+  the attribute may take must be no name the app's code reads, calls or writes on
+  forms (on the document, for an element the document exposes) and no name starting
+  with `_` (`src/domNames.ts`: `parentNode`, `removeChild`, `createElement`, `value`,
+  `type`, …; common field names such as `name`, `title`, `id`, `submit` are accepted
+  on form controls) — a literal, a choice between literals, an enum, or a string with
+  a literal part holding a character outside `[A-Za-z0-9_$]` (`` `qty-${id}` ``, which
+  no property name has); any other expression is rejected. A written `id` of any
+  element, or `name` of an `<embed>`, `<form>`, `<iframe>`, `<img>`, `<object>`, may not
+  be a global the app's code reads (`nodeName`, `type`, `contentEditable`,
+  `correspondingUseElement`, `IS_REACT_ACT_ENVIRONMENT`, `jest`, `MSApp`, a name
+  starting with `_`). Other attributes are data of the element (`VNode.elem`).
 * The parameters of a translated function (component, callback, DOM handler,
   array callback, functional update, local helper, top-level function) are bound
   to the arguments by position: a `this` parameter (TypeScript's annotation of the
@@ -679,10 +683,20 @@ after 50 nested commits React throws "Maximum update depth exceeded" from the
 setter, inside the handler — which the model does not have. So a focus handler
 (onFocus, onBlur, the composition handlers) on an `autoFocus` element, or on an
 element around one, may not update state (setters, `dispatch`; parent callbacks
-are rejected for robust handlers anyway): then only the element that had focus
-before the first such commit can update state, once (focus moves only to
-`autoFocus` elements inside the chain), and the chain ends one commit later
-(`FaDomAutoFocusChain`, `FaDomAutoFocusAround`).
+are rejected for robust handlers anyway) unless no render of its component after
+the first mounts an `autoFocus` element: every `autoFocus` element of the
+component is written in its only `return` (a statement of the body), reached from
+the returned value through elements and fragments only — not under a condition, in
+a list or a local constant —, with no `key` on it or on an element around it, and
+the component renders no other component (`FaDomAutoFocusTrack`; otherwise
+`FaDomAutoFocusChain`, `FaDomAutoFocusAround`, `FaDomAutoFocusAroundBlur`,
+`FaDomAutoFocusRendersComponent`). Then only the element that had focus before the
+first such commit can make an update that mounts anything, once (focus moves only
+to `autoFocus` elements inside the chain), and the updates of the accepted handlers re-render
+only their own component, which mounts no `autoFocus` element and so focuses
+nothing (VTS has no layout effects; the passive effects React runs at the end of
+such a commit have default-priority updates, rendered later): the chain ends at
+most two commits later.
 
 **Rebasing.** These *deferred* updates are still pending when a later discrete
 event runs. React keeps one update queue per hook; it renders the discrete
@@ -1301,20 +1315,37 @@ hook rules hold (static checks). For every function: its body is safe and its
   in its commit, `document.createElement` for every new element, which then throw;
   `nodeName` in its event plugins; `correspondingUseElement` on every event's target;
   `document.activeElement` in every commit), so §1.2 rejects, on these elements, every
-  `name`/`id` value that may be a reserved name (`src/domNames.ts`): every property
-  name along the prototype chains of a form and of the document (Chromium 152's, the
-  members TypeScript's lib.dom.d.ts declares, Firefox's non-standard ones, the
-  patterns `on…`, vendor prefixes, `aria…`), every name starting with `_` (React's
-  expandos on DOM nodes: `__reactFiber$…`, `_valueTracker`, `_wrapperState`, …; with
-  a control of such a name, defining the expando on the form throws), and the names
-  react-dom reads on a node that may be a form or the document that browsers do not
-  define there (`correspondingUseElement`, `parentWindow`, `window`, `document`,
+  `name`/`id` value that may be a reserved name (`src/domNames.ts`). Of the property
+  names along the prototype chains of a form and of the document (Chromium 152's, the
+  members TypeScript's lib.dom.d.ts declares, Firefox's non-standard ones), those
+  react, react-dom and scheduler 18.3.1 access at all, on any object (`x.n`,
+  `x["n"]`, `"n" in x`, in any of their builds: `parentNode`, `removeChild`,
+  `createElement`, `nodeType`, `length`, …) are reserved, but for the ones they read
+  only on other objects (`name`, `id`, `action`, `target`, `children`, `clear`,
+  `implementation`, and `location`, read on a window, where no element can shadow
+  it); `body`, read on the document only, is reserved there only; `title`, which VTS
+  code writes on the document (`document.title = …`), is reserved there. The other
+  names (`title` and `body` on forms, `method`, `submit`, `reset`, `lang`, `role`,
+  `elements`, `cookie`, …) occur in the bundle at most as strings no code uses as a
+  property key of a DOM node, or in comments: react-dom computes property keys on DOM
+  nodes only for its expandos, an `<input>`'s `value`/`checked`, vendor-prefixed
+  style names and `checked`/`multiple`/`muted`/`selected`, which it writes on an
+  element given that prop — @types/react allows none of them on a `<form>`. VTS code
+  reads no property of a form or the document. Also reserved: the patterns `on…`,
+  vendor prefixes, `aria…`, every name starting with `_` (React's expandos on DOM
+  nodes: `__reactFiber$…`, `_valueTracker`, `_wrapperState`, …; with a control of
+  such a name, defining the expando on the form throws), and the names react-dom
+  reads on a node that may be a form or the document that browsers do not define
+  there (`correspondingUseElement`, `parentWindow`, `window`, `document`,
   `documentMode`, `attachEvent`, `detachEvent`, `value`, `type`, `data`, `checked`).
   That list is the trusted part: react-dom's other property reads are on fibers,
   events, its own objects, or nodes it picked by tag (an `<input>`'s `value`, a
-  `<select>`'s `options`), which have no named getter; its writes reach the setters
-  of the prototypes past a named property (assignment ignores named properties), but
-  for a new expando, whose names start with `_`. The
+  `<select>`'s `options`), which have no named getter; its writes on a form reach the
+  setters of the prototypes past a named property (Chromium 152: `form.className = …`
+  with a control named className sets the attribute), but for a new expando, whose
+  names start with `_`, and it writes no property of the document after `createRoot`
+  (Chromium 152 silently drops a write to a document property an element shadows:
+  `document.title = …` with a `<form name="title">`, `FaDomClobberDocTitle`). The
   window (no `[LegacyOverrideBuiltIns]`) answers `window.x` with an element of id
   `x` (or name, for `<embed>`, `<form>`, `<iframe>`, `<img>`, `<object>`) only when
   the window defines no property `x`; the app bundle reads such globals only in
@@ -1402,9 +1433,10 @@ hook rules hold (static checks). For every function: its body is safe and its
   focuses during React's commit; validation on submit), have robust handlers
   (§2.2), and robust handlers cannot call parents, so several of them in one
   batch compose with each other and with the one discrete handler; those of an
-  `autoFocus` element and of the elements around one may not update state at all
-  (§2.2: React commits their updates at once, inside the commit, and a chain of such
-  commits ends in "Maximum update depth exceeded"). `onSelect`
+  `autoFocus` element and of the elements around one may not update state, unless
+  no later render of their component mounts an `autoFocus` element (§2.2: React
+  commits their updates at once, inside the commit, and a chain of such commits can
+  end in "Maximum update depth exceeded"). `onSelect`
   and capture-phase handlers are rejected; unknown handler names are rejected,
   never discrete.
 

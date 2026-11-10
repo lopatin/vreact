@@ -565,10 +565,14 @@ not call parent callbacks — and so must `onFocus`, `onBlur` and `onInvalid`: t
 DOM also fires them inside another event's batch (`autoFocus`, a label click
 focusing its control, form validation). The focus handlers (`onFocus`, `onBlur`,
 the composition handlers) of an `autoFocus` element, and of an element around one,
-may not update state at all: React focuses it inside the commit that mounts it and
-commits their updates at once, and if that mounts an `autoFocus` element again
-(`key={n}`, a condition on the state) the chain ends in "Maximum update depth
-exceeded" thrown from the setter. In a component with such handlers or with effects /
+may not update state unless no later render of the component mounts an `autoFocus`
+element: React focuses it inside the commit that mounts it and commits their updates
+at once, and if that mounts an `autoFocus` element again (`key={n}`, a condition on
+the state) the chain ends in "Maximum update depth exceeded" thrown from the setter.
+So such updates (focus tracking: `<input autoFocus onFocus={() => setFocused(true)}
+…/>`) need every `autoFocus` element of the component written in its only `return`,
+not under a condition (`{open && …}`), in a list or a local constant, with no `key`
+on it or around it, in a component that renders no other component. In a component with such handlers or with effects /
 timers that set state, discrete handlers and callbacks passed to children must
 also be safe when React rebases them onto those pending updates (guard inside the
 functional update: `setR(p => p.lo < p.hi ? … : p)`). Rejected: unknown handler
@@ -640,20 +644,26 @@ rejected: a `children=` attribute (it is the element's children), `contentEditab
 between strings (`show ? "text" : "password"`) or an enum, without `"file"`.
 `name` and `id` are checked against HTML's named access, which makes a form's
 `form.x` its control named (or with id) `x`, and `document.x` an `<iframe>`, `<form>`,
-`<object>` or `<embed>` named `x`, before their own properties — React reads
-`form.parentNode`, `form.removeChild`, `document.createElement`, …: on `<input>`,
-`<button>`, `<select>`, `<textarea>`, `<output>`, `<fieldset>`, `<object>`, `<img>`
-(`name`, `id`) and `<form>`, `<iframe>`, `<embed>` (`name`), a value that is a
-property name of forms or of the document (`parentNode`, `submit`, `title`, `name`,
-`action`, `length`, `elements`, `on…`, …), a name react-dom reads on them (`value`,
-`type`, `data`, `checked`, `window`, `document`, …) or a name starting with `_` is
-rejected, and so is a value VTS cannot bound: write a literal, a choice between
-literals (`c ? "a" : "b"`), an enum, or a string with a literal part that holds a
-character other than letters, digits, `_` and `$` (`` `qty-${id}` ``, `"qty-" + id`:
-no property name has one). A written `id` of any element may not be `nodeName`,
-`type`, `contentEditable`, `correspondingUseElement` or start with `_` (the window
-exposes it as a global that react-dom reads); a computed id of another element is
-not checked.
+`<object>`, `<embed>` or `<img>` named `x` (an `<object>`'s, `<img>`'s id too), before
+their own properties — React reads `form.parentNode`, `form.removeChild`,
+`document.createElement`, …: on `<input>`, `<button>`, `<select>`, `<textarea>`,
+`<output>`, `<fieldset>`, `<object>`, `<img>` (`name`, `id`) and `<form>`, `<iframe>`,
+`<embed>` (`name`), a value that the app's code reads, calls or writes on forms (on
+the document, for an element the document shows: also `body`, `title`) — a property
+react, react-dom or scheduler access on some object (`parentNode`, `removeChild`,
+`createElement`, `nodeType`, `length`, `style`, `focus`, …, but not `name`, `id`,
+`action`, `target`, `location`, read only on other objects), a name react-dom reads on
+them (`value`, `type`, `data`, `checked`, `window`, `document`, …), `on…`, `aria…`, a
+vendor prefix or a name starting with `_` — is rejected, and so is a value VTS cannot
+bound: write a literal, a choice between literals (`c ? "a" : "b"`), an enum, or a
+string with a literal part that holds a character other than letters, digits, `_`
+and `$` (`` `qty-${id}` ``, `"qty-" + id`: no property name has one). Common field
+names (`name`, `title`, `id`, `email`, `submit`, `reset`, `body`, `method`, …) are
+fine on form controls. A written `id` of any element, and a `name` of an `<embed>`,
+`<form>`, `<iframe>`, `<img>` or `<object>`, may not be `nodeName`, `type`,
+`contentEditable`, `correspondingUseElement`, `IS_REACT_ACT_ENVIRONMENT`, `jest`,
+`MSApp` or start with `_` (the window exposes it as a global that the app's code
+reads); a computed id of an element that only the window exposes is not checked.
 Type keywords are matched ASCII-case-insensitively, as HTML does
 (`type="CheckBox"` is a checkbox, `type="chec&#8490;box"` with a Kelvin sign is
 not: a text input). Character
