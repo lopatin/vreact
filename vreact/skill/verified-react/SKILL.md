@@ -167,7 +167,11 @@ export function ItemList(props: ItemListProps) {
   of their pending updates (React rebases): guard inside `setX(p => …)`.
 * Closures read `let`s when they run: do not reassign a `let` after creating a
   handler/helper/updater that reads it (`const xNow = x;` first), and never assign
-  an outer `let` inside a callback.
+  an outer `let` inside a callback. A helper or handler may read a `const` declared
+  after it if it is used (called, attached) after that declaration; a `useEffect`,
+  `useCallback` or `useMemo` function may not (its deps cannot list it): declare
+  what a hook reads before the hook. A timer callback may read the effect body's
+  `const`s declared before `setTimeout`/`setInterval`.
 * Module constants run in source order when the module loads: declare a constant
   above every constant (or `assert`) whose initialiser uses it, also through a
   function call. `export default` only a name, never an expression.

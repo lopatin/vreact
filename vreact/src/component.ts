@@ -10,7 +10,7 @@
 import ts from "typescript";
 import { T, type VType, type Param, type Field, leanType, showType, typeOfNode, checkValueType, propertyName, isLibSymbol, collectionKind } from "./types.ts";
 import { type Env, ModCtx, type CompCtx, type CompInfo, type StateVar, type FnInfo, type Binding, bind, freshLocal, refSymbol } from "./ctx.ts";
-import { expr, prop, propAll, block, branch, handlerFn, checkDeps, hookName, specFn, isGlobal, symbolOf, bindParam, type BlockCtx, typeOf, valueBlock, lambda, outcome, checkClosures, topLevelHookDecls, fnParamTsTypes, stripParens, isNumeric, evalArgs, isDocumentTitle, jsxAttrText, checkPlainParams, isNullLit, ARRAY_MUTATORS } from "./translate.ts";
+import { expr, prop, propAll, block, branch, handlerFn, checkDeps, hookName, specFn, isGlobal, symbolOf, bindParam, type BlockCtx, typeOf, valueBlock, lambda, outcome, checkClosures, topLevelHookDecls, fnParamTsTypes, stripParens, isNumeric, evalArgs, isDocumentTitle, jsxAttrText, checkPlainParams, isNullLit, ARRAY_MUTATORS, isMutatedLocal } from "./translate.ts";
 import { fail, leanField, leanIdent, leanStr, jsStr, paren, nodeText, indent, VtsError, jsxTextValue, asciiLower } from "./util.ts";
 
 /* ─────────────────────── React 18.3.1 event model ───────────────────────
@@ -229,6 +229,16 @@ interface Prepass {
   inv: string[];
   stateVars: StateVar[];
   inits: string[];
+  /** the Lean locals `init` binds the initial values to when a later one reads an earlier state value */
+  initNames: string[];
+  /** whether an initial value reads a state value declared before it (`useState(a)`) */
+  initReadsState: boolean;
+  /**
+   * The initial values that read an earlier state value and that React evaluates at every
+   * render, not only at mount (all but a lazy `useState(() => …)`), at their types: also checked
+   * in the render, with the state of that render (`translateComponent`).
+   */
+  renderChecks: { node: ts.Expression; type: VType }[];
   contracts: Map<string, { binders: string[]; prop: string }>;
   renderStmts: ts.Statement[];
   /** env with props bound (for pre / contracts / init) */
@@ -279,7 +289,11 @@ export function translateComponent(fn: ts.FunctionDeclaration, info: CompInfo, m
   out += `@[vreact_simp] def pre (props : Props) : Prop :=\n  ${pp.pre.length ? pp.pre.join(" ∧\n  ") : "True"}\n\n`;
   const stateLets = pp.stateVars.map((s) => `let ${leanIdent(s.name)} := σ.${leanField(s.field)}; `).join("");
   out += `@[vreact_simp] def inv (props : Props) (σ : State) : Prop :=\n  ${pp.inv.length ? stateLets + "\n  " + pp.inv.join(" ∧\n  ") : "True"}\n\n`;
-  out += `@[vreact_simp] def init (props : Props) (hpre : pre props) : State :=\n  State.mk${pp.inits.map((x) => " " + paren(x)).join("")}\n\n`;
+  // (a later initial value that reads an earlier state value reads its initial value: a local)
+  const initBody = pp.initReadsState
+    ? `${pp.inits.map((x, i) => `let ${pp.initNames[i]} : ${leanType(pp.stateVars[i].type)} := ${x};\n  `).join("")}State.mk${pp.initNames.map((x) => " " + x).join("")}`
+    : `State.mk${pp.inits.map((x) => " " + paren(x)).join("")}`;
+  out += `@[vreact_simp] def init (props : Props) (hpre : pre props) : State :=\n  ${initBody}\n\n`;
   const invNode = fn.name!;
   if (info.trusted) {
     out += `axiom init_inv : ∀ (props : Props) (hpre : pre props), inv props (init props hpre)\n`;
@@ -302,6 +316,13 @@ export function translateComponent(fn: ts.FunctionDeclaration, info: CompInfo, m
       lets += `let ${leanIdent(sv.name)} := σ.${leanField(sv.field)};\n  `;
     }
     renv = bindStateVars(renv, body.statements, pp.stateVars);
+    // an initial value that reads earlier state and that React evaluates at every render (its
+    // value then unused): checked there too, against the state of the render (`stateVar`)
+    for (const rc of pp.renderChecks) {
+      const n0 = m.obligations.length;
+      const v = expr(rc.node, { ...renv, limits: INIT_LIMITS }, rc.type);
+      if (m.obligations.length > n0) lets += `let _ : ${leanType(rc.type)} := ${v.code};\n  `;
+    }
     const effects: string[] = [];
     const bc: BlockCtx = {
       kind: "render",
@@ -341,6 +362,36 @@ function deferredOf(comp: CompCtx): StateVar[] {
   return deferredFields.get(comp) ?? [];
 }
 
+/**
+ * The hook call an initialiser or expression statement is, through parentheses
+ * (`(useEffect(…))`, `const [n, setN] = (useState(0))`: the same call in JS), or null.
+ */
+function hookCall(e: ts.Expression | undefined): ts.CallExpression | null {
+  if (!e) return null;
+  const x = stripParens(e);
+  return ts.isCallExpression(x) ? x : null;
+}
+
+/** Is `c` a call of useState / useReducer? */
+function isStateHook(c: ts.CallExpression | null, env: Env): boolean {
+  const h = c ? hookName(env, c.expression) : null;
+  return h === "useState" || h === "useReducer";
+}
+
+/** Hooks VTS does not model (rejected wherever they are called). */
+const UNMODELLED_HOOKS = new Set(["useRef", "useContext", "useLayoutEffect", "useSyncExternalStore", "useTransition", "useDeferredValue", "useId", "useImperativeHandle"]);
+
+/** What the restricted environments of a component's contracts and initial values give access to (`Env.limits`). */
+const PRE_LIMITS = "a requires(…) may mention only the props and top-level declarations (it is what every parent must establish before the component renders)";
+const INV_LIMITS = "an invariant may mention only the props, the state and top-level declarations";
+const CBREQ_LIMITS = "callbackRequires(…) may mention only the callback's arguments, the props and top-level declarations";
+const INIT_LIMITS = "an initial value (useState / useReducer) may read only the props, the state values declared before it (at mount, their initial values) and top-level declarations";
+
+/** Why the hook `h` is rejected: it is not modelled. */
+function unmodelledHook(h: string): string {
+  return `${h} is not modelled in VTS yet${h === "useLayoutEffect" ? " (its updates are synchronous, during the commit; use useEffect)" : ""}`;
+}
+
 /** Syntactic over-approximation: setters/dispatches reachable (through local closures) from an effect or a non-discrete handler. */
 function computeDeferred(body: ts.Block, comp: CompCtx, env: Env): StateVar[] {
   const checker = env.m.checker;
@@ -351,7 +402,7 @@ function computeDeferred(body: ts.Block, comp: CompCtx, env: Env): StateVar[] {
       if (ts.isIdentifier(n.name)) {
         const sym = checker.getSymbolAtLocation(n.name);
         if (sym) closures.set(sym, n.initializer);
-      } else if (ts.isArrayBindingPattern(n.name) && ts.isCallExpression(n.initializer) && ["useState", "useReducer"].includes(hookName(env, n.initializer.expression) ?? "")) {
+      } else if (ts.isArrayBindingPattern(n.name) && isStateHook(hookCall(n.initializer), env)) {
         const [a, b] = n.name.elements;
         if (a && b && ts.isBindingElement(a) && ts.isIdentifier(a.name) && ts.isBindingElement(b) && ts.isIdentifier(b.name)) {
           const sv = comp.stateVars.find((x) => x.name === (a.name as ts.Identifier).text);
@@ -410,8 +461,9 @@ function bindStateVars(env: Env, stmts: readonly ts.Statement[], svs: StateVar[]
   for (const s of stmts) {
     if (!ts.isVariableStatement(s)) continue;
     for (const d of s.declarationList.declarations) {
-      if (!ts.isArrayBindingPattern(d.name) || !d.initializer || !ts.isCallExpression(d.initializer)) continue;
-      const h = hookName(e, d.initializer.expression);
+      const c = hookCall(d.initializer);
+      if (!ts.isArrayBindingPattern(d.name) || !c) continue;
+      const h = hookName(e, c.expression);
       if (h !== "useState" && h !== "useReducer") continue;
       const [a, b] = d.name.elements;
       const sv = svs.find((x) => ts.isBindingElement(a) && ts.isIdentifier(a.name) && x.name === a.name.text)!;
@@ -437,8 +489,9 @@ function renderBlock(stmts: ts.Statement[], env: Env, bc: BlockCtx): string {
   const run = (i: number, e: Env): string => {
     if (i >= stmts.length) fail(bc.fnNode, "component must return");
     const s = stmts[i];
-    if (ts.isExpressionStatement(s) && ts.isCallExpression(s.expression) && hookName(e, s.expression.expression) === "useEffect") {
-      onEffect(s.expression, e);
+    const c = ts.isExpressionStatement(s) ? hookCall(s.expression) : null;
+    if (c && hookName(e, c.expression) === "useEffect") {
+      onEffect(c, e);
       return run(i + 1, e);
     }
     if (ts.isReturnStatement(s) && i < stmts.length - 1) fail(stmts[i + 1], "unreachable code after return (it never runs)");
@@ -449,16 +502,20 @@ function renderBlock(stmts: ts.Statement[], env: Env, bc: BlockCtx): string {
 }
 
 function prepass(stmts: readonly ts.Statement[], env: Env, comp: CompCtx, m: ModCtx): Prepass {
-  const pp: Prepass = { pre: [], inv: [], stateVars: [], inits: [], contracts: new Map(), renderStmts: [], propsEnv: env };
+  const pp: Prepass = { pre: [], inv: [], stateVars: [], inits: [], initNames: [], initReadsState: false, renderChecks: [], contracts: new Map(), renderStmts: [], propsEnv: env };
   let sawNonHook = false;
-  let stateEnv: Env = env; // props + state (as σ.field) for invariants
+  let stateEnv: Env = { ...env, limits: INV_LIMITS }; // props + state (as σ.field) for invariants
+  // the initial values: the props, and each state value declared so far bound to its own
+  // initial value (`initNames`), which it has when React evaluates a later one at mount
+  let initEnv: Env = { ...env, limits: INIT_LIMITS };
+  const stateSyms: ts.Symbol[] = [];
   // several requires / invariants form one condition each, in order: a later one may use
   // the earlier ones as guards (`propAll`, as for function preconditions)
   const reqs: ts.Expression[] = [];
   const invs: ts.Expression[] = [];
   for (const s of stmts) {
-    if (ts.isExpressionStatement(s) && ts.isCallExpression(s.expression)) {
-      const c = s.expression;
+    const c = ts.isExpressionStatement(s) ? hookCall(s.expression) : null;
+    if (c) {
       const sf = specFn(env, c.expression);
       if (sf === "requires" || sf === "invariant") {
         if (c.arguments.length !== 1) fail(c, `${sf}(condition)`);
@@ -473,7 +530,7 @@ function prepass(stmts: readonly ts.Statement[], env: Env, comp: CompCtx, m: Mod
         const lam = c.arguments[1];
         if (!lam || !(ts.isArrowFunction(lam) || ts.isFunctionExpression(lam))) fail(c, "callbackRequires(cb, (args) => condition)");
         // (parameter annotations are checked against the callback prop's parameter types)
-        const l = lambda(lam, env, cb.params.map((p) => p.type), T.bool, fnParamTsTypes(m.checker.getTypeAtLocation(cbE), cbE, env) ?? cb.params.map(() => null));
+        const l = lambda(lam, { ...env, limits: CBREQ_LIMITS }, cb.params.map((p) => p.type), T.bool, fnParamTsTypes(m.checker.getTypeAtLocation(cbE), cbE, env) ?? cb.params.map(() => null));
         const prop = `${paren(l.body.code)} = true`;
         const prev = pp.contracts.get(cb.name);
         if (!prev) pp.contracts.set(cb.name, { binders: l.binders, prop });
@@ -493,34 +550,43 @@ function prepass(stmts: readonly ts.Statement[], env: Env, comp: CompCtx, m: Mod
         continue;
       }
       if (sf) fail(c, `${sf}(…) is not allowed in a component body`);
+      // a hook called as a statement at the top level (`(useEffect(…))` too): only useEffect
       const h = hookName(env, c.expression);
-      if (h === "useEffect" || h === "useLayoutEffect") {
+      if (h) {
         if (sawNonHook) fail(c, "hooks must run unconditionally before any early return (Rules of Hooks)");
-        pp.renderStmts.push(s);
-        continue;
+        if (h === "useEffect") {
+          pp.renderStmts.push(s);
+          continue;
+        }
+        if (UNMODELLED_HOOKS.has(h)) fail(c, unmodelledHook(h));
+        const bound = h === "useState" || h === "useReducer" ? `const [value, ${h === "useState" ? "setValue" : "dispatch"}] = ${h}(…)` : `const value = ${h}(…)`;
+        fail(c, `${h}(…) as a statement (its value unused) is not supported: bind it (${bound})`);
       }
     }
     if (ts.isVariableStatement(s)) {
       const d = s.declarationList.declarations[0];
-      if (d && d.initializer && ts.isCallExpression(d.initializer)) {
-        const h = hookName(env, d.initializer.expression);
-        if (h === "useState" || h === "useReducer") {
-          if (sawNonHook) fail(d, "hooks must run unconditionally before any early return (Rules of Hooks)");
-          if (s.declarationList.declarations.length !== 1) fail(s, "one hook per declaration");
-          const sv = stateVar(d, h, env, m, pp);
-          pp.stateVars.push(sv);
-          const a = (d.name as ts.ArrayBindingPattern).elements[0] as ts.BindingElement;
-          stateEnv = bind(stateEnv, symbolOf(env, a.name)!, { k: "val", code: leanIdent(sv.name), type: sv.type });
-          continue;
-        }
-        if (h === "useRef" || h === "useContext" || h === "useLayoutEffect" || h === "useSyncExternalStore" || h === "useTransition" || h === "useDeferredValue" || h === "useId" || h === "useImperativeHandle") {
-          fail(d, `${h} is not modelled in VTS yet`);
-        }
+      const dc = hookCall(d?.initializer);
+      const h = dc ? hookName(env, dc.expression) : null;
+      if (dc && (h === "useState" || h === "useReducer")) {
+        if (sawNonHook) fail(d, "hooks must run unconditionally before any early return (Rules of Hooks)");
+        if (s.declarationList.declarations.length !== 1) fail(s, "one hook per declaration");
+        const sv = stateVar(d, dc, h, initEnv, m, pp, stateSyms);
+        pp.stateVars.push(sv);
+        const a = (d.name as ts.ArrayBindingPattern).elements[0] as ts.BindingElement;
+        const sym = symbolOf(env, a.name)!;
+        stateEnv = bind(stateEnv, sym, { k: "val", code: leanIdent(sv.name), type: sv.type });
+        const r = freshLocal(initEnv, leanIdent(sv.name));
+        initEnv = bind(r.env, sym, { k: "val", code: r.name, type: sv.type });
+        pp.initNames.push(r.name);
+        stateSyms.push(sym);
+        continue;
       }
+      if (h && UNMODELLED_HOOKS.has(h)) fail(d, unmodelledHook(h));
+      if (h === "useEffect") fail(d, "useEffect(…) returns nothing: call it as a statement, useEffect(() => { … }, [deps]);");
       // useMemo / useCallback: allowed only here (top level), before any early return
       for (const dd of s.declarationList.declarations) {
-        const init = dd.initializer && ts.isParenthesizedExpression(dd.initializer) ? dd.initializer.expression : dd.initializer;
-        if (!init || !ts.isCallExpression(init)) continue;
+        const init = hookCall(dd.initializer);
+        if (!init) continue;
         const h = hookName(env, init.expression);
         if (h !== "useMemo" && h !== "useCallback") continue;
         if (sawNonHook) fail(dd, "hooks must run unconditionally before any early return (Rules of Hooks)");
@@ -531,7 +597,7 @@ function prepass(stmts: readonly ts.Statement[], env: Env, comp: CompCtx, m: Mod
     pp.renderStmts.push(s);
   }
   // (an invariant can only mention state declared before it: TypeScript rejects the rest)
-  if (reqs.length) pp.pre.push(propAll(reqs, env));
+  if (reqs.length) pp.pre.push(propAll(reqs, { ...env, limits: PRE_LIMITS }));
   if (invs.length) pp.inv.push(propAll(invs, stateEnv));
   return pp;
 }
@@ -565,12 +631,30 @@ function actionOnlyPre(r: FnInfo, env: Env) {
   }
 }
 
-function stateVar(d: ts.VariableDeclaration, h: string, env: Env, m: ModCtx, pp: Prepass): StateVar {
+/** Does `n` refer to one of the variables `syms` (also as a shorthand property `{ a }`)? */
+function readsAny(n: ts.Node, syms: readonly ts.Symbol[], checker: ts.TypeChecker): boolean {
+  if (!syms.length) return false;
+  if (ts.isIdentifier(n)) {
+    const s = refSymbol(checker, n);
+    if (s && syms.includes(s)) return true;
+  }
+  return !!ts.forEachChild(n, (c) => (readsAny(c, syms, checker) ? true : undefined));
+}
+
+/**
+ * A `useState` / `useReducer` slot, its initial value translated in `env`: the props, and the
+ * state values declared before it (`earlier`) bound to their initial values.  React evaluates
+ * the argument `init` in the render (`useState(a)` reads the state `a` of that render) and uses it
+ * only at mount, when every earlier state value is its initial value: so `init` has the value
+ * it is translated to here.  An argument evaluated at every render that reads earlier state is
+ * also checked in the render, against the state there (`renderChecks`): its value is discarded
+ * then, but JS still evaluates it.
+ */
+function stateVar(d: ts.VariableDeclaration, c: ts.CallExpression, h: string, env: Env, m: ModCtx, pp: Prepass, earlier: readonly ts.Symbol[]): StateVar {
   if (!ts.isArrayBindingPattern(d.name) || d.name.elements.length < 1) fail(d, `use const [value, setValue] = ${h}(…)`);
   const a = d.name.elements[0];
   if (!ts.isBindingElement(a) || !ts.isIdentifier(a.name)) fail(d, "state variable must be an identifier");
   const name = a.name.text;
-  const c = d.initializer as ts.CallExpression;
   if (h === "useState") {
     let t: VType | undefined = c.typeArguments?.[0] ? typeOfNode(c.typeArguments[0], m.prog.typeEnv, name[0].toUpperCase() + name.slice(1)) : undefined;
     if (t) checkValueType(c.typeArguments![0], t, m.reg, `state \`${name}\``);
@@ -578,10 +662,16 @@ function stateVar(d: ts.VariableDeclaration, h: string, env: Env, m: ModCtx, pp:
     if (!init) fail(c, "useState needs an initial value");
     let v;
     const ii = ts.isParenthesizedExpression(init) ? init.expression : init;
+    const reads = readsAny(init, earlier, m.checker);
     if (ts.isArrowFunction(ii) && ii.parameters.length === 0) {
+      // (a lazy initialiser: React calls it at mount only)
       v = ts.isBlock(ii.body) ? valueBlock(ii.body.statements, env, t, ii) : expr(ii.body, env, t);
     } else v = expr(init, env, t);
     t = t ?? v.type;
+    if (reads) {
+      pp.initReadsState = true;
+      if (!(ts.isArrowFunction(ii) && ii.parameters.length === 0)) pp.renderChecks.push({ node: init, type: t });
+    }
     pp.inits.push(v.code);
     return { name, field: name, type: t };
   }
@@ -606,6 +696,10 @@ function stateVar(d: ts.VariableDeclaration, h: string, env: Env, m: ModCtx, pp:
     fail(initFn, "useReducer's third (init) argument is not supported; compute the initial state in the second argument");
   } else {
     initCode = expr(c.arguments[1], env, st).code;
+    if (readsAny(c.arguments[1], earlier, m.checker)) {
+      pp.initReadsState = true;
+      pp.renderChecks.push({ node: c.arguments[1], type: st });
+    }
   }
   pp.inits.push(initCode!);
   return { name, field: name, type: st, reducer: r, actionType: r.params[1].type };
@@ -660,8 +754,6 @@ function effectCode(c: ts.CallExpression, env: Env, info: CompInfo): string {
     if (ts.isCallExpression(e) && (isGlobal(env, e.expression, "setInterval") || isGlobal(env, e.expression, "setTimeout"))) return e;
     return null;
   };
-  // the path condition of the timers registered so far down the effect body (`timerGuard`)
-  const guards: TimerGuard[] = [];
   stmts.forEach((s, i) => {
     // JS does not run what follows a top-level `return` (the model must not either)
     if (ts.isReturnStatement(s) && i < stmts.length - 1) fail(stmts[i + 1], "unreachable code after return (it never runs)");
@@ -677,12 +769,10 @@ function effectCode(c: ts.CallExpression, env: Env, info: CompInfo): string {
       // registered: `onStmt`)
       if (call.arguments[1]) pureCleanupExpr(call.arguments[1], env, TIMER_ARG_RULE, "a timer's delay");
       const timer = call.arguments[0];
-      tasks.push(`(fun _ => ${guardedTimer(guards, 0, env, (e) => handlerFn(timer, e, "robust", []).code)})`);
+      tasks.push(`(fun _ => ${timerTask(stmts.slice(0, i), 0, env, fn, timerCalls, timer, (e) => handlerFn(timer, e, "robust", []).code)})`);
       timerCalls.set(s, call);
       return;
     }
-    const g = timerGuard(s, env);
-    if (g) guards.push(g);
   });
   // the synchronous part, translated as a robust handler body; a timer registration evaluates
   // its delay there (its callback is a task), and `return cleanup` the cleanup's arguments
@@ -764,36 +854,98 @@ function timerGuard(s: ts.Statement, env: Env): TimerGuard | null {
 }
 
 /**
- * A timer callback (`body`), checked under the path condition of its registration.
- * The effect body registers the timer only past `guards` (top-level early returns,
- * asserts, assumes), each about the snapshot the effect runs with — the same one the
- * callback captures (an effect cannot assign a variable it captures, and a captured
- * `let` is not reassigned after the effect is created).  So the callback is
- * `if h : c then body else skip` (or the reverse): the skip branch is a timer the real
- * program never registers, and does nothing, which preserves every invariant.  A
- * guard is used only if it translates in the component's environment (effect-local
- * consts are not in scope there; the guards before it may narrow) without
- * obligations of its own (those stay with the effect body); others are left out,
- * which only weakens the timer's facts.
+ * A timer callback (`body`), translated in the environment of the effect body at its
+ * registration and checked under the path condition there.  `items` are the effect body's
+ * top-level statements before the registration (`env`: the component's environment at the
+ * `useEffect`).  The callback captures the same snapshot as the effect: an effect cannot assign
+ * a variable it captures, and a captured `let` is not reassigned after the effect is created.
+ * * A guard (top-level early return, assert, assume: `timerGuard`) holds whenever the timer is
+ *   registered, so the callback is `if h : c then body else skip` (or the reverse): the skip
+ *   branch is a timer the real program never registers, and does nothing, which preserves every
+ *   invariant.  A guard is used only if it translates here without obligations of its own (those
+ *   stay with the effect body); others are left out, which only weakens the timer's facts.
+ * * A top-level `const` that the callback or another statement refers to is bound to its
+ *   value by translating its declaration again here, as
+ *   the effect body does: it is evaluated once, before the registration, from the snapshot and
+ *   the effect's earlier consts, and keeps that value (a local Map / Set the effect mutates
+ *   afterwards is not bound).  Only a declaration that translates without obligations of its own
+ *   (those stay with the effect body) is bound; the others, the `let`s and the timer handles
+ *   are recorded in `env.unavailable`, for the message if the callback reads them.
  */
-function guardedTimer(guards: TimerGuard[], i: number, env: Env, body: (e: Env) => string): string {
-  if (i === guards.length) return body(env);
-  const g = guards[i];
+function timerTask(items: readonly ts.Statement[], i: number, env: Env, fn: ts.Node, timerCalls: ReadonlyMap<ts.Statement, ts.CallExpression>, cb: ts.Expression, body: (e: Env) => string): string {
+  if (i === items.length) return body(env);
+  const s = items[i];
   const m = env.m;
-  let usable = false;
+  const next = (e: Env) => timerTask(items, i + 1, e, fn, timerCalls, cb, body);
+  const g = timerGuard(s, env);
+  if (g) {
+    let usable = false;
+    m.dryRun(() => {
+      const n0 = m.obligations.length;
+      try {
+        branch(g.cond, env, () => "true", () => "false");
+        usable = m.obligations.length === n0;
+      } catch (err) {
+        if (!(err instanceof VtsError)) throw err;
+      }
+    });
+    if (!usable) return next(env);
+    const skip = outcome({ kind: "robust", updates: [], emit: null, eventVar: null }, env.comp!);
+    return g.holds ? branch(g.cond, env, next, () => skip) : branch(g.cond, env, () => skip, next);
+  }
+  if (!ts.isVariableStatement(s)) return next(env);
+  const names = boundNames(s.declarationList);
+  // (a declaration that neither the callback nor another statement refers to is left out; an
+  // earlier one can only through a local function, which may run after it)
+  const syms = names.map((n) => symbolOf(env, n)).filter((x): x is ts.Symbol => !!x);
+  if (![cb, ...items.filter((_, j) => j !== i)].some((n) => readsAny(n, syms, m.checker))) return next(env);
+  const unavailable = (why: (name: string) => string): Env => {
+    const u = new Map(env.unavailable ?? []);
+    for (const n of names) {
+      const sym = symbolOf(env, n);
+      if (sym) u.set(sym, why(n.text));
+    }
+    return { ...env, unavailable: u };
+  };
+  if (timerCalls.has(s)) return next(unavailable((x) => `\`${x}\` is a timer handle: it can only be cleared, with clearTimeout(${x}) / clearInterval(${x}) in the effect's cleanup`));
+  if (!(s.declarationList.flags & (ts.NodeFlags.Const | ts.NodeFlags.Let))) return next(unavailable(() => "use const or let (no var)"));
+  if (!(s.declarationList.flags & ts.NodeFlags.Const)) {
+    return next(unavailable((x) => `\`${x}\` is a \`let\` of the effect body: VTS binds in a timer callback only the effect body's \`const\`s declared before the registration, computed from the props, the state and earlier such consts`));
+  }
+  if (s.declarationList.declarations.some((d) => isMutatedLocal(d))) {
+    return next(unavailable((x) => `\`${x}\` is a Map or Set the effect body mutates: VTS binds in a timer callback only the effect body's \`const\`s that keep the value of their declaration`));
+  }
+  // the declaration, translated as the effect body translates it (a robust handler body)
+  const acc = { kind: "robust" as const, updates: [], emit: null, eventVar: null };
+  const eh: Env = { ...env, handler: acc, curState: undefined };
+  const bc: BlockCtx = { kind: "handler", fnNode: fn, onDone: () => fail(s, "internal: a declaration has no outcome") };
+  let why: string | null = null;
   m.dryRun(() => {
     const n0 = m.obligations.length;
     try {
-      branch(g.cond, env, () => "true", () => "false");
-      usable = m.obligations.length === n0;
+      block([s], 0, eh, bc, () => "()");
+      if (m.obligations.length !== n0) why = "its value has proof obligations of its own (they are checked in the effect body, not repeated in the callback); compute it in the callback instead";
     } catch (err) {
       if (!(err instanceof VtsError)) throw err;
+      why = err.message;
     }
   });
-  if (!usable) return guardedTimer(guards, i + 1, env, body);
-  const skip = outcome({ kind: "robust", updates: [], emit: null, eventVar: null }, env.comp!);
-  const next = (e: Env) => guardedTimer(guards, i + 1, e, body);
-  return g.holds ? branch(g.cond, env, next, () => skip) : branch(g.cond, env, () => skip, next);
+  if (why !== null) {
+    const reason = why;
+    return next(unavailable((x) => `\`${x}\` is a const of the effect body that VTS cannot bind in a timer callback: ${reason}`));
+  }
+  return block([s], 0, eh, bc, (e2) => next({ ...e2, handler: env.handler, curState: env.curState }));
+}
+
+/** The identifiers a declaration list binds (through destructuring patterns). */
+function boundNames(l: ts.VariableDeclarationList): ts.Identifier[] {
+  const out: ts.Identifier[] = [];
+  const visit = (n: ts.BindingName) => {
+    if (ts.isIdentifier(n)) out.push(n);
+    else for (const el of n.elements) if (!ts.isOmittedExpression(el)) visit(el.name);
+  };
+  for (const d of l.declarations) visit(d.name);
+  return out;
 }
 
 const TIMER_ARG_RULE = "the delay of setTimeout/setInterval must be data (a literal, a constant, props or state, pure functions of them): no mutating methods (push, sort, set, …), casts, `arguments`, `any`, setters or helpers";

@@ -514,9 +514,29 @@ Order inside the body:
    useReducer(reducer, init)`, `useEffect(() => {…}, [deps])`,
    `useMemo(() => v, [deps])`, `useCallback(fn, [deps])` — top level,
    unconditional, before any `if`/`switch`/early return (never in branches,
-   loops, handlers or closures); deps exhaustive (`{ x }` reads `x`);
-4. `invariant(…)` — over props and state;
-5. render-local `const`s, helper arrows, handlers;
+   loops, handlers or closures; parentheses around the call do not matter); deps
+   exhaustive (`{ x }` reads `x`). An initial value may read the props, the state
+   declared before it and top-level declarations (not render locals): React uses
+   it at mount, when that state has its own initial value (`useState(a)` starts
+   at `a`'s initial value), but evaluates a non-lazy one at every render, so it
+   is also checked with each render's state (`useState(10 % a)` needs `a !== 0`
+   in every state; the lazy `useState(() => 10 % a)` runs at mount only). Other
+   hooks (`useLayoutEffect`, `useRef`, …) are not modelled, and a hook other than
+   `useEffect` called as a statement (its value unused) is rejected;
+4. `invariant(…)` — over props, state and top-level declarations (a
+   `requires`: props and top-level declarations only; neither may read render
+   locals);
+5. render-local `const`s, helper arrows, handlers. A local arrow function is
+   translated where it is called or attached as a handler, so it may read a
+   `const` (or a `let` nothing assigns) declared after it, as long as that use
+   comes after the declaration (`const inc = () => setN(n + step); const step:
+   int = 2; … onClick={inc}`; calling it in the render before `const step` reads
+   `step` in its temporal dead zone, a ReferenceError: rejected, and so is
+   attaching it in a JSX const declared before `step`). A `useEffect`,
+   `useCallback` or `useMemo` function may not read a local declared after the
+   hook call: the dependency array cannot list it (temporal dead zone), so React
+   would keep a stale function (the `useMemo` function runs at the call: a
+   ReferenceError);
 6. `return <JSX/>` (early returns allowed).
 
 Props: a single parameter `props: P` (or destructured `{ a, b }: P`) where `P`
@@ -572,7 +592,12 @@ names, `onSelect`, capture-phase handlers (`onClickCapture`).
 Effects: setters and timers (`setTimeout`/`setInterval` callbacks become tasks;
 register them at the top level of the effect body; a timer's callback may use the
 early returns `if (c) return;` and the `assert`/`assume` before it, as in
-`if (left <= 0) return; setTimeout(() => setLeft(left - 1), 1000)`; the delay is
+`if (left <= 0) return; setTimeout(() => setLeft(left - 1), 1000)`, and read the
+effect body's top-level `const`s declared before the registration, each bound to
+its value (`const step: int = props.fast ? 2 : 1;
+setInterval(() => setN((k) => k + step), 100)`) — but not the body's `let`s, a
+Map or Set the body mutates, or a `const` whose value has proof obligations of its
+own (`100 % props.d`: compute it in the callback); the delay is
 checked where the timer is registered; no further `setTimeout` arguments),
 external writes (`localStorage.setItem`, `document.title = …`, `console.*`) are
 allowed and have no modelled effect, but JS evaluates their arguments, so these
@@ -666,7 +691,7 @@ or a label (use `htmlFor`).
 
 | feature | workaround |
 |---------|-----------|
-| `useRef`, `useContext`, custom hooks | lift state up / pass props; inline hook calls |
+| `useRef`, `useContext`, `useLayoutEffect` (its updates are synchronous, during the commit), custom hooks | lift state up / pass props; `useEffect`; inline hook calls |
 | `children` / `ReactNode` props | compose in the parent |
 | recursion, `while` | `for…of`, array methods |
 | generic type aliases, interfaces, components, reducers and arrows | concrete types; generic top-level functions (see Generics) |
