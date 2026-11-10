@@ -509,7 +509,12 @@ Order inside the body:
 1. `requires(…)` — props precondition (what every parent must establish);
 2. `callbackRequires(props.cb, (args) => …)` — what this component guarantees
    about the arguments it passes to callback props (the parent may rely on it;
-   several for one callback are conjoined);
+   several for one callback are conjoined). The first argument is `props.cb` or a
+   name destructured from the props parameter, and the contract is the prop's that
+   name holds (`{ cb: f }` then `callbackRequires(f, …)` is cb's), never one spelled
+   like it; anything else is rejected. The body is a contract (guards in scope, as
+   below in Contracts: `implies(a, b)` may index under `a`); a block body is read as
+   code;
 3. hooks: `const [x, setX] = useState<T>(init)`, `const [s, dispatch] =
    useReducer(reducer, init)`, `useEffect(() => {…}, [deps])`,
    `useMemo(() => v, [deps])`, `useCallback(fn, [deps])` — top level,

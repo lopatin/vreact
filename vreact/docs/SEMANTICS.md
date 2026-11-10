@@ -544,7 +544,7 @@ Every expression maps to a Lean term whose value is the JavaScript value.
 | `ensures((r: T) => c)`            | theorem `f.post : ∀ args, h_pre → c[r := f args]` (a generic function's: also `∀ T` and its constraint binders) |
 | `requires(c)` in a component      | the props precondition `pre`; every `<C …/>` must prove it (several are conjoined in order, as in functions) |
 | `invariant(c)` in a component     | the state invariant `inv` (after the hooks; several are conjoined in order) |
-| `callbackRequires(cb, (…) => c)`  | the contract of a callback prop (§2.4) |
+| `callbackRequires(cb, (…) => c)`  | the contract of the callback prop `cb` holds (§2.4) |
 | `assert(c)` / `assume(c)`         | obligation + fact / trusted fact (reported): `c` whenever control reaches it, for every input the declaration's contracts allow; not in a generic function, a `for…of` body, an array-method callback or a functional update |
 | `forall exists distinct implies`  | bounded quantifiers, key uniqueness (`List.Nodup`), implication |
 | `/** @opaque */` on a function    | callers see only its `ensures` (modular verification) |
@@ -568,7 +568,9 @@ proof obligations, plain `a ∧ b` otherwise), `a || b` as `a ∨ ∃ (h : ¬a),
 `∀ (h : a), b`, `forall(lo, hi, i => p)` as `∀ i, ∀ (h₁ : lo ≤ i), ∀ (h₂ : i < hi), p`
 and `xs.every(x => p)` as `∀ x, ∀ (h : x ∈ xs), p`, so an index obligation in `b`,
 `p`, … sees its guard. (In code, `implies` is a function call: both arguments are
-evaluated.) Several `requires` (or `invariant`) statements are one condition
+evaluated.) The body of a `callbackRequires` lambda, which JS never calls, is such a
+contract too (a block body `{ …; return c; }` is read as code, its obligations
+holding for every argument). Several `requires` (or `invariant`) statements are one condition
 `c₁ && c₂ && …`: a later one may rely on the earlier ones as guards.
 Narrowing tests in a guard narrow what JS evaluates under it, as in code — also
 in a compound guard: in `b || s.kind === "a" || s.to.length > 0` (left-associated,
@@ -723,8 +725,17 @@ invariant-preserving interactions.
 ### 2.4 Composition: callbacks as assume/guarantee
 
 A child declares `callbackRequires(props.onPick, (i) => 0 <= i && i < props.n)`.
+The first argument is the callback prop, taken by the binding it holds, as a call
+of it is, never by its spelling: `props.onPick` on the props parameter, or a name
+destructured from it — with `{ onPick: pick }` the contract
+`callbackRequires(pick, …)` is onPick's, and with `{ onA: onB, onB: onA }`
+`callbackRequires(onA, …)` is props.onB's. Anything else (a module function or
+another object's property spelled like a callback prop, `Math.max` with a prop
+`max`) is rejected. The lambda's parameters are the callback's arguments; its
+body is a contract (§1.3: `implies(a, b)` an implication, guards in scope).
 
-* **Guarantee (child):** every call `props.onPick(e)` must prove the contract.
+* **Guarantee (child):** every call `props.onPick(e)` (or `pick(e)`, and every
+  forward of the callback to a child) must prove the contract.
 * **Assume (parent):** the parent's function passed as `onPick` is verified
   under the contract. In Lean the callback returns an `Emit` — the parent
   outcome packaged with the proof that it preserves the parent's invariant
@@ -732,7 +743,8 @@ A child declares `callbackRequires(props.onPick, (i) => 0 <= i && i < props.n)`.
 
 A handler may invoke at most one parent callback per execution path (two would
 compose two parent outcomes that were only checked separately). Several
-`callbackRequires` for one callback are conjoined.
+`callbackRequires` for one callback are conjoined, also when one names a parameter
+another ignores (`(a) => a > 0` and `(x, y) => y > 0`).
 
 ### 2.5 Lifecycle obligations
 
