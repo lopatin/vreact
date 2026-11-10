@@ -267,8 +267,9 @@ postcondition, root-precondition, unreachable, assert).
    become long disjunctions that slow or defeat the prover.)
 2. Split work: make a large function `@opaque` with precise `ensures`.
 3. Add an intermediate fact: `assert(cond)` (proved, then available).
-4. Write a Lean lemma in `proofs/<Module>.lean` (`import VTS.<Module>.Defs`);
-   tag it `@[vreact_simp]` if it is a rewrite rule (or `@[grind …]`). The lemma
+4. Write a Lean lemma in `proofs/<Module>.lean` (`import VTS.<Module>.Defs`;
+   `<Module>` is the Lean module name: `src/Base.ts` is `Base_`, `src/_util.ts`
+   is `M_util`, see reference/obligations.md); tag it `@[vreact_simp]` if it is a rewrite rule (or `@[grind …]`). The lemma
    helps the module's component obligations, the `ensures` of the module's functions that no other
    function or constant of the module uses (they are proved after it, in
    `Posts.lean`), and everything (functions, contracts, components) in the
@@ -276,7 +277,7 @@ postcondition, root-precondition, unreachable, assert).
    `<Module>`, nor the `ensures` of a function that another function or
    constant of `<Module>` calls (those are proved in `Defs.lean`, before it,
    so the caller can use them). For such a lemma: state it generically in
-   `proofs/Base.lean` (imported everywhere), or move the function that needs
+   `proofs/Base.lean` (imported everywhere, so it imports no generated module), or move the function that needs
    it to a module that imports `<Module>`. Proof files may contain only lemmas
    (`theorem`/`def`/`abbrev`/`example`, `open`, `namespace`/`section`, the
    attributes `simp`/`vreact_simp`/`grind`, `grind_pattern`, resource options) and

@@ -67,13 +67,22 @@ at top level.
   result is unused, state updates included).
 
 Each file becomes the Lean module `VTS.<path>`: its path under `src` without
-`.ts`/`.tsx`, characters other than letters, digits and `_` replaced by `_`.
-Two files that map to the same module, or to names differing only in letter
-case, are rejected (`module name clash`): e.g. `limits.ts` + `limits.tsx`,
-`my-x.ts` + `my_x.ts`, `todo.ts` + `Todo.tsx`. Rename one of them. Within a
-module, types and values share Lean's one namespace: a function or constant
-named like a type of its module (`type Limits = …; const Limits: Limits = …`)
-is rejected.
+`.ts`/`.tsx`, characters other than letters, digits and `_` replaced by `_`; a
+path segment starting with a digit or `_` gets a leading `M` (`src/_util.ts` is
+`VTS.M_util`: Lean gives `_`-names meanings), and one that is a Lean keyword or
+Lean name a trailing `_` (`src/end.ts` is `VTS.end_`). A file directly in `src`
+named `Base` (in any letter case) is `VTS.Base_`, so its lemma file is
+`proofs/Base_.lean`: `proofs/Base.lean` is the global lemma file (see
+obligations.md). Two files that map to the same module, or to names differing
+only in letter case, are rejected (`module name clash`): e.g. `limits.ts` +
+`limits.tsx`, `my-x.ts` + `my_x.ts`, `todo.ts` + `Todo.tsx`, `end.ts` +
+`end_.ts`. Rename one of them. Within a module, types and values share Lean's
+one namespace: a function, component or constant named like a type of its
+module (`type Limits = …; const Limits: Limits = …`, `type Todo = …; function
+Todo(…)`) is rejected. Inline object and union types are named by the
+translator after where they occur (`const config: { … }` → `Config`, a
+function's result → `<Fn>Result`), with a subscript (`Config₂`) when that name
+is taken by a type, function, component or constant of the module.
 
 The tsconfig needs `"strict": true` (with every check of the strict family:
 `strictNullChecks`, `noImplicitAny`, `strictFunctionTypes`, … none set to false)
@@ -101,7 +110,7 @@ compiles a file with the nearest one's settings, e.g. its `jsxImportSource`).
 | `"a" \| "b" \| "c"`                     | string-literal enums (`switch` on them is exhaustive) |
 | `{ readonly f: T; g?: U }`              | records (optional field = `U \| undefined`) |
 | `{ kind: "x"; … } \| { kind: "y"; … }`  | discriminated unions — any common string-literal field works |
-| `readonly T[]`, `T \| null`, `[A, B]`   | lists, options (not both null and undefined), tuples |
+| `readonly T[]`, `T \| null`, `[A, B]`   | lists, options (not both null and undefined), tuples (fixed length, at least one element; named members `[lo: A, hi: B]` too, but no optional `a?: A` or rest `...r: A[]` members) |
 | `ReadonlyMap<K, V>`, `ReadonlySet<T>`   | Maps and Sets (also `Map`/`Set`): see [Map and Set](#map-and-set) |
 | `(a: A) => void`                        | only as callback **props** (a direct field of a props type); never data: not a function's parameter or result, state, a constant, a local, a hole, an array element |
 

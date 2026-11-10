@@ -404,16 +404,26 @@ function jsxRuntimeProblem(sf: ts.SourceFile, program: ts.Program, root: string)
 /** The Lean namespace of the module of source file `f` (also used by `vreact synth`, whose type names must match). */
 export function moduleNs(srcDir: string, f: string): string {
   const rel = path.relative(srcDir, f).replace(/\.(tsx?|jsx?)$/, "");
-  return "VTS." + rel.split(path.sep).map(sanitizeSeg).join(".");
+  const segs = rel.split(path.sep);
+  return "VTS." + segs.map((s) => sanitizeSeg(s, segs.length === 1)).join(".");
 }
 
-/** A module path segment as a Lean namespace / module name component (also a directory name). */
-function sanitizeSeg(s: string): string {
+/**
+ * A module path segment as a Lean namespace / module name component (also a directory name, and,
+ * after `Proofs.`, the name of the module's lemma file). `only`: the module's path has this one
+ * segment (a file directly in src/).
+ */
+function sanitizeSeg(s: string, only: boolean): string {
   const t0 = s.replace(/[^A-Za-z0-9_]/g, "_");
-  const t = /^[A-Za-z_]/.test(t0) ? t0 : "M" + t0;
+  // a component must start with a letter: not a digit, and not `_`, since Lean gives `_`-names
+  // meanings (a name ending in the component `_hyg` is a macro-scoped name: declarations in
+  // the namespace VTS._hyg are lost; `_private`, `_root_`, …)
+  const t = /^[A-Za-z]/.test(t0) ? t0 : "M" + t0;
   // a Lean token (`end`, `at`, `Type`) does not parse as a name component, and a Lean or
-  // generated name (`List`, `VReact`) would capture references (`List.map` inside VTS.List)
-  return clashesWithLean(t) ? t + "_" : t;
+  // generated name (`List`, `VReact`) would capture references (`List.map` inside VTS.List);
+  // the lemma file of a top-level module `Base` would be proofs/Base.lean, which is the global
+  // lemma file every Defs imports (in any letter case: one file on a case-insensitive disk)
+  return clashesWithLean(t) || (only && t.toLowerCase() === "base") ? t + "_" : t;
 }
 
 /** Is the type annotation React's node type (`JSX.Element`, `ReactNode`, `ReactElement`, also `… | null`), by its declaration? */
@@ -518,7 +528,7 @@ function translateAll(cfg: Config): TranslateResult {
     const a = path.relative(cfg.root, other.fileName), b = path.relative(cfg.root, sf.fileName);
     const otherNs = nsOfFile(other.fileName);
     const same = otherNs === ns ? `the same Lean module ${ns}` : `Lean modules ${otherNs} and ${ns}, whose files differ only in letter case`;
-    res.errors.push(new VtsError(sf, `module name clash: ${a} and ${b} translate to ${same} (a module is named after its path without the .ts/.tsx extension, other characters than letters, digits and _ become _, and a segment that is a Lean keyword or Lean name gets a trailing _); rename one of the files`));
+    res.errors.push(new VtsError(sf, `module name clash: ${a} and ${b} translate to ${same} (a module is named after its path without the .ts/.tsx extension, other characters than letters, digits and _ become _, a segment that starts with a digit or _ gets a leading M, and a segment that is a Lean keyword or Lean name, or a module src/Base.ts in any letter case, gets a trailing _); rename one of the files`));
   }
   if (res.errors.length) return res;
   // ---- a module's generated files go to the directory VTS/<segments>/: two modules whose
@@ -661,6 +671,22 @@ function translateAll(cfg: Config): TranslateResult {
     res.errors.push(e);
   }
   if (res.errors.length) return res;
+  // every Defs.lean imports proofs/Base.lean: what it imports (also through other proof files)
+  // cannot be generated code, which would close an import cycle (lake: "build cycle detected")
+  const baseCycle = baseProofCycle(new Map(leanFiles.map((f) => ["Proofs." + f.rel.replace(/\.lean$/, "").split(path.sep).slice(1).join("."), f.text])));
+  if (baseCycle) {
+    const fileOf = (p: string) => path.join(path.relative(cfg.root, cfg.proofsDir), ...p.split(".").slice(1)) + ".lean";
+    const via = baseCycle.chain.length > 1 ? ` (through ${baseCycle.chain.slice(1).map(fileOf).join(" → ")})` : "";
+    // (a module src/Base.ts is VTS.Base_: its lemma file is proofs/Base_.lean)
+    const baseMod = sfs.find((sf) => path.dirname(path.resolve(sf.fileName)) === path.resolve(cfg.srcDir) && /^base\.tsx?$/i.test(path.basename(sf.fileName)));
+    const hint = baseMod ? `; the lemmas about ${path.relative(cfg.root, baseMod.fileName)} (the Lean module ${nsOfFile(baseMod.fileName)}) go in ${fileOf("Proofs." + nsOfFile(baseMod.fileName).slice(4))}, importing ${nsOfFile(baseMod.fileName)}.Defs` : "";
+    const e = new VtsError(undefined, `${fileOf("Proofs.Base")} is the global lemma file, imported by every generated Defs.lean, so it cannot import generated code: it imports ${baseCycle.target}${via}, which would make an import cycle; state its lemmas without the generated modules, and put lemmas about a module src/<path>.ts in proofs/<path>.lean${hint}`);
+    e.file = path.join(cfg.proofsDir, ...baseCycle.file.split(".").slice(1)) + ".lean";
+    e.line = baseCycle.line;
+    e.col = baseCycle.col;
+    res.errors.push(e);
+    return res;
+  }
   /** the Lean names each module generates, for `nameClashes` */
   const declared = new Map<ts.SourceFile, GeneratedNames>();
   // the user lemmas about a module's functions (proofs/<Up>.lean) are imported into the Defs of
@@ -1029,6 +1055,35 @@ function leanImports(text: string): string[] {
 }
 
 /**
+ * The first import of a generated module (`VTS`, `VTS.…`) that `Proofs.Base` reaches through its
+ * imports and those of the proof files it imports (`proofs`: proof module → text): `file` is the
+ * proof module with that import (`line`/`col` locate it, 1-based), `chain` the proof modules from
+ * `Proofs.Base` to it. Every Defs.lean imports `Proofs.Base`, so such an import closes a cycle.
+ */
+function baseProofCycle(proofs: Map<string, string>): { file: string; line: number; col: number; chain: string[]; target: string } | null {
+  if (!proofs.has("Proofs.Base")) return null;
+  const seen = new Set<string>();
+  const queue: string[][] = [["Proofs.Base"]];
+  while (queue.length) {
+    const chain = queue.shift()!;
+    const p = chain[chain.length - 1];
+    if (seen.has(p)) continue;
+    seen.add(p);
+    const text = proofs.get(p)!;
+    for (const i of leanImports(text)) {
+      if (i === "VTS" || i.startsWith("VTS.")) {
+        // (comments blanked, line breaks kept: the line of the import)
+        const lines = text.replace(/\/-[\s\S]*?-\//g, (c) => c.replace(/[^\n]/g, " ")).replace(/--.*$/gm, "").split("\n");
+        const at = lines.findIndex((l) => /^\s*(?:(?:public|private|meta)\s+)*import\b/.test(l) && l.split(/\s+/).includes(i));
+        return { file: p, line: at + 1, col: at < 0 ? 0 : lines[at].indexOf(i) + 1, chain, target: i };
+      }
+      if (proofs.has(i)) queue.push([...chain, i]);
+    }
+  }
+  return null;
+}
+
+/**
  * For each module (in import order, dependencies first): the user proof modules
  * `Proofs.<Up>` of the modules it imports, to be imported by its Defs.lean. An import that
  * would close a cycle (a proof file that itself imports, directly or not, the importing
@@ -1083,6 +1138,7 @@ function collect(st: ts.Statement, m: ModCtx, ns: string, res: TranslateResult) 
     const trusted = isTrusted(st);
     if (!trusted && st.body) rejectAsyncFunctions(st.body);
     if (isComponentDecl(st, prog)) {
+      checkValueNameFree(st.name, "component", m);
       if (st.typeParameters?.length) fail(st.typeParameters[0], `generic components are not supported in VTS (${st.name.text}<${st.typeParameters.map((t) => t.name.text).join(", ")}>): give the props concrete types, and move generic code into a generic top-level function`);
       const info = compSignature(st, ns, ns, m, trusted);
       prog.globals.set(st, { k: "comp", info });
@@ -1189,9 +1245,10 @@ function collect(st: ts.Statement, m: ModCtx, ns: string, res: TranslateResult) 
 }
 
 /**
- * A function or constant must not share its name with a type of the module: TypeScript keeps
- * types and values apart (`type Limits = …; const Limits: Limits = …`), but both would be the
- * Lean declaration `VTS.<module>.Limits`.
+ * A function, component or constant must not share its name with a type of the module:
+ * TypeScript keeps types and values apart (`type Limits = …; const Limits: Limits = …`), but
+ * both would be the Lean declaration `VTS.<module>.Limits` (a component: the namespace of its
+ * Props, State, init, …, which the type's fields and constructors would share).
  */
 function checkValueNameFree(name: ts.Identifier, what: string, m: ModCtx) {
   const t = m.sf.statements.find((x) => (ts.isTypeAliasDeclaration(x) || ts.isInterfaceDeclaration(x)) && x.name.text === name.text);
@@ -1528,6 +1585,15 @@ function translateFunction(fn: ts.FunctionDeclaration, info: FnInfo, m: ModCtx):
       fail(c, "recursion is not supported yet");
     } else break;
     stmts.shift();
+  }
+  // a call of the function in its own `requires` is recursion: JS evaluates the condition on every
+  // call (also of a @trusted function), and the precondition is part of the function's Lean
+  // signature, which cannot mention the function (by the declaration the callee resolves to)
+  const selfCall = (n: ts.Node): ts.Node | undefined =>
+    ts.isCallExpression(n) && ts.isIdentifier(n.expression) && m.prog.refDecl(n.expression) === fn ? n : ts.forEachChild(n, selfCall);
+  for (const r of reqs) {
+    const c = selfCall(r);
+    if (c) fail(c, `recursion is not supported yet: the requires of ${info.name} calls ${info.name} (JS evaluates it on every call)`);
   }
   // all requires form one precondition (each guarded by the earlier ones): call sites pass one proof
   if (reqs.length) {
