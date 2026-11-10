@@ -10,7 +10,7 @@
 import ts from "typescript";
 import { T, type VType, type Param, type Field, leanType, showType, typeOfNode, checkValueType, propertyName, isLibSymbol, collectionKind } from "./types.ts";
 import { type Env, ModCtx, type CompCtx, type CompInfo, type CallbackInfo, type StateVar, type FnInfo, type Binding, bind, freshLocal, refSymbol } from "./ctx.ts";
-import { expr, prop, propAll, block, branch, handlerFn, checkDeps, hookName, specFn, isGlobal, symbolOf, bindParam, type BlockCtx, typeOf, valueBlock, contractLambda, outcome, checkClosures, topLevelHookDecls, fnParamTsTypes, stripParens, isNumeric, evalArgs, isDocumentTitle, jsxAttrText, checkPlainParams, isNullLit, ARRAY_MUTATORS, isMutatedLocal } from "./translate.ts";
+import { expr, prop, propAll, block, branch, handlerFn, checkDeps, hookName, specFn, isGlobal, symbolOf, bindParam, type BlockCtx, typeOf, valueBlock, contractLambda, outcome, checkClosures, topLevelHookDecls, fnParamTsTypes, stripParens, isNumeric, evalArgs, isDocumentTitle, jsxAttrText, checkPlainParams, isNullLit, ARRAY_MUTATORS, isMutatedLocal, toStr, nullishKinds } from "./translate.ts";
 import { fail, leanField, leanIdent, leanStr, jsStr, paren, nodeText, indent, VtsError, jsxTextValue, asciiLower } from "./util.ts";
 
 /* ─────────────────────── React 18.3.1 event model ───────────────────────
@@ -1304,7 +1304,7 @@ export function jsxNode(e0: ts.Expression, env: Env): string {
   if (ts.isParenthesizedExpression(e)) return jsxNode(e.expression, env);
   if (e.kind === ts.SyntaxKind.NullKeyword || isGlobal(env, e, "undefined") || e.kind === ts.SyntaxKind.FalseKeyword) return "VReact.VNode.empty";
   if (ts.isJsxElement(e) || ts.isJsxSelfClosingElement(e)) return element(e, env);
-  if (ts.isJsxFragment(e)) return `(VReact.VNode.elem "fragment" [] [] ${children(e.children, env)})`;
+  if (ts.isJsxFragment(e)) return `(VReact.VNode.elem "fragment" [] [] ${children(e.children, env, e, "<>…</>")})`;
   if (ts.isConditionalExpression(e)) return branch(e.condition, env, (e1) => jsxNode(e.whenTrue, e1), (e2) => jsxNode(e.whenFalse, e2));
   if (ts.isBinaryExpression(e) && e.operatorToken.kind === ts.SyntaxKind.AmpersandAmpersandToken) {
     return branch(e.left, env, (e1) => jsxNode(e.right, e1), () => "VReact.VNode.empty");
@@ -1344,8 +1344,14 @@ export function jsxNode(e0: ts.Expression, env: Env): string {
   }
 }
 
-function children(cs: ts.NodeArray<ts.JsxChild>, env: Env): string {
+/**
+ * The children of an element or a fragment (`parent`, described as `what`).  React reconciles
+ * them as one array, so the explicit keys of the elements in it must be pairwise distinct
+ * (`siblingKeys`).
+ */
+function children(cs: ts.NodeArray<ts.JsxChild>, env: Env, parent: ts.Node, what: string): string {
   const items: string[] = [];
+  const slots: ts.Expression[] = [];
   for (const c of cs) {
     if (ts.isJsxText(c)) {
       const t = jsxTextValue(c.text, c);
@@ -1356,11 +1362,135 @@ function children(cs: ts.NodeArray<ts.JsxChild>, env: Env): string {
       if (!c.expression) continue;
       if (c.dotDotDotToken) fail(c, "spread children are not supported");
       items.push(jsxNode(c.expression, env));
+      slots.push(c.expression);
       continue;
     }
     items.push(jsxNode(c as ts.Expression, env));
+    slots.push(c as ts.Expression);
   }
-  return items.length ? `(VReact.VList.ofList [\n    ${items.map((i) => indent(i, 2).trimStart()).join(",\n    ")}])` : "VReact.VList.nil";
+  const list = items.length ? `(VReact.VList.ofList [\n    ${items.map((i) => indent(i, 2).trimStart()).join(",\n    ")}])` : "VReact.VList.nil";
+  return siblingKeys(slots, env, parent, what, list);
+}
+
+/** An explicitly keyed element that a child can put into its parent's children array. */
+interface SiblingKey {
+  attr: ts.JsxAttribute;
+  /** the key, when it is written as a string (`key="a"`, `key={"a"}`) */
+  lit: string | null;
+  /** the child is this element, unconditionally */
+  always: boolean;
+}
+
+/** The `key` attribute of a JSX element, or null. */
+function keyAttrOf(e: ts.JsxElement | ts.JsxSelfClosingElement): ts.JsxAttribute | null {
+  for (const a of attrs(e)) if (ts.isJsxAttribute(a) && a.name.getText() === "key") return a;
+  return null;
+}
+
+/** The JSX const a child expression names (`{row}`), or null. */
+function jsxConstOf(e: ts.Expression, env: Env): { node: ts.Expression; env: Env } | null {
+  if (!ts.isIdentifier(e)) return null;
+  const s = symbolOf(env, e);
+  const b = s ? env.vars.get(s) : undefined;
+  return b?.k === "jsx" ? { node: b.node, env: b.env } : null;
+}
+
+/**
+ * The explicitly keyed elements that the child `e0` can put at the top level of the children
+ * array it is in, following `jsxNode`: the element itself, the branches of `c ? a : b` and
+ * `c && a`, the element of a JSX const.  A fragment and a keyed list (`xs.map(…)`) are one child
+ * of the array (React makes each a fragment fiber), whose keys are those of an array of its own.
+ */
+function siblingKeysOf(e0: ts.Expression, env: Env, always: boolean, out: SiblingKey[]): SiblingKey[] {
+  const e = stripParens(e0);
+  if (ts.isJsxElement(e) || ts.isJsxSelfClosingElement(e)) {
+    const a = keyedByMap.has(e) ? null : keyAttrOf(e);
+    if (a) out.push({ attr: a, lit: literalAttr(a), always });
+  } else if (ts.isConditionalExpression(e)) {
+    siblingKeysOf(e.whenTrue, env, false, out);
+    siblingKeysOf(e.whenFalse, env, false, out);
+  } else if (ts.isBinaryExpression(e) && e.operatorToken.kind === ts.SyntaxKind.AmpersandAmpersandToken) {
+    siblingKeysOf(e.right, env, false, out);
+  } else {
+    const c = jsxConstOf(e, env);
+    if (c) siblingKeysOf(c.node, c.env, always, out);
+  }
+  return out;
+}
+
+/**
+ * React 18 compares the keys of the elements of one children array as strings (`'' + key`:
+ * `key={1}` and `key="1"` are the same key) and requires them to be pairwise distinct: with two
+ * equal keys, `reconcileChildrenArray` warns ("Encountered two children with the same key") and,
+ * once an update leaves its first pass, `mapRemainingChildren` keeps one old fiber per key, so the
+ * other is neither reused nor deleted — its DOM stays, with stale handlers, and it is never
+ * unmounted.  The model reconciles these children by position (`VNode.withKey`), which matches
+ * React only when the keys are distinct.  So when two or more children of `parent` may have an
+ * explicit key, two that are always present with the same written key are rejected, and unless
+ * all keys are strings that differ between children, the children carry a `unique-keys`
+ * obligation (`VList.withKeys`) over the keys of the children present, as strings.
+ */
+function siblingKeys(slots: ts.Expression[], env: Env, parent: ts.Node, what: string, list: string): string {
+  const keyed = slots.map((s) => ({ slot: s, keys: siblingKeysOf(s, env, true, []) })).filter((s) => s.keys.length);
+  if (keyed.length < 2) return list;
+  const seen = new Map<string, SiblingKey>();
+  for (const { keys } of keyed) {
+    for (const k of keys) {
+      if (!k.always || k.lit === null) continue;
+      if (seen.has(k.lit)) fail(k.attr, `two children of ${what} have the same key ${JSON.stringify(k.lit)}: React requires the keys of the children of one element to be distinct (with two equal keys it can duplicate or omit children, and one of them stays mounted, with its handlers, after it is removed); give them distinct keys`);
+      seen.set(k.lit, k);
+    }
+  }
+  // keys written as strings that no two children share: distinct, whichever are present
+  const lits = keyed.map(({ keys }) => keys.map((k) => k.lit));
+  if (lits.every((ls) => ls.every((l) => l !== null)) && lits.every((ls, i) => ls.every((l) => lits.every((other, j) => j === i || !other.includes(l))))) return list;
+  const parts = keyed.map(({ slot }) => siblingKeysTerm(slot, env));
+  const shown = keyed.flatMap(({ keys }) => keys.map((k) => (k.lit !== null ? JSON.stringify(k.lit) : nodeText(attrValue(k.attr)!, 40))));
+  const ob = env.m.ob(parent, "unique-keys", `the keys of the children of ${what} are distinct (React compares them as strings): ${shown.join(", ")}`);
+  return `(VReact.VList.withKeys (${parts.join(" ++\n    ")})\n  ${ob}\n  ${list})`;
+}
+
+/**
+ * The keys (as strings, in a Lean list) that the child `e0` puts into its parent's children
+ * array: the branches of conditionals as `jsxNode` translates them, a JSX const's element where
+ * it is declared (JS evaluates its key there).
+ */
+function siblingKeysTerm(e0: ts.Expression, env: Env): string {
+  const e = stripParens(e0);
+  const has = (x: ts.Expression, ex: Env) => siblingKeysOf(x, ex, true, []).length > 0;
+  if (ts.isJsxElement(e) || ts.isJsxSelfClosingElement(e)) {
+    const a = keyedByMap.has(e) ? null : keyAttrOf(e);
+    return a ? keyString(a, env) : "[]";
+  }
+  if (ts.isConditionalExpression(e)) {
+    if (!has(e.whenTrue, env) && !has(e.whenFalse, env)) return "[]";
+    return branch(e.condition, env, (e1) => siblingKeysTerm(e.whenTrue, e1), (e2) => siblingKeysTerm(e.whenFalse, e2));
+  }
+  if (ts.isBinaryExpression(e) && e.operatorToken.kind === ts.SyntaxKind.AmpersandAmpersandToken) {
+    if (!has(e.right, env)) return "[]";
+    return branch(e.left, env, (e1) => siblingKeysTerm(e.right, e1), () => "[]");
+  }
+  const c = jsxConstOf(e, env);
+  return c ? siblingKeysTerm(c.node, { ...c.env, scope: env.scope }) : "[]";
+}
+
+/**
+ * The key of `key={…}` as React sees it, `'' + key`, as a Lean list: one string, or none for
+ * `undefined` (React's `jsx()` ignores an undefined key, but makes a null one the key "null").
+ */
+function keyString(a: ts.JsxAttribute, env: Env): string {
+  const lit = literalAttr(a);
+  if (lit !== null) return `[${jsStr(lit)}]`;
+  const val = attrValue(a)!;
+  const v = expr(val, env);
+  const scalar = (t: VType) => ["str", "int", "num", "bool", "enum"].includes(t.k);
+  if (scalar(v.type)) return `[${toStr(v, val)}]`;
+  if (v.type.k === "opt" && scalar(v.type.elem)) {
+    const kinds = nullishKinds(val, env);
+    const x = env.m.fresh("key");
+    return `(match ${v.code} with | some ${x} => [${toStr({ code: x, type: v.type.elem }, val)}] | none => [${!kinds || kinds.null ? jsStr("null") : ""}])`;
+  }
+  fail(val, `a key of type ${showType(v.type)} next to other keyed children: React compares the keys of the children of one element as strings ('' + key), which VTS models for string, int, number, boolean and string-enum keys (and their optional forms); key by one of these`);
 }
 
 function attrs(e: ts.JsxElement | ts.JsxSelfClosingElement): ts.NodeArray<ts.JsxAttributeLike> {
@@ -1760,7 +1890,7 @@ function intrinsic(tag: string, e: ts.JsxElement | ts.JsxSelfClosingElement, kid
     }
     as.push(`⟨${leanStr(name)}, ${av}⟩`);
   }
-  const ch = kids ? withBubble(inner, () => children(kids, env)) : "VReact.VList.nil";
+  const ch = kids ? withBubble(inner, () => children(kids, env, e, `<${tag}>`)) : "VReact.VList.nil";
   return withKey(key, `(VReact.VNode.elem ${leanStr(tag)} [${as.join(", ")}]\n  [${hs.join(",\n   ")}]\n  ${ch})`);
 }
 

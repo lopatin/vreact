@@ -706,7 +706,7 @@ function untypedFix(e: ts.Expression, env: Env, otherwise: string): string {
   return rt ? `annotate the result parameter with the return type, ensures((${root.text}: ${nodeText(rt, 50)}) => …)` : otherwise;
 }
 
-function nullishKinds(e: ts.Expression, env: Env): { null: boolean; undef: boolean } | null {
+export function nullishKinds(e: ts.Expression, env: Env): { null: boolean; undef: boolean } | null {
   const t = tsTypeOf(e, env);
   return t ? kindsOfType(t) : null;
 }
@@ -1268,7 +1268,7 @@ function narrowAdvice(x: ts.Expression | undefined, env: Env): string {
 }
 
 /** Conversion to string (template literals, JSX text, string concatenation). */
-function toStr(v: Val, node: ts.Node): string {
+export function toStr(v: Val, node: ts.Node): string {
   switch (v.type.k) {
     case "str":
       return paren(v.code);
