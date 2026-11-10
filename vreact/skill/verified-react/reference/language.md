@@ -21,7 +21,10 @@ at top level.
   Bare specifiers that reach a project file (`"@/model"` through `paths`,
   `"model"` through `baseUrl`) are rejected. Vite reads everything from the first
   `?` or `#` of a path as a URL query or hash (`"./limits#v2"` loads `limits.ts`),
-  so neither an import path nor a source's path may contain `?` or `#`.
+  and its dev server percent-decodes a module's URL (`limits%61.ts` is served as
+  `limitsa.ts`; the browser turns `\` into `/` and drops tabs and line breaks),
+  so neither an import path nor a source's path may contain `?`, `#`, `%`, `\`,
+  a tab or a line break.
 * The sources are the `.ts`/`.tsx` files of `"src"` (vreact.json) except `.d.ts`
   files, tests (a name containing `.test.` or `.spec.`: `order.spec.ts` is
   skipped — a verified file importing it is rejected; rename it), files in
@@ -29,8 +32,9 @@ at top level.
   exactly the files in `"include"`. They must be inside the project directory and
   must not be (or be inside) a symbolic link: Vite loads a module from its real
   path and resolves its imports from there, TypeScript from the link's path. An
-  object `"browser"` field in the package.json nearest to a source is rejected
-  (Vite maps relative imports through it).
+  object `"browser"` field in any package.json from a source's directory up to the
+  root of the file system is rejected (Vite maps imports through the nearest
+  package.json it can load, skipping a `null` or otherwise unloadable one).
 * Exports: `export` on declarations, `export { a, b as c }`, `export default f`
   / `export default x` (a name; `export default <expression>` is rejected —
   declare a `const` and export that), re-exports `export … from "./m"` (they load
@@ -105,7 +109,10 @@ compiles a file with the nearest one's settings, e.g. its `jsxImportSource`), an
 so is a project without a tsconfig.json that has one above it (the bundler would
 use that one). A solution-style tsconfig.json with `"references"` (Vite's react-ts
 template: `"files": []` and `tsconfig.app.json`) is rejected: put the compiler
-options in tsconfig.json itself.
+options in tsconfig.json itself. `"extends"` must name a file of the project by a
+relative path that TypeScript and Vite resolve to the same file — write it in full
+(`"./tsconfig.base.json"`): Vite resolves `"./base"` like Node's `require`
+(`base.js` before `base.json`); a package name (`"@tsconfig/…"`) is rejected.
 
 ## Types
 

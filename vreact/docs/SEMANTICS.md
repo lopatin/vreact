@@ -1174,7 +1174,14 @@ hook rules hold (static checks). For every function: its body is safe and its
   compile its files with that one). A solution-style tsconfig.json (`"references"`,
   as in Vite's react-ts template) is rejected: Vite compiles a file it does not
   include with the referenced tsconfig that does (`tsconfig.app.json`), which
-  vreact does not read.
+  vreact does not read. Vite also merges in the tsconfig files `"extends"` names,
+  resolving each path as Node's `require.resolve` does from the extending file
+  (the path, then with `.js`, `.json`, `.node` added; tsconfck), where TypeScript
+  tries the path, then with `.json` added: each `"extends"` path is resolved both
+  ways (also through symbolic links, from the real path and from the path itself)
+  and must lead to the same file at every step (`"./base"` with a `base.js` next
+  to `base.json` is rejected); a package name (`"@tsconfig/…"`, looked for in
+  `node_modules` by two different algorithms) is rejected.
 * **TypeScript's checker.** VTS relies on the program type-checking without
   errors (null and undefined, the types of library and React declarations,
   imports): `@ts-ignore`, `@ts-expect-error` and `@ts-nocheck` are rejected
@@ -1212,12 +1219,18 @@ hook rules hold (static checks). For every function: its body is safe and its
   without those settings. Vite gives every module the id of its real path
   (`resolve.preserveSymlinks` is false) and resolves its relative imports from
   there, and it reads everything from the first `?` or `#` of a path as a URL
-  query or hash (`./limits#v2` is `./limits`): so the sources must be inside the
-  project directory, with no symbolic link below it on their path (a link in the
-  source directory, to a file or a directory, is rejected), and neither a source's
-  path nor an import path may contain `?` or `#`. Vite also maps the relative
-  imports of a package's modules through an object `"browser"` field of the
-  nearest package.json: such a field next to the sources is rejected. The
+  query or hash (`./limits#v2` is `./limits`); its dev server serves a module at
+  the URL of its path, which the server percent-decodes (`limits%61.ts` is served
+  as `limitsa.ts`) and the browser's URL parser changes (`\` becomes `/`, tabs
+  and line breaks are dropped): so the sources must be inside the project
+  directory, with no symbolic link below it on their path (a link in the source
+  directory, to a file or a directory, is rejected), and neither a source's real
+  path nor an import path may contain `?`, `#`, `%`, `\`, a tab or a line break.
+  Vite also maps the imports of a module (relative ones, and `react`) through an
+  object `"browser"` field of the nearest package.json it can load — skipping one
+  that is not JSON, starts with a byte order mark, is `null` or has a
+  `"sideEffects"` list it cannot read —: such a field in any package.json from a
+  source's directory up to the root of the file system is rejected. The
   sources are the `.ts`/`.tsx` files of `"src"` (vreact.json), except declaration
   files, tests (a name containing `.test.` or `.spec.`), files in `node_modules`
   or in a directory whose name starts with `.`, and those listed in `"exclude"`

@@ -96,23 +96,35 @@ const MAX_HEARTBEATS = 1_000_000_000;
 /**
  * vreact removes `<out>/VTS`, `<out>/Proofs` and `<out>/.lake` before it writes the generated Lean
  * project: "out" must be a directory of its own — not the project directory or one containing
- * it, and neither "src" nor "proofs", inside one of them or containing one (on a case-insensitive
- * disk `./VTS` is `./vts`, and `./Proofs` is `./proofs`). Paths are compared through symbolic
+ * it, nor "src" or "proofs" or a directory containing one of them, nor inside "proofs" (whose
+ * Lean files are the user's; on a case-insensitive disk `./VTS` is `./vts`, and `./Proofs` is
+ * `./proofs`). It may be inside "src" (`"src": "."` with the default `.vreact`): the sources are
+ * `.ts`/`.tsx` files, and vreact removes `<out>/VTS` and `<out>/Proofs` only when they hold
+ * nothing but Lean files (`notGenerated` in module.ts). Paths are compared through symbolic
  * links and without regard to letter case.
  */
 function checkOutDir(cfgFile: string, root: string, srcDir: string, proofsDir: string, outDir: string) {
+  const problem = outDirProblem(root, srcDir, proofsDir, outDir);
+  if (!problem) return;
+  const dflt = path.resolve(root, ".vreact");
+  const suggest = dflt !== path.resolve(outDir) && !outDirProblem(root, srcDir, proofsDir, dflt) ? `, such as ".vreact"` : ` (one that neither is nor contains the project directory, "src" or "proofs", and is not inside "proofs")`;
+  throw new Error(`${cfgFile}: "out" (${JSON.stringify(path.relative(root, outDir) || ".")}) ${problem}: vreact replaces the directories VTS/, Proofs/ and .lake/ inside "out" with the Lean project it generates; set "out" to a directory of its own${suggest}`);
+}
+
+/** What is wrong with `outDir` as "out" (see `checkOutDir`), null when nothing is. */
+function outDirProblem(root: string, srcDir: string, proofsDir: string, outDir: string): string | null {
   const out = canonicalPath(outDir);
   const within = (a: string, b: string) => a === b || a.startsWith(b.endsWith(path.sep) ? b : b + path.sep);
-  const where = `"out" (${JSON.stringify(path.relative(root, outDir) || ".")})`;
-  const why = "vreact replaces the directories VTS/, Proofs/ and .lake/ inside \"out\" with the Lean project it generates; set \"out\" to a directory of its own, such as \".vreact\"";
-  if (within(canonicalPath(root), out)) throw new Error(`${cfgFile}: ${where} is ${out === canonicalPath(root) ? "the project directory itself" : "a directory containing the project directory"}: ${why}`);
+  if (within(canonicalPath(root), out)) return `is ${out === canonicalPath(root) ? "the project directory itself" : "a directory containing the project directory"}`;
   for (const [name, dir] of [["src", srcDir], ["proofs", proofsDir]] as const) {
     const d = canonicalPath(dir);
-    if (within(out, d) || within(d, out)) {
+    // (inside "src" is allowed; inside "proofs" is not)
+    if (within(d, out) || (name === "proofs" && within(out, d))) {
       const caseOnly = !(path.resolve(outDir) === path.resolve(dir) || path.resolve(outDir).startsWith(path.resolve(dir) + path.sep) || path.resolve(dir).startsWith(path.resolve(outDir) + path.sep));
-      throw new Error(`${cfgFile}: ${where} ${out === d ? "is the same directory as" : within(out, d) ? "is inside" : "contains"} the "${name}" directory (${JSON.stringify(path.relative(root, dir) || ".")}${caseOnly ? ", through a symbolic link or on a disk that ignores letter case" : ""}): ${why}`);
+      return `${out === d ? "is the same directory as" : within(out, d) ? "is inside" : "contains"} the "${name}" directory (${JSON.stringify(path.relative(root, dir) || ".")}${caseOnly ? ", through a symbolic link or on a disk that ignores letter case" : ""})`;
     }
   }
+  return null;
 }
 
 /**

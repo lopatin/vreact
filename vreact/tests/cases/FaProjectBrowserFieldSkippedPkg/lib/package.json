@@ -1,0 +1,4 @@
+{
+  "private": true,
+  "browser": { "./isnull/limits.js": "./evil.js", "./bom/limits.js": "./evil.js", "./sfx/limits.js": "./evil.js" }
+}

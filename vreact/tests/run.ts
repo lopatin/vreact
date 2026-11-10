@@ -19,8 +19,11 @@
  * the case's project in a directory of the system's temporary directory, with no tsconfig.json
  * above it (vreact rejects a project without one of its own whose files the bundler would compile
  * with one above it, as vreact/tsconfig.json is above tests/.work) and a node_modules/ of links
- * to vreact, react and @types/react. A `reject` case is also met by an error of vreact.json
- * (loadConfig), with the message of that error.
+ * to vreact, react and @types/react. A file `VIA_LINK` (with `ISOLATED`) makes the project at
+ * `<dir>/real/app`, copies the case's `_above/` to `<dir>/real/` (the directory above the
+ * project's real location), and runs vreact on the project through the symbolic link `<dir>/app`
+ * (the bundler finds files from a module's real path). A `reject` case is also met by an error of
+ * vreact.json (loadConfig), with the message of that error.
  */
 import fs from "node:fs";
 import os from "node:os";
@@ -469,6 +472,12 @@ for (const name of dirCases) {
     }
     dir = path.join(base, name);
   }
+  // (`VIA_LINK`: the project is made at <dir>/real/app and reached through the link <dir>/app)
+  const linkBase = fs.existsSync(path.join(src, "VIA_LINK")) ? dir : null;
+  if (linkBase) {
+    fs.rmSync(linkBase, { recursive: true, force: true });
+    dir = path.join(linkBase, "real", "app");
+  }
   fs.rmSync(dir, { recursive: true, force: true });
   fs.mkdirSync(path.join(dir, "src"), { recursive: true });
   // (a symbolic link is copied as a link, its target verbatim)
@@ -477,14 +486,19 @@ for (const name of dirCases) {
     else fs.cpSync(from, to, { recursive: true, verbatimSymlinks: true });
   };
   for (const f of files) copy(path.join(src, f), path.join(dir, "src", f));
-  // subdirectories other than proofs/, smuggled/ and _node_modules/ are source directories (nested
+  // subdirectories other than proofs/, smuggled/, _node_modules/ and _above/ are source directories (nested
   // modules); _node_modules/ is the project's node_modules/ (installed libraries, e.g. type declarations)
-  for (const f of fs.readdirSync(src)) if (f !== "proofs" && f !== "smuggled" && f !== "_node_modules" && fs.statSync(path.join(src, f)).isDirectory()) copy(path.join(src, f), path.join(dir, "src", f));
+  for (const f of fs.readdirSync(src)) if (f !== "proofs" && f !== "smuggled" && f !== "_node_modules" && f !== "_above" && fs.statSync(path.join(src, f)).isDirectory()) copy(path.join(src, f), path.join(dir, "src", f));
   if (fs.existsSync(path.join(src, "_node_modules"))) fs.cpSync(path.join(src, "_node_modules"), path.join(dir, "node_modules"), { recursive: true });
   if (fs.existsSync(path.join(src, "proofs"))) fs.cpSync(path.join(src, "proofs"), path.join(dir, "proofs"), { recursive: true });
   if (fs.existsSync(path.join(src, "vreact.json"))) fs.copyFileSync(path.join(src, "vreact.json"), path.join(dir, "vreact.json"));
   if (fs.existsSync(path.join(src, "tsconfig.json"))) fs.copyFileSync(path.join(src, "tsconfig.json"), path.join(dir, "tsconfig.json"));
   else if (!fs.existsSync(path.join(src, "NO_TSCONFIG"))) fs.writeFileSync(path.join(dir, "tsconfig.json"), tsconfig);
+  if (linkBase) {
+    if (fs.existsSync(path.join(src, "_above"))) fs.cpSync(path.join(src, "_above"), path.join(linkBase, "real"), { recursive: true });
+    fs.symlinkSync(path.join("real", "app"), path.join(linkBase, "app"));
+    dir = path.join(linkBase, "app");
+  }
   if (expect[0] === "reject") {
     // several expected messages are separated by ` ;; `; a message is also matched with its
     // location (`proofs/m.lean:4:1: …`, relative to the case's project)
