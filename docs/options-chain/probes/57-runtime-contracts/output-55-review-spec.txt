@@ -1,0 +1,17 @@
+
+  contracts.mjs  152.8kb
+
+⚡ Done in 6ms
+FAIL place post 5 [{"collapsed":{"Set":[3,2]},"filter":"all","watch":{"Set":[2080,2180]},"held":{"Map":[[1,2144]]},"focus":2,"heat":1,"orders":{"Map":[[2,{"expiry":1,"leg":"put","strike":2140,"buy":false,"qty":127,"price":65}]]},"nextId":4},{"expiry":1,"leg":"call","strike":2100,"side":"ask","price":244},389,110]
+FAIL chainReducer post 3 [{"collapsed":{"Set":[3,2]},"filter":"all","watch":{"Set":[2080,2180]},"held":{"Map":[[1,2144]]},"focus":2,"heat":1,"orders":{"Map":[[2,{"expiry":1,"leg":"put","strike":2140,"buy":false,"qty":127,"price":65}]]},"nextId":4},{"kind":"place","ticket":{"expiry":1,"leg":"call","strike":2100,"side":"ask","price":244},"qty":389,"price":110}]
+FAIL place post 5 [{"collapsed":{"Set":[1,2]},"filter":"s99","watch":{"Set":[]},"held":{"Map":[[1,2058]]},"focus":null,"heat":1,"orders":{"Map":[]},"nextId":2},{"expiry":1,"leg":"put","strike":1980,"side":"ask","price":147},344,168]
+FAIL chainReducer post 3 [{"collapsed":{"Set":[1,2]},"filter":"s99","watch":{"Set":[]},"held":{"Map":[[1,2058]]},"focus":null,"heat":1,"orders":{"Map":[]},"nextId":2},{"kind":"place","ticket":{"expiry":1,"leg":"put","strike":1980,"side":"ask","price":147},"qty":344,"price":168}]
+FAIL simReducer post 8 [{"feed":{"offset":0,"seed":57305},"paused":false,"rally":false},{"kind":"toggleRally"}]
+FAIL simReducer post 7 [{"feed":{"offset":0,"seed":38044},"paused":false,"rally":false},{"kind":"rallyTick"}]
+FAIL simReducer post 8 [{"feed":{"offset":0,"seed":38044},"paused":true,"rally":false},{"kind":"toggleRally"}]
+FAIL simReducer post 7 [{"feed":{"offset":0,"seed":38044},"paused":true,"rally":false},{"kind":"togglePause"}]
+FAIL moveFutures post 2 [[{"id":1,"symbol":"DIX","label":"DEC 26","future":{"bid":2048,"bidQty":62,"ask":2049,"askQty":56},"strikes":[{"strike":1920,"call":{"bid":145,"bidQty":108,"ask":153,"askQty":83},"put":{"bid":null,"bidQty":0,"ask":16,"askQty":154},"callTheo":146,"putTheo":18,"vol":2286},{"strike":1940,"call":{"bid":127,"bidQty":43,"ask":135,"askQty":20},"put":{"bid":24,"bidQty":72,"ask":28,"askQty":47},"callTheo":
+FAIL stepFeed post 3 [{"offset":5,"seed":68289}]
+FAIL stepFeed post 3 [{"offset":22,"seed":30915}]
+FAIL moveFutures post 2 [[{"id":1,"symbol":"DIX","label":"DEC 26","future":{"bid":2048,"bidQty":62,"ask":2049,"askQty":56},"strikes":[{"strike":1920,"call":{"bid":145,"bidQty":108,"ask":153,"askQty":83},"put":{"bid":null,"bidQty":0,"ask":16,"askQty":154},"callTheo":146,"putTheo":18,"vol":2286},{"strike":1940,"call":{"bid":127,"bidQty":43,"ask":135,"askQty":20},"put":{"bid":24,"bidQty":72,"ask":28,"askQty":47},"callTheo":
+reachable steps: 18000 (chain), 18000 (feed); postconditions checked: 775760; failures: [["place post 5",851],["chainReducer post 3",851],["orders out of placement order",3445],["simReducer post 8",9533],["simReducer post 7",10927],["moveFutures post 2",1984],["stepFeed post 3",16040]]

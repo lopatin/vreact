@@ -1,0 +1,121 @@
+translated 8 module(s), 210 proof obligation(s) → .vreact/ ; checking with Lean…
+
+Components
+  VERIFIED           PriceCell              src/StrikeRow.tsx:12
+  VERIFIED           StrikeRow              src/StrikeRow.tsx:41
+  VERIFIED           TermRow                src/TermRow.tsx:19
+  VERIFIED           OrderTicket            src/OrderTicket.tsx:19
+  VERIFIED           OptionsChain           src/OptionsChain.tsx:34
+  VERIFIED           App                    src/App.tsx:172
+Functions
+  VERIFIED           sameMembers
+  VERIFIED           sameMembersExcept
+  VERIFIED           toggleIn
+  VERIFIED           sameEntries
+  VERIFIED           agreeExcept
+  VERIFIED           sameList
+  VERIFIED           byId
+  VERIFIED           validChain
+  VERIFIED           legOf
+  VERIFIED           theoOf
+  VERIFIED           quotePrice
+  VERIFIED           withinSpread
+  VERIFIED           isMid
+  VERIFIED           midPrice
+  VERIFIED           inTheMoney
+  VERIFIED           dist
+  VERIFIED           nearest
+  VERIFIED           atmIndex
+  VERIFIED           inWindow
+  INCOMPLETE         strikeWindow
+      ↳ 2 obligations of it failed
+  VERIFIED           shownRows
+  VERIFIED           levelsOf
+  VERIFIED           filterLabel
+  VERIFIED           edge
+  VERIFIED           heatOf
+  VERIFIED           legFor
+  VERIFIED           labelOf
+  VERIFIED           marketOf
+  VERIFIED           validQty
+  VERIFIED           validOrder
+  VERIFIED           openQty
+  VERIFIED           fmtPrice
+  VERIFIED           contractText
+  VERIFIED           quoteText
+  VERIFIED           crosses
+  VERIFIED           fmtVol
+  VERIFIED           wellFormed
+  VERIFIED           sameView
+  VERIFIED           sameOrder
+  VERIFIED           keepsOrders
+  VERIFIED           keepsOrdersExcept
+  VERIFIED           freshIds
+  VERIFIED           sameOrders
+  VERIFIED           orderFor
+  VERIFIED           toggle
+  VERIFIED           setCollapsed
+  VERIFIED           setFilter
+  VERIFIED           watchStrike
+  VERIFIED           holdAt
+  VERIFIED           follow
+  VERIFIED           jump
+  VERIFIED           setHeat
+  VERIFIED           accepts
+  VERIFIED           withOrder
+  VERIFIED           place
+  VERIFIED           repriced
+  VERIFIED           amend
+  VERIFIED           cancel
+  VERIFIED           validAction
+  VERIFIED           chainReducer
+  VERIFIED           shiftQuote
+  VERIFIED           shifted
+  VERIFIED           moveFutures
+  VERIFIED           nextSeed
+  VERIFIED           validFeed
+  VERIFIED           stepFeed
+  VERIFIED           sameFeed
+  VERIFIED           simReducer
+App certificates (VReact.run_allInv instantiated)
+  VERIFIED           VTS.App.App.certificate  axioms: propext, Classical.choice, Quot.sound
+Obligations by file
+  ✓ src/collections.ts                       6/6
+  ✗ src/model.ts                             24/26
+  ✓ src/reducer.ts                           52/52
+  ✓ src/StrikeRow.tsx                        24/24
+  ✓ src/TermRow.tsx                          12/12
+  ✓ src/OrderTicket.tsx                      12/12
+  ✓ src/OptionsChain.tsx                     46/46
+  ✓ src/App.tsx                              32/32
+
+Failed obligations
+✗ src/model.ts:142:11  [postcondition] postcondition of strikeWindow: 0 <= r.lo && r.lo <= atm && atm < r.hi && r.hi <= n
+    │ `grind` failed
+    │ case grind.2
+    │ n atm levels : Int
+    │ h_pre_1 h_pre : (0 ≤ atm ∧ atm < n) ∧ levels ≥ 0
+    │ h : -1 * atm + min n (atm + levels) ≤ 0
+    │ h_1 : ¬n + -1 * atm + -1 * levels ≤ 0
+    │ ⊢ False
+✗ src/model.ts:143:11  [postcondition] postcondition of strikeWindow: forall(0, n, (i) => (r.lo <= i && i < r.hi) === inWindow(i, atm, levels))
+    │ `grind` failed
+    │ case grind.2.2.2.1
+    │   … (4 earlier hypotheses: n, atm, levels, h_pre_1: --full shows them)
+    │ i : Int
+    │ h : 0 ≤ i
+    │ h_1 : i < n
+    │ h_pre : (0 ≤ atm ∧ atm < n) ∧ levels ≥ 0
+    │ hcontract : …  (a contract instance, 2 lines: --full shows it)
+    │ h_2 :
+    │   (JS.le (max 0 (atm + -1 * levels)) i = true ∧ JS.lt i (min n (atm + levels)) = true) =
+    │     (JS.le (atm + -1 * levels) i = false ∨ JS.le i (atm + levels) = false)
+    │ left : JS.le (max 0 (atm + -1 * levels)) i = false ∨ JS.lt i (min n (atm + levels)) = false
+    │ left_1 : JS.le (atm + -1 * levels) i = true
+    │ right_1 : JS.le i (atm + levels) = true
+    │ h_4 : JS.lt i (min n (atm + levels)) = false
+    │ h_5 : ¬n + -1 * atm + -1 * levels ≤ 0
+    │ h_6 : -1 * atm + levels ≤ 0
+    │ ⊢ False
+
+✗ NOT VERIFIED  208/210 obligations proved, 2 failed; components: 6/6 verified  (73.6s)

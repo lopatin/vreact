@@ -1,0 +1,12 @@
+▲ [WARNING] Import "shownRows" will always be undefined because there is no matching export in "src/model.ts" [import-is-undefined]
+
+    contracts.ts:154:23:
+      154 │ for (let i = 0; i < (M.shownRows === undefined ? 0 : 20000); i++) {
+          ╵                        ~~~~~~~~~
+
+1 warning
+
+  contracts.mjs  150.9kb
+
+⚡ Done in 6ms
+reachable steps: 18000 (chain), 18000 (feed); postconditions checked: 460392; failures: none

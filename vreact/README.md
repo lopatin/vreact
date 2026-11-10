@@ -68,9 +68,9 @@ in `lean/lean-toolchain`). Run `skill/verified-react/scripts/setup.sh [app]`.
 ## Tests
 
 ```bash
-node --experimental-strip-types tests/run.ts          # 691 cases: React-semantics bugs caught, subset rejections, report honesty
+node --experimental-strip-types tests/run.ts          # 693 cases: React-semantics bugs caught, subset rejections, report honesty
 node --experimental-strip-types tests/synth.test.ts   # synthesis (append / remove-by-key / update-by-key, joint holes, what counts as proved)
 (cd tests/todo && node ../../bin/vreact.js verify)    # small verified app with child callbacks
 (cd ../examples/kanban && node ../../vreact/bin/vreact.js verify)   # the walkthrough app: 79 obligations
-(cd ../examples/options-chain && node ../../vreact/bin/vreact.js verify)   # the options-chain walkthrough app: 195 obligations
+(cd ../examples/options-chain && node ../../vreact/bin/vreact.js verify)   # the options-chain walkthrough app: 210 obligations
 ```

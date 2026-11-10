@@ -1,5 +1,0 @@
-
-  contracts.mjs  110.4kb
-
-⚡ Done in 17ms
-reachable steps: 18000; postconditions checked: 324025; failures: none

@@ -1,0 +1,113 @@
+translated 8 module(s), 210 proof obligation(s) → .vreact/ ; checking with Lean…
+
+Components
+  VERIFIED           PriceCell              src/StrikeRow.tsx:12
+  VERIFIED           StrikeRow              src/StrikeRow.tsx:41
+  VERIFIED           TermRow                src/TermRow.tsx:19
+  VERIFIED           OrderTicket            src/OrderTicket.tsx:19
+  VERIFIED           OptionsChain           src/OptionsChain.tsx:34
+  VERIFIED           App                    src/App.tsx:172
+Functions
+  VERIFIED           sameMembers
+  VERIFIED           sameMembersExcept
+  VERIFIED           toggleIn
+  VERIFIED           sameEntries
+  VERIFIED           agreeExcept
+  VERIFIED           sameList
+  VERIFIED           byId
+  VERIFIED           validChain
+  VERIFIED           legOf
+  VERIFIED           theoOf
+  VERIFIED           quotePrice
+  VERIFIED           withinSpread
+  VERIFIED           isMid
+  VERIFIED           midPrice
+  VERIFIED           inTheMoney
+  VERIFIED           dist
+  VERIFIED           nearest
+  VERIFIED           atmIndex
+  VERIFIED           inWindow
+  VERIFIED           strikeWindow
+  VERIFIED           shownRows
+  VERIFIED           levelsOf
+  VERIFIED           filterLabel
+  VERIFIED           edge
+  VERIFIED           heatOf
+  VERIFIED           legFor
+  VERIFIED           labelOf
+  VERIFIED           marketOf
+  VERIFIED           validQty
+  VERIFIED           validOrder
+  VERIFIED           openQty
+  VERIFIED           fmtPrice
+  VERIFIED           contractText
+  VERIFIED           quoteText
+  VERIFIED           crosses
+  VERIFIED           fmtVol
+  VERIFIED           wellFormed
+  VERIFIED           sameView
+  VERIFIED           sameOrder
+  VERIFIED           keepsOrders
+  VERIFIED           keepsOrdersExcept
+  VERIFIED           freshIds
+  VERIFIED           sameOrders
+  VERIFIED           orderFor
+  VERIFIED           toggle
+  VERIFIED           setCollapsed
+  VERIFIED           setFilter
+  VERIFIED           watchStrike
+  VERIFIED           holdAt
+  VERIFIED           follow
+  VERIFIED           jump
+  VERIFIED           setHeat
+  VERIFIED           accepts
+  VERIFIED           withOrder
+  VERIFIED           place
+  VERIFIED           repriced
+  VERIFIED           amend
+  VERIFIED           cancel
+  VERIFIED           validAction
+  VERIFIED           chainReducer
+  VERIFIED           shiftQuote
+  VERIFIED           shifted
+  VERIFIED           moveFutures
+  VERIFIED           nextSeed
+  VERIFIED           validFeed
+  VERIFIED           stepFeed
+  VERIFIED           sameFeed
+  INCOMPLETE         simReducer
+      ↳ an obligation of it failed
+App certificates (VReact.run_allInv instantiated)
+  VERIFIED           VTS.App.App.certificate  axioms: propext, Classical.choice, Quot.sound
+Obligations by file
+  ✓ src/collections.ts                       6/6
+  ✓ src/model.ts                             26/26
+  ✓ src/reducer.ts                           52/52
+  ✓ src/StrikeRow.tsx                        24/24
+  ✓ src/TermRow.tsx                          12/12
+  ✓ src/OrderTicket.tsx                      12/12
+  ✓ src/OptionsChain.tsx                     46/46
+  ✗ src/App.tsx                              31/32
+
+Failed obligations
+✗ src/App.tsx:147:11  [postcondition] postcondition of simReducer: implies(a.kind === "rallyTick" && !s.rally, sameFeed(r.feed, s.feed))
+    │ `grind` failed
+    │ case grind.1.1.2.2
+    │ s : Sim
+    │ hcontract, hcontract_1, hcontract_2, hcontract_3 : …  (4 contract instances, 125 lines: --full shows them)
+    │ h₂₂ : ¬s.rally = true
+    │ h : ¬s.paused = true
+    │ h_1 : ¬40 ≤ s.feed.offset
+    │ hcontract_4 : True
+    │ left : -1 * s.feed.offset + -40 ≤ 0
+    │ left_1 : s.feed.offset + -40 ≤ 0
+    │ left_2 : -1 * s.feed.seed ≤ 0
+    │ right_2 : s.feed.seed + -65536 ≤ 0
+    │ h_4 : …  (a long hypothesis, 2 lines: --full shows it)
+    │ h_5 :
+    │   ¬((if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537 else -1 * ((-75 * s.feed.seed + -74) % 65537)) = 5 ∨
+    │       (if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537 else -1 * ((-75 * s.feed.seed + -74) % 65537)) = -5)
+    │ h_6 : ¬s.feed.seed + -872 ≤ 0
+    │ ⊢ False
+
+✗ NOT VERIFIED  209/210 obligations proved, 1 failed; components: 6/6 verified  (69.4s)

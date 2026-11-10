@@ -8,11 +8,11 @@ the first version: model, reducer, components, a simulated market feed, and an a
 specification. Part 2 adds what a real app gets next: a rule checked where actions are
 dispatched, a risk limit whose proof needs a hand-written Lean lemma, a reducer that owns the
 rules of the feed, a move of the state onto Maps and Sets with generic helpers, two new
-features, and a second audit. The final app has 6 components, 65 functions (the reducers among
-them) and 195 proof obligations (claims the verifier must prove, Step 1a), plus a proof file of
-8 Lean lemmas (helper theorems, Step 10). Its whole-app certificate (a theorem about every run
-of the app, Step 3) depends only on Lean's three standard axioms. At the end we list exactly
-what is and is not proven.
+features, a second audit, and the answer to an outside review of the specification. The final
+app has 6 components, 68 functions (the reducers among them) and 210 proof obligations (claims
+the verifier must prove, Step 1a), plus a proof file of 8 Lean lemmas (helper theorems, Step
+10). Its whole-app certificate (a theorem about every run of the app, Step 3) depends only on
+Lean's three standard axioms. At the end we list exactly what is and is not proven.
 
 It is written for a developer who knows React and TypeScript but has never used formal
 verification. Each new idea is explained the first time it appears. Every tool output below
@@ -28,8 +28,8 @@ The snapshots are for `vreact verify` and the replay: they hold `src/` (and from
 (which `main.tsx` imports). The app you can run is
 [`examples/options-chain`](../examples/options-chain/).
 
-Two numberings run side by side. The snapshots and their logs are numbered 01 to 53; the text
-has its own sections, Step 1 to Step 18. "Step 12", with a capital S, names a section of this
+Two numberings run side by side. The snapshots and their logs are numbered 01 to 57; the text
+has its own sections, Step 1 to Step 19. "Step 12", with a capital S, names a section of this
 text; "step 33" (or "snapshot 33", "log 33") names a snapshot and its log.
 
 > **Inspiration.** The feature set is modelled on the *Options Chain (new)* widget in the
@@ -64,7 +64,8 @@ text; "step 33" (or "snapshot 33", "log 33") names a snapshot and its log.
    * [Step 15: watched strikes](#step-15-watched-strikes)
    * [Step 16: amending an order](#step-16-amending-an-order)
    * [Step 17: a second mutation audit](#step-17-a-second-mutation-audit)
-   * [Step 18: the final app](#step-18-the-final-app)
+   * [Step 18: an outside review](#step-18-an-outside-review)
+   * [Step 19: the final app](#step-19-the-final-app)
 * [What exactly is proven](#what-exactly-is-proven)
 * [Where the tool pushed back](#where-the-tool-pushed-back)
 * [Try it yourself](#try-it-yourself)
@@ -110,7 +111,7 @@ around the price of the underlying futures contract. The finished widget looks l
 | Click a bid/ask (option or futures) to open a pre-filled order entry | `OrderTicket`: clicking a bid prepares a sell at the bid, an ask a buy at the ask; quantity and price adjustable; shows the live market and warns when the order would trade at once | `OrderTicket.tsx` |
 | (orders) | working orders listed under the chain in the order they were placed, each repriced by one tick (▼/▲) or cancelled; 1–500 lots per order, at most 1000 lots working in total | `place` / `amend` / `cancel` in `reducer.ts` |
 | (watched strikes) | ☆ in a strike cell watches that strike: it is shown in every expiry, whatever the filter; the toolbar lists the watched strikes | `watchStrike` in `reducer.ts`, `shownRows` in `model.ts` |
-| (demo feed) | the App moves the futures prices; "Pause feed" freezes them, "Rally" makes them climb | `simReducer` in `App.tsx` |
+| (demo feed) | the App moves the futures prices; "Pause feed" stops them (a tick dispatched just before the click can still show after it), "Rally" makes them climb | `simReducer` in `App.tsx` |
 
 **Out of scope.** The following are not built:
 
@@ -147,7 +148,7 @@ From a fresh clone (Node ≥ 22.6, Lean 4 via [elan](https://github.com/leanprov
 ```bash
 bash vreact/skill/verified-react/scripts/setup.sh examples/options-chain   # npm deps + Lean library
 cd examples/options-chain
-npx vreact verify          # ✔ VERIFIED 195/195
+npx vreact verify          # ✔ VERIFIED 210/210
 npm run dev                # the same .tsx files, running in React 18
 ```
 
@@ -162,7 +163,8 @@ with `.vreact/`, and `vreact.json`:
 `main.tsx` only mounts `<App/>`. It stays outside the verified program. The logs of this
 walkthrough were made the way the replay runs a step (see "Try it yourself"): the step's
 snapshot in a temp project with the app's configs and a `node_modules` symlink, and the command
-run as `node <repo>/vreact/bin/vreact.js …`. `npx vreact …` is the same program.
+run as `node <repo>/vreact/bin/vreact.js …`. `npx vreact …` is the same program. All logs and
+probe outputs were made with one version of vreact, the one in this repository.
 
 The finished app has eight verified files and one proof file:
 
@@ -181,9 +183,9 @@ The finished app has eight verified files and one proof file:
 The app folder also has `lakefile.toml` and `lean-toolchain` (added in Part 2). They are only
 for a Lean editor opened on the app folder, so that it can check `proofs/model.lean` against the
 generated Lean; `vreact verify` does not need them. `setup.sh` leaves an existing
-`lakefile.toml` alone and prints a note that, for editor support, it needs a `[[require]]` of
-the package `vts` at `.vreact`. That note is expected here: the app's `lakefile.toml` already
-has that entry.
+`lakefile.toml` alone. If that file lacks a `[[require]]` of the package `vts` at `.vreact`,
+it prints a note that editor support needs one. The app's `lakefile.toml` has that entry, so
+here it prints no note.
 
 ---
 
@@ -298,7 +300,7 @@ Obligations by file
   src/model.ts:103:51 [index]: it depends on `sorry` from a failure elsewhere (a failed obligation, a declaration with an error, or a hole()) that its goal or its proof contains, so Lean could not check it on its own: fix that first
 pending (hole() / sorry): quotePrice, midPrice, strikeWindow, heatOf
 
-◐ INCOMPLETE (holes / trusted stubs / unchecked parts remain)  5/6 obligations proved, 1 unchecked; components: 0/0 verified  (4.9s)
+◐ INCOMPLETE (holes / trusted stubs / unchecked parts remain)  5/6 obligations proved, 1 unchecked; components: 0/0 verified  (5.4s)
 ```
 
 A **proof obligation** is one claim that must be true for the program to be correct, such as
@@ -322,21 +324,23 @@ random inputs against the contracts, and asks Lean to prove the ones that pass.
 $ vreact synth src/model.ts
 …
 hole 2/2 in quotePrice: int | null   scope: q, q.bid, q.bidQty, q.ask, q.askQty, side
-  candidate passes 196 random tests: q.ask   (2 candidate(s) tested in 0.0s)
+  candidate passes 206 random tests: q.ask   (2 candidate(s) tested in 0.0s)
   ✔ proved by Lean: quotePrice with q.bid / q.ask
 hole in midPrice: int | null   scope: q, q.bid, q.bidQty, q.ask, q.askQty
   candidate passes 400 random tests: q.bid   (1 candidate(s) tested in 0.0s)
   ✔ proved by Lean: q.bid
 hole in atmIndex: int   scope: ks, price
-  14785 candidates tested in 60.0s, up to size 7; stopped: the 60s time limit was reached at size 7
+  23461 candidates tested in 60.0s, up to size 8; stopped: the 60s time limit was reached at size 8
   no verified solution for hole in atmIndex: no candidate passed the tests
-  most common failure (14785×): price: postcondition fails on [[{"strike":1,"call":{"bid":10,"bidQty":1,"ask":null,"askQty":-1},"put":{"bid":10,"bidQty":1,"ask":7,"askQty":0},"callTheo":-1,"putTheo":4,"vol":-10}],-1] ↦ -1
+  most common failure (23461×): price: postcondition fails on [[{"strike":2,"call":{"bid":-10,"bidQty":1,"ask":null,"askQty":2},"put":{"bid":2,"bidQty":7,"ask":-5,"askQty":-5},"callTheo":7,"putTheo":4,"vol":10}],10] ↦ 10
 …
 ```
 
-The test inputs are random. Test counts, candidate counts, timings and counterexamples
-differ from run to run, so a re-run will not print these exact numbers. The verdicts and the
-fills are the same each time (the replay checks them).
+The test inputs are random, but reproducible: each hole's inputs come from a generator with a
+fixed seed (`--seed N` picks another one; the default is 1), so a re-run tests the same inputs
+and prints the same counterexamples. The search itself stops after 60 s per hole, so how many
+candidates it reaches, and the timings, depend on the machine: a re-run will not print these
+exact numbers. The verdicts and the fills are the same each time (the replay checks them).
 
 `quotePrice` is filled as expected. The `midPrice` result is a warning: **`return q.bid`
 satisfies its contract.** The first contract only said "null when both sides are missing" and
@@ -346,9 +350,11 @@ its specification, and the synthesizer just showed that ours does not say "mid".
 For `atmIndex`, no candidate passed, not even the trivial `-1`. The reason is how synth tests:
 it runs the contracts as JavaScript, where `implies(a, b)` is an ordinary function call that
 evaluates `b` even when `a` is false. For `r = -1`, `ks[-1].strike` throws. (The failure printed
-above is such a case: on a one-strike ladder and the price −1, the candidate `price` returns
-−1.) In Lean, `implies` is guarded. We write the same condition with `||`, which short-circuits
-in both languages ([log](options-chain/03-model-synth-guard.txt)):
+above is not that case. Synth counts the failures of all candidates by kind and shows the
+first one of the most common kind. That is its first candidate, `price`: on a one-strike ladder
+and the price 10, it returns 10, which is not even an index of the ladder.) In Lean, `implies`
+is guarded. We write the same condition with `||`, which short-circuits in both languages
+([log](options-chain/03-model-synth-guard.txt)):
 
 ```ts
 ensures((r: int) => r < 0 || nearest(ks, ks[r], price));
@@ -388,13 +394,13 @@ $ vreact synth src/model.ts --write
 hole in midPrice: int | null   …
 …
   no verified solution for hole in midPrice: no candidate passed the tests
-  most common failure (10143×): q.bid: postcondition fails on [{"bid":1,"bidQty":2,"ask":-2,"askQty":2}] ↦ 1
+  most common failure (10143×): q.bid: postcondition fails on [{"bid":-10,"bidQty":1,"ask":0,"askQty":-10}] ↦ -10
 …
 wrote src/model.ts
 ```
 
-`q.bid` is now refuted by a concrete input (a bid of 1 and an ask of −2: the mid, rounded down,
-is −1, not 1). The rest needs branches, which synth does not build ("write this one by hand").
+`q.bid` is now refuted by a concrete input (a bid of −10 and an ask of 0: the mid, rounded down,
+is −5, not −10). The rest needs branches, which synth does not build ("write this one by hand").
 `--write` keeps the one proved fill.
 
 ### 1c. Hand-written code, machine-checked ([log](options-chain/05-model-bugs.txt), [snapshot](options-chain/steps/05-model-bugs/src/model.ts))
@@ -435,12 +441,12 @@ $ vreact verify
     │ h : -1 * atm + min n (atm + levels) ≤ 0
     │ h_1 : ¬n + -1 * atm + -1 * levels ≤ 0
     │ ⊢ False
-✗ src/model.ts:140:11  [postcondition] postcondition of strikeWindow: forall(0, n, (i) => (r.lo <= i && i < r.hi) === inWindow(i, atm, leve…
+✗ src/model.ts:140:11  [postcondition] postcondition of strikeWindow: forall(0, n, (i) => (r.lo <= i && i < r.hi) === inWindow(i, atm, levels))
 …
 4 obligation(s) not checked:
   src/model.ts:116:11 [postcondition], src/model.ts:119:44 [index], src/model.ts:119:11 [postcondition], src/model.ts:121:11 [postcondition]: it depends on `sorry` from a failure elsewhere (a failed obligation, a declaration with an error, or a hole()) that its goal or its proof contains, so Lean could not check it on its own: fix that first
 
-✗ NOT VERIFIED  16/24 obligations proved, 4 failed, 4 unchecked; components: 0/0 verified  (15.2s)
+✗ NOT VERIFIED  16/24 obligations proved, 4 failed, 4 unchecked; components: 0/0 verified  (11.7s)
 ```
 
 Some vocabulary first. vreact proves each obligation with `vreact_auto`, its automation, whose
@@ -509,7 +515,7 @@ atom. One obligation still fails:
     │ h : (JS.findIndex ks fun s => nearest ks s price) + 1 ≤ 0
     │ ⊢ False
 
-✗ NOT VERIFIED  21/22 obligations proved, 1 failed; components: 0/0 verified  (7.2s)
+✗ NOT VERIFIED  21/22 obligations proved, 1 failed; components: 0/0 verified  (5.9s)
 ```
 
 The goal is the case of a non-empty ladder (`h₂₁`) in which `findIndex` found no nearest strike
@@ -539,7 +545,7 @@ $ vreact verify
   …
   ✓ src/model.ts                             22/22
 
-✔ VERIFIED  22/22 obligations proved; components: 0/0 verified  (8.5s)
+✔ VERIFIED  22/22 obligations proved; components: 0/0 verified  (5.9s)
 ```
 
 `heatOf` and `midPrice` were right the first time. The verifier checked, for example, that
@@ -597,13 +603,13 @@ hole in setFilter: ChainUi   …
   candidate passes 400 random tests: { ...u, filter: f }   (17 candidate(s) tested in 0.1s)
   ✔ proved by Lean: { ...u, filter: f }
 hole in holdAt: ChainUi   …
-  candidate passes 400 random tests: { ...u, held: [{ expiry: id, price: price }] }   (12658 candidate(s) tested in 44.5s)
+  candidate passes 400 random tests: { ...u, held: [{ expiry: id, price: price }] }   (12658 candidate(s) tested in 32.3s)
   ✔ proved by Lean: { ...u, held: [{ expiry: id, price: price }] }
 hole in follow: ChainUi   …
-  candidate passes 400 random tests: jump(u, id)   (17 candidate(s) tested in 0.1s)
+  candidate passes 400 random tests: jump(u, id)   (17 candidate(s) tested in 0.0s)
   ✔ proved by Lean: jump(u, id)
 hole in place: ChainUi   …
-  19699 candidates tested in 60.0s, up to size 6; stopped: the 60s time limit was reached at size 6
+  23653 candidates tested in 60.0s, up to size 6; stopped: the 60s time limit was reached at size 6
   no verified solution for hole in place: no candidate passed the tests
 …
 hole in cancel: ChainUi   …
@@ -648,11 +654,11 @@ With the stronger specs, synth fills `follow` and `cancel`:
 $ vreact synth src/reducer.ts --write
 …
 hole in follow: ChainUi   …
-  candidate passes 400 random tests: { ...u, held: u.held.filter((x) => x.expiry !== id) }   (9690 candidate(s) tested in 30.0s)
+  candidate passes 400 random tests: { ...u, held: u.held.filter((x) => x.expiry !== id) }   (9690 candidate(s) tested in 26.0s)
   ✔ proved by Lean: { ...u, held: u.held.filter((x) => x.expiry !== id) }
 …
 hole in cancel: ChainUi   …
-  candidate passes 400 random tests: { ...u, orders: u.orders.filter((x) => x.id !== id) }   (12887 candidate(s) tested in 39.4s)
+  candidate passes 400 random tests: { ...u, orders: u.orders.filter((x) => x.id !== id) }   (12887 candidate(s) tested in 34.7s)
   ✔ proved by Lean: { ...u, orders: u.orders.filter((x) => x.id !== id) }
 wrote src/reducer.ts
 ```
@@ -699,14 +705,14 @@ $ vreact verify
     │         qty := qty, price := price }
     │ h_6 : -1 * x.id + u.nextId ≤ 0
 …
-✗ NOT VERIFIED  43/44 obligations proved, 1 failed; components: 0/0 verified  (12.0s)
+✗ NOT VERIFIED  43/44 obligations proved, 1 failed; components: 0/0 verified  (10.3s)
 ```
 
 The counterexample is the new order `x` itself, whose id is `u.nextId`: `nextId` was never
 advanced, so the next order would reuse the id. The fix is `nextId: u.nextId + 1`:
 
 ```
-✔ VERIFIED  44/44 obligations proved; components: 0/0 verified  (9.0s)
+✔ VERIFIED  44/44 obligations proved; components: 0/0 verified  (8.6s)
 ```
 
 ---
@@ -821,11 +827,15 @@ $ vreact verify
 …
 ✗ src/OptionsChain.tsx:101:67  [precondition] precondition of strikeWindow(n, atm, levels)
     │ `grind` failed
+    │ case grind.1.1.1.1.1
+    │   … (15 earlier hypotheses: E, props, κ, σ, ui, ticket, levels, allOpen, …: --full shows them)
+    │ center, atm := …  (2 definitions, 8 lines: --full shows them)
+    │ h₁₀, hpre, hinv, heq, h₈, h_5 : …  (6 long hypotheses, 39 lines: --full shows them)
+    │ hcontract : …  (a contract instance, 3 lines: --full shows it)
+    │ h : (JS.findIndex e.strikes fun s => model.nearest e.strikes s held_1) + 1 ≤ 0
     │ …
-    │ center : Option Int :=
-    │   match h₈ : held with
-    │   | some held_1 => some held_1
-    │   …
+    │ h₂₂ h_7 : σ.ui.filter = model.StrikeFilter.s3
+    │ …
     │ ⊢ False
 ✗ src/OptionsChain.tsx:101:67  [precondition] precondition of strikeWindow(n, atm, levels)
     │ …
@@ -833,13 +843,18 @@ $ vreact verify
 1 obligation(s) not checked:
   src/OptionsChain.tsx:107:20 [unique-keys]: it depends on `sorry` from a failure elsewhere (a failed obligation, a declaration with an error, or a hole()) that its goal or its proof contains, so Lean could not check it on its own: fix that first
 …
-✗ NOT VERIFIED  72/75 obligations proved, 2 failed, 1 unchecked; components: 0/5 verified  (59.2s)
+✗ NOT VERIFIED  72/75 obligations proved, 2 failed, 1 unchecked; components: 0/5 verified  (61.0s)
 ```
 
 The short report prints at most 18 lines of each failure, always ending with the goal's
-conclusion `⊢ …`, and here it cuts the goal off before the interesting part.
-`vreact verify --full` prints it whole ([log](options-chain/14-chain-atm-edge-full.txt)). Its
-key lines, from the first goal:
+conclusion `⊢ …`. This goal is much longer, so the report shortens it, and every line that
+stands for others names them and ends in "--full shows …". The hypotheses farthest from the
+conclusion are left out (the first line names them). Long ones are folded into one line each:
+the two local definitions `center` and `atm`, six long hypotheses, and a **contract instance**
+(`hcontract`: what the `ensures` of a function in the goal says about these arguments). The
+short hypotheses next to the conclusion stay whole, and here they are the interesting part.
+`vreact verify --full` prints the goal whole ([log](options-chain/14-chain-atm-edge-full.txt)).
+Its key lines, from the first goal:
 
 ```
 $ vreact verify --full
@@ -853,17 +868,13 @@ $ vreact verify --full
 …
     │     some held_1
 …
-    │ h : (JS.findIndex e.strikes fun s => model.nearest e.strikes s held_1) + 1 ≤ 0
-…
-    │ h₂₂ h_7 : σ.ui.filter = model.StrikeFilter.s3
-…
-    │ ⊢ False
 ```
 
-Read together: `heq` (elided here, it spells out `held` and `live`) ends in `= some held_1`, so
-the center is some price `held_1`; `h` says `atmIndex` returned −1 (the `findIndex` result plus
-1 is at most 0); and the filter is "3". `atmIndex`'s contract allows −1 when no strike is
-nearest, which is the case for an empty ladder. The code shows a second way to get −1:
+Read together: `heq` (folded in the short report, elided here: it spells out `held` and `live`)
+ends in `= some held_1`, so the center is some price `held_1`; `h` says `atmIndex` returned −1
+(the `findIndex` result plus 1 is at most 0); and `h₂₂ h_7` (two hypotheses with the same
+statement) say that the filter is "3". `atmIndex`'s contract allows −1 when no strike is nearest,
+which is the case for an empty ladder. The code shows a second way to get −1:
 `center` is `null` when there is no price at all (no bid, no ask, nothing held). Either way
 `strikeWindow`'s precondition `0 <= atm` fails. This is the **ATM at the edge, one level up**.
 
@@ -900,7 +911,7 @@ Obligations by file
 trusted (not verified, contracts assumed): TermRow, StrikeRow, OrderTicket
 VERIFIED* = all own obligations proved; relies on the contracts of the trusted declarations above
 
-✔ VERIFIED modulo @trusted declarations  75/75 obligations proved; components: 0/5 verified  (21.1s)
+✔ VERIFIED modulo @trusted declarations  75/75 obligations proved; components: 0/5 verified  (18.3s)
 ```
 
 **`VERIFIED*`** means that all of the component's own obligations are proved, assuming the
@@ -970,25 +981,27 @@ $ vreact verify
     │ …
     │ props props' : Props
     │ σ : State
-    │ h :
+    │ h, h_1 : …  (2 long hypotheses, 12 lines: --full shows them)
+    │ ticket : Option model.Ticket
+    │ ticket_1 : model.Ticket
+    │ heq : σ.ticket = some ticket_1
+    │ h_2 : ∀ (a : model.Expiry), a ∈ props'.expiries → ¬a.id = ticket_1.expiry
     │ …
-    │       match σ.ticket with
-    │       | some ticket => ∃ e, e ∈ props.expiries ∧ e.id = ticket.expiry
-    │       | none => True
-    │ h_1 :
-    │   (List.map (fun e => e.id) props'.expiries).Nodup ∧
-    │     ∀ (x : model.Expiry), x ∈ props'.expiries → (List.map (fun s => s.strike) x.strikes).Nodup
+    │ w : model.Expiry
+    │ left : w ∈ props.expiries
+    │ right : w.id = ticket_1.expiry
     │ …
-✗ NOT VERIFIED  77/78 obligations proved, 1 failed; components: 0/5 verified  (21.8s)
+✗ NOT VERIFIED  77/78 obligations proved, 1 failed; components: 0/5 verified  (27.8s)
 ```
 
-The handlers do establish the invariant: the `tExp!` assertions and every `setTicket` were proved.
-The failure is about something else. When the parent re-renders with new props, **React keeps
-the component's state**. The goal shows the old `props` (where the ticket's expiry is listed) and
-new props `props'` that only satisfy the precondition. Nothing stops the feed from dropping the
-expiry, for example when it expires, while a ticket for it is open. An invariant that ties state
-to props cannot survive that, and the verifier checks this case for every component
-(the `[props-stability]` obligation).
+The handlers do establish the invariant: the `tExp!` assertions and every `setTicket` were
+proved. The failure is about something else. When the parent re-renders with new props, **React
+keeps the component's state**. The goal has the old `props` and new props `props'`, which
+satisfy only the precondition. `heq` says that a ticket is open. `w`, `left` and `right` say
+that the old props list its expiry, and `h_2` that no expiry of the new props has its id.
+Nothing stops the feed from dropping the expiry, for example when it expires, while a ticket for
+it is open. An invariant that ties state to props cannot survive that, and the verifier checks
+this case for every component (the `[props-stability]` obligation).
 
 The fix the skill recommends is to keep the invariant about state only, look the expiry up at
 render time, and clamp ([log](options-chain/17-props-clamped.txt)):
@@ -1014,7 +1027,7 @@ const tExp = ticket === null ? undefined : props.expiries.find((e) => e.id === t
 ```
 
 ```
-✔ VERIFIED modulo @trusted declarations  76/76 obligations proved; components: 0/5 verified  (19.1s)
+✔ VERIFIED modulo @trusted declarations  76/76 obligations proved; components: 0/5 verified  (21.2s)
 ```
 
 The same reasoning is why the reducer's invariant says nothing about the expiries:
@@ -1066,15 +1079,21 @@ $ vreact verify
 ✗ src/StrikeRow.tsx:55:110  [callback-contract] callback contract of onPick("put", "ask", x)
     │ `grind` failed
     │ …
-    │ hpre_1 : props.heat ≥ 1
+    │ x : Int
+    │ hpre : props.heat ≥ 1
+    │ hcb₁₂ : props.strike.put.bid = some x
     │ …
-✗ NOT VERIFIED  97/98 obligations proved, 1 failed; components: 1/6 verified  (22.4s)
+    │ h_1 : ¬props.strike.put.ask = some x
+    │ …
+✗ NOT VERIFIED  97/98 obligations proved, 1 failed; components: 1/6 verified  (24.5s)
 ```
 
 A **callback-contract** obligation says that a call of a callback prop satisfies its
 `callbackRequires`. Line 55 is the put **bid** cell, which reports `"ask"`. Clicking a put's bid
 would have opened a *buy* ticket at the *bid* price. The contract catches this because the
-report contradicts itself: the bid's price under the name "ask". (A cell that reported another
+report contradicts itself: the bid's price under the name "ask". In the goal, `hcb₁₂` (what
+`PriceCell` promises about its callback) says that the reported `x` is the put's bid, and
+`h_1` that the put's ask, the quote the report names, is not `x`. (A cell that reported another
 cell's name together with that cell's price would not contradict itself; Step 7 comes back to
 that.) The chain and the App are `INCOMPLETE` too, although all their own obligations are
 proved: they use `StrikeRow`, so they rest on the `sorry` that admits its failed obligation (the
@@ -1104,23 +1123,21 @@ $ vreact verify
 …
 ✗ src/OrderTicket.tsx:46:17  [handler] onClick handler on <button> preserves the invariant of OrderTicket
     │ …
-    │ hinv : (1 ≤ σ.qty ∧ σ.qty ≤ 500) ∧ σ.price > 0
-    │   …
-    │ ⊢ False
-
-✗ NOT VERIFIED  121/122 obligations proved, 1 failed; components: 3/6 verified  (19.7s)
-
-$ vreact verify --full     # the same failure, complete goal (excerpt, lines 85-87 of the log)
+    │ marketable := …  (a definition, 4 lines: --full shows it)
+    │ e : DomEvent
     │ hinv : (1 ≤ σ.qty ∧ σ.qty ≤ 500) ∧ σ.price > 0
     │ h : σ.price + -1 ≤ 0
     │ ⊢ False
+
+✗ NOT VERIFIED  121/122 obligations proved, 1 failed; components: 3/6 verified  (22.0s)
 ```
 
-At a price of 1 tick, "−" makes it 0. A **handler** obligation says that a click, run against the
-state the user saw, keeps the invariant. The short report stops one hypothesis short of the
-counterexample (at most 18 lines, as in Step 3). The full goal has it right after the
-invariant: `h` says `σ.price - 1 ≤ 0`, and `hinv` says the price is positive, so the price
-is 1. The fix is a guard, and the button is disabled for good measure
+At a price of 1 tick, "−" makes it 0. A **handler** obligation says that a click, run against
+the state the user saw, keeps the invariant. `h` says `σ.price - 1 ≤ 0`, and `hinv` says the
+price is positive, so the price is 1. To keep the report within its 18 lines, the definition of
+`marketable` is folded into one line (it plays no part here); the full goal is in the
+[full log](options-chain/20-children-bug-full.txt). The fix is a guard, and the button is
+disabled for good measure
 ([snapshot](options-chain/steps/21-children-verified/src/OrderTicket.tsx)):
 
 ```tsx
@@ -1139,7 +1156,7 @@ Components
 App certificates (VReact.run_allInv instantiated)
   VERIFIED           VTS.App.App.certificate  axioms: propext, Classical.choice, Quot.sound
 …
-✔ VERIFIED  122/122 obligations proved; components: 6/6 verified  (23.2s)
+✔ VERIFIED  122/122 obligations proved; components: 6/6 verified  (22.0s)
 ```
 
 The submit button needs no guard: the invariant already makes `(qty, price)` valid, which is
@@ -1186,10 +1203,18 @@ $ vreact verify
 ✗ src/App.tsx:106:3  [effect-robust] timer callbacks of the effect preserve the invariant of App from any state
     │ `grind` failed
     │ …
-    │ hinv : (-40 ≤ σ.offset ∧ σ.offset ≤ 40) ∧ 0 ≤ σ.seed ∧ σ.seed < 65537
+    │ h, h_5, h_6, h_9 : …  (4 long hypotheses, 116 lines: --full shows them)
+    │ s : State
+    │ left : -1 * s.offset + -40 ≤ 0
+    │ left_1 : s.offset + -40 ≤ 0
+    │ left_2 : -1 * s.seed ≤ 0
+    │ right_2 : s.seed + -65536 ≤ 0
+    │ h_3 : (List.foldl (fun s u => u s) s (t e).updates).offset + 41 ≤ 0
+    │ h_4 : ¬σ.paused = true
     │ …
+    │ ⊢ False
 
-✗ NOT VERIFIED  127/128 obligations proved, 1 failed; components: 5/6 verified  (46.5s)
+✗ NOT VERIFIED  127/128 obligations proved, 1 failed; components: 5/6 verified  (50.1s)
 
 $ vreact verify --full     # the same failure, complete goal (excerpt, lines 84-142 of the log)
     │ h :
@@ -1217,15 +1242,18 @@ $ vreact verify --full     # the same failure, complete goal (excerpt, lines 84-
     │                   seed := τ.seed, paused := τ.paused }] }
 ```
 
-`t` is the timer callback. Its first branch is the effect's `if (paused) return;`, and the long
-elided expressions are `move`, computed from `σ.seed`. The guard compares `σ.offset + move` with
-−40 and 40, but the second update sets `offset := τ.offset + move`. The timer callback is a
-**stale closure**: its guard reads `σ.offset` from the render that created the timer, but its
-update `o => o + move` is applied to `τ`, the state React holds when it processes the update.
-vreact's model (see `vreact/docs/SEMANTICS.md` §2.2) treats effects and timers as running later,
-against any state that satisfies the invariant. So it asks for an **effect-robust** update: one
-that keeps the invariant from *every* valid `τ`, not just from the snapshot. With `τ.offset =
-40` and `move = +2`, this one does not.
+`t` is the timer callback, `h` in the short report, folded there and printed whole by `--full`.
+Its first branch is the effect's `if (paused) return;`, and the long elided expressions are
+`move`, computed from `σ.seed`. The guard compares `σ.offset + move` with −40 and 40, but the
+second update sets `offset := τ.offset + move`. The timer callback is a **stale closure**: its
+guard reads `σ.offset` from the render that created the timer, but its update `o => o + move` is
+applied to `τ`, the state React holds when it processes the update. vreact's model (see
+`vreact/docs/SEMANTICS.md` §2.2) treats effects and timers as running later, against any state
+that satisfies the invariant. So it asks for an **effect-robust** update: one that keeps the
+invariant from *every* valid `τ`, not just from the snapshot. In the short report, `s` is such a
+state: its feed is valid (`left` to `right_2`), and `h_3` says that after the timer's updates
+its offset is at most −41. For example, the snapshot shows −38 and the move is −2, so the guard
+passes, but by the time the update runs the offset is −40, and −40 − 2 = −42.
 
 The fix the skill recommends: put the related state in one record, and make the timer apply one
 total function to whatever state it finds ([log](options-chain/23-app-feed.txt)):
@@ -1292,7 +1320,7 @@ Obligations by file
   ✓ src/OptionsChain.tsx                     27/27
   ✓ src/App.tsx                              12/12
 
-✔ VERIFIED  129/129 obligations proved; components: 6/6 verified  (21.9s)
+✔ VERIFIED  129/129 obligations proved; components: 6/6 verified  (22.8s)
 ```
 
 `moveFutures(EXPIRIES, offset)` maps over the constant, and its `ensures` (validity is preserved)
@@ -1332,7 +1360,7 @@ $ vreact verify
 App certificates (VReact.run_allInv instantiated)
   VERIFIED           VTS.App.App.certificate  axioms: propext, Classical.choice, Quot.sound
 …
-✔ VERIFIED  129/129 obligations proved; components: 6/6 verified  (23.4s)
+✔ VERIFIED  129/129 obligations proved; components: 6/6 verified  (22.8s)
 ```
 
 All three survive. They are of two kinds.
@@ -1407,7 +1435,7 @@ Obligations by file
   ✓ src/App.tsx                              12/12
 
 Failed obligations
-✗ src/reducer.ts:175:11  [postcondition] postcondition of place: implies(validQty(qty) && price > 0, r.orders.some((o) => orderFor(o, …
+✗ src/reducer.ts:175:11  [postcondition] postcondition of place: implies(validQty(qty) && price > 0, r.orders.some((o) => orderFor(o, u.nextId, t, qty, price)))
     │ `grind` failed
     │ …
     │ h_2 :
@@ -1421,7 +1449,7 @@ Failed obligations
     │           ¬a.leg = t.leg ∨ ¬a.strike = t.strike ∨ ¬a.buy = JS.eq t.side model.Side.ask ∨ ¬a.qty = qty ∨ ¬a.price = price
     │ ⊢ False
 
-✗ NOT VERIFIED  130/131 obligations proved, 1 failed; components: 6/6 verified  (22.0s)
+✗ NOT VERIFIED  130/131 obligations proved, 1 failed; components: 6/6 verified  (22.9s)
 ```
 
 `h_2` says that no order in the result fits `orderFor`, and why: the new order has
@@ -1475,7 +1503,7 @@ Obligations by file
   ✓ src/OptionsChain.tsx                     27/27
   ✓ src/App.tsx                              12/12
 
-✔ VERIFIED  131/131 obligations proved; components: 6/6 verified  (21.9s)
+✔ VERIFIED  131/131 obligations proved; components: 6/6 verified  (22.8s)
 ```
 
 ---
@@ -1483,7 +1511,7 @@ Obligations by file
 ## Step 8: the app at the end of Part 1
 
 This is the app Part 1 set out to build. Before it grew, it was checked beyond the verifier
-(Step 18b repeats these checks for the final app):
+(Step 19b repeats these checks for the final app):
 
 * **Verification.** `✔ VERIFIED 131/131` ([log](options-chain/26-final.txt)). The certificate's
   axioms are exactly `propext, Classical.choice, Quot.sound`. No `@trusted`, no `assume`, no
@@ -1520,14 +1548,15 @@ This is the app Part 1 set out to build. Before it grew, it was checked beyond t
 ## Part 2: the app grows
 
 A verified app is not finished when it first verifies: it gets new rules, new features and
-better data structures, and each change must verify too. Part 2 grows the app of step 26 in ten
-more sections, Step 9 to Step 18, with snapshots 27 to 53. Steps 9–12 add a precondition on
-dispatched actions, a cap on the open quantity with the walkthrough's first Lean proof, a Rally
-button for the simulated feed, and a reducer that owns the rules of that feed. Steps 13–18 move
-the UI state onto Maps and Sets, write the comparisons they need once, as generic helpers, add
-watched strikes and order amendment, audit the specification a second time, and end with the
-final app. From step 27 on, every snapshot also holds `proofs/`, the app's proof file (in steps
-27–29 it has no lemmas).
+better data structures, and each change must verify too. Part 2 grows the app of step 26 in
+eleven more sections, Step 9 to Step 19, with snapshots 27 to 57. Steps 9–12 add a precondition
+on dispatched actions, a cap on the open quantity with the walkthrough's first Lean proof, a
+Rally button for the simulated feed, and a reducer that owns the rules of that feed. Steps 13–17
+move the UI state onto Maps and Sets, write the comparisons they need once, as generic helpers,
+add watched strikes and order amendment, and audit the specification a second time. Step 18
+answers an outside review of the specification, and Step 19 is the final app. From step 27
+on, every snapshot also holds `proofs/`, the app's proof file (in steps 27–29 it has no
+lemmas).
 
 Where snapshots 27–36 come from: they follow six commits in which the app's author extended the
 app (and, in the first one, vreact), and each is the app's `src/` and `proofs/` at a commit.
@@ -1614,29 +1643,28 @@ $ vreact verify
 Failed obligations
 ✗ src/OptionsChain.tsx:151:13  [precondition] precondition of chainReducer(…, { kind: "place", ticket: ticket, qty: qty - 1, price: price })
     │ `grind` failed
-…
+    │ …
+    │ τ : State
+    │ hcb₃₅ : (1 ≤ qty ∧ qty ≤ 500) ∧ 0 < price
+    │ h : qty + -1 ≤ 0
+    │ …
+    │ ⊢ False
+
 1 obligation(s) not checked:
   src/OptionsChain.tsx:150:11 [callback]: it depends on `sorry` from a failure elsewhere (a failed obligation, a declaration with an error, or a hole()) that its goal or its proof contains, so Lean could not check it on its own: fix that first
 
-✗ NOT VERIFIED  140/142 obligations proved, 1 failed, 1 unchecked; components: 4/6 verified  (25.3s)
-
-$ vreact verify --full     # the same failure, complete goal (excerpt, lines 77-123 of the log)
-✗ src/OptionsChain.tsx:151:13  [precondition] precondition of chainReducer(…, { kind: "place", ticket: ticket, qty: qty - 1, price: price })
-…
-    │ hcb₃₅ : (1 ≤ qty ∧ qty ≤ 500) ∧ 0 < price
-    │ h : qty + -1 ≤ 0
-…
-    │ ⊢ False
+✗ NOT VERIFIED  140/142 obligations proved, 1 failed, 1 unchecked; components: 4/6 verified  (28.7s)
 ```
 
 The failure is reported at the `dispatch` (line 151), not inside the reducer, and its
-description shows the action as written, `qty: qty - 1` included. `hcb₃₅` is what
-`OrderTicket` promises about the arguments of `onSubmit` (its `callbackRequires`): a quantity of
-1 to 500 lots and a positive price. `h` says `qty ≤ 1`. Together: `qty = 1`. The smallest order
-the ticket allows, one lot, reaches the reducer as `qty - 1 = 0` lots, and `validQty(0)` is
-false. Without the new precondition, the same bug would have verified: `place` ignores an
-invalid quantity at run time, so a one-lot order would silently not be placed. The user clicks
-Submit, the ticket closes, and no working order appears.
+description shows the action as written, `qty: qty - 1` included. `hcb₃₅` is what `OrderTicket`
+promises about the arguments of `onSubmit` (its `callbackRequires`): a quantity of 1 to 500 lots
+and a positive price. `h` says `qty ≤ 1`. Together: `qty = 1`. (The other hypotheses describe
+the open ticket; the [full log](options-chain/27-action-precondition-bug-full.txt) prints them
+all.) The smallest order the ticket allows, one lot, reaches the reducer as `qty - 1 = 0` lots,
+and `validQty(0)` is false. Without the new precondition, the same bug would have verified:
+`place` ignores an invalid quantity at run time, so a one-lot order would silently not be
+placed. The user clicks Submit, the ticket closes, and no working order appears.
 
 The second obligation, "not checked" (`[callback]`), is the callback's own one (that it keeps
 the chain's invariant, at line 150). Its goal contains the failed proof, which Lean replaces
@@ -1661,7 +1689,7 @@ Obligations by file
   ✓ src/OptionsChain.tsx                     37/37
   ✓ src/App.tsx                              12/12
 
-✔ VERIFIED  142/142 obligations proved; components: 6/6 verified  (25.2s)
+✔ VERIFIED  142/142 obligations proved; components: 6/6 verified  (26.8s)
 ```
 
 There are 11 obligations more than at step 26. Ten are the preconditions of the ten
@@ -1726,9 +1754,11 @@ the order is built, and the limit is checked in `place`, on the state the action
 
 One consequence of the first choice: `accepts` is part of the specification, not something it
 checks. A stricter rule, such as `+ qty < MAX_OPEN`, changes the guard and the contract together
-and still verifies (a [probe](options-chain/probes/53-rules-changed/) on the final app, not one
-of the steps); the invariant bounds the total only from above. So `accepts` has to be right as
-written, and the same holds for every function a contract calls by name.
+and still verifies (a [probe](options-chain/probes/53-rules-changed/) on snapshot 53, not one
+of the steps, which also changes `levelsOf`, Step 18a); the invariant bounds the total only from
+above. So `accepts` has to be right as
+written, and the same holds for every function a contract calls by name. (Step 18 ties
+`accepts` to the invariant, so that this change no longer verifies.)
 
 ### 10a. Sums need induction ([log](options-chain/29-open-cap-unproved.txt), [full log](options-chain/29-open-cap-unproved-full.txt), [snapshot](options-chain/steps/29-open-cap-unproved/src/))
 
@@ -1750,16 +1780,13 @@ $ vreact verify
 …
   ✗ src/OptionsChain.tsx                     36/37
 …
-✗ NOT VERIFIED  139/142 obligations proved, 3 failed; components: 4/6 verified  (38.2s)
-
-$ vreact verify --full     # the three goals (excerpts, lines 81-371 of the log)
+Failed obligations
 ✗ src/OptionsChain.tsx:32:17  [init-invariant] OptionsChain: initial state satisfies the invariant
-…
+    │ …
     │ h : -1 * model.openQty [] + 1001 ≤ 0
     │ ⊢ False
-…
 ✗ src/reducer.ts:181:11  [postcondition] postcondition of place: implies(wellFormed(u), wellFormed(r))
-…
+    │ …
     │ h : ((1 ≤ qty ∧ qty ≤ 500) ∧ 0 < price) ∧ model.openQty u.orders + qty ≤ 1000
     │ h_1 :
     │   -1 *
@@ -1769,19 +1796,20 @@ $ vreact verify --full     # the three goals (excerpts, lines 81-371 of the log)
     │                 qty := qty, price := price }]) +
     │       1001 ≤
     │     0
-…
+    │ …
     │ ⊢ False
-…
 ✗ src/reducer.ts:198:11  [postcondition] postcondition of cancel: implies(wellFormed(u), wellFormed(r))
-…
+    │ …
     │ h₁₇ :
     │   (((1 ≤ u.heat ∧ u.heat ≤ 5) ∧ (List.map (fun o => o.id) u.orders).Nodup) ∧
     │       ∀ (x : model.Order), x ∈ u.orders → ((1 ≤ x.qty ∧ x.qty ≤ 500) ∧ 0 < x.price) ∧ x.id < u.nextId) ∧
     │     model.openQty u.orders ≤ 1000
-…
+    │ hsub : (List.map (fun o => o.id) (List.filter (fun x => !JS.eq x.id id') u.orders)).Nodup
     │ h : -1 * model.openQty (List.filter (fun x => !JS.eq x.id id') u.orders) + 1001 ≤ 0
-…
+    │ …
     │ ⊢ False
+
+✗ NOT VERIFIED  139/142 obligations proved, 3 failed; components: 4/6 verified  (26.6s)
 ```
 
 This time the hypotheses are not a counterexample. Each set contradicts itself, for anyone who
@@ -1906,12 +1934,15 @@ Proof files are imported into the generated Lean, so whatever they declare is in
 the app is checked. An `axiom` there could "prove" `False`, an `instance` could change what `===`
 means for a record, and a macro could change how the generated code reads. That is why vreact
 applies **the proof-file whitelist**. Before Lean runs, it parses every proof file with Lean's
-own parser and accepts only `import`s of the generated modules (`VTS.…`), of other proof files
-and of the whole library; the declarations `theorem`, `def`, `abbrev` and `example`; `open`,
-`namespace`/`section`/`end`, `variable`, `#check` and `#print`; the attributes `simp`,
-`vreact_simp` and `grind`, and `grind_pattern`; and a few options (heartbeat, recursion and
-instance-search limits, linters, printing, traces). Everything else is rejected with file, line
-and reason: `axiom`, `instance`, `macro`, `syntax`, `#eval`, other attributes and options. For
+own parser and accepts only `import`s of the generated modules (`VTS.…`), of other proof files,
+of the whole library and of `Init`; the declarations `theorem`, `def`, `abbrev` and `example`;
+`open`, `namespace`/`section`/`end`, `variable`, `universe`, `include`/`omit`, module docs
+(`/-! … -/`), `#check` and `#print`; the attributes `simp`, `vreact_simp` and `grind`, and
+`grind_pattern`; and a few options (heartbeat, recursion and instance-search limits,
+auto-bound implicits, diagnostics, linters, printing, traces). The exact rules, also for what
+may appear inside a proof, are in the skill's `reference/obligations.md`. Everything else is
+rejected with file, line and reason: `axiom`, `instance`, `macro`, `syntax`, `#eval`, other
+attributes and options. For
 example, a proof file with
 `axiom openQty_le_cap (os : List VTS.model.Order) : VTS.model.openQty os ≤ 1000` in place of
 the lemmas ([probe](options-chain/probes/30-axiom-in-proof-file/), not one of the steps) stops
@@ -1935,7 +1966,7 @@ $ vreact verify
 App certificates (VReact.run_allInv instantiated)
   VERIFIED           VTS.App.App.certificate  axioms: propext, Classical.choice, Quot.sound
 …
-✔ VERIFIED  142/142 obligations proved; components: 6/6 verified  (27.1s)
+✔ VERIFIED  142/142 obligations proved; components: 6/6 verified  (24.9s)
 ```
 
 The count is the same as at step 29: lemmas are not obligations. Lean checks them while it
@@ -1981,12 +2012,20 @@ $ vreact verify
 Failed obligations
 ✗ src/App.tsx:129:3  [effect-robust] timer callbacks of the effect preserve the invariant of App from any state
     │ `grind` failed
-…
-✗ NOT VERIFIED  144/145 obligations proved, 1 failed; components: 5/6 verified  (32.9s)
+    │ …
+    │ h : …  (a long hypothesis, 10 lines: --full shows it)
+    │ s : State
+    │ left : -1 * s.feed.offset + -40 ≤ 0
+    │ left_1 : s.feed.offset + -40 ≤ 0
+    │ …
+    │ h_4 : -1 * (List.foldl (fun s u => u s) s (t e).updates).feed.offset + 41 ≤ 0
+    │ h_5 : σ.rally = true
+    │ h_6 : ¬-1 * σ.feed.offset + 40 ≤ 0
+    │ ⊢ False
 
-$ vreact verify --full     # the same failure, complete goal (excerpt, lines 77-111 of the log)
-✗ src/App.tsx:129:3  [effect-robust] timer callbacks of the effect preserve the invariant of App from any state
-…
+✗ NOT VERIFIED  144/145 obligations proved, 1 failed; components: 5/6 verified  (26.2s)
+
+$ vreact verify --full     # the same failure, `h` whole (excerpt, lines 93-102 of the log)
     │ h :
     │   t = fun x =>
     │     if σ.rally = true then
@@ -1997,26 +2036,19 @@ $ vreact verify --full     # the same failure, complete goal (excerpt, lines 77-
     │             [fun τ =>
     │               { feed := { offset := τ.feed.offset + 1, seed := τ.feed.seed }, paused := τ.paused, rally := τ.rally }] }
     │     else { }
-    │ s : State
-    │ left : -1 * s.feed.offset + -40 ≤ 0
-    │ left_1 : s.feed.offset + -40 ≤ 0
-…
-    │ h_4 : -1 * (List.foldl (fun s u => u s) s (t e).updates).feed.offset + 41 ≤ 0
-    │ h_5 : σ.rally = true
-    │ h_6 : ¬-1 * σ.feed.offset + 40 ≤ 0
-    │ ⊢ False
 ```
 
-The same pattern as Step 6. `h` is the timer callback `t`: if the rally is on and the *snapshot*
-`σ` is below 40, it queues one update, `offset := τ.feed.offset + 1`, applied to whatever state
-`τ` React holds when it runs. `s` is that state: any state with a valid feed (`left`, `left_1`:
-−40 ≤ offset ≤ 40). `h_6` says the snapshot was below 40, and `h_4` that the offset after the
-update is at least 41. A counterexample: the snapshot shows 39, but by the time the timer fires,
-the random walk (or an earlier rally tick) has moved the feed to 40, and 40 + 1 = 41. This is
-Step 6's stale closure again. React runs the effect's cleanup only after the next render, so a
-tick of the old interval can fire after the state has changed, and the update must keep the
-invariant from every valid state, however unlikely. The commit message records the same finding:
-"vreact rejected that version with an effect-robust failure (offset 40 + 1 = 41)".
+The same pattern as Step 6. `h`, folded in the short report, is the timer callback `t`: if the
+rally is on and the *snapshot* `σ` is below 40, it queues one update,
+`offset := τ.feed.offset + 1`, applied to whatever state `τ` React holds when it runs. `s` is
+that state: any state with a valid feed (`left`, `left_1`: −40 ≤ offset ≤ 40). `h_6` says the
+snapshot was below 40, and `h_4` that the offset after the update is at least 41. A
+counterexample: the snapshot shows 39, but by the time the timer fires, the random walk (or an
+earlier rally tick) has moved the feed to 40, and 40 + 1 = 41. This is Step 6's stale closure
+again. React runs the effect's cleanup only after the next render, so a tick of the old interval
+can fire after the state has changed, and the update must keep the invariant from every valid
+state, however unlikely. The commit message records the same finding: "vreact rejected that
+version with an effect-robust failure (offset 40 + 1 = 41)".
 
 ### 11b. The limit inside the update ([log](options-chain/32-rally.txt), [snapshot](options-chain/steps/32-rally/src/App.tsx))
 
@@ -2032,7 +2064,7 @@ $ vreact verify
 …
   ✓ src/App.tsx                              15/15
 
-✔ VERIFIED  145/145 obligations proved; components: 6/6 verified  (32.4s)
+✔ VERIFIED  145/145 obligations proved; components: 6/6 verified  (25.0s)
 ```
 
 Three obligations more, all in the App: two for the new effect (the effect itself and its timer
@@ -2098,10 +2130,11 @@ it, a reducer that ignores ticks would satisfy the spec. But it ties a tick to o
 `stepFeed`, and `stepFeed`'s own contract says only that the feed stays valid. So it rules out
 a reducer that skips the random walk, not a random walk that never moves: like `accepts` in
 Step 10, `stepFeed` is part of the specification, and the comment's "never move" is about the
-reducer alone. (A [probe](options-chain/probes/53-walk-frozen/) on the final app, not one of
-the steps: a `stepFeed` that always keeps the offset verifies.)
+reducer alone. (A [probe](options-chain/probes/53-walk-frozen/) on snapshot 53, not one of the
+steps: a `stepFeed` that always keeps the offset verifies. Step 18 gives `stepFeed` a contract
+that rules this out, and rewords the comment.)
 
-### 12a. A reducer that does what the old code did ([log](options-chain/33-sim-paused-bug.txt), [snapshot](options-chain/steps/33-sim-paused-bug/src/App.tsx))
+### 12a. A reducer that does what the old code did ([log](options-chain/33-sim-paused-bug.txt), [full log](options-chain/33-sim-paused-bug-full.txt), [snapshot](options-chain/steps/33-sim-paused-bug/src/App.tsx))
 
 The obvious first version of the reducer just applies the moves, as the step-32 code did, and
 leaves pausing to the effects, which stop their intervals while paused:
@@ -2134,32 +2167,34 @@ Failed obligations
     │ The goal splits into 13 cases. A case's name lists the branches that lead to it, outermost first: … Each case alone, smallest first, with up to 100000 heartbeats: 0 proved, 0 did not finish, then case h_2.isFalse failed (12 not tried):
     │ `grind` failed
     │ case grind.1.1.2.2
-    │ s : Sim
-    │ h₁₀ : s.paused = true
+    │   … (2 earlier hypotheses: s, h₁₀: --full shows them)
     │ hcontract, hcontract_1, hcontract_2 : …  (3 contract instances, 118 lines: --full shows them)
     │ h : ¬40 ≤ s.feed.offset
 …
     │ ⊢ False
 
-✗ NOT VERIFIED  147/148 obligations proved, 1 failed; components: 6/6 verified  (58.1s)
+✗ NOT VERIFIED  147/148 obligations proved, 1 failed; components: 6/6 verified  (64.6s)
 ```
 
-Three things are new here.
+Three things to note here.
 
 **A timeout, then the case that fails.** The first line says the automation used up its budget
-(Lean counts work in "heartbeats"; each obligation gets 1,000,000) without finishing. The
-claim is false, but the automation searches for a proof, not for a counterexample, and here the
-search does not end in time. After a timeout, vreact looks for the part that fails, as a
-diagnosis. The goal splits into **cases**, one for each path through the `switch` and the
-conditions in the reducer (and a few from the translation, such as the sign tests of `%` in
-the random walk). vreact tries them one at a time, smallest first, each with a tenth of the
-budget, and stops at the first that fails. Here that is the first one it tries, case
-`h_2.isFalse`. The name lists the branches, outermost first: `h_2` is the second alternative of
-the `switch`, `"rallyTick"`, and `isFalse` is the false branch of its condition
-`s.feed.offset >= MAX_MOVE`. The case's hypotheses are a counterexample: `h₁₀` the feed is
-paused, `h` the offset is below 40 (`MAX_MOVE`). In that state a rally tick moves the feed one
-tick up, while paused. (The line `case grind.1.1.2.2` above them is `grind`'s own name for the
-branch of its search where it stopped; it can be ignored.)
+(Lean counts work in "heartbeats"; each obligation gets 1,000,000) without finishing. The claim
+is false, but the automation searches for a proof, not for a counterexample, and here the search
+does not end in time. After a timeout, vreact looks for the part that fails, as a diagnosis. The
+goal splits into **cases**, one for each path through the `switch` and the conditions in the
+reducer (and a few from the translation, such as the sign tests of `%` in the random walk).
+vreact tries them one at a time, smallest first, each with a tenth of the budget and with half
+of it in all, and stops at the first that fails, or when that half is used up. Here that is
+the first one it tries, case `h_2.isFalse`. The name lists the branches, outermost first: `h_2`
+is the second alternative of the `switch`, `"rallyTick"`, and `isFalse` is the false branch of
+its condition `s.feed.offset >= MAX_MOVE`. The case's
+hypotheses are a counterexample: `h₁₀` the feed is paused, `h` the offset is below 40
+(`MAX_MOVE`). The short report leaves `h₁₀` out, as one of the two hypotheses farthest from the
+conclusion, and names it on its first line; `--full` prints it, `h₁₀ : s.paused = true`
+([full log](options-chain/33-sim-paused-bug-full.txt)). In that state a rally tick moves the
+feed one tick up, while paused. (The line `case grind.1.1.2.2` above them is `grind`'s own name
+for the branch of its search where it stopped; it can be ignored.)
 
 The diagnosis stops at the first case that fails ("12 not tried"), so it does not say whether
 other cases fail too. The `"tick"` case does, and it is also where the budget goes: it has to
@@ -2168,30 +2203,38 @@ decide whether one step of the random walk can leave a paused feed unchanged, a 
 back into the commit's reducer of step 34, not into snapshot 33, so the goal is not split the
 same way: 12 cases instead of 13. With only the `"tick"` case wrong
 ([probe](options-chain/probes/33-tick-case-only/)), the obligation times out again. The
-diagnosis proves 3 of the 12 cases, does not finish 5, does not try the last 4, and shows the
-first unfinished one, a case of the `"tick"` alternative (`h_1`). With only the `"rallyTick"`
-case wrong ([probe](options-chain/probes/33-rally-case-only/)), `grind` fails without a
-timeout, with the same counterexample as above. So Part 1's lesson applies again, and the
+diagnosis proves 3 of the 12 cases, does not finish 5, does not try the last 4 (five unfinished
+cases of a tenth each use up the half), and shows the first unfinished one, a case of the
+`"tick"` alternative (`h_1`). With only the `"rallyTick"` case wrong
+([probe](options-chain/probes/33-rally-case-only/)), `grind` fails without a timeout, with the
+same counterexample as above. So Part 1's lesson applies again, and the
 report helps with it: when an obligation is not proved, look for a counterexample before
 blaming the automation. The commit message names two ways the feed moved while paused: the
 rally interval never checked `paused` (the bug seen in the browser), and a random-walk tick
-dispatched just before Pause can be applied after it. The `"rallyTick"` case of snapshot 33 is
-that second problem for the rally: its interval stops on Pause, but a rally tick already
-dispatched is still applied.
+dispatched just before Pause can be applied after it. The second needs a correction. React
+applies a hook's queued actions in the order they were dispatched (`vreact/docs/SEMANTICS.md`
+§2.2), so a tick dispatched before Pause is applied before it, to a running feed, and moves it:
+no reducer can refuse that tick. React may render the Pause first and the tick after it, so the
+futures can still move once on screen after the click ("Not proven here" lists this). What the
+`"rallyTick"` case of snapshot 33 shows is different: a rally tick applied to a paused state,
+that is, a tick dispatched after Pause. The model allows that: it has no cleanup step, so a
+timer it registers may fire against any later state (SEMANTICS §2.6). And from 12c on, the
+clocks never stop, so every tick after Pause meets a paused state.
 
-**Contract instances, collapsed.** The `hcontract…` hypotheses are facts from contracts: what
-the `ensures` of the functions in the goal say about these arguments. Here they are long
-formulas, mostly about the random walk's arithmetic, so the short report folds them into one
-line that names and counts them, and the short hypotheses after them stay in view. `--full`
-prints them.
+**Contract instances, collapsed.** As in Step 3, the `hcontract…` hypotheses are facts from
+contracts: what the `ensures` of the functions in the goal say about these arguments. Here they
+are long formulas, mostly about the random walk's arithmetic, so the short report folds them
+into one line that names and counts them, and the short hypotheses after them stay in view.
+`--full` prints them.
 
 **The effects do not help.** In this snapshot both effects stop their intervals while paused,
 and still the postcondition fails. A reducer's postcondition is about the reducer alone, for
-every state and every action. That is the point. An action can be queued before Pause and
-applied after it, so only the reducer, looking at the state the action is applied to, can
-enforce "paused means frozen". This is a **reducer that owns the rules**: the rules are checked
-in the reducer, on the state each action meets, and stated as its contract. Code that
-dispatches can only ask.
+every state and every action. That is the point. The code that dispatches a tick cannot know
+the state the tick will be applied to: in the model a timer may fire after Pause, and in 12c
+the clocks tick whatever the state. So only the reducer, looking at the state the action is
+applied to, can enforce "paused means frozen" for every action. This is a **reducer that owns
+the rules**: the rules are checked in the reducer, on the state each action meets, and stated as
+its contract. Code that dispatches can only ask.
 
 As in Step 7a, the certificate is VERIFIED while the verdict is NOT VERIFIED: App's invariant,
 `validFeed(sim.feed)`, needs only `simReducer`'s first postcondition, which holds. "Paused means
@@ -2225,13 +2268,14 @@ $ vreact verify
 …
   ✓ src/App.tsx                              18/18
 
-✔ VERIFIED  148/148 obligations proved; components: 6/6 verified  (31.0s)
+✔ VERIFIED  148/148 obligations proved; components: 6/6 verified  (28.6s)
 ```
 
 The three new obligations are `simReducer`'s three postconditions. `simReducer` has no
 `requires`, so its `dispatch` calls add no precondition obligations. In the browser (again
 from the commit message), a rally while paused leaves the feed unchanged, and the feed moves
-again after Resume.
+again after Resume. The code comment repeats the commit message's "dispatched just before the
+pause"; as 12a explains, what the check refuses is a tick dispatched after it.
 
 ### 12c. Clocks that only say "time passed" ([log](options-chain/35-sim-clocks-bug.txt), [full log](options-chain/35-sim-clocks-bug-full.txt), [log](options-chain/36-sim-clocks.txt), [snapshot](options-chain/steps/36-sim-clocks/src/App.tsx))
 
@@ -2287,7 +2331,7 @@ Failed obligations
 …
     │ ⊢ False
 
-✗ NOT VERIFIED  149/150 obligations proved, 1 failed; components: 6/6 verified  (29.3s)
+✗ NOT VERIFIED  149/150 obligations proved, 1 failed; components: 6/6 verified  (32.4s)
 
 $ vreact verify --full     # the same failure, complete goal (excerpt, lines 206-209 of the log)
     │ hcontract_3 :
@@ -2322,7 +2366,7 @@ Obligations by file
   ✓ src/OptionsChain.tsx                     37/37
   ✓ src/App.tsx                              20/20
 
-✔ VERIFIED  150/150 obligations proved; components: 6/6 verified  (40.1s)
+✔ VERIFIED  150/150 obligations proved; components: 6/6 verified  (31.3s)
 ```
 
 The two new obligations are the two new postconditions. At step 36 the app has 6 components,
@@ -2348,7 +2392,8 @@ This step moves the state onto `ReadonlySet` and `ReadonlyMap`, and Step 14 extr
 comparisons into generic helpers, proved once for every key type they allow. The components
 change only where they read the state (`has`, `get`, `size`). Then two features use the new
 structures (watched strikes, Step 15; amending an order, Step 16), a second mutation audit
-checks the new frames (Step 17), and Step 18 is the final app.
+checks the new frames (Step 17), an outside review checks the whole spec (Step 18), and Step 19
+is the final app.
 
 **Maps and Sets in VTS.** `ReadonlyMap<K, V>` and `ReadonlySet<T>` (and `Map`, `Set`) may
 appear wherever a type may: parameters, results, state, props, record fields. Keys and Set
@@ -2575,22 +2620,22 @@ one more `every`, so the frame now says "unchanged" both ways. `holdAt` and `fol
 ```
 $ vreact synth src/reducer.ts
 hole in follow: ChainUi   scope: u, u.collapsed, u.filter, u.held, u.focus, u.heat, u.orders, id
-  candidate passes 400 random tests: { ...jump(u, id), collapsed: u.collapsed, focus: u.focus }   (11503 candidate(s) tested in 45.6s)
+  candidate passes 400 random tests: { ...jump(u, id), collapsed: u.collapsed, focus: u.focus }   (11503 candidate(s) tested in 47.1s)
   ✗ Lean rejects { ...jump(u, id), collapsed: u.collapsed, focus: u.focus }: postcondition of follow: sameView(u, r) && keepsHolds(u, r, id) (src/reducer.ts:145:11)
-  15089 candidates tested in 60.0s, up to size 7; stopped: the 60s time limit was reached at size 7
+  14612 candidates tested in 60.0s, up to size 7; stopped: the 60s time limit was reached at size 7
   no verified solution for hole in follow: 1 candidate(s) passed the tests, none was proved
   the random tests accept candidates that Lean rejects: write this one by hand
 hole in cancel: ChainUi   scope: u, u.collapsed, u.filter, u.held, u.focus, u.heat, u.orders, id
-  15115 candidates tested in 60.0s, up to size 7; stopped: the 60s time limit was reached at size 7
+  14661 candidates tested in 60.0s, up to size 7; stopped: the 60s time limit was reached at size 7
   no verified solution for hole in cancel: no candidate passed the tests
-  most common failure (15115×): u: postcondition fails on [{"collapsed":{"Set":[-10]},"filter":"s7","held":{"Map":[]},…},1] ↦ …
+  most common failure (14661×): u: postcondition fails on [{"collapsed":{"Set":[1,0,3]},"filter":"s3","held":{"Map":[]},…},5] ↦ …
   write this one by hand (synth builds straight-line expressions; guarded updates need an `if`; it only adds to a Map or Set, by new Map(m).set(k, v) or new Set(s).add(x): deleting is not in its grammar), or check that the spec is satisfiable
 ```
 
 (The `most common failure` line is shortened here. In the log it prints the whole random state:
 Maps and Sets appear as `{"Map":[[key, value], …]}` and `{"Set":[…]}`, with two working
-orders, one of them under the id `1` that `cancel` was asked to remove. The random states differ
-from run to run.)
+orders, one of them under the id `5` that `cancel` was asked to remove. Synth's random inputs
+are seeded (Step 1b), so a re-run prints the same state.)
 
 The empty Maps are gone: the frames refute them. Two other things are visible.
 
@@ -2667,9 +2712,7 @@ Obligations by file
 ✗ src/reducer.ts:188:11  [postcondition] postcondition of place: implies(wellFormed(u), wellFormed(r))
     │ `grind` failed
 …
-    │ h₂₇ :
-    │   ((1 ≤ u.heat ∧ u.heat ≤ 5) ∧ ∀ (x : model.Order), x ∈ u.orders.values → (1 ≤ x.qty ∧ x.qty ≤ 500) ∧ 0 < x.price) ∧
-    │     model.openQty u.orders.values ≤ 1000
+    │ h₂₇ : …  (a long hypothesis, 3 lines: --full shows it)
     │ h : ((1 ≤ qty ∧ qty ≤ 500) ∧ 0 < price) ∧ model.openQty u.orders.values + qty ≤ 1000
     │ h_1 :
     │   -1 *
@@ -2678,9 +2721,10 @@ Obligations by file
     │               { expiry := t.expiry, leg := t.leg, strike := t.strike, buy := JS.eq t.side model.Side.ask, qty := qty,
     │                 price := price }).values +
     │       1001 ≤
-    │   …
+    │     0
+    │ …
     │ ⊢ False
-✗ src/reducer.ts:192:11  [postcondition] postcondition of place: r.orders.size === (accepts(u, qty, price) ? u.orders.size + 1 : u.ord…
+✗ src/reducer.ts:192:11  [postcondition] postcondition of place: r.orders.size === (accepts(u, qty, price) ? u.orders.size + 1 : u.orders.size)
     │ `grind` failed
 …
     │ hcontract : u.orders.keys.Nodup
@@ -2699,13 +2743,13 @@ Obligations by file
     │ h : -1 * model.openQty (u.orders.delete id').values + 1001 ≤ 0
     │ ⊢ False
 
-✗ NOT VERIFIED  146/150 obligations proved, 4 failed; components: 4/6 verified  (49.6s)
+✗ NOT VERIFIED  146/150 obligations proved, 4 failed; components: 4/6 verified  (49.7s)
 ```
 
 Four failures, of two kinds. Read the hypotheses first.
 
 **A counterexample: the second failure.** `h_1` says that `u.orders.size + 1` is already a key,
-and `h_3` names its order `w`. `hcontract` is a contract instance, as in Step 12a: in vreact's
+and `h_3` names its order `w`. `hcontract` is a contract instance, as in Step 3: in vreact's
 Lean library, a Map's `keys` has a contract of its own, that the keys are distinct. Nothing in
 the invariant excludes `h_1`, and it is easy to reach: place two orders (ids 1 and 2), cancel
 order 1. One order is left, under id 2, so `size + 1` is 2, and the next `place` *replaces*
@@ -2718,7 +2762,7 @@ old invariant's `distinct` ruled out.
 **No counterexample: the first and the fourth.** The cap of Step 10 (the open quantity is at
 most `MAX_OPEN` = 1000 lots) must survive `place` and `cancel`. In the first failure, `h` says
 the old total plus the new quantity is at most 1000, and `h_1` says the total after `set` is
-above 1000 (the short report cuts its last line). Nothing relates the two totals: the
+above 1000. Nothing relates the two totals: the
 automation does not know what `set` does to a sum over the Map's values. In the fourth, `h₃₀`
 says the old total is at most 1000, `h` says the total after `delete` is above 1000, and again
 nothing relates them. Both claims are true (replacing an order of at least one lot by one of
@@ -2819,7 +2863,7 @@ Obligations by file
   ✓ src/model.ts                             22/22
   ✓ src/reducer.ts                           25/25
 …
-✔ VERIFIED  150/150 obligations proved; components: 6/6 verified  (31.2s)
+✔ VERIFIED  150/150 obligations proved; components: 6/6 verified  (28.4s)
 ```
 
 Same count as step 36, different contracts. What changed:
@@ -2973,7 +3017,7 @@ Obligations by file
 ✗ src/OptionsChain.tsx:151:11  [callback] OrderTicket.onSubmit handler (passed from OptionsChain) preserves the invariant of OptionsChain, assuming OrderTicket's callback contract
     │ (deterministic) timeout: the automation did not finish within this obligation's budget of 1000000 heartbeats (set "heartbeats" in vreact.json to change it)
 …
-✗ NOT VERIFIED  170/171 obligations proved, 1 failed; components: 4/6 verified  (101.5s)
+✗ NOT VERIFIED  170/171 obligations proved, 1 failed; components: 4/6 verified  (113.5s)
 ```
 
 Every contract of the reducer is proved (40/40), including all the new frames. The failure is
@@ -2984,8 +3028,8 @@ postcondition of `place` is added to the goal. The handler needs only the first
 (`wellFormed`), but the automation also processes the others, and `sameList` over
 `[...u.orders.keys(), u.nextId]` is a statement about every index of a list built by appending:
 in a goal that also holds the chain's whole render state, that is too much. This time the
-report has no list of cases: the diagnosis of Step 12a first prepares the goal, with a quarter
-of the budget, and here even that did not finish.
+report has no list of cases: the diagnosis of Step 12a lists cases only when the goal, once
+prepared, splits into several, and the Submit handler has no branches, so its goal is one case.
 
 The skill's usual advice, "make a large function `@opaque` with precise `ensures`", moves the
 problem here: with `chainReducer` marked `@opaque`
@@ -3005,8 +3049,9 @@ statement. A position is cheap: the automation knows where `set` puts a key it a
 It says much less than the `sameList` version: the new order comes after as many orders as
 there were before, and every old order is still there, unchanged. It no longer says that the
 old orders keep their relative order, nor that no other order appears: Step 13e's "one order
-more" went with the `sameList` claim. Both are listed under "Not proven here". (For `cancel`
-the `sameList` version stays, and is proved.)
+more" went with the `sameList` claim. The first is listed under "Not proven here"; the second
+comes back, in a cheaper form, in Step 18c. (For `cancel` the `sameList` version stays, and is
+proved.)
 
 ### 14c. Proved once, used everywhere ([log](options-chain/44-collections.txt), [snapshot](options-chain/steps/44-collections/src/), [explain](options-chain/44-collections-explain.txt))
 
@@ -3035,7 +3080,7 @@ Obligations by file
   ✓ src/OptionsChain.tsx                     37/37
   ✓ src/App.tsx                              20/20
 
-✔ VERIFIED  171/171 obligations proved; components: 6/6 verified  (35.2s)
+✔ VERIFIED  171/171 obligations proved; components: 6/6 verified  (35.8s)
 ```
 
 **What "proved once" looks like.** `vreact explain src/collections.ts` prints the Lean that
@@ -3235,12 +3280,13 @@ Failed obligations
 ✗ src/OptionsChain.tsx:141:21  [unique-keys] keys s.strike are distinct across rows
     │ `grind` failed
 …
-✗ NOT VERIFIED  182/183 obligations proved, 1 failed; components: 4/6 verified  (65.8s)
+✗ NOT VERIFIED  182/183 obligations proved, 1 failed; components: 4/6 verified  (75.3s)
 ```
 
 A **unique-keys** obligation says that the keys of a rendered list are distinct (Part 1, Step
-3). The short report cuts the goal off before the interesting part. The `--full` log has it
-(excerpt, lines 289-295):
+3). The short report keeps the hypotheses nearest the conclusion, and here those are about the
+holds: the ones that matter are among the 29 it leaves out and the six it folds. The `--full`
+log has them (excerpt, lines 289-295):
 
 ```
     │ right : Key.int w.strike = a
@@ -3287,7 +3333,7 @@ $ vreact verify
   ✓ src/OptionsChain.tsx                     42/42
   ✓ src/App.tsx                              20/20
 
-✔ VERIFIED  183/183 obligations proved; components: 6/6 verified  (34.1s)
+✔ VERIFIED  183/183 obligations proved; components: 6/6 verified  (37.7s)
 ```
 
 Lesson: two lists joined are a list with duplicates as soon as they overlap. A `key` makes React
@@ -3342,7 +3388,7 @@ export function amend(u: ChainUi, id: int, price: int): ChainUi {
 }
 ```
 
-### 16a. A timeout ([log](options-chain/47-amend-timeout.txt), [snapshot](options-chain/steps/47-amend-timeout/src/reducer.ts))
+### 16a. A timeout ([log](options-chain/47-amend-timeout.txt), [full log](options-chain/47-amend-timeout-full.txt), [snapshot](options-chain/steps/47-amend-timeout/src/reducer.ts))
 
 The first draft replaces the order: it takes the old one out and puts the amended one in.
 
@@ -3361,50 +3407,65 @@ $ vreact verify
 …
 ✗ src/reducer.ts:256:11  [postcondition] postcondition of amend: implies(wellFormed(u), wellFormed(r))
     │ `grind` failed
-…
-    │ h_1 :
-    │   -1 *
-    │         model.openQty
-    │           ((u.orders.delete id').set id'
-    │   …
+    │ …
+    │ h₄₃, h_1 : …  (2 long hypotheses, 13 lines: --full shows them)
+    │ …
+    │ h_4 : -1 * model.openQty u.orders.values + model.openQty (u.orders.delete id').values ≤ 0
+    │ …
     │ ⊢ False
 ✗ src/reducer.ts:261:11  [postcondition] postcondition of amend: sameList([...r.orders.keys()], [...u.orders.keys()])
     │ (deterministic) timeout: the automation did not finish within this obligation's budget of 1000000 heartbeats (set "heartbeats" in vreact.json to change it)
     │   … (the goal as stated: --full shows it)
     │ The goal splits into 3 cases. … Each case alone, smallest first, with up to 100000 heartbeats: 2 proved, 1 did not finish. The first that did not finish, case h_1.isFalse.isTrue:
     │ case h_1.isFalse.isTrue
-…
-    │ heq✝ : u.orders.get id' = some p_1✝
+    │   … (6 earlier hypotheses: u, id', price, hcontract✝⁴, p_1✝, heq✝: --full shows them)
     │ h✝² : ¬price ≤ 0
-…
+    │ …
     │ h✝ : ↑((List.filter (fun x => !JS.eq x id') u.orders.keys).length + 1) = ↑u.orders.keys.length
-    │   …
+    │ …
     │ ⊢ ∀
     │     (x :
     │       { x //
     │   …
 
-✗ NOT VERIFIED  190/192 obligations proved, 2 failed; components: 4/6 verified  (69.7s)
+✗ NOT VERIFIED  190/192 obligations proved, 2 failed; components: 4/6 verified  (79.1s)
 ```
 
-Two failures, neither with a counterexample.
+Two failures, neither with a counterexample. The short report folds or leaves out some of the
+hypotheses that matter here; `vreact verify --full`
+([full log](options-chain/47-amend-timeout-full.txt)) prints them:
+
+```
+$ vreact verify --full     # (excerpts, lines 107-114 and 911 of the log)
+    │ h_1 :
+    │   -1 *
+    │         model.openQty
+    │           ((u.orders.delete id').set id'
+    │               { expiry := p_1.expiry, leg := p_1.leg, strike := p_1.strike, buy := p_1.buy, qty := p_1.qty,
+    │                 price := price }).values +
+    │       1001 ≤
+    │     0
+…
+    │ heq✝ : u.orders.get id' = some p_1✝
+```
 
 The first is the cap. `h_1` says that the total after `delete` and then `set` is above
 `MAX_OPEN`. The claim is true (the order comes back with the same quantity), but Step 13e's
-lemma about `delete` is an inequality: the total does not grow. Adding the order back adds its
-quantity, so all the automation can conclude is "at most the old total plus this quantity",
-which may be above `MAX_OPEN`. Nothing in `proofs/model.lean` says that deleting an order
-lowers the total by exactly its quantity.
+lemma about `delete` is an inequality: the total does not grow (`h_4` is that lemma, for this
+Map). Adding the order back adds its quantity, so all the automation can conclude is "at most
+the old total plus this quantity", which may be above `MAX_OPEN`. Nothing in
+`proofs/model.lean` says that deleting an order lowers the total by exactly its quantity.
 
 The second is a **timeout**, like Step 14b's. There, the claim was true and only too heavy for
 the goal it appeared in. The diagnosis of Step 12a narrows it down: two of the three cases are
 proved, and the third, `h_1.isFalse.isTrue`, does not finish within its share either. In that
-case the order is found (`heq✝`) and the price is positive (`h✝²`), so the code replaces the
-order, and the two lists have the same length (`h✝`, the first test of `sameList`). (A `✝`
-marks a name that the proof cannot refer to.) What is left, the goal cut off here, is the second
-test of `sameList`: the same key at every position. A timeout says nothing either way: the
-automation stopped before it found a proof or a counterexample. One way to find out is to ask a
-narrower question, a consequence of the claim that is cheaper to check.
+case the order is found (`heq✝`, in the full log) and the price is positive (`h✝²`), so the
+code replaces the order, and the two lists have the same length (`h✝`, the first test of
+`sameList`). (A `✝` marks a name that the proof cannot refer to.) What is left, the goal cut off
+here and printed whole in the full log, is the second test of `sameList`: the same key at every
+position. A timeout says nothing either way: the automation stopped before it found a proof or
+a counterexample. One way to find out is to ask a narrower question, a consequence of the claim
+that is cheaper to check.
 
 ### 16b. A narrower claim ([log](options-chain/48-amend-moves.txt), [full log](options-chain/48-amend-moves-full.txt), [snapshot](options-chain/steps/48-amend-moves/src/reducer.ts))
 
@@ -3422,7 +3483,7 @@ $ vreact verify
 ✗ src/reducer.ts:263:11  [postcondition] postcondition of amend: [...r.orders.keys()].indexOf(id) === [...u.orders.keys()].indexOf(id)
     │ `grind` failed
 …
-✗ NOT VERIFIED  190/193 obligations proved, 3 failed; components: 4/6 verified  (68.7s)
+✗ NOT VERIFIED  190/193 obligations proved, 3 failed; components: 4/6 verified  (82.4s)
 ```
 
 This one fails with hypotheses. Two of them, from the `--full` log (excerpt):
@@ -3473,7 +3534,7 @@ $ vreact verify
 …
   ✓ src/OptionsChain.tsx                     46/46
 …
-✔ VERIFIED  192/192 obligations proved; components: 6/6 verified  (37.9s)
+✔ VERIFIED  192/192 obligations proved; components: 6/6 verified  (42.6s)
 ```
 
 Both failures are gone. The cap is proved by Step 13e's `openQty_set`, whose "key in use" case
@@ -3529,10 +3590,10 @@ Failed obligations
 …
 ✗ src/reducer.ts:277:11  [postcondition] postcondition of cancel: implies(wellFormed(u), wellFormed(r))
 …
-✗ src/reducer.ts:281:11  [postcondition] postcondition of cancel: sameList([...r.orders.keys()], [...u.orders.keys()].filter((k) => k !…
+✗ src/reducer.ts:281:11  [postcondition] postcondition of cancel: sameList([...r.orders.keys()], [...u.orders.keys()].filter((k) => k !== id))
     │ `grind` failed
 …
-✗ NOT VERIFIED  188/192 obligations proved, 4 failed; components: 4/6 verified  (47.8s)
+✗ NOT VERIFIED  188/192 obligations proved, 4 failed; components: 4/6 verified  (54.1s)
 ```
 
 All three are caught, by the frames of Step 14:
@@ -3597,7 +3658,7 @@ Obligations by file
   ✓ src/OptionsChain.tsx                     46/46
   ✓ src/App.tsx                              20/20
 
-✔ VERIFIED  192/192 obligations proved; components: 6/6 verified  (39.1s)
+✔ VERIFIED  192/192 obligations proved; components: 6/6 verified  (44.2s)
 ```
 
 All four survive. They are of three kinds.
@@ -3686,12 +3747,12 @@ Obligations by file
   ✓ src/App.tsx                              20/20
 
 Failed obligations
-✗ src/model.ts:154:11  [postcondition] postcondition of shownRows: ks.slice(span.lo, span.hi).every((s) => r.some((x) => x.strike === s.…
+✗ src/model.ts:154:11  [postcondition] postcondition of shownRows: ks.slice(span.lo, span.hi).every((s) => r.some((x) => x.strike === s.strike))
     │ `grind` failed
 …
     │ h : s ∈ JS.slice ks span.lo (some span.hi)
 …
-✗ src/model.ts:155:11  [postcondition] postcondition of shownRows: ks.every((s) => !watch.has(s.strike) || r.some((x) => x.strike === s.…
+✗ src/model.ts:155:11  [postcondition] postcondition of shownRows: ks.every((s) => !watch.has(s.strike) || r.some((x) => x.strike === s.strike))
     │ `grind` failed
 …
     │ left : s.strike ∈ watch.elems
@@ -3702,7 +3763,7 @@ Failed obligations
     │ h : x ∈ u.watch.elems
     │ ⊢ False
 
-✗ NOT VERIFIED  192/195 obligations proved, 3 failed; components: 6/6 verified  (39.7s)
+✗ NOT VERIFIED  192/195 obligations proved, 3 failed; components: 6/6 verified  (44.9s)
 ```
 
 Two of the four are caught now. (The reducer has one obligation fewer than in step 51:
@@ -3712,34 +3773,13 @@ and `left` a watched strike, that the result leaves out. The ▲ mutant and the 
 expected: they are wiring and display, which no contract here describes. This time the chain,
 the App and the certificate stay `VERIFIED`: no proof of an invariant used the failed claims.
 
----
+### 17d. The app after the audit ([log](options-chain/53-audited.txt), [snapshot](options-chain/steps/53-audited/src/))
 
-## Step 18: the final app
-
-### 18a. Verified ([log](options-chain/53-final-2.txt), [snapshot](options-chain/steps/53-final-2/src/))
-
-The final app removes the mutants and keeps the stronger spec of Step 17c.
-`examples/options-chain` is this snapshot.
+Snapshot 53 removes the mutants and keeps the stronger spec of 17c.
 
 ```
 $ vreact verify
 translated 8 module(s), 195 proof obligation(s) → .vreact/ ; checking with Lean…
-
-Components
-  VERIFIED           PriceCell              src/StrikeRow.tsx:12
-  VERIFIED           StrikeRow              src/StrikeRow.tsx:41
-  VERIFIED           TermRow                src/TermRow.tsx:19
-  VERIFIED           OrderTicket            src/OrderTicket.tsx:19
-  VERIFIED           OptionsChain           src/OptionsChain.tsx:34
-  VERIFIED           App                    src/App.tsx:156
-Functions
-…
-  VERIFIED           shownRows
-…
-  VERIFIED           watchStrike
-…
-  VERIFIED           repriced
-  VERIFIED           amend
 …
 App certificates (VReact.run_allInv instantiated)
   VERIFIED           VTS.App.App.certificate  axioms: propext, Classical.choice, Quot.sound
@@ -3753,43 +3793,611 @@ Obligations by file
   ✓ src/OptionsChain.tsx                     46/46
   ✓ src/App.tsx                              20/20
 
-✔ VERIFIED  195/195 obligations proved; components: 6/6 verified  (38.4s)
+✔ VERIFIED  195/195 obligations proved; components: 6/6 verified  (43.0s)
 ```
 
-195 obligations, 65 functions, 6 components and 8 verified files, plus one proof file with 8
-lemmas. `proofs/model.lean` is unchanged since Step 13e: amending needed no new lemma.
+195 obligations, 65 functions, 6 components and 8 verified files, plus the proof file with 8
+lemmas (`proofs/model.lean` is unchanged since Step 13e: amending needed no new lemma). This was
+the final app until someone who had not written its specification read it.
 
-### 18b. Final checks
+---
 
-* **Verification.** `✔ VERIFIED 195/195` ([log](options-chain/53-final-2.txt), above). The
+## Step 18: an outside review
+
+Both audits so far (Steps 7 and 17) were done by the author of the spec, who knew what each
+contract was meant to say. For snapshot 53, a reviewer who had not written it read the spec
+next to the code and did the same thing as those audits: make small changes to the code, run
+them against the unchanged spec, and keep the ones that still verify. They were saved as probes
+on snapshot 53, two of them with several changes in one probe. The report listed those
+changes, a partial fix for one of them, and code comments that claim more than the contracts
+prove.
+
+A report like this is answered finding by finding. Each finding is one of three kinds:
+
+1. **A gap a contract can close.** Write the contract, and check that it catches the
+   reviewer's change.
+2. **A gap a contract can only narrow.** The contract makes a function exact, but something
+   outside it is still trusted: plain code around the function can still pass it the wrong
+   value, or a function that the new contract is written with can still be wrong.
+3. **A gap out of reach.** VTS contracts do not describe what a component renders or which value
+   a handler passes on, and a function that the spec itself is written with can only be trusted
+   as written. Such a finding goes into "Not proven here", stated as precisely as possible.
+
+The answer takes four snapshots: the reviewer's changes together (18a); a stronger spec, with
+the changes still in the code, to see which it catches (18b); the same spec without them
+(18c); and the fixes of what 18c reports, which are the final app of Step 19. Section 18d
+lists what remains out of reach, and where each change ends up.
+
+### 18a. Fourteen changes that verify ([log](options-chain/54-review-mutants.txt), [snapshot](options-chain/steps/54-review-mutants/src/))
+
+The reviewer's changes to snapshot 53, each verified in the probe named on its row (195/195
+every time; changes 2 and 3 share one probe, and changes 9 to 12 another):
+
+| # | change | where | probe |
+|---|---|---|---|
+| 1 | `place` also files the new order under the id below it, when that id is free (a cancelled order's id) | `place` | [53-place-extra-order](options-chain/probes/53-place-extra-order/) |
+| 2 | the cap refuses an order that brings the total to exactly 1000: `+ qty < MAX_OPEN` | `accepts` | [53-rules-changed](options-chain/probes/53-rules-changed/) |
+| 3 | the "3" filter shows four rows on each side: `levelsOf` returns 4 for it | `levelsOf` | [53-rules-changed](options-chain/probes/53-rules-changed/) |
+| 4 | Pause and Rally do nothing: both toggles `return s` | `simReducer` | [53-pause-rally-noop](options-chain/probes/53-pause-rally-noop/) |
+| 5 | a rally tick pauses the feed while the rally is off | `simReducer` | [53-rally-tick-pauses](options-chain/probes/53-rally-tick-pauses/) |
+| 6 | the futures move ten times the offset: `shiftQuote(e.future, d * 10)` | `moveFutures` | [53-futures-times-ten](options-chain/probes/53-futures-times-ten/) |
+| 7 | the random walk never moves: `f.offset` in both branches | `stepFeed` | [53-walk-frozen](options-chain/probes/53-walk-frozen/) |
+| 8 | Submit sends 1 lot (`props.onSubmit(1, price)`) of the opposite side, whatever the ticket shows | `OrderTicket`, the chain's `onSubmit` | [53-submit-sells](options-chain/probes/53-submit-sells/) |
+| 9 | "Collapse all" and "Expand all" swapped | the chain | [53-chain-wiring](options-chain/probes/53-chain-wiring/) |
+| 10 | the strike window ignores a held price (`center` is always the live price) | the chain | [53-chain-wiring](options-chain/probes/53-chain-wiring/) |
+| 11 | strike rows rendered only for collapsed expiries (`!open &&`) | the chain | [53-chain-wiring](options-chain/probes/53-chain-wiring/) |
+| 12 | ☆ watches the next strike up (`s.strike + 20`) | the chain | [53-chain-wiring](options-chain/probes/53-chain-wiring/) |
+| 13 | every expiry renders its whole ladder (`e.strikes.map`) | the chain | [53-rows-whole-ladder](options-chain/probes/53-rows-whole-ladder/) |
+| 14 | the working orders listed newest first (`.toReversed()`) | the chain | [53-orders-reversed](options-chain/probes/53-orders-reversed/) |
+
+The partial fix was for change 1: `r.orders.size === u.orders.size + 1` for an accepted order
+from a well-formed state, which verifies, 196/196
+([probe](options-chain/probes/53-place-one-more/)). The comments: `chainReducer`'s `ids are
+never reused` (change 1 files an order under an old id), `simReducer`'s `so "never move" is not
+a fix` (change 7 is a walk that never moves), and the first line of `reducer.ts`, which still
+calls the reducer total, though Step 9 gave it a precondition.
+
+Snapshot 54 has all fourteen changes at once; they touch different lines. It still verifies:
+
+```
+$ vreact verify
+…
+Obligations by file
+  ✓ src/collections.ts                       6/6
+  ✓ src/model.ts                             26/26
+  ✓ src/reducer.ts                           49/49
+  ✓ src/StrikeRow.tsx                        24/24
+  ✓ src/TermRow.tsx                          12/12
+  ✓ src/OrderTicket.tsx                      12/12
+  ✓ src/OptionsChain.tsx                     46/46
+  ✓ src/App.tsx                              20/20
+
+✔ VERIFIED  195/195 obligations proved; components: 6/6 verified  (43.7s)
+```
+
+Changes 1–7 are in functions that have contracts (`place`, `levelsOf`, `simReducer`,
+`moveFutures` and `stepFeed`) or that a contract calls (`accepts`, which has none of its own:
+`place`'s contract names it). Those contracts say less than the code does, and 18b tries to
+close each of these gaps. Changes 8–14 are in the components: which value a handler passes on,
+and which list a JSX expression renders. Those are the third kind; 18d comes back to them.
+
+### 18b. A stronger spec, with the changes still in ([log](options-chain/55-review-spec.txt), [full log](options-chain/55-review-spec-full.txt), [snapshot](options-chain/steps/55-review-spec/src/))
+
+Snapshot 55 is snapshot 54 with a stronger spec: the fourteen changes are still in the code.
+The new contracts, function by function:
+
+```ts
+// reducer.ts
+/**
+ * The state with the ticket's order added under the next id, without the check: the state that
+ * `place` builds when it accepts, written out again for `place`'s contract.
+ */
+export function withOrder(u: ChainUi, t: Ticket, qty: int, price: int): ChainUi {
+  const o: Order = { expiry: t.expiry, leg: t.leg, strike: t.strike, buy: t.side === "ask", qty: qty, price: price };
+  return { ...u, orders: new Map(u.orders).set(u.nextId, o), nextId: u.nextId + 1 };
+}
+…
+  // ... no other order is added or changed ...
+  ensures((r: ChainUi) => implies(accepts(u, qty, price), keepsOrdersExcept(u, r, u.nextId)));
+…
+  // the rule is the invariant's: from a well-formed state, an order is refused only when the
+  // state with it would not be well-formed
+  ensures((r: ChainUi) => implies(wellFormed(u) && !accepts(u, qty, price), !wellFormed(withOrder(u, t, qty, price))));
+…
+// chainReducer
+  // the next id only grows ...
+  ensures((r: ChainUi) => r.nextId >= u.nextId);
+  // ... and every new order gets an id at or above the old next id and below the new one. With
+  // the line above, by induction over the actions: no id is ever given to two orders.
+  ensures((r: ChainUi) => [...r.orders].every(([k]) => u.orders.has(k) || (u.nextId <= k && k < r.nextId)));
+```
+
+* **`place`: no other order.** `keepsOrdersExcept` is the frame that `amend` and `cancel`
+  already use: every order other than the one at the given id is unchanged, none dropped and
+  none added. With the next id as that id, an accepted order is the only change to the orders.
+  This rules out change 1. The reviewer's partial fix would rule it out too, but only for an
+  accepted order from a well-formed state, and only by counting: with `place`'s other
+  postconditions, one order more means exactly the one under the next id. The comment that
+  change 1 contradicts, "ids are never reused", is about the reducer and a whole run of
+  actions, so the spec states which orders may change (this frame) and, in the reducer, where a
+  new order's id comes from (the next point).
+* **`chainReducer`: no id given twice.** The old comment said "ids are never reused", but the
+  contract below it only said that the next id never goes down. The new claim says where a new
+  order's id comes from: if an order is in the result `r` and was not in `u`, its id is at least
+  `u.nextId` and below `r.nextId`. That is a fact about one action. Over a run of actions it
+  means that no id is given out twice: if an id `k` is given out by one action, then `k` is
+  below the next id after it; a later action starts from a next id that is at least as large
+  (the next id never goes down), so it can only give out ids above `k`. Lean checks the fact
+  about one action; this two-line induction over the run is not checked by Lean.
+* **`place`: the cap is the invariant's.** `accepts` is a function the spec calls, so it is
+  part of the specification (Step 10). A stricter rule changes the guard and the contract
+  together, and change 2 verifies. The new claim ties `accepts` to something written
+  separately, the invariant: an order is refused only when the state with it added would not be
+  well-formed. `place`'s first postcondition already says the other half: an accepted order
+  keeps the state well-formed. Together, `accepts` is exactly as strict as `wellFormed`. A rule
+  added to `accepts` alone now fails this claim; it must also go into `wellFormed`, where it
+  holds for every state. `withOrder` builds "the state with the order added": it is `place`'s
+  own construction, written out again, because the contract needs that state also when `place`
+  refuses the order and returns `u`. Nothing ties the two copies together, so `withOrder` is
+  one more function that the spec trusts as written (18d comes back to this).
+
+```ts
+// model.ts
+export function levelsOf(f: StrikeFilter): int | null {
+  ensures((r: int | null) => r === null || r >= 1);
+  // the filter does what its button says: the label is the number of rows on each side
+  ensures((r: int | null) => filterLabel(f) === (r === null ? "All" : `${r}`));
+…
+// App.tsx
+/** `r` is the market `q` moved by d ticks: a missing side stays missing, the quantities stay. */
+export function shifted(q: Quote, r: Quote, d: int): boolean {
+  return r.bid === (q.bid === null ? null : q.bid + d) && r.ask === (q.ask === null ? null : q.ask + d) && r.bidQty === q.bidQty && r.askQty === q.askQty;
+}
+…
+  // every expiry, in its place, with its futures market moved by exactly d ticks
+  ensures((r: readonly Expiry[]) => r.length === es.length && forall(0, es.length, (i) => r[i].id === es[i].id && shifted(es[i].future, r[i].future, d)));
+…
+export function stepFeed(f: Feed): Feed {
+  ensures((r: Feed) => implies(validFeed(f), validFeed(r)));
+  // one draw of the generator, and a move of exactly as many ticks as it drew (0, 1 or 2)
+  ensures((r: Feed) => r.seed === nextSeed(f.seed));
+  ensures((r: Feed) => Math.abs(r.offset - f.offset) === Math.abs((nextSeed(f.seed) % 5) - 2));
+```
+
+* **`levelsOf`: what the button says.** The filter buttons show `filterLabel(f)`. The claim
+  ties the two tables together: the label of a filter is its number of rows on each side. This
+  is aimed at change 3; 18c shows what became of it.
+* **`moveFutures`: exact about the futures.** As many expiries as it is given, with the same ids
+  in the same places, each with its futures market moved by exactly `d` ticks. `shifted` states
+  that for one market, independently of `shiftQuote`, which computes it. This rules out change
+  6. It says nothing about the rest of an expiry (its label, symbol and strikes) beyond
+  `validChain`, which is all the chain needs from them; "Not proven here" lists this gap.
+* **`stepFeed`: one draw, and a move of its size.** Each step draws one number from the
+  generator, and moves the offset by exactly as many ticks as the draw says (`seed % 5 - 2` is
+  −2 to +2), up or down. A walk that never moves breaks the second claim whenever the draw is
+  not zero: change 7. What the claims leave open is the direction (inside the band, either one
+  would satisfy them) and the generator itself, `nextSeed`.
+
+```ts
+// App.tsx, simReducer
+  // ... and while running, a tick is exactly one step of the random walk
+…
+  // a rally tick never draws from the generator, and at the top of the band it changes nothing
+  ensures((r: Sim) => implies(a.kind === "rallyTick", r.feed.seed === s.feed.seed && (s.feed.offset < MAX_MOVE || r.feed.offset === s.feed.offset)));
+  // each button flips its own flag and leaves the feed alone; nothing else changes a flag
+  ensures((r: Sim) => r.paused === (a.kind === "togglePause" ? !s.paused : s.paused));
+  ensures((r: Sim) => r.rally === (a.kind === "toggleRally" ? !s.rally : s.rally));
+  ensures((r: Sim) => implies(a.kind === "togglePause" || a.kind === "toggleRally", sameFeed(r.feed, s.feed)));
+```
+
+**`simReducer`: every field, for every action.** The result of `simReducer` has four fields:
+the feed's `offset` and `seed`, and the flags `paused` and `rally`. A reducer's contract is
+complete when, for every action and every state, some postcondition fixes each field of the
+result. A table of actions by fields shows where snapshot 53 left gaps:
+
+| action | `offset`, `seed` | `paused`, `rally` |
+|---|---|---|
+| `tick` | fixed: unchanged while paused, otherwise one step of `stepFeed` | not mentioned |
+| `rallyTick` | unchanged while paused or with the rally off; while climbing, `offset` + 1, but `seed` not mentioned; at the top of the band, not mentioned | not mentioned |
+| `togglePause`, `toggleRally` | fixed while paused (unchanged); while running, not mentioned | not mentioned |
+
+Changes 4 and 5 live in the last column. The four new postconditions fill every gap: a rally
+tick never touches the seed and changes nothing at the top of the band; each button flips its
+own flag and nothing else does; the two buttons leave the feed alone. With them, the contract
+of `simReducer` describes its result completely. The comment that said "so 'never move' is not
+a fix" now says only what that postcondition says: a tick, while running, is exactly one step of
+`stepFeed`. Snapshot 55 also rewords the first line of `reducer.ts`: the reducer is "total in
+the state, with a precondition on the action only".
+
+```
+$ vreact verify
+…
+  ✗ src/model.ts                             26/27
+  ✗ src/reducer.ts                           49/52
+  ✓ src/StrikeRow.tsx                        24/24
+  ✓ src/TermRow.tsx                          12/12
+  ✓ src/OrderTicket.tsx                      12/12
+  ✓ src/OptionsChain.tsx                     46/46
+  ✗ src/App.tsx                              28/32
+
+Failed obligations
+✗ src/App.tsx:97:11  [postcondition] postcondition of moveFutures: r.length === es.length && forall(0, es.length, (i) => r[i].id === es[i].id && shifted(es[i].future, r[i].future, d))
+    │ `grind` failed
+    │ …
+    │ w : Int
+    │ h_8 : ¬(fun h₁ => some (10 * d + w)) = fun h₃ => some (d + w)
+    │ …
+    │ h_15 : ¬d + bid_1 = 10 * d + bid_1
+    │ ⊢ False
+✗ src/App.tsx:118:11  [postcondition] postcondition of stepFeed: Math.abs(r.offset - f.offset) === Math.abs((nextSeed(f.seed) % 5) - 2)
+    │ (deterministic) timeout: the automation did not finish within this obligation's budget of 1000000 heartbeats (set "heartbeats" in vreact.json to change it)
+…
+✗ src/App.tsx:155:11  [postcondition] postcondition of simReducer: r.paused === (a.kind === "togglePause" ? !s.paused : s.paused)
+    │ `grind` failed
+…
+    │ left : s.paused = true
+    │ right : (!s.paused) = false
+    │ ⊢ False
+✗ src/App.tsx:156:11  [postcondition] postcondition of simReducer: r.rally === (a.kind === "toggleRally" ? !s.rally : s.rally)
+…
+✗ src/model.ts:184:11  [postcondition] postcondition of levelsOf: filterLabel(f) === (r === null ? "All" : `${r}`)
+    │ `grind` failed
+    │ case grind
+    │ r : Int
+    │ hcontract : 4 ≥ 1
+    │ heq : some 4 = some r
+    │ h : ¬{ units := [51] } = JS.str r
+    │ ⊢ False
+✗ src/reducer.ts:239:11  [postcondition] postcondition of place: implies(accepts(u, qty, price), keepsOrdersExcept(u, r, u.nextId))
+    │ `grind` failed
+…
+    │ h_1 : 1 < u.nextId
+    │ h_2 : ¬u.nextId - 1 ∈ u.orders.keys
+    │ h_3 : model.openQty u.orders.values + qty + qty ≤ 1000
+…
+    │ heq : u.orders.get (u.nextId - 1) = none
+    │ ⊢ False
+✗ src/reducer.ts:245:11  [postcondition] postcondition of place: implies(wellFormed(u) && !accepts(u, qty, price), !wellFormed(withOrder(u, t, qty, price)))
+    │ `grind` failed
+…
+✗ src/reducer.ts:333:11  [postcondition] postcondition of chainReducer: [...r.orders].every(([k]) => u.orders.has(k) || (u.nextId <= k && k < r.nextId))
+    │ (deterministic) timeout: the automation did not finish within this obligation's budget of 1000000 heartbeats (set "heartbeats" in vreact.json to change it)
+…
+✗ NOT VERIFIED  203/211 obligations proved, 8 failed; components: 6/6 verified  (143.3s)
+```
+
+There are 16 new obligations (211 instead of 195), and 8 of them fail. The 16 are one new
+postcondition in `model.ts`, three in `reducer.ts`, and twelve obligations in `App.tsx`: its
+seven new postconditions, four index obligations for the `r[i]` and `es[i]` that
+`moveFutures`'s `forall` reads, and one for the `% 5` in `stepFeed`'s contract (a divisor must
+not be zero). Six failures catch the reviewer's changes.
+
+**`place`, no other order** (line 239). `h_1` to `h_3` are the conditions of the change's
+branch: the next id is above 1, the id below it is not in use, and there is room for the order
+twice. `heq` says that id has no order before; after the change it has one. Change 1.
+
+**`place`, the cap** (line 245). The short report folds the two hypotheses that make the
+counterexample, `h₃₇` and `right_8`, into one line; the full log has them:
+
+```
+$ vreact verify --full     # (excerpt, lines 2720-2749 of the log)
+✗ src/reducer.ts:245:11  [postcondition] postcondition of place: implies(wellFormed(u) && !accepts(u, qty, price), !wellFormed(withOrder(u, t, qty, price)))
+…
+    │ h₃₇ :
+    │   (((1 ≤ u.heat ∧ u.heat ≤ 5) ∧
+    │         ∀ (x : Int × model.Order),
+    │           x ∈ u.orders.entries → ((1 ≤ x.snd.qty ∧ x.snd.qty ≤ 500) ∧ 0 < x.snd.price) ∧ x.fst < u.nextId) ∧
+    │       model.openQty u.orders.values ≤ 1000) ∧
+    │     ¬(((1 ≤ qty ∧ qty ≤ 500) ∧ 0 < price) ∧ model.openQty u.orders.values + qty < 1000)
+…
+    │ left_2 : -1 * qty + 1 ≤ 0
+    │ left_3 : qty + -500 ≤ 0
+    │ left_4 : -1 * price + 1 ≤ 0
+…
+    │ right_8 :
+    │   model.openQty
+    │         (u.orders.set u.nextId
+    │             { expiry := t.expiry, leg := t.leg, strike := t.strike, buy := JS.eq t.side model.Side.ask, qty := qty,
+    │               price := price }).values +
+    │       -1000 ≤
+    │     0
+```
+
+`h₃₇` is a well-formed state and an order that the changed rule refuses. `left_2` to `left_4`
+say that the quantity and the price are valid, and `right_8` that the total with the order
+added is at most 1000. Since the rule refused it, the total is not below 1000: it is exactly
+1000. The changed rule refuses that order, though the state with it is well-formed. Change 2.
+
+**`moveFutures`** (line 97). `h_8` says that a futures bid `w` becomes `10 * d + w` where the
+claim wants `d + w`. The last lines make the same comparison for a bid named `bid_1`, and `h_15`,
+the two results differ, holds for every `d` but 0: any move is a counterexample. Change 6.
+
+**`stepFeed`** (line 118): a timeout. The claim is false for the frozen walk of change 7, which
+moves 0 ticks where the draw says 1 or 2. But the automation runs out of budget in the
+arithmetic of `%` before it finds a counterexample, as with the random walk of Step 12a; the
+diagnosis tries both cases of the goal and finishes neither. Change 7 is caught, as a timeout
+rather than with a counterexample.
+
+**`simReducer`, the flags** (lines 155 and 156). The goal names no action, and there is no `a`
+among its hypotheses: the automation has already split the reducer's `switch` into one goal per
+action, and the report does not say which goal this is (`grind.1` is again `grind`'s own name).
+The claim tells. `left` is a paused state (`right` says the same in another form: `!s.paused`
+is false). From a paused state, no action of the changed reducer unpauses the feed, and the
+claim expects the flag to stay as it is for every action but `togglePause`, for which it
+expects `!s.paused`. So this is the `togglePause` goal: the changed reducer returns the state
+as it is, still paused. Change 4, and the same for `rally`. Change 5 breaks the first of the two
+as well, in a running state, but the report shows one counterexample per obligation. Change 5 alone, on the final app, fails it
+([probe](options-chain/probes/57-rally-tick-pauses/)).
+
+Two failures are not catches. In `levelsOf` (line 184), `heq` says `r` is 4, and `h` that the
+text `{ units := [51] }` differs from `JS.str r`, the text of `r`. A JS string is a list of
+UTF-16 code units, and 51 is the code of the character `3`. So the label is "3" and the levels
+are 4, which looks like change 3. But without the change, in 18c, the claim fails the same way.
+`chainReducer`'s new claim (line 333) is a timeout, and 18c has it too.
+
+Changes 8 to 14, in the components, all still verify (`OrderTicket.tsx` 12/12,
+`OptionsChain.tsx` 46/46): no contract here was meant to catch them. The certificate stays
+`VERIFIED`: App's invariant uses only `simReducer`'s first postcondition.
+
+### 18c. Two claims not proved ([log](options-chain/56-review-unproved.txt), [full log](options-chain/56-review-unproved-full.txt), [snapshot](options-chain/steps/56-review-unproved/src/))
+
+Snapshot 56 is snapshot 55 without the reviewer's changes:
+
+```
+$ vreact verify
+…
+  ✓ src/collections.ts                       6/6
+  ✗ src/model.ts                             26/27
+  ✗ src/reducer.ts                           51/52
+…
+  ✓ src/App.tsx                              32/32
+
+Failed obligations
+✗ src/model.ts:184:11  [postcondition] postcondition of levelsOf: filterLabel(f) === (r === null ? "All" : `${r}`)
+    │ `grind` failed
+    │ case grind
+    │ r : Int
+    │ hcontract : 3 ≥ 1
+    │ heq : some 3 = some r
+    │ h : ¬{ units := [51] } = JS.str r
+    │ ⊢ False
+✗ src/reducer.ts:330:11  [postcondition] postcondition of chainReducer: [...r.orders].every(([k]) => u.orders.has(k) || (u.nextId <= k && k < r.nextId))
+    │ (deterministic) timeout: the automation did not finish within this obligation's budget of 1000000 heartbeats (set "heartbeats" in vreact.json to change it)
+…
+    │ The goal splits into 11 cases. … Each case alone, smallest first, with up to 100000 heartbeats: 10 proved, 1 did not finish. The first that did not finish, case h_9:
+    │ case h_9
+    │   … (10 earlier hypotheses: u, tup✝, hcontract✝¹¹, hcontract✝¹⁰, ticket✝, qty✝, price✝, h_pre✝¹, …: --full shows them)
+    │ hcontract✝⁸ : (List.map Prod.fst (place u ticket✝ qty✝ price✝ ⋯).orders.entries).Nodup
+    │ hcontract✝⁷, hcontract✝⁶, hcontract✝⁵, hcontract✝⁴, hcontract✝³, hcontract✝², hcontract✝¹, hcontract✝ : …  (8 contract instances, 130 lines: --full shows them)
+…
+    │ ⊢ tup✝.fst ∈ u.orders.keys ∨ u.nextId ≤ tup✝.fst ∧ tup✝.fst < (place u ticket✝ qty✝ price✝ ⋯).nextId
+
+✗ NOT VERIFIED  209/211 obligations proved, 2 failed; components: 6/6 verified  (112.5s)
+
+$ vreact verify --full     # one of the 10 earlier hypotheses (excerpt, line 129 of the log)
+    │ a✝ : tup✝ ∈ (place u ticket✝ qty✝ price✝ ⋯).orders.entries
+```
+
+App.tsx's new claims are all proved, and so are `place`'s. Two claims are not, and both are
+true.
+
+**The decimal text of a number.** Now `heq` says `r` is 3, and `h` that the text "3" differs from
+the text of `r`. That is false, so the claim holds: the counterexample is not one. Lean defines
+the text of a number with its `toString`, and the automation does not evaluate it, so it cannot
+see that the text of 3 is "3". Four one-line lemmas, one per number, would fill the gap. It is
+simpler to make the claim unnecessary: compute the label from the levels, so that, with this
+code, the two cannot disagree ([snapshot](options-chain/steps/57-final-2/src/)):
+
+```ts
+/** A filter button's label: the number of rows it shows on each side, so the two cannot disagree. */
+export function filterLabel(f: StrikeFilter): string {
+  const n = levelsOf(f);
+  return n === null ? "All" : `${n}`;
+}
+…
+            <button key={f} className={ui.filter === f ? "on" : ""} onClick={() => dispatch({ kind: "filter", filter: f })}>
+```
+
+The buttons' keys change from the label to the filter itself (`key={f}`, a value of the enum
+`StrikeFilter`): with computed labels, the proof that the keys are distinct would again need the
+text of the numbers. The labels on screen are the same as before. What this gives up is the
+claim aimed at change 3, which would have caught it once proved; it never was (18b). Change 3
+itself now changes the label too: a `levelsOf` that returns 4 for the first filter puts "4" on
+its button, and that verifies ([probe](options-chain/probes/57-levels-changed/)). The label
+follows the number only because `filterLabel`'s code computes it, though, and no contract
+checks that code: put snapshot 53's table of labels back into `filterLabel`, add change 3, and
+the "3" button shows four rows, and that verifies too
+([probe](options-chain/probes/57-label-3-shows-4/)). Whether the filters should be 3, 7, 11 and
+99 is a product decision, and only a contract that repeats the numbers could check it.
+
+**A fact several steps away.** The diagnosis of the timeout proves 10 of the reducer's 11 cases.
+The one it does not finish is `h_9`, the `"place"` case: the goal asks whether an order `tup✝`
+of `place`'s result (`a✝`, which the short report leaves out and the
+[full log](options-chain/56-review-unproved-full.txt) shows) has an id of `u` or a fresh one.
+The facts it has are `place`'s postconditions, eight of them in this case, 130 lines in the full
+log. Its two frames hold under opposite conditions: `keepsOrdersExcept` when `accepts` holds,
+`sameOrders` when it does not. So the automation must split on `accepts`, and for an accepted
+order go from `keepsOrdersExcept` ("every order other than the new one is the same order as
+before, field by field") to "the id is a key of `u`", several steps. Why this case does not
+finish while the other ten are proved was not isolated: those cases have frames too, eight of
+them the same `sameOrders` that a refused order gets, but there the frame holds without a
+condition, among fewer postconditions. Step 14b had the opposite problem: there a postcondition the caller did
+not need slowed the caller down. Here the caller needs a fact that the callee's contract
+implies only in several steps. The fix states
+that fact itself in `place`'s contract, in the words the reducer uses
+([snapshot](options-chain/steps/57-final-2/src/reducer.ts)):
+
+```ts
+/**
+ * Every order of `r` that `u` does not have got an id from `u.nextId` up to, not including,
+ * `r.nextId`: an id that `u`'s next id had not handed out yet, and that `r`'s next id has passed.
+ */
+export function freshIds(u: ChainUi, r: ChainUi): boolean {
+  return [...r.orders].every(([k]) => u.orders.has(k) || (u.nextId <= k && k < r.nextId));
+}
+…
+  // ... no other order appears (the only new id can be the old next id) ...
+  ensures((r: ChainUi) => freshIds(u, r));
+…
+  // ... and every new order gets an id at or above the old next id and below the new one. With
+  // the line above, by induction over the actions: no id is ever given to two orders.
+  ensures((r: ChainUi) => freshIds(u, r));
+```
+
+The first `freshIds` is `place`'s, the second the reducer's. For `place`, which raises the next
+id by at most one, it says that the only order that can be new is under the old next id. That
+rules out change 1 as well, so `place` no longer needs `keepsOrdersExcept`
+([probe](options-chain/probes/57-place-extra-order/): change 1 on the final app fails only
+`freshIds`). In the reducer's `"place"` case the fact is now one step from the goal.
+
+### 18d. What no contract here closes
+
+Changes 8 to 14 verify on the final app as they did on snapshot 53. They are of the third
+kind: the chain's wiring and rendering. One of them deserves a closer look, because it is the
+one that matters most to a user of the widget.
+
+**Submit (change 8).** The ticket keeps the quantity and the price in its own state, and passes
+them to `onSubmit`. A callback contract is written before the component's hooks, so it can
+mention the props and the callback's arguments, but never the component's state: a
+`callbackRequires(props.onSubmit, (qty, price) => …)` cannot compare `qty` with the quantity
+the ticket shows. The chain then builds the `place` action from its own `ticket` and the two
+arguments, and the only check on a dispatched action is the reducer's precondition, which may
+mention only the action (Step 9, for a good reason: the state it meets is not known at the
+dispatch). So no contract can compare the action with what the ticket shows. Moving the ticket's quantity and
+price into the reducer's state would not close the gap either: the action would then carry no
+data, but the ticket would show those values through its props, and what a component renders is
+not specified. On the final app, change 8 verifies
+([probe](options-chain/probes/57-submit-sells/)).
+
+**The rows and the orders (changes 11, 13, 14).** Step 17c already moved the choice of rows
+into `shownRows`, with a contract. Change 13 simply does not call it, and change 11 renders
+its rows under the wrong condition. A list function with a contract about its order would not
+help with change 14 either: `[...ui.orders]` is already exactly the Map's key order, and the
+change reverses the list in the JSX, where it could reverse a function's result just as well.
+All three verify on the final app ([probe](options-chain/probes/57-rows-whole-ladder/),
+[probe](options-chain/probes/57-orders-reversed/),
+[probe](options-chain/probes/57-chain-wiring/), which also has changes 9, 10 and 12).
+
+**What only narrowed** (the second kind). `moveFutures` is now exact about the futures, but App
+calls `moveFutures(EXPIRIES, offset)` in its render, in plain code: `offset * 10` there verifies
+([probe](options-chain/probes/57-futures-call-site/)). `stepFeed` now draws once and moves by
+the size of the draw, but the generator is still trusted as written: a `nextSeed` that returns
+its argument unchanged draws the same number forever, so every step moves the futures one tick
+down, until they bounce back and forth at the bottom of the band; that verifies, 209/209 (the
+`%` in `nextSeed` and its obligation are gone) ([probe](options-chain/probes/57-seed-stuck/)).
+And `accepts` is now tied to `wellFormed`, which leaves the invariant itself as the statement
+of the rule: the cap of 1000 lots is right if `wellFormed` says the right thing, and if
+`withOrder` builds the state that `place` builds. Nothing checks the second: a `withOrder` that
+files the order with one lot more than it has lets the stricter cap of change 2 verify again
+([probe](options-chain/probes/57-withorder-one-more/)).
+
+**The fourteen changes, at the end.** Each change of 18a, with its kind and what the final app
+does with it (each caught change alone on the final app is a probe in "Try it yourself"):
+
+| change | kind | on the final app |
+|---|---|---|
+| 1: `place` files another order | 1 | caught by `place`'s `freshIds` (18c) |
+| 2: a stricter cap | 2 | caught by the claim that ties `accepts` to `wellFormed`; `wellFormed` and `withOrder` are trusted as written |
+| 3: the "3" filter shows four rows | 3 | verifies, with "4" on the button; the claim aimed at it is gone (18c), and the label follows the number only through `filterLabel`'s code |
+| 4 and 5: Pause, Rally and the rally tick | 1 | caught: `simReducer`'s contract fixes every field of its result |
+| 6: the futures moved ten times the offset | 2 | caught in `moveFutures`; its call in App is plain code |
+| 7: a walk that never moves | 2 | caught, as a timeout (18b); the generator `nextSeed` is trusted as written |
+| 8 to 14: the components | 3 | still verify (the probes above) |
+
+---
+
+## Step 19: the final app
+
+### 19a. Verified ([log](options-chain/57-final-2.txt), [snapshot](options-chain/steps/57-final-2/src/))
+
+The final app is snapshot 57: the spec of 18b with the two fixes of 18c, and none of the
+reviewer's changes. `examples/options-chain` is this snapshot.
+
+```
+$ vreact verify
+translated 8 module(s), 210 proof obligation(s) → .vreact/ ; checking with Lean…
+
+Components
+  VERIFIED           PriceCell              src/StrikeRow.tsx:12
+  VERIFIED           StrikeRow              src/StrikeRow.tsx:41
+  VERIFIED           TermRow                src/TermRow.tsx:19
+  VERIFIED           OrderTicket            src/OrderTicket.tsx:19
+  VERIFIED           OptionsChain           src/OptionsChain.tsx:34
+  VERIFIED           App                    src/App.tsx:172
+Functions
+…
+  VERIFIED           freshIds
+…
+  VERIFIED           withOrder
+  VERIFIED           place
+…
+  VERIFIED           shifted
+  VERIFIED           moveFutures
+…
+App certificates (VReact.run_allInv instantiated)
+  VERIFIED           VTS.App.App.certificate  axioms: propext, Classical.choice, Quot.sound
+Obligations by file
+  ✓ src/collections.ts                       6/6
+  ✓ src/model.ts                             26/26
+  ✓ src/reducer.ts                           52/52
+  ✓ src/StrikeRow.tsx                        24/24
+  ✓ src/TermRow.tsx                          12/12
+  ✓ src/OrderTicket.tsx                      12/12
+  ✓ src/OptionsChain.tsx                     46/46
+  ✓ src/App.tsx                              32/32
+
+✔ VERIFIED  210/210 obligations proved; components: 6/6 verified  (69.9s)
+```
+
+210 obligations, 68 functions, 6 components and 8 verified files, plus one proof file with 8
+lemmas. Since step 53: 15 more obligations (3 in `reducer.ts`, the 12 of 18b in `App.tsx`;
+`model.ts` has the same 26, since the label claim went away) and three more functions (`freshIds`,
+`withOrder`, `shifted`). `proofs/model.lean` is unchanged since Step 13e: the new contracts
+needed no new lemma.
+
+### 19b. Final checks
+
+* **Verification.** `✔ VERIFIED 210/210` ([log](options-chain/57-final-2.txt), above). The
   certificate's axioms are exactly `propext, Classical.choice, Quot.sound`: the lemmas of the
   proof file are proved, not assumed. No `@trusted`, no `assume`, no `sorry` and no `hole`
-  anywhere. `vreact synth src/model.ts` and
-  `vreact synth src/reducer.ts` both report `no hole<T>() in …`
-  ([probe](options-chain/probes/53-no-holes/)).
+  anywhere. `vreact synth src/model.ts` and `vreact synth src/reducer.ts` both report
+  `no hole<T>() in …` ([probe](options-chain/probes/57-no-holes/)).
 * **TypeScript.** `npx tsc --noEmit -p .` is clean in a project with the app's npm
   dependencies installed (`npm ci` from its `package-lock.json`).
 * **Build** (by hand; no log is saved). `npx vite build`: 39 modules, `index.html` 0.41 kB, CSS
-  4.03 kB, JS 166.38 kB (52.99 kB gzipped).
-* **The contracts at run time** ([probe](options-chain/probes/53-runtime-contracts/): the
+  4.03 kB, JS 167.27 kB (53.16 kB gzipped).
+* **The contracts at run time** ([probe](options-chain/probes/57-runtime-contracts/): the
   script, its command and its outputs). `vreact/spec` records the `ensures` of a function when
   its test mode is on (synth uses that, Part 1, Step 1b). The script runs 300 random sessions
   of 60 actions from `INITIAL_UI`, then 20,000 random states (also unreachable ones: negative
   quantities, ids at or above `nextId`) with a random action each, every action both through
   `chainReducer` and by calling its operation directly; then `shownRows` on 20,000 random
-  windows and watch lists, and `toggleIn` on Sets of strings. All with real JS Maps and Sets.
-  It evaluates each function's own postconditions on its result: 324,025 checks, no failure.
-  It also checks that the working orders always stay in id order (placement order) in the
-  sessions, and that `shownRows` keeps the ladder's order. Run on the earlier snapshots, it
-  reports the step-47 draft of 16a and the mutants of 17a and 17c that the contracts catch, and
-  nothing for those of 17b, as the verifier does.
-* **In a browser** (by hand; no log is saved). On the built app (`vite preview`), with the feed
-  paused: the filter set to "All", ☆ on 96.00 and on 108.00 (these two clicks from a script in
-  the page, the others with the mouse), the filter set to "3". Every expiry then showed 96.00,
-  its seven window rows and 108.00, in ladder order; the toolbar showed "Watching ★ 96.00 ★
-  108.00". ☆ on 103.00, inside the window, made it ★ and left it one row. Two orders placed from
-  the ladder, then ▲ on the first: its price went from 2.25 to 2.30 and it stayed first. The
-  console showed no errors.
+  windows and watch lists, and `toggleIn` on Sets of strings; then the feed of `App.tsx`: 300
+  random runs of 60 actions through `simReducer` from App's initial state, and 20,000 random
+  (also invalid) feeds, each through `simReducer` with a random action and through `stepFeed`,
+  and `moveFutures` on random offsets. All with real JS Maps and Sets. It evaluates each
+  function's own postconditions on its result: 775,792 checks, no failure. It also checks that
+  the working orders always stay in id order (placement order) in the sessions, and that
+  `shownRows` keeps the ladder's order. An earlier version of the script computed its random
+  numbers in floating point and lost their low bits, so that, for example, every random order
+  was a sell; the script now uses a 32-bit generator, and its runs on earlier snapshots were
+  made again with it. On the snapshots of Steps 16 and 17 it reports the step-47 draft of 16a
+  and the mutants of 17a and 17c, and nothing for those of 17b, as the verifier does. On step 55
+  it reports changes 1 and 4 to 7 of the review through the new postconditions of `place`,
+  `chainReducer`, `simReducer`, `moveFutures` and `stepFeed`. It does not report change 2: random
+  states almost never make the total exactly 1000, where the changed rule differs. The proof
+  does not depend on luck.
+* **In a browser** (by hand; no log is saved). This session was run on snapshot 53. The final
+  app behaves the same: its code changes since then are postconditions, whose lambdas run only
+  in test mode; three functions that only contracts call (`freshIds`, `withOrder`, `shifted`);
+  the filter labels, which are now computed and read the same; and the filter buttons' keys,
+  now the filters themselves (Step 18c). On the built app
+  (`vite preview`), with the feed paused: the filter set to "All", ☆ on 96.00 and on 108.00
+  (these two clicks from a script in the page, the others with the mouse), the filter set to
+  "3". Every expiry then showed 96.00, its seven window rows and 108.00, in ladder order; the
+  toolbar showed "Watching ★ 96.00 ★ 108.00". ☆ on 103.00, inside the window, made it ★ and left
+  it one row. Two orders placed from the ladder, then ▲ on the first: its price went from 2.25
+  to 2.30 and it stayed first. The console showed no errors.
 
 ---
 
@@ -3798,9 +4406,10 @@ lemmas. `proofs/model.lean` is unchanged since Step 13e: amending needed no new 
 `App.certificate` is a Lean theorem: in every run of the application, meaning any sequence of
 clicks and other user events, effect runs and timer firings in vreact's model of React 18, every
 mounted component instance satisfies its invariant. Lean's kernel checked it, and it depends on
-no assumption beyond Lean's standard axioms. In terms of this app, together with the 195
+no assumption beyond Lean's standard axioms. In terms of this app, together with the 210
 obligations of its components and functions, all proved, the final app guarantees the
-following. *(Part 2)* marks what is new since step 26.
+following. *(Part 2)* marks what is new since step 26, and *(Step 18)* what the answer to the
+outside review added.
 
 **State that can never go wrong**
 
@@ -3811,8 +4420,9 @@ following. *(Part 2)* marks what is new since step 26.
 * An open ticket always has a positive price. The order ticket's own quantity and price are
   always valid.
 * The simulated feed's offset stays within ±40 ticks, whatever the interleaving of timer
-  ticks, re-renders and clicks. (That the futures on screen are the data moved by this offset
-  is not proven: see "Not proven here".)
+  ticks, re-renders and clicks. `moveFutures` moves each futures market by exactly the offset
+  it is given *(Step 18)*; that App gives it the feed's offset is plain code (see "Not proven
+  here").
 * Each of these survives any new props the parent passes, including expiries disappearing.
 
 **Rendering never fails** (in any reachable state, for any valid data):
@@ -3828,7 +4438,8 @@ following. *(Part 2)* marks what is new since step 26.
 
 **What the callbacks report, and what is dispatched**
 
-* A price cell's button reports exactly the price it displays (`PriceCell`).
+* A price cell's button reports exactly the price the cell is given to show, its `price` prop
+  (`PriceCell`). That the text it shows is that price is rendering, which is not specified.
 * Every report from `StrikeRow` is consistent: the price is the current quote of the leg (call
   or put) and the side (bid or ask) that it names. The same holds for `TermRow` and the futures
   market. This rules out forwarding a cell's price under the wrong side or leg, the bug of
@@ -3843,19 +4454,26 @@ following. *(Part 2)* marks what is new since step 26.
   *(Part 2, Step 9)*.
 * Every callback a parent hands to a child keeps the parent's invariant.
 
-**What each operation of the reducer does** (the `ensures` in `reducer.ts`, each proved for
-all inputs):
+**What each operation of the reducer does when it is called** (the `ensures` in `reducer.ts`,
+each proved for all inputs). Which operation the reducer's `switch` calls for an action is plain
+code: see "Not proven here".
 
 * `place` adds an order exactly when `accepts` holds: a valid quantity, a positive price, and a
-  total that stays within `MAX_OPEN` (`accepts` is that rule as written, Step 10). The order
-  under the old `nextId` is then exactly the one that the `Ticket` passed to `place` describes
-  (its expiry, contract and strike, buy for an ask and sell for a bid), with the quantity and
-  the price passed along, and `nextId` goes up by one. (That the chain passes the ticket,
-  quantity and price that the order ticket shows is plain code: see "Not proven here".) From a
-  well-formed state, the new order's id comes at position `u.orders.size` of the Map's key
-  order (after as many orders as there were before), and every working order is still there,
-  unchanged. A rejected order changes neither the orders nor `nextId`. `place` never changes
-  the view (filter, focus, heat threshold, collapsed expiries, watched strikes) or the holds.
+  total that stays within `MAX_OPEN` (Step 10). From a well-formed state, `accepts` refuses an
+  order only when the state with it added would not be well-formed *(Step 18)*: with "an
+  accepted order keeps the state well-formed", it is exactly as strict as the invariant. (The
+  state with it added is the one `withOrder` builds, a second copy of `place`'s construction
+  that the spec trusts as written.) The order under the old `nextId` is then exactly the one
+  that the `Ticket` passed to `place` describes (its expiry, contract and strike, buy for an ask
+  and sell for a bid), with the quantity and the price passed along, and `nextId` goes up by
+  one. (That the chain passes the
+  ticket, quantity and price that the order ticket shows is plain code: see "Not proven
+  here".) No other order appears: the only id that can be new is the old `nextId` *(Step 18)*.
+  From a well-formed state, the new order's id comes at position `u.orders.size` of the Map's
+  key order (after as many orders as there were before, so last), and every working order is
+  still there, unchanged. A rejected order changes neither the orders nor `nextId`. `place`
+  never changes the view (filter, focus, heat threshold, collapsed expiries, watched strikes) or
+  the holds.
 * `amend` with a known id and a positive price gives that order the new price, with the same
   contract, direction and quantity, at the same place in the Map's key order *(Part 2, Step
   16)*. For any id and price, the other orders are unchanged, no order is added or removed, the
@@ -3872,12 +4490,14 @@ all inputs):
   operations, except `watchStrike`, which did not exist yet, had no frame conditions)*. Their
   frames name the view's fields in one place, `sameView`, so a field added to the view later
   is in every frame.
-* `chainReducer` keeps the invariant for every valid action, and never lowers `nextId` *(Part
-  2)*. With `place`'s contract and the invariant, this means that the order a ticket creates
-  goes under an id that no order has had before. It does not mean that an id is never used
-  twice: `place`'s contract does not rule out an extra order filed under an old id (see "Not
-  proven here"). The code's comment on that `ensures`, "ids are never reused", says more than
-  is proved.
+* `chainReducer` keeps the invariant for every valid action and never lowers `nextId` *(Part
+  2)*, and every order it adds gets an id at or above the old `nextId` and below the new one
+  *(Step 18)*. Together these mean that no id is handed out twice in a run of actions: the id
+  of a cancelled order never goes to a new one. Lean proves the two facts about one action; the
+  step from them to a whole run is a two-line induction (Step 18b), which Lean does not check.
+  (These facts are about handing out ids. That an id keeps the same order is up to the frames
+  of the operations, and has two gaps: `amend` with a price below one tick, and the reducer's
+  `switch`; see "Not proven here".)
 
 **The generic helpers** (`collections.ts`, Part 2): `toggleIn` flips the membership of one key
 and keeps every other member; `byId` returns a value with the id, or `undefined` only when no
@@ -3901,16 +4521,29 @@ contract.) Each is proved once, for every type its constraint allows, and used a
   quote.
 * `midPrice`: the mid rounded down when two-sided, otherwise the side present, otherwise null.
   When the market is two-sided and not crossed (bid ≤ ask), the result lies within the spread.
-* `stepFeed`, `moveFutures`: they preserve validity, and their contracts say nothing more.
+* `levelsOf`: at least one row on each side, or all rows. (The filter buttons' labels are
+  computed from it in plain code since Step 18; see "Not proven here".)
+* `stepFeed` *(Step 18)*: it preserves validity, draws exactly one number from the generator
+  (`nextSeed`), and moves the offset by exactly as many ticks as the draw says (0, 1 or 2), up
+  or down.
+* `moveFutures` *(Step 18)*: it preserves validity, and returns as many expiries as it is
+  given, with the same ids in the same order, each with its futures market moved by exactly the
+  given number of ticks (a missing side stays missing, the quantities stay). It says nothing
+  else about an expiry: its label, symbol and strikes are only kept valid (see "Not proven
+  here").
 
-**The rules of the simulated feed** (`simReducer` in `App.tsx`, Part 2, Step 12): the feed
-stays valid; while paused, no action changes the feed; while running, a tick is exactly one
-step of the random walk (`stepFeed`); a rally tick leaves the feed unchanged while the rally is
-off, and adds exactly one tick to the offset while the rally is on, the feed runs and the
-offset is below the top of the band. These are functional postconditions of `simReducer`. They
-are about the feed only: none of them says what happens to `paused` and `rally` (see "Not
-proven here"). App's invariant needs only the first of them (Step 12a shows the difference),
+**The rules of the simulated feed** (`simReducer` in `App.tsx`, Part 2, Step 12, completed in
+Step 18): the feed stays valid; while paused, no action changes the feed; while running, a tick
+is exactly one step of the random walk (`stepFeed`); a rally tick leaves the feed unchanged
+while the rally is off, adds exactly one tick to the offset while the rally is on, the feed
+runs and the offset is below the top of the band, changes nothing at the top of the band, and
+never touches the generator's seed; Pause and Rally each flip their own flag and leave the feed
+alone, and no other action changes a flag *(Step 18)*. Together these fix every field of the
+result for every action and every state: the postconditions describe `simReducer` completely.
+App's invariant needs only the first of them (Step 12a shows the difference),
 but all of them are proved obligations, and the verdict would not be `VERIFIED` without them.
+These rules are about each action and the state React applies it to. They do not say that
+nothing moves on screen after a click on Pause (see "Not proven here").
 
 **The proof file** *(Part 2)*: `proofs/model.lean` holds 8 lemmas about `openQty`, the total
 quantity of the working orders: over a list (Step 10b), and over a Map after `set` and `delete`
@@ -3941,6 +4574,9 @@ What a reader has to trust, following `vreact/docs/SEMANTICS.md` §5:
   (Step 9);
 * Lean's kernel, plus the standard axioms. After the build, vreact checks every declaration of
   the generated modules and of the proof file again with the kernel, in a fresh process;
+* **one argument on paper** *(Step 18)*: that no order id is given out twice in a run follows
+  from two proved facts about one action of the reducer, by an induction over the actions that
+  Lean does not check (Step 18b);
 * **the proof file's whitelist** *(Part 2)*. `proofs/model.lean` is imported into the generated
   Lean, so it must not be able to change what the generated code means. vreact accepts only the
   listed kinds of commands in a proof file (theorems, definitions, simp and grind attributes,
@@ -3954,62 +4590,105 @@ What a reader has to trust, following `vreact/docs/SEMANTICS.md` §5:
 
 ### Not proven here
 
-The probes linked below are changes to the final app that still verify, 195/195 (each run
-once, not part of the replay).
+The probes linked below are changes to the final app that still verify (210/210, or 209/209
+where the change removes an obligation; each run once, not part of the replay). Step 18 shows
+how the outside review's findings were sorted into what a contract could close and what it
+could not. A second review, of the final app, found more such gaps; they are stated here, each
+with its probe, and the app was not changed for them.
 
 * Which action, with which arguments, each control dispatches, and which cell a report comes
   from. The contracts check that every report is consistent and every dispatched action valid,
   not that it is the one the control stands for. Changes that verify: a cell that reports
-  another cell's leg, side and price (snapshot 24); ▲ lowering the price (Step 17b); ☆ watching
-  another strike, a "Collapse all" that collapses nothing and an "Expand all" that collapses
-  every expiry ([probe](options-chain/probes/53-chain-wiring/)); and the one that matters most,
-  a Submit that sends the opposite side and 1 lot, whatever the ticket shows
-  ([probe](options-chain/probes/53-submit-sells/)): the ticket's title says "Buy" and its
-  quantity 5, and a sell of 1 lot is placed.
+  another cell's leg, side and price (snapshot 24); ▲ lowering the price
+  ([probe](options-chain/probes/57-up-lowers-price/)); ☆ watching another strike, a "Collapse
+  all" that collapses nothing and an "Expand all" that collapses every expiry
+  ([probe](options-chain/probes/57-chain-wiring/)); and the one that matters most, a Submit
+  that sends the opposite side and 1 lot, whatever the ticket shows
+  ([probe](options-chain/probes/57-submit-sells/)): the ticket's title says "Buy" and its
+  quantity 5, and a sell of 1 lot is placed. Step 18d explains why no contract can close this
+  one: a callback contract cannot see the ticket's own state, and a reducer's precondition sees
+  only the action. Which button dispatches Pause and which Rally is wiring too.
+* Which operation the reducer runs for each action. `chainReducer`'s `switch` is plain code,
+  and its contract says only that the invariant holds, that `nextId` does not go down and that
+  new orders get fresh ids; the contracts of the operations apply only when the `switch` calls
+  them. A `"cancel"` case that returns `u` verifies, and Cancel then does nothing
+  ([probe](options-chain/probes/57-reducer-cancel-noop/)); so does a `"place"` case that places
+  a 1-lot buy whatever side and quantity the action asks for
+  ([probe](options-chain/probes/57-reducer-place-1-lot-buy/)). Unlike Submit's gap, this one a
+  contract could state: a postcondition of `chainReducer` for each kind of action (for
+  `"cancel"`: the order is gone and the others are kept). The final app has none, and it was not
+  tried; the chain's handlers would see such postconditions too, as in Step 14b.
+* That the ticket opens at the clicked price. `OrderTicket` copies `props.ticket.price` into its
+  own state in plain code: `useState<int>(1)` there verifies, and every ticket then opens at
+  0.05, whatever cell was clicked, and Submit places the order at that price unless it is
+  changed ([probe](options-chain/probes/57-ticket-opens-at-1/)). As with Submit, no contract
+  here reaches it: an invariant must hold after every click too, and the ticket's − and +
+  change the price.
 * That the screen shows the data. Rendering is proved not to fail, but what it shows is not
-  specified: the numbers in the right columns and colours, the ☆/★ glyph (Step 17b), the
-  ticket's "Buy"/"Sell" title, the "Pause feed"/"Resume feed" label. That includes which strike
-  rows the chain renders: `shownRows`'s result is specified, but rendering every expiry's whole
-  ladder verifies ([probe](options-chain/probes/53-rows-whole-ladder/)), and so do rows shown
-  only for collapsed expiries and a window that ignores the held price
-  ([probe](options-chain/probes/53-chain-wiring/)). It also includes the order of the working
+  specified: the numbers in the right columns and colours (also the in-the-money shading:
+  `inTheMoney` has no contract), the ☆/★ glyph (Step 17b), the ticket's "Buy"/"Sell" title and
+  its "Marketable" warning (`crosses` has no contract either: one that misses an order at
+  exactly the bid or the ask verifies, [probe](options-chain/probes/57-marketable-strict/)), the
+  "Pause feed"/"Resume feed" label. That includes which strike rows the chain renders:
+  `shownRows`'s result is specified, but rendering every expiry's whole ladder verifies
+  ([probe](options-chain/probes/57-rows-whole-ladder/)), and so do rows shown only for
+  collapsed expiries and a window that ignores the held price
+  ([probe](options-chain/probes/57-chain-wiring/)). It also includes the order of the working
   orders on screen: the chain renders `[...ui.orders]` in plain code, and a reversed list
-  verifies ([probe](options-chain/probes/53-orders-reversed/)).
-* That the futures on screen are the data moved by the feed's offset. `moveFutures`'s contract
-  only keeps the data valid: moving the futures ten times as far verifies
-  ([probe](options-chain/probes/53-futures-times-ten/)).
-* That Pause and Rally change the simulation at all, and that a tick leaves `paused` and
-  `rally` alone. No postcondition of `simReducer` mentions them in its result: buttons that do
-  nothing verify ([probe](options-chain/probes/53-pause-rally-noop/)), and so does a rally
-  tick that pauses the feed while the rally is off
-  ([probe](options-chain/probes/53-rally-tick-pauses/)).
-* That the rules written as functions are the intended ones. `accepts`, `stepFeed` and
-  `levelsOf` are called by contracts, so they are part of the specification and are trusted as
-  written (Steps 10 and 12). A random walk that never moves
-  ([probe](options-chain/probes/53-walk-frozen/)), a "3" filter that shows four rows on each
-  side, and a cap that rejects an order bringing the total to exactly 1000
-  ([probe](options-chain/probes/53-rules-changed/)) verify.
-* That `place` lists the new order after all the others, adds no other order, and keeps the
-  others in their order. Its contract says less (see above); the full statement timed out in
-  the chain's Submit handler (Step 14b). So the contracts do not rule out an id being used
-  twice: a `place` that also files the new order under the id of a cancelled order verifies
-  ([probe](options-chain/probes/53-place-extra-order/)). With that change, in the app: place an
-  order, cancel it, place another, and that one Submit makes two working orders, one of them
-  under the cancelled id. Part of
-  the gap can be closed: a probe that adds
-  `implies(wellFormed(u) && accepts(u, qty, price), r.orders.size === u.orders.size + 1)` to
-  `place` verifies, 196/196 ([probe](options-chain/probes/53-place-one-more/)). With it, an
-  accepted `place` adds exactly one order, so it could no longer file one under an old id. It
-  came too late for the final code.
+  verifies ([probe](options-chain/probes/57-orders-reversed/)).
+* That a filter button shows the rows its label names. `filterLabel` computes the label from
+  `levelsOf` since Step 18c, so with this code the two agree, but no contract ties them:
+  snapshot 53's table of labels in `filterLabel`, with a first filter of four rows, gives a "3"
+  button that shows four rows, and verifies
+  ([probe](options-chain/probes/57-label-3-shows-4/)). And the chain reads the window's size
+  with `levelsOf(ui.filter)` in plain code: `levelsOf("s7")` there verifies, and every button
+  then shows seven rows on each side ([probe](options-chain/probes/57-filter-ignored/)).
+* That App passes the feed's offset to `moveFutures`, and that `moveFutures` leaves the rest of
+  an expiry alone. The function is exact about the futures since Step 18, but its call in App's
+  render is plain code: `moveFutures(EXPIRIES, offset * 10)` verifies
+  ([probe](options-chain/probes/57-futures-call-site/)). And its contract says nothing about an
+  expiry's label, symbol or strikes beyond `validChain`: a `moveFutures` that returns every
+  expiry without strikes (`strikes: []`) verifies, and the chain then shows no strike rows at
+  all ([probe](options-chain/probes/57-futures-no-strikes/)).
+* That the functions the spec is written with are the intended ones. A function that a
+  contract calls by name is part of the specification and is trusted as written (Steps 10 and
+  12). Step 18 narrowed this. `accepts` is now tied to the invariant, so the rule it states is
+  the invariant's, and the invariant is what has to be right, together with `withOrder`, the
+  copy of `place`'s construction that the new claim is written with: a `withOrder` that files
+  the order with one lot more lets the stricter cap of change 2 verify again
+  ([probe](options-chain/probes/57-withorder-one-more/)). `stepFeed` now draws once and
+  moves by the size of the draw, but the generator `nextSeed` and the walk's direction inside
+  the band are still as written: a `nextSeed` that returns its argument draws the same number
+  forever and verifies ([probe](options-chain/probes/57-seed-stuck/)). And the filter's numbers
+  are a product decision: a first filter of 4 rows verifies, with "4" on its button
+  ([probe](options-chain/probes/57-levels-changed/)).
+* That `place` keeps the other orders in their relative order. Its contract says that the new
+  order comes last, that every other order is still there unchanged, and that no other order
+  appears (Step 18c), but not that the others keep their order: the full statement timed out in
+  the chain's Submit handler (Step 14b).
 * That `shownRows` keeps the ladder's order, that its rows are the ladder's own records, and
   that a watched strike the ladder does not list stays out. It does all three by construction
-  (it is a `filter` of the ladder), and the run-time script of Step 18b checked the order, but
+  (it is a `filter` of the ladder), and the run-time script of Step 19b checked the order, but
   its contract compares rows only by their strike and says none of this.
 * That `amend` with a price below one tick leaves the order as it is. The code does, but the
   contract only says that the order stays valid and in its place, and that the others are
   unchanged.
-* That the two intervals actually fire, or at which rate. The model lets timers fire at any
-  time, in any order; "about 8 seconds" in Step 12c is arithmetic, not a theorem.
+* The initial states, beyond their invariants. The chain's `INITIAL_UI` and App's first `Sim`
+  are constants that only the invariants check: a chain that starts with the All filter, the
+  heat threshold at 5, an expiry focused and a strike watched, together with a feed that starts
+  paused, with the rally on and the futures 2.00 above the data, verifies
+  ([probe](options-chain/probes/57-initial-states/), both changes in one probe).
+* That nothing moves on screen after a click on Pause. React applies a tick dispatched just
+  before the click first, to a running feed, so the tick moves the futures; but React may
+  render the Pause first and that tick after it (rebasing, `vreact/docs/SEMANTICS.md` §2.2).
+  The futures then move once more while the button already says "Resume feed". `simReducer`'s
+  rules are about each action and the state it is applied to, and that tick met a running
+  feed. This follows from the model of React; no run of the verifier shows it.
+* That the two intervals actually fire, or at which rate, or which action each one
+  dispatches. The model lets timers fire at any time, in any order; "about 8 seconds" in Step
+  12c is arithmetic, not a theorem. A 200 ms clock that dispatches `tick` instead of
+  `rallyTick` verifies: Rally then changes only its button's label, and the random walk runs
+  five times as often ([probe](options-chain/probes/57-rally-clock-ticks/)).
 * That a nearest strike always exists for a non-empty ladder (true, but it needs induction; see
   below). The UI falls back to showing every strike if `atmIndex` ever returned −1.
 * That the strikes are ascending. Nothing depends on it except the display order.
@@ -4025,9 +4704,11 @@ once, not part of the replay).
 * Integer overflow: `int` is unbounded in the model. The values here are far below 2^53.
 
 Two items of Part 1's list (Step 8) are proved now and have left it: the frames of `toggle`,
-`setCollapsed`, `setFilter`, `jump` and `setHeat`, and that `nextId` only grows (both Step
-14b). A third is proved only in part: the order a ticket creates never gets the id of a
-cancelled order, but, as above, nothing rules out an extra order that does.
+`setCollapsed`, `setFilter`, `jump` and `setHeat` (Step 14b), and the item about ids, in both
+its parts: that `nextId` only grows (Step 14b), and that the id of a cancelled order is never
+given to a new one (Step 18, with the last step, from one action to a whole run, argued by
+hand). Step 18 also answered the outside review (18a): changes 1, 2 and 4 to 7 no longer verify,
+and 18d gives the final status of all fourteen.
 
 ---
 
@@ -4037,7 +4718,8 @@ Each item below is a limit of the tool (a quirk of synth, or a true statement th
 could not prove) or a construct VTS rejected. In Part 1, each was resolved by restructuring the
 code, and no `assume`, `@trusted` or Lean proof was added. Part 2 adds one proof file, for
 facts about sums that need induction, and in one place (item 9) states less than it wanted to.
-It adds no `assume` and no `@trusted` either.
+It adds no `assume` and no `@trusted` either. Step 18 adds no lemma: it states one claim in
+other words (item 13) and replaces another with code that makes it unnecessary (item 14).
 
 1. **`implies` in synth's random tests** (steps 02–03). Synth evaluates contracts as
    JavaScript, so `implies(r >= 0, nearest(ks, ks[r], price))` evaluates `ks[-1].strike` and
@@ -4064,7 +4746,9 @@ It adds no `assume` and no `@trusted` either.
    that fails, the `"rallyTick"` case, with a counterexample. It stops there, so the `"tick"`
    case's own problem shows only in a probe with one case wrong at a time
    ([tick](options-chain/probes/33-tick-case-only/), [rally](options-chain/probes/33-rally-case-only/)).
-   *Fix:* none needed: both cases were real bugs, fixed in the reducer (step 34).
+   *Fix:* none needed: both cases were real bugs, fixed in the reducer (step 34). The same
+   arithmetic made the false claim of step 55 about `stepFeed` time out (Step 18b): the frozen
+   walk was caught, but as a timeout, not with a counterexample.
 7. **Synth cannot delete from a Map or a Set** (step 39). Its candidates are expressions, and
    its Map and Set expressions only add (`new Map(m).set(k, v)`, `new Set(s).add(x)`): JS's
    `delete` returns a boolean, so a deletion is a statement, and the expression
@@ -4092,6 +4776,17 @@ It adds no `assume` and no `@trusted` either.
     and after re-sorting a Map's entries, is true but was not proved: `openQty_delete_le` is an
     inequality, and no lemma says that reordering keeps the total. Neither is in the final code,
     so no lemma was added.
+13. **A fact several steps away** (steps 55 and 56). `chainReducer`'s claim that a new order's
+    id is fresh timed out in its `"place"` case: it had to be inferred from `place`'s eight
+    postconditions, with a split on `accepts`, and for an accepted order from the frame
+    `keepsOrdersExcept`, order by order and field by field. Why the other ten cases, which have
+    frames too, were proved and this one was not, was not isolated. *Fix:* state the fact the
+    caller needs in the callee's contract, in the caller's words (`freshIds`, Step 18c); the
+    case is then one step.
+14. **The decimal text of a number** (steps 55 and 56). ``filterLabel(f) === `${r}` `` with `r`
+    equal to 3 is true, but the automation does not evaluate Lean's `toString`, so it cannot see
+    that the text of 3 is "3". *Fix:* compute the label from the number, so that there is
+    nothing to prove (Step 18c). Four one-line lemmas would also have done.
 
 Two more items were on this list when this walkthrough was first written, and the current
 vreact no longer pushes back on either: synth offered `chainReducer` as a building block for
@@ -4101,7 +4796,8 @@ the very operations it calls, and gave up (steps 08–10, see 2b); and VTS rejec
 Not on this list: the bracket ATM search of step 05. Its postconditions were not proved (they
 were not checked, behind its failed index reads), and they are false: the search assumes an
 ascending ladder that no contract promises, so there the verifier was right. Nor are the
-surviving mutants of steps 24 and 51: they are gaps in the spec, not in the tool. Nor are the
+surviving mutants of steps 24, 51 and 54: they are gaps in the spec, not in the tool, and Step
+18d explains why some of them cannot be closed with VTS contracts. Nor are the
 VTS rejections of steps 37 and 42. Those of step 37 (a reducer that mutates the state's Set, a
 null test that is always true) each stopped a real bug. That of step 42 (`===` on values of an
 unconstrained type parameter) stopped a contract whose JS meaning, "the same object", is not
@@ -4119,7 +4815,7 @@ Splitting a conjunction into separate `ensures` shows which part the other proof
 ```bash
 bash vreact/skill/verified-react/scripts/setup.sh examples/options-chain
 cd examples/options-chain
-npx vreact verify                 # ✔ VERIFIED 195/195, certificate on standard axioms
+npx vreact verify                 # ✔ VERIFIED 210/210, certificate on standard axioms
 npx vreact synth src/model.ts     # nothing left to fill: "no hole<T>() in src/model.ts"
 npx tsc --noEmit -p .             # clean
 npm run dev                       # http://localhost:5173
@@ -4131,33 +4827,40 @@ and the output):
 
 | change | in | the verifier reports | probe |
 |---|---|---|---|
-| `onPick={(x) => props.onPick("put", "ask", x)}` on the put *bid* cell | `StrikeRow` | `[callback-contract]` | [probe](options-chain/probes/53-put-bid-reports-ask/) |
-| `hi: Math.min(n, atm + levels)` | `strikeWindow` | `[postcondition]` (2) | [probe](options-chain/probes/53-window-off-by-one/) |
-| `buy: t.side === "bid"` | `place` | `[postcondition]` | [probe](options-chain/probes/53-place-buys-on-bid/) |
-| `qty: qty - 1` in the Submit handler | `OptionsChain` | `[precondition]` of `chainReducer`, at the dispatch | [probe](options-chain/probes/53-dispatch-qty-minus-1/) |
-| `focus: null` in `toggle`'s result | `toggle` | `[postcondition]` (its frame) | [probe](options-chain/probes/53-toggle-clears-focus/) |
-| `[...ks.slice(span.lo, span.hi), ...ks.filter((s) => watch.has(s.strike))]` as the rows | `shownRows` | `[postcondition]` (each strike once) and `[unique-keys]` in the chain | [probe](options-chain/probes/53-rows-joined/) |
-| the rally tick without `!s.rally \|\|` | `simReducer` | `[postcondition]` | [probe](options-chain/probes/53-rally-rule-missing/) |
-| `orders.delete(id);` before the `set` | `amend` | `[postcondition]` (2): the cap, not proved; the list's order, a timeout | [probe](options-chain/probes/53-amend-delete-set/) |
-| `setPrice(price - 1);` without its `if (price > 1)` on the price's "−" | `OrderTicket` | `[handler]` | [probe](options-chain/probes/53-ticket-unguarded/) |
-| ▲ dispatching `price: o.price - 1` | `OptionsChain` | nothing: `✔ VERIFIED 195/195`, a surviving mutant | [probe](options-chain/probes/53-up-lowers-price/) |
+| `onPick={(x) => props.onPick("put", "ask", x)}` on the put *bid* cell | `StrikeRow` | `[callback-contract]` | [probe](options-chain/probes/57-put-bid-reports-ask/) |
+| `hi: Math.min(n, atm + levels)` | `strikeWindow` | `[postcondition]` (2) | [probe](options-chain/probes/57-window-off-by-one/) |
+| `buy: t.side === "bid"` | `place` | `[postcondition]` | [probe](options-chain/probes/57-place-buys-on-bid/) |
+| also file the order under the id below the next one, when it is free | `place` | `[postcondition]` (`freshIds`) | [probe](options-chain/probes/57-place-extra-order/) |
+| `+ qty < MAX_OPEN` | `accepts` | `[postcondition]` of `place` (the cap is the invariant's) | [probe](options-chain/probes/57-cap-strict/) |
+| `qty: qty - 1` in the Submit handler | `OptionsChain` | `[precondition]` of `chainReducer`, at the dispatch | [probe](options-chain/probes/57-dispatch-qty-minus-1/) |
+| `focus: null` in `toggle`'s result | `toggle` | `[postcondition]` (its frame) | [probe](options-chain/probes/57-toggle-clears-focus/) |
+| `[...ks.slice(span.lo, span.hi), ...ks.filter((s) => watch.has(s.strike))]` as the rows | `shownRows` | `[postcondition]` (each strike once) and `[unique-keys]` in the chain | [probe](options-chain/probes/57-rows-joined/) |
+| the rally tick without `!s.rally \|\|` | `simReducer` | `[postcondition]` | [probe](options-chain/probes/57-rally-rule-missing/) |
+| `return s;` for both toggles | `simReducer` | `[postcondition]` (2): the flags | [probe](options-chain/probes/57-pause-rally-noop/) |
+| a rally tick with the rally off pauses the feed | `simReducer` | `[postcondition]` (the `paused` flag) | [probe](options-chain/probes/57-rally-tick-pauses/) |
+| `shiftQuote(e.future, d * 10)` | `moveFutures` | `[postcondition]` | [probe](options-chain/probes/57-futures-times-ten/) |
+| `f.offset` in both branches | `stepFeed` | `[postcondition]`, a timeout | [probe](options-chain/probes/57-walk-frozen/) |
+| `orders.delete(id);` before the `set` | `amend` | `[postcondition]` (2): the cap, not proved; the list's order, a timeout | [probe](options-chain/probes/57-amend-delete-set/) |
+| `setPrice(price - 1);` without its `if (price > 1)` on the price's "−" | `OrderTicket` | `[handler]` | [probe](options-chain/probes/57-ticket-unguarded/) |
+| ▲ dispatching `price: o.price - 1` | `OptionsChain` | nothing: `✔ VERIFIED 210/210`, a surviving mutant | [probe](options-chain/probes/57-up-lowers-price/) |
+| Submit sending `1` lot of the other side | `OrderTicket`, `OptionsChain` | nothing: `✔ VERIFIED 210/210` (Step 18d) | [probe](options-chain/probes/57-submit-sells/) |
 
 And look for mutants that survive: each one is something the spec does not say. "Not proven
-here" lists the known ones; a line that closes part of one of them, for `place`, is in
-[`53-place-one-more`](options-chain/probes/53-place-one-more/).
+here" lists the known ones, and Step 18 shows how to sort them into those a contract can close
+and those it cannot.
 
 Replay the whole walkthrough. Each step's snapshot is copied into a temp project, the same
 command is run (without `--write`), and the verdict and per-item statuses are compared with the
 saved log:
 
 ```bash
-bash docs/options-chain/replay.sh           # all steps (~42 minutes; steps 01-26: ~20, 27-53: ~22); non-zero on any mismatch
+bash docs/options-chain/replay.sh           # all steps (~46 minutes; steps 01-26: ~19, 27-57: ~27); non-zero on any mismatch
 bash docs/options-chain/replay.sh 05 16     # just steps 05 and 16
 bash docs/options-chain/replay.sh --stable docs/options-chain/26-final.txt   # the lines it compares
 ```
 
 The synth steps run against the clock: each hole has a 60 s budget. In our runs, step 08 found
-`holdAt` after 30 to 45 s, steps 09 and 10 found `cancel` after 35 to 40 s, and step 39 found
+`holdAt` after 30 to 45 s, steps 09 and 10 found `cancel` after 34 to 40 s, and step 39 found
 its candidate for `follow` after 45 to 50 s, depending on the machine's load. On a much slower
 or busier machine such a fill may not be found in time, and the replay then reports a mismatch
 for that step. The budget is wall-clock time, so keep the machine awake while the replay runs
@@ -4166,7 +4869,7 @@ for that step. The budget is wall-clock time, so keep the machine awake while th
 The probes are not part of the replay. To re-run one, copy the snapshot of the step named in
 its `base` file into a project the way the replay does, put the probe's `src/` or `proofs/`
 files over it, and run the command in its `command` file. One probe is a script, not a
-change: for `53-runtime-contracts`, put its `contracts.ts` next to `src/` in a project with the
+change: for `57-runtime-contracts`, put its `contracts.ts` next to `src/` in a project with the
 app's npm dependencies (`npm ci`), and run its `command` in a shell.
 
 ---
@@ -4208,7 +4911,7 @@ app's npm dependencies (`npm ci`), and run its `command` in a shell.
 | 30 cap with a proof file | `verify` | ✔ VERIFIED 142/142 | [src](options-chain/steps/30-open-cap/src/), [proofs](options-chain/steps/30-open-cap/proofs/) | [log](options-chain/30-open-cap.txt) |
 | 31 Rally, limit on the snapshot | `verify` (and `verify --full`) | ✗ effect-robust (40 + 1 = 41) | [src](options-chain/steps/31-rally-snapshot-bug/src/), [proofs](options-chain/steps/31-rally-snapshot-bug/proofs/) | [log](options-chain/31-rally-snapshot-bug.txt), [full](options-chain/31-rally-snapshot-bug-full.txt) |
 | 32 Rally | `verify` | ✔ VERIFIED 145/145 | [src](options-chain/steps/32-rally/src/), [proofs](options-chain/steps/32-rally/proofs/) | [log](options-chain/32-rally.txt) |
-| 33 `simReducer` ignores `paused` | `verify` | ✗ postcondition "paused: feed unchanged": a timeout, then the `"rallyTick"` case fails | [src](options-chain/steps/33-sim-paused-bug/src/), [proofs](options-chain/steps/33-sim-paused-bug/proofs/) | [log](options-chain/33-sim-paused-bug.txt) |
+| 33 `simReducer` ignores `paused` | `verify` (and `verify --full`) | ✗ postcondition "paused: feed unchanged": a timeout, then the `"rallyTick"` case fails | [src](options-chain/steps/33-sim-paused-bug/src/), [proofs](options-chain/steps/33-sim-paused-bug/proofs/) | [log](options-chain/33-sim-paused-bug.txt), [full](options-chain/33-sim-paused-bug-full.txt) |
 | 34 `simReducer` | `verify` | ✔ VERIFIED 148/148 | [src](options-chain/steps/34-sim-reducer/src/), [proofs](options-chain/steps/34-sim-reducer/proofs/) | [log](options-chain/34-sim-reducer.txt) |
 | 35 clocks, rally rule missing | `verify` (and `verify --full`) | ✗ postcondition: a rally tick moves the feed with the rally off | [src](options-chain/steps/35-sim-clocks-bug/src/), [proofs](options-chain/steps/35-sim-clocks-bug/proofs/) | [log](options-chain/35-sim-clocks-bug.txt), [full](options-chain/35-sim-clocks-bug-full.txt) |
 | 36 clocks | `verify` | ✔ VERIFIED 150/150 | [src](options-chain/steps/36-sim-clocks/src/), [proofs](options-chain/steps/36-sim-clocks/proofs/) | [log](options-chain/36-sim-clocks.txt) |
@@ -4222,19 +4925,23 @@ app's npm dependencies (`npm ci`), and run its `command` in a shell.
 | 44 helpers, verified | `verify` (and `explain`) | ✔ VERIFIED 171/171 | [src](options-chain/steps/44-collections/src/), [proofs](options-chain/steps/44-collections/proofs/) | [log](options-chain/44-collections.txt), [explain](options-chain/44-collections-explain.txt) (also [reducer](options-chain/44-collections-explain-reducer.txt), [model](options-chain/44-collections-explain-model.txt)) |
 | 45 watched strikes, two lists joined | `verify` (and `verify --full`) | ✗ unique-keys: a watched strike inside the window is rendered twice | [src](options-chain/steps/45-watch-dup-keys/src/), [proofs](options-chain/steps/45-watch-dup-keys/proofs/) | [log](options-chain/45-watch-dup-keys.txt), [full](options-chain/45-watch-dup-keys-full.txt) |
 | 46 watched strikes | `verify` | ✔ VERIFIED 183/183 | [src](options-chain/steps/46-watch/src/), [proofs](options-chain/steps/46-watch/proofs/) | [log](options-chain/46-watch.txt) |
-| 47 amend, delete then set | `verify` | ✗ the cap is not proved; the list's order times out | [src](options-chain/steps/47-amend-timeout/src/), [proofs](options-chain/steps/47-amend-timeout/proofs/) | [log](options-chain/47-amend-timeout.txt) |
+| 47 amend, delete then set | `verify` (and `verify --full`) | ✗ the cap is not proved; the list's order times out | [src](options-chain/steps/47-amend-timeout/src/), [proofs](options-chain/steps/47-amend-timeout/proofs/) | [log](options-chain/47-amend-timeout.txt), [full](options-chain/47-amend-timeout-full.txt) |
 | 48 amend, a narrower claim | `verify` (and `verify --full`) | ✗ the amended order moves to the end (insertion order) | [src](options-chain/steps/48-amend-moves/src/), [proofs](options-chain/steps/48-amend-moves/proofs/) | [log](options-chain/48-amend-moves.txt), [full](options-chain/48-amend-moves-full.txt) |
 | 49 amend with `set` | `verify` | ✔ VERIFIED 192/192 | [src](options-chain/steps/49-amend/src/), [proofs](options-chain/steps/49-amend/proofs/) | [log](options-chain/49-amend.txt) |
 | 50 mutants caught | `verify` (and `verify --full`) | ✗ 3 mutants caught by the new frames | [src](options-chain/steps/50-mutants-caught/src/), [proofs](options-chain/steps/50-mutants-caught/proofs/) | [log](options-chain/50-mutants-caught.txt), [full](options-chain/50-mutants-caught-full.txt) |
 | 51 mutants that survive | `verify` | ✔ VERIFIED 192/192: all four survive | [src](options-chain/steps/51-mutants-survive/src/), [proofs](options-chain/steps/51-mutants-survive/proofs/) | [log](options-chain/51-mutants-survive.txt) |
 | 52 stronger spec | `verify` | ✗ 2 of the 4 mutants caught (frames by exception, `shownRows`) | [src](options-chain/steps/52-mutants-spec/src/), [proofs](options-chain/steps/52-mutants-spec/proofs/) | [log](options-chain/52-mutants-spec.txt) |
-| 53 final | `verify` | ✔ VERIFIED 195/195 | [src](options-chain/steps/53-final-2/src/), [proofs](options-chain/steps/53-final-2/proofs/) | [log](options-chain/53-final-2.txt) |
+| 53 after the audit | `verify` | ✔ VERIFIED 195/195 | [src](options-chain/steps/53-audited/src/), [proofs](options-chain/steps/53-audited/proofs/) | [log](options-chain/53-audited.txt) |
+| 54 the review's changes | `verify` | ✔ VERIFIED 195/195: all fourteen survive | [src](options-chain/steps/54-review-mutants/src/), [proofs](options-chain/steps/54-review-mutants/proofs/) | [log](options-chain/54-review-mutants.txt) |
+| 55 stronger spec, changes in | `verify` (and `verify --full`) | ✗ changes 1, 2 and 4–7 caught; two claims not proved | [src](options-chain/steps/55-review-spec/src/), [proofs](options-chain/steps/55-review-spec/proofs/) | [log](options-chain/55-review-spec.txt), [full](options-chain/55-review-spec-full.txt) |
+| 56 stronger spec | `verify` (and `verify --full`) | ✗ a timeout in the reducer; the decimal text of a number | [src](options-chain/steps/56-review-unproved/src/), [proofs](options-chain/steps/56-review-unproved/proofs/) | [log](options-chain/56-review-unproved.txt), [full](options-chain/56-review-unproved-full.txt) |
+| 57 final | `verify` | ✔ VERIFIED 210/210 | [src](options-chain/steps/57-final-2/src/), [proofs](options-chain/steps/57-final-2/proofs/) | [log](options-chain/57-final-2.txt) |
 
-The `--full` logs (steps 14, 20, 22, 27, 29, 31, 35, 45, 48 and 50) and the three `explain` logs of
-step 44 are not part of the replay (it runs each step's command only). Neither are the probes:
-runs of a step's snapshot with a change, quoted in the text. Each probe folder in
-[`options-chain/probes/`](options-chain/probes/) has the changed file(s), a `base` file naming
-the step it changes, the `command` and the `output.txt`:
+The `--full` logs (steps 14, 20, 22, 27, 29, 31, 33, 35, 45, 47, 48, 50, 55 and 56) and the
+three `explain` logs of step 44 are not part of the replay (it runs each step's command only).
+Neither are the probes: runs of a step's snapshot with a change, quoted in the text. Each probe
+folder in [`options-chain/probes/`](options-chain/probes/) has the changed file(s), a `base`
+file naming the step it changes, the `command` and the `output.txt`:
 
 | probe | base step | what it shows | where |
 |---|---|---|---|
@@ -4252,16 +4959,36 @@ the step it changes, the `command` and the `output.txt`:
 | [50-toggle-alone](options-chain/probes/50-toggle-alone/) | 49 | the `toggle` mutant alone reaches the certificate | 17a |
 | [50-toggle-split](options-chain/probes/50-toggle-split/) | 49 | the same, with the heat equality in its own `ensures` | 17a |
 | [50-holdat-alone](options-chain/probes/50-holdat-alone/) | 49 | the `holdAt` mutant alone | 17a |
-| [53-no-holes](options-chain/probes/53-no-holes/) | 53 | `synth` finds no hole in `model.ts` and `reducer.ts` | 18b |
-| [53-runtime-contracts](options-chain/probes/53-runtime-contracts/) | 53 | a script that evaluates the contracts at run time; also its outputs on steps 47, 50, 51 and 52 | 18b |
-| [53-walk-frozen](options-chain/probes/53-walk-frozen/) | 53 | a `stepFeed` that keeps the offset: verifies | Step 12, Not proven here |
-| [53-chain-wiring](options-chain/probes/53-chain-wiring/) | 53 | four wiring and rendering changes in the chain: verify | Not proven here |
-| [53-submit-sells](options-chain/probes/53-submit-sells/) | 53 | Submit sends the opposite side and 1 lot: verifies | Not proven here |
-| [53-rows-whole-ladder](options-chain/probes/53-rows-whole-ladder/) | 53 | every expiry renders its whole ladder: verifies | Not proven here |
-| [53-orders-reversed](options-chain/probes/53-orders-reversed/) | 53 | the working orders rendered newest first: verifies | Not proven here |
-| [53-futures-times-ten](options-chain/probes/53-futures-times-ten/) | 53 | the futures moved ten times the offset: verifies | Not proven here |
-| [53-pause-rally-noop](options-chain/probes/53-pause-rally-noop/) | 53 | Pause and Rally do nothing: verifies | Not proven here |
-| [53-rally-tick-pauses](options-chain/probes/53-rally-tick-pauses/) | 53 | a rally tick pauses the feed while the rally is off: verifies | Not proven here |
-| [53-rules-changed](options-chain/probes/53-rules-changed/) | 53 | `levelsOf` and `accepts` changed: verifies | Step 10, Not proven here |
-| [53-place-extra-order](options-chain/probes/53-place-extra-order/) | 53 | `place` also files the order under a cancelled id: verifies | Not proven here |
-| `53-…` (eleven more) | 53 | the changes of "Try it yourself" | Try it yourself |
+| [53-walk-frozen](options-chain/probes/53-walk-frozen/) | 53 | a `stepFeed` that keeps the offset: verifies | Step 12, 18a |
+| [53-rules-changed](options-chain/probes/53-rules-changed/) | 53 | `levelsOf` and `accepts` changed: verifies | Step 10, 18a |
+| [53-place-extra-order](options-chain/probes/53-place-extra-order/) | 53 | `place` also files the order under a cancelled id: verifies | 18a |
+| [53-place-one-more](options-chain/probes/53-place-one-more/) | 53 | the reviewer's partial fix: one order more, 196/196 | 18a |
+| [53-pause-rally-noop](options-chain/probes/53-pause-rally-noop/) | 53 | Pause and Rally do nothing: verifies | 18a |
+| [53-rally-tick-pauses](options-chain/probes/53-rally-tick-pauses/) | 53 | a rally tick pauses the feed while the rally is off: verifies | 18a |
+| [53-futures-times-ten](options-chain/probes/53-futures-times-ten/) | 53 | the futures moved ten times the offset: verifies | 18a |
+| [53-submit-sells](options-chain/probes/53-submit-sells/) | 53 | Submit sends the opposite side and 1 lot: verifies | 18a |
+| [53-chain-wiring](options-chain/probes/53-chain-wiring/) | 53 | four wiring and rendering changes in the chain: verify | 18a |
+| [53-rows-whole-ladder](options-chain/probes/53-rows-whole-ladder/) | 53 | every expiry renders its whole ladder: verifies | 18a |
+| [53-orders-reversed](options-chain/probes/53-orders-reversed/) | 53 | the working orders rendered newest first: verifies | 18a |
+| [57-no-holes](options-chain/probes/57-no-holes/) | 57 | `synth` finds no hole in `model.ts` and `reducer.ts` | 19b |
+| [57-runtime-contracts](options-chain/probes/57-runtime-contracts/) | 57 | a script that evaluates the contracts at run time; also its outputs on steps 47, 50, 51, 52 and 55 | 19b |
+| [57-rally-tick-pauses](options-chain/probes/57-rally-tick-pauses/) | 57 | change 5 of the review alone: caught | 18b, Try it yourself |
+| [57-place-extra-order](options-chain/probes/57-place-extra-order/) | 57 | change 1 of the review alone: caught by `freshIds` | 18c, Try it yourself |
+| [57-levels-changed](options-chain/probes/57-levels-changed/) | 57 | a first filter of 4 rows, labelled "4": verifies | 18c, Not proven here |
+| [57-submit-sells](options-chain/probes/57-submit-sells/) | 57 | Submit sends the opposite side and 1 lot: verifies | 18d, Not proven here |
+| [57-chain-wiring](options-chain/probes/57-chain-wiring/) | 57 | four wiring and rendering changes in the chain: verify | 18d, Not proven here |
+| [57-rows-whole-ladder](options-chain/probes/57-rows-whole-ladder/) | 57 | every expiry renders its whole ladder: verifies | 18d, Not proven here |
+| [57-orders-reversed](options-chain/probes/57-orders-reversed/) | 57 | the working orders rendered newest first: verifies | 18d, Not proven here |
+| [57-futures-call-site](options-chain/probes/57-futures-call-site/) | 57 | App passes ten times the offset to `moveFutures`: verifies | 18d, Not proven here |
+| [57-seed-stuck](options-chain/probes/57-seed-stuck/) | 57 | a generator that never changes its seed: verifies, 209/209 | 18d, Not proven here |
+| [57-withorder-one-more](options-chain/probes/57-withorder-one-more/) | 57 | `withOrder` files one lot more, with change 2: verifies | 18d, Not proven here |
+| [57-label-3-shows-4](options-chain/probes/57-label-3-shows-4/) | 57 | snapshot 53's labels with change 3, a "3" button that shows four rows: verifies | 18c, Not proven here |
+| [57-filter-ignored](options-chain/probes/57-filter-ignored/) | 57 | the chain's window always uses `levelsOf("s7")`: verifies | Not proven here |
+| [57-reducer-cancel-noop](options-chain/probes/57-reducer-cancel-noop/) | 57 | the reducer's `"cancel"` case returns `u`: verifies | Not proven here |
+| [57-reducer-place-1-lot-buy](options-chain/probes/57-reducer-place-1-lot-buy/) | 57 | the reducer's `"place"` case places a 1-lot buy: verifies | Not proven here |
+| [57-ticket-opens-at-1](options-chain/probes/57-ticket-opens-at-1/) | 57 | the ticket opens at 0.05, whatever cell was clicked: verifies | Not proven here |
+| [57-marketable-strict](options-chain/probes/57-marketable-strict/) | 57 | no "Marketable" warning at exactly the bid or the ask: verifies | Not proven here |
+| [57-futures-no-strikes](options-chain/probes/57-futures-no-strikes/) | 57 | `moveFutures` drops every expiry's strikes: verifies | Not proven here |
+| [57-initial-states](options-chain/probes/57-initial-states/) | 57 | other initial states of the chain and of the feed: verifies | Not proven here |
+| [57-rally-clock-ticks](options-chain/probes/57-rally-clock-ticks/) | 57 | the 200 ms clock dispatches `tick`: verifies | Not proven here |
+| `57-…` (fourteen more) | 57 | the other changes of "Try it yourself" | Try it yourself |

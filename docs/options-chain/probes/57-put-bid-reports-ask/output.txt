@@ -1,0 +1,116 @@
+translated 8 module(s), 210 proof obligation(s) → .vreact/ ; checking with Lean…
+
+Components
+  VERIFIED           PriceCell              src/StrikeRow.tsx:12
+  INCOMPLETE         StrikeRow              src/StrikeRow.tsx:41
+      ↳ an obligation of it failed
+  VERIFIED           TermRow                src/TermRow.tsx:19
+  VERIFIED           OrderTicket            src/OrderTicket.tsx:19
+  INCOMPLETE         OptionsChain           src/OptionsChain.tsx:34
+      ↳ it uses StrikeRow (src/StrikeRow.tsx), which is not verified: an obligation of it failed
+  INCOMPLETE         App                    src/App.tsx:172
+      ↳ it uses StrikeRow (src/StrikeRow.tsx), which is not verified: an obligation of it failed
+Functions
+  VERIFIED           sameMembers
+  VERIFIED           sameMembersExcept
+  VERIFIED           toggleIn
+  VERIFIED           sameEntries
+  VERIFIED           agreeExcept
+  VERIFIED           sameList
+  VERIFIED           byId
+  VERIFIED           validChain
+  VERIFIED           legOf
+  VERIFIED           theoOf
+  VERIFIED           quotePrice
+  VERIFIED           withinSpread
+  VERIFIED           isMid
+  VERIFIED           midPrice
+  VERIFIED           inTheMoney
+  VERIFIED           dist
+  VERIFIED           nearest
+  VERIFIED           atmIndex
+  VERIFIED           inWindow
+  VERIFIED           strikeWindow
+  VERIFIED           shownRows
+  VERIFIED           levelsOf
+  VERIFIED           filterLabel
+  VERIFIED           edge
+  VERIFIED           heatOf
+  VERIFIED           legFor
+  VERIFIED           labelOf
+  VERIFIED           marketOf
+  VERIFIED           validQty
+  VERIFIED           validOrder
+  VERIFIED           openQty
+  VERIFIED           fmtPrice
+  VERIFIED           contractText
+  VERIFIED           quoteText
+  VERIFIED           crosses
+  VERIFIED           fmtVol
+  VERIFIED           wellFormed
+  VERIFIED           sameView
+  VERIFIED           sameOrder
+  VERIFIED           keepsOrders
+  VERIFIED           keepsOrdersExcept
+  VERIFIED           freshIds
+  VERIFIED           sameOrders
+  VERIFIED           orderFor
+  VERIFIED           toggle
+  VERIFIED           setCollapsed
+  VERIFIED           setFilter
+  VERIFIED           watchStrike
+  VERIFIED           holdAt
+  VERIFIED           follow
+  VERIFIED           jump
+  VERIFIED           setHeat
+  VERIFIED           accepts
+  VERIFIED           withOrder
+  VERIFIED           place
+  VERIFIED           repriced
+  VERIFIED           amend
+  VERIFIED           cancel
+  VERIFIED           validAction
+  VERIFIED           chainReducer
+  VERIFIED           shiftQuote
+  VERIFIED           shifted
+  VERIFIED           moveFutures
+  VERIFIED           nextSeed
+  VERIFIED           validFeed
+  VERIFIED           stepFeed
+  VERIFIED           sameFeed
+  VERIFIED           simReducer
+App certificates (VReact.run_allInv instantiated)
+  INCOMPLETE         VTS.App.App.certificate  axioms: propext, sorryAx, Classical.choice, Quot.sound
+      ↳ it uses StrikeRow (src/StrikeRow.tsx), which is not verified: an obligation of it failed
+Obligations by file
+  ✓ src/collections.ts                       6/6
+  ✓ src/model.ts                             26/26
+  ✓ src/reducer.ts                           52/52
+  ✗ src/StrikeRow.tsx                        23/24
+  ✓ src/TermRow.tsx                          12/12
+  ✓ src/OrderTicket.tsx                      12/12
+  ✓ src/OptionsChain.tsx                     46/46
+  ✓ src/App.tsx                              32/32
+
+Failed obligations
+✗ src/StrikeRow.tsx:68:110  [callback-contract] callback contract of onPick("put", "ask", x)
+    │ `grind` failed
+    │ case grind.1.1.1.1.1.1
+    │   … (9 earlier hypotheses: E, props, κ, σ, hpre_1, hinv, s, t, …: --full shows them)
+    │ callItm, putItm := …  (2 definitions, 8 lines: --full shows them)
+    │ cq : JS.Str := if h₇ : callItm = true then JS.Str.ofString "qty itm" else JS.Str.ofString "qty"
+    │ pq : JS.Str := if h₈ : putItm = true then JS.Str.ofString "qty itm" else JS.Str.ofString "qty"
+    │ x : Int
+    │ hpre : props.heat ≥ 1
+    │ hcb₁₆ : props.strike.put.bid = some x
+    │ hcontract, hcontract_1, hcontract_2, hcontract_3, hcontract_4 : …  (5 contract instances, 77 lines: --full shows them)
+    │ h : ¬model.Right.put = model.Right.call
+    │ h_1 : ¬props.strike.put.ask = some x
+    │ h_2, h_3, h_5, h_6 : …  (4 long hypotheses, 81 lines: --full shows them)
+    │ ask : Int
+    │ h_4 : props.strike.put.bid = some ask
+    │ r_1 : Int
+    │ h₈ h_7 : props.strike.put.bid = some r_1
+    │ ⊢ False
+
+✗ NOT VERIFIED  209/210 obligations proved, 1 failed; components: 3/6 verified  (69.8s)

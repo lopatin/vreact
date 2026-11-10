@@ -1,0 +1,113 @@
+translated 8 module(s), 210 proof obligation(s) → .vreact/ ; checking with Lean…
+
+Components
+  VERIFIED           PriceCell              src/StrikeRow.tsx:12
+  VERIFIED           StrikeRow              src/StrikeRow.tsx:41
+  VERIFIED           TermRow                src/TermRow.tsx:19
+  VERIFIED           OrderTicket            src/OrderTicket.tsx:19
+  VERIFIED           OptionsChain           src/OptionsChain.tsx:34
+  VERIFIED           App                    src/App.tsx:172
+Functions
+  VERIFIED           sameMembers
+  VERIFIED           sameMembersExcept
+  VERIFIED           toggleIn
+  VERIFIED           sameEntries
+  VERIFIED           agreeExcept
+  VERIFIED           sameList
+  VERIFIED           byId
+  VERIFIED           validChain
+  VERIFIED           legOf
+  VERIFIED           theoOf
+  VERIFIED           quotePrice
+  VERIFIED           withinSpread
+  VERIFIED           isMid
+  VERIFIED           midPrice
+  VERIFIED           inTheMoney
+  VERIFIED           dist
+  VERIFIED           nearest
+  VERIFIED           atmIndex
+  VERIFIED           inWindow
+  VERIFIED           strikeWindow
+  VERIFIED           shownRows
+  VERIFIED           levelsOf
+  VERIFIED           filterLabel
+  VERIFIED           edge
+  VERIFIED           heatOf
+  VERIFIED           legFor
+  VERIFIED           labelOf
+  VERIFIED           marketOf
+  VERIFIED           validQty
+  VERIFIED           validOrder
+  VERIFIED           openQty
+  VERIFIED           fmtPrice
+  VERIFIED           contractText
+  VERIFIED           quoteText
+  VERIFIED           crosses
+  VERIFIED           fmtVol
+  VERIFIED           wellFormed
+  VERIFIED           sameView
+  VERIFIED           sameOrder
+  VERIFIED           keepsOrders
+  VERIFIED           keepsOrdersExcept
+  VERIFIED           freshIds
+  VERIFIED           sameOrders
+  VERIFIED           orderFor
+  VERIFIED           toggle
+  VERIFIED           setCollapsed
+  VERIFIED           setFilter
+  VERIFIED           watchStrike
+  VERIFIED           holdAt
+  VERIFIED           follow
+  VERIFIED           jump
+  VERIFIED           setHeat
+  VERIFIED           accepts
+  VERIFIED           withOrder
+  VERIFIED           place
+  VERIFIED           repriced
+  VERIFIED           amend
+  VERIFIED           cancel
+  VERIFIED           validAction
+  VERIFIED           chainReducer
+  VERIFIED           shiftQuote
+  VERIFIED           shifted
+  INCOMPLETE         moveFutures
+      ↳ an obligation of it failed
+  VERIFIED           nextSeed
+  VERIFIED           validFeed
+  VERIFIED           stepFeed
+  VERIFIED           sameFeed
+  VERIFIED           simReducer
+App certificates (VReact.run_allInv instantiated)
+  VERIFIED           VTS.App.App.certificate  axioms: propext, Classical.choice, Quot.sound
+Obligations by file
+  ✓ src/collections.ts                       6/6
+  ✓ src/model.ts                             26/26
+  ✓ src/reducer.ts                           52/52
+  ✓ src/StrikeRow.tsx                        24/24
+  ✓ src/TermRow.tsx                          12/12
+  ✓ src/OrderTicket.tsx                      12/12
+  ✓ src/OptionsChain.tsx                     46/46
+  ✗ src/App.tsx                              31/32
+
+Failed obligations
+✗ src/App.tsx:97:11  [postcondition] postcondition of moveFutures: r.length === es.length && forall(0, es.length, (i) => r[i].id === es[i].id && shifted(es[i].future, r[i].future, d))
+    │ `grind` failed
+    │ case grind.1.1.2.1.1.1.1.1.1.1.2.2.2
+    │   … (23 earlier hypotheses: es, d, x, x_1, x_2, hp0, hp1, hp0_1, …: --full shows them)
+    │ hcontract, hcontract_1, hcontract_2 : …  (3 contract instances, 23 lines: --full shows them)
+    │ h, right_1 : …  (2 long hypotheses, 53 lines: --full shows them)
+    │ w : Int
+    │ h_8 : ¬(fun h₁ => some (10 * d + w)) = fun h₃ => some (d + w)
+    │ w_1 : model.Expiry
+    │ left_1 : w_1 ∈ es
+    │ bid_3 : Int
+    │ h₁_3 h_10 : w_1.future.ask = some bid_3
+    │ bid_4 : Int
+    │ h₁_4 h_11 : w_1.future.bid = some bid_4
+    │ h_12 : bid_1 = bid_2
+    │ h_13 : ¬bid_2 = 10 * d + bid_1
+    │ h_14 : ¬bid_2 = d + bid_1
+    │ h_15 : ¬d + bid_1 = 10 * d + bid_1
+    │ ⊢ False
+
+✗ NOT VERIFIED  209/210 obligations proved, 1 failed; components: 6/6 verified  (70.5s)
