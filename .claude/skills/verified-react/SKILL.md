@@ -87,16 +87,25 @@ change (it is incremental and usually takes seconds).
    `xs.filter(x => x.k !== v)`, `xs.map(x => x.k === v ? { ...x, f: e } : x)`,
    calls of the module's total helpers (generic ones at the hole's types),
    `± 1` and comparisons — smallest first,
-   up to size 9. Each hole costs up to ~60 s of search (the limit holds while a
-   candidate is tested; one candidate's tests get at most 5 s, a slower one is
-   dropped) plus up to 5 Lean checks
+   up to size 9. Each hole costs up to ~60 s of search (candidates are built as
+   they are tested, and the limit holds while one is tested; one candidate's
+   tests get at most 5 s: one cut off after passing the tests that ran goes to
+   Lean after the candidates whose tests finish, or once 3 such are held back)
+   plus up to 5 Lean checks
    of candidates that pass the random tests; a function with n holes takes up
    to about n times that. Holes go in code only: a hole inside a contract
    (`requires`, `ensures`, `invariant`, `decreases`, `callbackRequires`,
    `assert`, `assume`) is never filled — the contract is what the holes are
    filled against, so a fill proved against it could be vacuous
    (`requires(false)`) — and its function is not searched: write the contract
-   by hand. Guarded updates (`if … return s;`)
+   by hand. Likewise a function that a contract calls (directly or through
+   other functions) and that has no `ensures` of its own is not filled: Lean
+   would check its fill against nothing (`true` would be "proved") and the fill
+   would become part of that contract — give it an `ensures` or write it. The
+   functions that module-level code calls (`export const N: int = f(1);`) are
+   filled first: while one has a hole, the constants declared after that call
+   stay uninitialized in the tests, and inputs that read one are skipped.
+   Guarded updates (`if … return s;`)
    are not in the grammar: write the guard by hand and leave a hole in each
    branch (or `case`) — the holes of one function are filled and proved
    together (holes in different branches or cases are searched once each,
@@ -105,8 +114,9 @@ change (it is incremental and usually takes seconds).
    `relative_to` under `--json` — means the proof assumes those @trusted
    contracts or `assume(…)` facts. A `? not proved` line names what kept Lean
    from checking it (often a failing obligation elsewhere in the module or an
-   import: fix that first; when it is a helper the candidate calls, the
-   candidates that do not call it are tried next); a contract whose statement depends on a function
+   import: fix that first; when it is a helper that a fill calls — the
+   candidate or another hole's fill — the fills that do not call it are tried
+   next); a contract whose statement depends on a function
    that still has a hole (through calls, their bodies and `requires`; not
    through `@trusted` bodies) is reported as such: fill that function first. Synth never edits the
    file while searching; `--write` writes only proved fills (and drops the imports, and the

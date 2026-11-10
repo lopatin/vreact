@@ -3,8 +3,9 @@
 // also in synth's tests. TEN calls inc itself (whose own contract the tests rename): every
 // candidate failed with "does not load: __vreactOwnEnsures__ is not defined". NINE calls dec,
 // which still has a hole while inc is searched: every candidate of inc failed with "does not
-// load: vreact: unfilled hole()". Now the top-level code runs in test mode, a hole stops it, and
-// the inputs that read what it never initialized are skipped.
+// load: vreact: unfilled hole()". Now the top-level code runs in test mode and a hole stops it
+// (neither function reads what it then leaves uninitialized: FaSynthUninitExported and
+// FaSynthUninitLocal test that the inputs reading such a constant are skipped).
 import { ensures, hole, type int } from "vreact/spec";
 
 export function inc(x: int): int {
