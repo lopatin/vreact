@@ -2270,7 +2270,39 @@ export function lambda(
 ): { binders: string[]; typed: string[]; body: Val; obligations: boolean; env: Env } {
   if (!ts.isArrowFunction(fn) && !ts.isFunctionExpression(fn)) fail(fn, "expected an inline arrow function `(x) => …`");
   // (Lean checks the callback for any value of its parameters: `generalized`)
-  let e2: Env = { ...env, generalized: "an array-method callback: Lean checks it for every value of its parameters, not only the array's elements (and the program's accumulators or indexes)" };
+  const { env: e2, binders, typed } = lambdaParams(fn, { ...env, generalized: "an array-method callback: Lean checks it for every value of its parameters, not only the array's elements (and the program's accumulators or indexes)" }, paramTypes, paramTs);
+  const before = env.m.obCount();
+  // (a predicate's result is tested for truthiness by JS: `xs.filter((x) => x)`)
+  const body = ts.isBlock(fn.body) ? valueBlock(fn.body.statements, e2, expectedRet, fn) : expectedRet?.k === "bool" ? boolOperand(fn.body, e2) : expr(fn.body, e2, expectedRet);
+  return { binders, typed, body, obligations: env.m.obCount() > before, env: e2 };
+}
+
+/**
+ * A contract lambda `(x₁, …) => c` (`callbackRequires`): JS never calls it, it states that `c`
+ * holds (is truthy) for the arguments of every call of the callback.  An expression body is
+ * read as a contract proposition (`prop`: the consequent of `implies(a, b)`, the right operand
+ * of `&&`, … under their guards, as in `requires`); a block body is read as code, its
+ * obligations checked for every value of the parameters.
+ */
+export function contractLambda(
+  fn: ts.ArrowFunction | ts.FunctionExpression,
+  env: Env,
+  paramTypes: VType[],
+  paramTs?: readonly (ts.Type | null | undefined)[],
+): { binders: string[]; typed: string[]; prop: string } {
+  const { env: e2, binders, typed } = lambdaParams(fn, { ...env, generalized: "a callbackRequires contract: Lean checks it for every value of the callback's parameters" }, paramTypes, paramTs);
+  if (ts.isBlock(fn.body)) return { binders, typed, prop: `${paren(valueBlock(fn.body.statements, e2, T.bool, fn).code)} = true` };
+  return { binders, typed, prop: prop(fn.body, e2) };
+}
+
+/** Bind the parameters of an inline function to fresh Lean variables (`_` for the arguments it ignores). */
+function lambdaParams(
+  fn: ts.ArrowFunction | ts.FunctionExpression,
+  env: Env,
+  paramTypes: VType[],
+  paramTs?: readonly (ts.Type | null | undefined)[],
+): { env: Env; binders: string[]; typed: string[] } {
+  let e2 = env;
   const binders: string[] = [];
   const typed: string[] = [];
   fn.parameters.forEach((p, i) => {
@@ -2288,10 +2320,7 @@ export function lambda(
     binders.push("_");
     typed.push(`(_ : ${leanType(paramTypes[i])})`);
   }
-  const before = env.m.obCount();
-  // (a predicate's result is tested for truthiness by JS: `xs.filter((x) => x)`)
-  const body = ts.isBlock(fn.body) ? valueBlock(fn.body.statements, e2, expectedRet, fn) : expectedRet?.k === "bool" ? boolOperand(fn.body, e2) : expr(fn.body, e2, expectedRet);
-  return { binders, typed, body, obligations: env.m.obCount() > before, env: e2 };
+  return { env: e2, binders, typed };
 }
 
 /**
@@ -4146,7 +4175,7 @@ function handlerEffect(t: UpdTarget, c: ts.CallExpression, env: Env, rest: (e: E
   const cb = comp.info.callbacks.find((x) => x.name === t.name)!;
   if (c.arguments.length !== cb.params.length) fail(c, `${cb.name} expects ${cb.params.length} arguments`);
   const as = c.arguments.map((a, i) => paren(expr(a, env, cb.params[i].type).code));
-  const ob = m.ob(c, "callback-contract", `callback contract of ${cb.name}(${c.arguments.map((a) => argText(a)).join(", ")})`);
+  const ob = m.ob(c, "callback-contract", `callback contract of ${cb.name}(${c.arguments.map((a) => argText(a)).join(", ")})${calledAs(c.expression, cb.name)}`);
   const emit = `(${comp.cbVar}.${leanField(cb.name)}${as.map((a) => " " + a).join("")} ${ob})`;
   return rest({ ...env, handler: { ...h, emit } });
 }
@@ -4501,6 +4530,11 @@ export function outcome(h: HandlerAcc, comp: CompCtx): string {
   return `(VReact.Outcome.mk (S := ${comp.stateType}) (E := E) ${upd} ${emit})`;
 }
 
+/** `, through the local pick` when a callback prop is reached through a renamed destructured local (`{ onPick: pick }`). */
+function calledAs(callee: ts.Node, name: string): string {
+  return ts.isIdentifier(callee) && callee.text !== name ? `, through the local ${callee.text}` : "";
+}
+
 function forwardCallback(cb: { name: string; params: Param[] }, node: ts.Node, env: Env, kind: "discrete" | "robust", argTypes: Param[] | DomSite): { code: string; params: string[] } {
   const comp = env.comp!;
   if (kind === "robust") fail(node, "parent callbacks cannot be invoked from effects, timers, continuous/default-priority events or onFocus/onBlur/onInvalid (robust handlers)");
@@ -4514,7 +4548,7 @@ function forwardCallback(cb: { name: string; params: Param[] }, node: ts.Node, e
     e1 = r.env;
     names.push(r.name);
   }
-  const ob = env.m.ob(node, "callback-contract", `contract of forwarded callback ${cb.name}`);
+  const ob = env.m.ob(node, "callback-contract", `contract of forwarded callback ${cb.name}${calledAs(node, cb.name)}`);
   const emit = `(${comp.cbVar}.${leanField(cb.name)}${names.map((n) => " " + n).join("")} ${ob})`;
   return { code: `(VReact.Outcome.mk (S := ${comp.stateType}) (E := E) [] (some ${emit}))`, params: !Array.isArray(argTypes) ? ["_"] : names };
 }

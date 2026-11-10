@@ -9,8 +9,8 @@
  */
 import ts from "typescript";
 import { T, type VType, type Param, type Field, leanType, showType, typeOfNode, checkValueType, propertyName, isLibSymbol, collectionKind } from "./types.ts";
-import { type Env, ModCtx, type CompCtx, type CompInfo, type StateVar, type FnInfo, type Binding, bind, freshLocal, refSymbol } from "./ctx.ts";
-import { expr, prop, propAll, block, branch, handlerFn, checkDeps, hookName, specFn, isGlobal, symbolOf, bindParam, type BlockCtx, typeOf, valueBlock, lambda, outcome, checkClosures, topLevelHookDecls, fnParamTsTypes, stripParens, isNumeric, evalArgs, isDocumentTitle, jsxAttrText, checkPlainParams, isNullLit, ARRAY_MUTATORS } from "./translate.ts";
+import { type Env, ModCtx, type CompCtx, type CompInfo, type CallbackInfo, type StateVar, type FnInfo, type Binding, bind, freshLocal, refSymbol } from "./ctx.ts";
+import { expr, prop, propAll, block, branch, handlerFn, checkDeps, hookName, specFn, isGlobal, symbolOf, bindParam, type BlockCtx, typeOf, valueBlock, contractLambda, outcome, checkClosures, topLevelHookDecls, fnParamTsTypes, stripParens, isNumeric, evalArgs, isDocumentTitle, jsxAttrText, checkPlainParams, isNullLit, ARRAY_MUTATORS } from "./translate.ts";
 import { fail, leanField, leanIdent, leanStr, jsStr, paren, nodeText, indent, VtsError, jsxTextValue, asciiLower } from "./util.ts";
 
 /* ─────────────────────── React 18.3.1 event model ───────────────────────
@@ -466,26 +466,30 @@ function prepass(stmts: readonly ts.Statement[], env: Env, comp: CompCtx, m: Mod
         continue;
       }
       if (sf === "callbackRequires") {
+        if (c.arguments.length !== 2) fail(c, "callbackRequires(cb, (args) => condition)");
         const cbE = c.arguments[0];
-        const name = ts.isPropertyAccessExpression(cbE) ? cbE.name.text : ts.isIdentifier(cbE) ? cbE.text : null;
-        const cb = comp.info.callbacks.find((x) => x.name === name);
-        if (!cb) fail(cbE, "callbackRequires expects a callback prop");
-        const lam = c.arguments[1];
-        if (!lam || !(ts.isArrowFunction(lam) || ts.isFunctionExpression(lam))) fail(c, "callbackRequires(cb, (args) => condition)");
-        // (parameter annotations are checked against the callback prop's parameter types)
-        const l = lambda(lam, env, cb.params.map((p) => p.type), T.bool, fnParamTsTypes(m.checker.getTypeAtLocation(cbE), cbE, env) ?? cb.params.map(() => null));
-        const prop = `${paren(l.body.code)} = true`;
+        const cb = contractCallback(cbE, env, comp);
+        const lam = stripParens(c.arguments[1]);
+        if (!(ts.isArrowFunction(lam) || ts.isFunctionExpression(lam))) fail(c, "callbackRequires(cb, (args) => condition)");
+        // (parameter annotations are checked against the callback prop's parameter types; the
+        // body is a contract proposition: JS never runs it)
+        const l = contractLambda(lam, env, cb.params.map((p) => p.type), fnParamTsTypes(m.checker.getTypeAtLocation(cbE), cbE, env) ?? cb.params.map(() => null));
+        const prop = l.prop;
         const prev = pp.contracts.get(cb.name);
         if (!prev) pp.contracts.set(cb.name, { binders: l.binders, prop });
         else {
           // several contracts for one callback: all of them hold (conjunction), the
-          // later one's parameters renamed to the first one's binders (simultaneously)
+          // later one's parameters renamed to the first one's binders (simultaneously).  Both
+          // have one binder per parameter of the callback; a parameter the earlier ones ignore
+          // (`_`, which the later one would receive as a placeholder) is named after the later
+          // one's binder, made distinct from the others (the earlier contracts do not mention it)
           const binders = [...prev.binders];
-          for (let i = binders.length; i < l.binders.length; i++) {
-            let nb = l.binders[i];
-            for (let k = 1; binders.includes(nb); k++) nb = `${l.binders[i]}_${k}`;
-            binders.push(nb);
-          }
+          l.binders.forEach((lb, i) => {
+            if (binders[i] !== "_" || lb === "_") return;
+            let nb = lb;
+            for (let k = 1; binders.includes(nb); k++) nb = lb.endsWith("»") ? `${lb.slice(0, -1)}_${k}»` : `${lb}_${k}`;
+            binders[i] = nb;
+          });
           const same = l.binders.every((b, i) => b === binders[i]);
           const later = same ? paren(prop) : `((fun ${l.typed.join(" ")} => ${prop})${l.binders.map((_, i) => " " + binders[i]).join("")})`;
           pp.contracts.set(cb.name, { binders, prop: `${prev.prop} ∧ ${later}` });
@@ -534,6 +538,35 @@ function prepass(stmts: readonly ts.Statement[], env: Env, comp: CompCtx, m: Mod
   if (reqs.length) pp.pre.push(propAll(reqs, env));
   if (invs.length) pp.inv.push(propAll(invs, stateEnv));
   return pp;
+}
+
+/**
+ * The callback prop whose contract `callbackRequires(cbE, …)` states: the one `cbE` holds, by its
+ * binding (as a call `cbE(…)` resolves it), never by its spelling — `props.onPick` on the props
+ * parameter, or a name destructured from the props parameter (`{ onPick }`, `{ onPick: pick }`:
+ * the local `pick` holds props.onPick).
+ */
+function contractCallback(cbE: ts.Expression, env: Env, comp: CompCtx): CallbackInfo {
+  const form = `callbackRequires(cb, (args) => condition) states the contract of a callback prop of ${comp.info.name}: write cb as props.<name> (props being the props parameter) or as a name destructured from the props parameter`;
+  const e = stripParens(cbE);
+  if (ts.isIdentifier(e)) {
+    const s = symbolOf(env, e);
+    const b = s ? env.vars.get(s) : undefined;
+    if (b?.k === "callback") return b.cb;
+    if (b?.k === "props") fail(e, `\`${e.text}\` is the props object, not one of its callbacks: ${form}`);
+    if (b?.k === "val") fail(e, `\`${e.text}\` holds a data prop of ${comp.info.name}, not a callback prop: ${form}`);
+    fail(e, `\`${e.text}\` is not a name destructured from the props parameter of ${comp.info.name}: ${form}`);
+  }
+  if (ts.isPropertyAccessExpression(e) && !e.questionDotToken && ts.isIdentifier(e.expression)) {
+    const s = symbolOf(env, e.expression);
+    if (s && env.vars.get(s)?.k === "props") {
+      const cb = comp.info.callbacks.find((x) => x.name === e.name.text);
+      if (cb) return cb;
+      fail(e, `props.${e.name.text} is not a callback prop of ${comp.info.name}: ${form}`);
+    }
+    fail(e, `\`${nodeText(e.expression)}\` is not the props parameter of ${comp.info.name}: ${form}`);
+  }
+  fail(e, `${form} (not \`${nodeText(e)}\`)`);
 }
 
 /** Does a statement of the component body contain a `return` of the component (not of a nested function)? */
