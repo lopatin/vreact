@@ -1394,10 +1394,12 @@ const KEY_HANDLERS = ["onKeyDown", "onKeyUp", "onKeyPress"];
  * on a `<div>`, whose `value` is undefined, and `(e: KeyboardEvent<…>)` as an onChange, whose
  * event has no `key` (also for a handler passed by name).  `e.currentTarget` is the element
  * the handler is on; `e.target` is the element where the event happened, which is that element
- * only when nothing inside it can be an event target: an `<input>` (a void element), a
- * `<textarea>` (text only, and React reports a text node's event at its parent), and a
- * `<select>`'s onChange / onInput (`change` and `input` fire at the select; a click may be on
- * one of its options).
+ * only when nothing inside it can be the target: an `<input>` (a void element), a `<textarea>`
+ * (text only, and React reports a text node's event at its parent), and a `<select>`'s
+ * onChange — its content is `<option>`s and `<optgroup>`s (`CONTENT_RULES` in component.ts),
+ * which never make an onChange, so it runs for the select's own `change` event only.  Not its
+ * onInput: an `input` event dispatched at one of its options (by a script) bubbles to the select
+ * with the option as its target.
  */
 function checkEventSite(pa: ts.PropertyAccessExpression, site: DomSite, which: "target" | "currentTarget" | null, field: string) {
   const on = `${site.prop} on <${site.tag}>`;
@@ -1406,9 +1408,10 @@ function checkEventSite(pa: ts.PropertyAccessExpression, site: DomSite, which: "
     return;
   }
   if (!site.html) fail(pa, `\`${nodeText(pa)}\` in ${on}: this <${site.tag}> is inside an <svg> or <math> element, so React creates it as an SVG (MathML) element, which has no ${field}`);
-  const self = site.tag === "input" || site.tag === "textarea" || (site.tag === "select" && (site.prop === "onChange" || site.prop === "onInput"));
+  const self = site.tag === "input" || site.tag === "textarea" || (site.tag === "select" && site.prop === "onChange");
   if (which === "target" && !self) {
-    fail(pa, `\`${nodeText(pa)}\` in ${on}: e.target is the element where the event happened, which may be another element inside <${site.tag}> (with another ${field}, or none); put the handler on the control itself and read e.currentTarget.${field} there`);
+    const fix = site.tag === "select" ? `read e.currentTarget.${field} (the select's) instead` : `put the handler on the control itself and read e.currentTarget.${field} there`;
+    fail(pa, `\`${nodeText(pa)}\` in ${on}: e.target is the element where the event happened, which may be another element inside <${site.tag}> (with another ${field}, or none${site.tag !== "select" ? "" : site.prop === "onInput" ? ": an input event a script dispatches at one of its options reaches it" : ": one of its options"}); ${fix}`);
   }
   if (field === "value" && !STRING_VALUE_TAGS.includes(site.tag)) {
     fail(pa, `\`${nodeText(pa)}\` is not a string in ${on}: only ${STRING_VALUE_TAGS.map((t) => `<${t}>`).join(", ")} have a string value (it is undefined on a <${site.tag}>${["li", "meter", "progress"].includes(site.tag) ? ", or a number" : ""}; React's handler types are bivariant, so TypeScript accepts a handler typed for another element)`);
