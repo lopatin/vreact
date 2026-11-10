@@ -1,6 +1,6 @@
 // expect: verified
 // A callbackRequires lambda is never run by JS: it is a contract, so implies(a, b) is an
-// implication whose consequent is translated under its guard, as in requires/invariant. The
+// implication whose consequent is translated under its guard, as in an ensures lambda. The
 // index props.xs[i] is in bounds there (it used to be read as code, with an unguarded index
 // obligation that failed). The parent relies on an implies contract.
 import { useState } from "react";

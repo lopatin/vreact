@@ -176,8 +176,9 @@ export interface Env {
    */
   generalized?: string;
   /**
-   * Set only inside a contract that JS never evaluates (the body of an `ensures` lambda, and
-   * what it calls in place): there `implies(a, b)` reads `b` under the hypothesis `a`.  Every
+   * Set only inside a contract that JS never evaluates (the body of an `ensures` lambda, the
+   * expression body of a `callbackRequires` lambda, and what they call in place): there
+   * `implies(a, b)` reads `b` under the hypothesis `a`.  Every
    * other contract (requires, invariant, assert, assume, a module-level assert, and the
    * callbacks run inside them) is an argument JS evaluates, and `implies` is a function: `b`
    * is evaluated whatever `a` is, so its obligations get no hypothesis from `a` (`prop`).

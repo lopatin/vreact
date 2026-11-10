@@ -2332,7 +2332,9 @@ export function contractLambda(
 ): { binders: string[]; typed: string[]; prop: string } {
   const { env: e2, binders, typed } = lambdaParams(fn, { ...env, generalized: "a callbackRequires contract: Lean checks it for every value of the callback's parameters" }, paramTypes, paramTs);
   if (ts.isBlock(fn.body)) return { binders, typed, prop: `${paren(valueBlock(fn.body.statements, e2, T.bool, fn).code)} = true` };
-  return { binders, typed, prop: prop(fn.body, e2) };
+  // (JS never calls it — vreact/spec's callbackRequires ignores its predicate — so, as in an
+  // ensures lambda, `implies(a, b)` reads b under a: `Env.ghost`)
+  return { binders, typed, prop: prop(fn.body, { ...e2, ghost: true }) };
 }
 
 /** Bind the parameters of an inline function to fresh Lean variables (`_` for the arguments it ignores). */
@@ -3456,7 +3458,8 @@ function narrowBranch(nt: NarrowTest, env: Env, onTrue: (e: Env) => string, onFa
  * calls it only there).  `implies(a, b)` is a function call: JS evaluates `b`
  * whatever `a` is, so in a contract that runs (requires, invariant, assert,
  * assume, a module-level assert) it is `a → b` with `b` unguarded; only in an
- * `ensures` lambda, which JS never calls (`env.ghost`), is `b` read under `a`.
+ * `ensures` lambda or a `callbackRequires` lambda, which JS never calls (`env.ghost`), is `b`
+ * read under `a`.
  * When the guarded part has no proof obligations the plain connective is emitted
  * (`∧`, `∨`, `→`: same normal forms); otherwise a named hypothesis binds the
  * guard (`∃ (h : a), b`, `∀ (h : a), b`).
