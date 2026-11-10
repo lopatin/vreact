@@ -568,7 +568,8 @@ a `!`, a divisor, a callee's `requires`) must hold without `a`, and `a` narrows
 nothing in `b`. Guard them with `!a || b` (`xs.length === 0 || xs[0] > 0`,
 `x === null || x.v > 0`) or `a ? b : true`. Only an `ensures` lambda, which JS never
 calls, reads `implies(a, b)` as `∀ (h : a), b`, so that `b` may index (and narrow)
-under `a`. (In code, likewise, `implies` evaluates both arguments; a
+under `a` (`vreact synth`'s tests, which call it, evaluate that `implies` as
+`!a || b`: §5). (In code, likewise, `implies` evaluates both arguments; a
 `callbackRequires` predicate is translated as code.)
 
 Several `requires` (or `invariant`) statements are one condition
@@ -1380,3 +1381,9 @@ random inputs come from a seeded generator, one per hole (its seed made from the
 run's seed, `--seed N`, default 1, the function's name and the hole's position), so
 a run tests the same inputs whatever order the holes are searched in, and two runs
 say the same up to the 60 s time limits; the seed, too, only steers the search.
+The tests run the function's own `requires` and `ensures` as JS does (a throw in an
+`ensures` fails the candidate), except that an `implies(a, b)` an `ensures` lambda
+reads as a proposition (its body, under `!`, `&&`, `||`, `?:`, `implies` and in
+quantifier bodies) is evaluated as `!a || b`: `b` only where `a` holds, as the
+prover reads it there (§1.3); vreact/spec's `implies` would evaluate `b` also where
+`a` fails (`xs[0].v` of `[]` throws) and fail every candidate.

@@ -143,7 +143,7 @@ export function ItemList(props: ItemListProps) {
 ```
 
 * Use `int` for integers (counts, ids, cents); `number` is a float the prover knows nothing about (opaque: no arithmetic, comparison or `Math.*` facts). A division `a / b` needs a divisor that is not zero (`requires(b !== 0)` or a guard `b === 0 ? … : a / b`; a nonzero literal divisor needs nothing): `1 / -0` is `-Infinity`, and VTS values do not keep the sign of zero.
-* `implies(a, b)` is a function call: JS evaluates `b` even when `a` is false. In `requires`, `invariant`, `assert` and `assume`, which run at every call or render, `b` must be safe on its own (no index, `!` or divisor that needs `a`): write `!a || b`, e.g. `requires(xs.length === 0 || xs[0] > 0)`. Only in `ensures` (never run) may `b` rely on `a`: `ensures((r: T) => implies(xs.length > 0, r === xs[0]))`.
+* `implies(a, b)` is a function call: JS evaluates `b` even when `a` is false. In `requires`, `invariant`, `assert` and `assume`, which run at every call or render, `b` must be safe on its own (no index, `!` or divisor that needs `a`): write `!a || b`, e.g. `requires(xs.length === 0 || xs[0] > 0)`. Only in `ensures` (the app never runs it, and `vreact synth`'s tests evaluate its `implies(a, b)` as `!a || b`, as the prover reads it) may `b` rely on `a`: `ensures((r: T) => implies(xs.length > 0, r === xs[0]))`.
 * Helpers used at several types may be generic top-level functions:
   `<K extends int | string>` to compare keys (`===`, `includes`, `distinct`),
   `<T extends { readonly id: int }>` to read fields; values of a type parameter are

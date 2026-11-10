@@ -385,9 +385,12 @@ divisors and callee preconditions are checked without `a`
 (`requires(implies(xs.length > 0, xs[0] >= 0))` fails its `index` obligation:
 `xs[0]` of `[]` is read). Write
 `!a || b` instead (`xs.length === 0 || xs[0] >= 0`, `x === null || x.v > 0`), which
-guards and narrows as JS evaluates it. Only in an `ensures` lambda, which never
-runs, does `b` see `a` as its guard (`ensures((r: int) => implies(xs.length > 0,
-r === xs[0]))`).
+guards and narrows as JS evaluates it. Only in an `ensures` lambda, which the app
+never calls, does `b` see `a` as its guard (`ensures((r: int) => implies(xs.length > 0,
+r === xs[0]))`). `vreact synth`'s random tests, which do call it, evaluate such an
+`implies(a, b)` as `!a || b` (`b` only where `a` holds), as the prover reads it; an
+`implies` in code inside the lambda (a `filter` callback, an operand of `===`)
+evaluates both arguments, there as in Lean.
 
 Constants: small ones are unfolded wherever used. For large data use
 
