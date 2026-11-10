@@ -566,11 +566,16 @@ Order inside the body:
    (`item.count`, `props.item?.count`), `length`, `size`. A call `m.has(k)` reads
    `m` and `k`: list `m` (or a prefix of a field path), never the method —
    `[m.has]`, `[xs.slice]`, `[s.trim]` are rejected (the same function for every
-   receiver: React would never recompute). An effect may also list a setter or
-   `dispatch` (never changes), a local helper arrow (a new function each render:
-   the effect runs after every render) or a `useCallback` function (changes when
-   its own deps do); not a parent callback, nor `props` itself (list its
-   fields). An initial value may read the props, the state
+   receiver: React would never recompute), and so are library constants
+   (`[Number.MAX_SAFE_INTEGER]`) and a tuple's `length` (list the tuple). Values
+   from outside the component (`Math`, imports, top-level consts) are never
+   needed: leave them out. An effect may also list a setter or `dispatch`, or a
+   top-level function, const or component (or an import of one), which never
+   change; a local helper arrow or a JSX const (new each render: the effect runs
+   after every render); or a `useCallback` function (changes when its own deps
+   do); not a parent callback, nor `props` itself (list its fields), nor a global
+   such as `Math` (leave it out), also through a `useCallback` it lists. An
+   initial value may read the props, the state
    declared before it and top-level declarations (not render locals): React uses
    it at mount, when that state has its own initial value (`useState(a)` starts
    at `a`'s initial value), but evaluates a non-lazy one at every render, so it

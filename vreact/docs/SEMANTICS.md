@@ -879,28 +879,48 @@ change, and before, `[m.has]` covered `m.has(2)`: a `useMemo` kept its first
 value in React while the model recomputed it, and a broken invariant was
 VERIFIED (`FaDepsMemoMethod.tsx`, `FaDepsCallbackMethod.tsx`,
 `FaDepsArraySlice.tsx`). Such a dependency is rejected, naming the receiver to
-list instead.
+list instead. So is any other link that is not a data link — a library constant
+(`Number.MAX_SAFE_INTEGER`), a tuple's `length` — with that reason, not the
+method one (`FaDepsLibConstantMsg.tsx`, `FaDepsTupleLengthMsg.tsx`). A path that
+starts outside the component (a global such as `Math` or `Number`, an import, a
+top-level declaration) is never required, and the message says to leave it out
+rather than list it (`FaDepsOutsideMethodMsg.tsx`, `FaDepsOutsideValueOk.tsx`).
 
 An effect's dependency values (`VReact.DepVal`, compared with the previous
-render's) follow React's identities: an int, string, boolean or enum by value
-(but an int that is 0 before and after is undecided: either may be `-0`, §3);
-another data value (a `number`, array, record, Map, optional) as `obj`, whose
+render's) follow React's identities (`Object.is`): an int, string, boolean or enum
+by value (but an int that is 0 before and after is undecided: either may be `-0`,
+§3); another data value (a `number`, array, record, Map, optional) as `obj`, whose
 `Object.is` the model does not decide, so where no other dependency changed the
 run chooses whether the effect runs (§3), covering what React does (both
 choices are verified: the effect is robust, and so is every timer it registers,
-whichever render registered it); a setter or `dispatch`
-contributes nothing (React keeps one function per hook); a local helper arrow is
-`obj` (a new function at every render: in React the effect runs after every
-render, one of the runs the model allows); a `useCallback` function
-contributes the dependency values of its own dependencies (React returns the
-cached function until one of them changes, so it changes exactly when they do:
-`useCallback(f, [])` listed in an effect runs it once, as `[]` does;
-`FaDepsEffectUseCallback.tsx`, `FaDepsEffectHelper.tsx`). A parent callback
-(`props.onPick`, or destructured) is rejected as an effect dependency, also
-through a `useCallback` that lists one: an effect never calls one, and when the
-parent passes a new function is not modelled. The props object itself is not an
-effect dependency either (a `useMemo` / `useCallback` may list it: the same props
-object has the same fields): list the fields the effect reads.
+whichever render registered it); a setter or `dispatch` contributes nothing
+(React keeps one function per hook); a local helper arrow is `obj` (a new
+function at every render: in React the effect runs after every render, one of
+the runs the model allows), and so is a JSX const (a new element object at every
+render); a top-level declaration of the program — a function, a constant, a
+component, or an import of one — and a data path from it (`CFG.step`)
+contribute nothing: it is created once, when its module is evaluated (top-level
+variables are const, and an import binding cannot be reassigned), so React never
+sees it change (`FaDepsEffectOutsideFn.tsx`, `FaDepsEffectOutsideImport/`), and
+nor does `undefined`; a `useCallback` function contributes the dependency values
+of its own dependencies (React returns the cached function until one of them
+changes, so it changes exactly when they do: `useCallback(f, [])` listed in an
+effect runs it once, as `[]` does; `FaDepsEffectUseCallback.tsx`,
+`FaDepsEffectHelper.tsx`; one that lists a top-level function or a JSX const,
+`FaDepsEffectJsxConst.tsx`). Any other value from outside the component — a
+global such as `Math`, which need not keep its value (`innerWidth` changes) — is
+rejected as an effect dependency, also through a `useCallback` that lists one,
+with that reason: the dependency check never requires one, so leave it out
+(`FaDepsEffectGlobalMsg.tsx`). A parent callback (`props.onPick`, or
+destructured) is rejected as an effect dependency, also through a `useCallback`
+that lists one: an effect never calls one, and when the parent passes a new
+function is not modelled. The props object itself is not an effect dependency
+either (a `useMemo` / `useCallback` may list it: the same props object has the
+same fields): list the fields the effect reads. VTS arithmetic can produce `-0`
+(`-n` with `n` 0, `-1 * 0`, `-3 % 3`), which the model's `int` does not
+represent (it is `0`; `===`, `<`, Map keys, `includes` and string conversion
+also treat them alike); a switch between `0` and `-0` is one of the undecided
+cases above (`FaDepsEffectNegZero.tsx`).
 
 The model has no cleanup step, so a returned cleanup is restricted statically:
 it must be an inline function that only calls `clearTimeout` / `clearInterval` and makes external writes
