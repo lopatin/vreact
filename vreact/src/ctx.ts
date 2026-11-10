@@ -225,6 +225,13 @@ export interface Env {
    * recursive call, which inlining does not support.
    */
   inlining?: ReadonlySet<ts.Node>;
+  /**
+   * Set inside code that runs while an event handler or effect runs but that VTS translates as a
+   * value (an array-method callback, a local helper called for its value, a functional update):
+   * why a setter, `dispatch` or parent callback reached there is rejected (render code, where
+   * it is unset, gets the render-phase message).
+   */
+  valueCtx?: string;
 }
 
 /** The module of the contract functions and `int`. */

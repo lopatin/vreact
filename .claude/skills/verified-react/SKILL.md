@@ -186,7 +186,10 @@ export function ItemList(props: ItemListProps) {
   `K extends int | string` in a generic helper such as `toggleIn<K>(s: ReadonlySet<K>, k: K)`):
   update a fresh copy — `new Map(m).set(k, v)`, or `const n = new Map(m); n.delete(k); return n;` —
   never state, props or parameters; consume iterators at once (`[...m.values()]`, `for…of`).
-* Handlers may call setters, `dispatch`, and **at most one** parent callback per path.
+* Handlers may call setters, `dispatch`, and **at most one** parent callback per path —
+  in their own statements, or in a local helper called as a statement (`bump();`) or as
+  `const v = bump();`; never inside an array callback, a functional update, or an expression
+  (`setN(bump())`). A callback implementation may ignore trailing arguments (`() => close()`).
 * `setX(v)` uses the render snapshot; two of them in one handler do not compose — use
   `setX(prev => …)` when updates must accumulate.
 * Effects/timers and continuous/default-priority handlers (`onMouseMove`,
