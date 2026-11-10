@@ -340,8 +340,10 @@ def VNode.keyedMap {S E inv snap} {α : Type} (xs : List α) (key : α → Key)
 /-- An element with a `key={k}` outside a list.  JavaScript evaluates `k` on every
 render, so the term `k` (with its proof obligations) is kept; the model
 reconciles by position and component identity, and a key change (React remounts:
-fresh state, `init_inv`) is covered because both keeping and resetting the state
-are verified.  That needs the keys of siblings to be distinct, which `VList.withKeys`
+fresh state, `init_inv`, and every effect runs again at the next flush) is covered
+because a run of the model may remount any instance at any time
+(`Action.remount`), and both keeping and resetting the state are verified.  Moving
+state between siblings needs their keys to be distinct, which `VList.withKeys`
 checks where two or more children of an element may have keys. -/
 def VNode.withKey {S E inv snap} {α : Type} (_k : α) (n : VNode S E inv snap) : VNode S E inv snap := n
 
