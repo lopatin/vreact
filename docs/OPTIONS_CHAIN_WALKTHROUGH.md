@@ -4387,17 +4387,19 @@ needed no new lemma.
   `chainReducer`, `simReducer`, `moveFutures` and `stepFeed`. It does not report change 2: random
   states almost never make the total exactly 1000, where the changed rule differs. The proof
   does not depend on luck.
-* **In a browser** (by hand; no log is saved). This session was run on snapshot 53. The final
-  app behaves the same: its code changes since then are postconditions, whose lambdas run only
-  in test mode; three functions that only contracts call (`freshIds`, `withOrder`, `shifted`);
-  the filter labels, which are now computed and read the same; and the filter buttons' keys,
-  now the filters themselves (Step 18c). On the built app
-  (`vite preview`), with the feed paused: the filter set to "All", ☆ on 96.00 and on 108.00
-  (these two clicks from a script in the page, the others with the mouse), the filter set to
-  "3". Every expiry then showed 96.00, its seven window rows and 108.00, in ladder order; the
+* **In a browser** (by hand; no log is saved). On the built final app (`vite preview`), with
+  the feed paused: the filter set to "All", ☆ on 96.00 and on 108.00, then the filter set to
+  "3". Every expiry showed 96.00, its seven window rows and 108.00, in ladder order, and the
   toolbar showed "Watching ★ 96.00 ★ 108.00". ☆ on 103.00, inside the window, made it ★ and left
-  it one row. Two orders placed from the ladder, then ▲ on the first: its price went from 2.25
-  to 2.30 and it stayed first. The console showed no errors.
+  it one row. A ticket from the ask of the DEC 26 102.00 call, set to 5 lots and one tick lower,
+  became the working order "Buy 5 DIX DEC 26 102.00 C @ 3.20"; a ticket from the bid of the
+  JUN 27 105.00 put became "Sell 1 DIX JUN 27 105.00 P @ 7.35", listed second. ▲ on the first
+  order moved its price to 3.25, and it stayed first. Then Resume and Rally: the offset climbed
+  from +10 to +40 ticks, the top of the band, and stayed there; every expiry's futures moved up
+  by the same 1.50, and the strike windows followed them. Pause then left the rally running
+  ("Stop rally" stayed), and Stop rally left the feed paused. The console showed no errors. A
+  session like this shows what the proof does not cover (18d): that Submit sends what the ticket
+  shows, and that the rows on screen are the ones `shownRows` chose.
 
 ---
 
