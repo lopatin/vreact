@@ -170,7 +170,9 @@ export function ItemList(props: ItemListProps) {
   an outer `let` inside a callback. A helper or handler may read a `const` declared
   after it if it is used (called, attached) after that declaration; a `useEffect`,
   `useCallback` or `useMemo` function may not (its deps cannot list it): declare
-  what a hook reads before the hook. A timer callback may read the effect body's
+  what a hook reads before the hook. State, too, exists only from its `useState`
+  on (put the hooks first; an `invariant` reads only the state above it). Local
+  functions cannot be recursive. A timer callback may read the effect body's
   `const`s declared before `setTimeout`/`setInterval`.
 * Module constants run in source order when the module loads: declare a constant
   above every constant (or `assert`) whose initialiser uses it, also through a

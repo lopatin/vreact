@@ -502,11 +502,19 @@ Every expression maps to a Lean term whose value is the JavaScript value.
   a function that reads it cannot be assigned at all, by the first check);
   variables are identified by their TypeScript symbols, so a name resolves as in
   JS. A use before the declaration (a call in the render, a JSX const) is rejected
-  (the call would read it in its temporal dead zone). A `useEffect`, `useCallback`
+  (the call would read it in its temporal dead zone). This holds for the state
+  values and setters too: each is bound from its own `useState` / `useReducer`
+  declaration on (the Lean locals `let n := σ.n` stand at the top of `render`,
+  but a function that runs before the declaration — a helper called there, an
+  array callback, the `useMemo` factory, a JSX const — and reads them is
+  rejected: React 18 throws a ReferenceError at mount). A `useEffect`, `useCallback`
   or `useMemo` function that reads a local declared after the hook call is
-  rejected: its dependency array cannot list it (temporal dead zone), so React
+  rejected: the function is translated with the locals declared before the call,
+  and its dependency array cannot list it there (temporal dead zone), so React
   could keep the function of an earlier render (the `useMemo` factory runs at the
-  call: a ReferenceError).
+  call: a ReferenceError). A local function is inlined where it is called or
+  attached, so it cannot call itself, directly or through other local functions
+  (rejected as a recursive call).
 * A DOM handler's event parameter is `DomEvent` (`e.target.value`,
   `e.currentTarget.value`, `e.target.checked`, `e.key`: arbitrary values, fixed for
   the run of the handler). This describes JS only while the handler's own
@@ -569,7 +577,12 @@ proof obligations, plain `a ∧ b` otherwise), `a || b` as `a ∨ ∃ (h : ¬a),
 and `xs.every(x => p)` as `∀ x, ∀ (h : x ∈ xs), p`, so an index obligation in `b`,
 `p`, … sees its guard. (In code, `implies` is a function call: both arguments are
 evaluated.) Several `requires` (or `invariant`) statements are one condition
-`c₁ && c₂ && …`: a later one may rely on the earlier ones as guards.
+`c₁ && c₂ && …`: a later one may rely on the earlier ones as guards. An
+`invariant(c)` may read only the state declared before it: the runtime evaluates
+`c` where the statement stands (vreact/spec's `invariant` is an ordinary call),
+where a later state value is in its temporal dead zone — TypeScript reports a
+direct read, not one inside a lambda (`forall(0, 1, (i) => b >= i)`), which is
+rejected.
 Narrowing tests in a guard narrow what JS evaluates under it, as in code — also
 in a compound guard: in `b || s.kind === "a" || s.to.length > 0` (left-associated,
 any length), `x !== null && y !== null && x + y > 0`, `!(x === null || y === null) || …`,

@@ -522,10 +522,16 @@ Order inside the body:
    is also checked with each render's state (`useState(10 % a)` needs `a !== 0`
    in every state; the lazy `useState(() => 10 % a)` runs at mount only). Other
    hooks (`useLayoutEffect`, `useRef`, …) are not modelled, and a hook other than
-   `useEffect` called as a statement (its value unused) is rejected;
-4. `invariant(…)` — over props, state and top-level declarations (a
-   `requires`: props and top-level declarations only; neither may read render
-   locals);
+   `useEffect` called as a statement (its value unused) is rejected, as is a
+   `useState` / `useReducer` declared together with other variables (`const x =
+   1, [n, setN] = useState(0)`). A state value and its setter exist from their
+   declaration on: a function that runs before it (a helper called in the
+   render, an array callback, a `useMemo` function, a JSX const) may not read
+   them (a ReferenceError in JS, which TypeScript misses inside a function);
+4. `invariant(…)` — over props, the state declared before it and top-level
+   declarations (JS evaluates its argument where it stands, also inside a
+   lambda); a `requires`: props and top-level declarations only; neither may
+   read render locals;
 5. render-local `const`s, helper arrows, handlers. A local arrow function is
    translated where it is called or attached as a handler, so it may read a
    `const` (or a `let` nothing assigns) declared after it, as long as that use
@@ -536,7 +542,8 @@ Order inside the body:
    `useCallback` or `useMemo` function may not read a local declared after the
    hook call: the dependency array cannot list it (temporal dead zone), so React
    would keep a stale function (the `useMemo` function runs at the call: a
-   ReferenceError);
+   ReferenceError). Local functions are inlined where they are called, so they
+   cannot be recursive (also not mutually);
 6. `return <JSX/>` (early returns allowed).
 
 Props: a single parameter `props: P` (or destructured `{ a, b }: P`) where `P`

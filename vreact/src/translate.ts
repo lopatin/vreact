@@ -1352,6 +1352,40 @@ function unboundLocal(id: ts.Identifier, s: ts.Symbol, env: Env): string | null 
   return `\`${id.text}\` is a local (declared at ${at}) that VTS does not bind where it translates this code`;
 }
 
+/**
+ * Why the callee `id`, which refers to the variable `s`, has no binding here: a recursive call
+ * of a local function being inlined around this point (`env.inlining`; the function is not in
+ * its own environment, nor, through another local function, in that one's), else `unboundLocal`.
+ */
+function unboundCallee(id: ts.Identifier, s: ts.Symbol, env: Env): string | null {
+  const f = localFnOf(s);
+  if (f && env.inlining?.has(f)) return recursiveCall(id.text);
+  return unboundLocal(id, s, env);
+}
+
+/** The function a local variable is initialised with (`const f = (…) => …`, also through `useCallback`), if any. */
+function localFnOf(s: ts.Symbol): ts.Node | undefined {
+  const d = s.valueDeclaration;
+  if (!d || !ts.isVariableDeclaration(d) || !d.initializer) return undefined;
+  let init = stripParens(d.initializer);
+  if (ts.isCallExpression(init) && init.arguments[0]) init = stripParens(init.arguments[0]);
+  return ts.isArrowFunction(init) || ts.isFunctionExpression(init) ? init : undefined;
+}
+
+/** Why a call of the local function `name` inside its own run is rejected. */
+function recursiveCall(name: string): string {
+  return `\`${name}\` is called again while it runs (a recursive call, directly or through other local functions): VTS translates a local function by inlining its body where it is called or attached as a handler, so it cannot be recursive; use \`for … of\` or an array method`;
+}
+
+/**
+ * `env` for the body of the local function `fn` inlined at a call or attachment in `outer`:
+ * `fn` is being inlined there, so a call of it inside is recursive (`unboundCallee`).
+ */
+function enterInline(fn: ts.Node, at: ts.Node, name: string, env: Env, outer: Env): Env {
+  if (outer.inlining?.has(fn)) fail(at, recursiveCall(name));
+  return { ...env, inlining: new Set([...(outer.inlining ?? []), fn]) };
+}
+
 function propertyAccess(pa: ts.PropertyAccessExpression, env: Env): Val {
   const m = env.m;
   const name = pa.name.text;
@@ -2424,6 +2458,9 @@ function call(c: ts.CallExpression, env: Env, expected?: VType): Val {
       return { code: `(${info.qname}${as.map((a) => " " + a).join("")}${ob})`, type: info.ret };
     }
     if (isGlobal(env, callee, "String") && args.length === 1) return { code: toStr(expr(args[0], env), args[0]), type: T.str };
+    // a local of the function (TypeScript resolved it) without a binding here: say why
+    const local = s && !b ? unboundCallee(callee, s, env) : null;
+    if (local) fail(c, local);
     fail(c, `call to \`${callee.text}\` is not supported (only verified top-level functions, local helper arrows, and modelled library methods)`);
   }
   if (ts.isPropertyAccessExpression(callee)) {
@@ -2851,6 +2888,16 @@ export function closureEnv(b: Extract<Binding, { k: "closure" }>, env: Env): Env
   return vars ? { ...b.env, vars } : b.env;
 }
 
+/** Is `d` the setter / dispatch of `const [value, setValue] = useState(…)` / `useReducer(…)` (a stable function)? */
+function isStateSetter(d: ts.Node, env: Env): boolean {
+  if (!ts.isBindingElement(d) || !ts.isArrayBindingPattern(d.parent) || d.parent.elements.indexOf(d) !== 1) return false;
+  const v = d.parent.parent;
+  if (!ts.isVariableDeclaration(v) || !v.initializer) return false;
+  const c = stripParens(v.initializer);
+  const h = ts.isCallExpression(c) ? hookName(env, c.expression) : null;
+  return h === "useState" || h === "useReducer";
+}
+
 /** The `const` / `let` declaration list a variable declaration or a binding element in one belongs to, if any. */
 function localVarDecl(d: ts.Node): ts.VariableDeclarationList | null {
   let x: ts.Node = d;
@@ -2866,7 +2913,7 @@ function inlineClosure(b: Extract<Binding, { k: "closure" }>, c: ts.CallExpressi
   if (fn.parameters.length !== c.arguments.length) fail(c, "arity mismatch");
   // Evaluate the arguments in the caller env, bind them in the closure's env.
   let lets = "";
-  let e2: Env = { ...closureEnv(b, env), scope: env.scope, narrow: b.env.narrow, curState: env.curState, generalized: env.generalized ?? b.env.generalized };
+  let e2: Env = enterInline(fn, c, nodeText(c.expression, 30), { ...closureEnv(b, env), scope: env.scope, narrow: b.env.narrow, curState: env.curState, generalized: env.generalized ?? b.env.generalized }, env);
   fn.parameters.forEach((p, i) => {
     if (!p.type) fail(p, "helper function parameters need type annotations");
     const t = helperValueType(p.type, env, "Arg", `parameter \`${p.name.getText()}\` of ${nodeText(c.expression, 30)}`);
@@ -4071,7 +4118,7 @@ function exprStatement(e: ts.Expression, env: Env, bc: BlockCtx, rest: (e: Env) 
       const fn = b.fn;
       checkPlainParams(fn.parameters, `the local function ${callee.text}`);
       if (fn.parameters.length !== e.arguments.length) fail(e, `${callee.text} takes ${fn.parameters.length} argument(s), not ${e.arguments.length}`);
-      let e2: Env = { ...closureEnv(b, env), handler: env.handler, scope: env.scope, curState: undefined, generalized: env.generalized ?? b.env.generalized };
+      let e2: Env = enterInline(fn, e, callee.text, { ...closureEnv(b, env), handler: env.handler, scope: env.scope, curState: undefined, generalized: env.generalized ?? b.env.generalized }, env);
       let lets = "";
       fn.parameters.forEach((p, i) => {
         if (!p.type) fail(p, "helper parameters need type annotations");
@@ -4101,6 +4148,12 @@ function exprStatement(e: ts.Expression, env: Env, bc: BlockCtx, rest: (e: Env) 
     fail(e, `${callee.name.text} mutates the array/object; VTS data is immutable (use spread, filter, toSorted, toReversed, with)`);
   }
   if (ts.isCallExpression(e) && hookName(env, callee)) fail(e, "hooks must be called at the top level of a component, unconditionally (Rules of Hooks)");
+  if (ts.isIdentifier(callee)) {
+    // a local of the function (TypeScript resolved it) without a binding here: say why
+    const s = symbolOf(env, callee);
+    const local = s && !env.vars.get(s) ? unboundCallee(callee, s, env) : null;
+    if (local) fail(e, local);
+  }
   fail(e, `this call has no modelled effect: ${nodeText(e)}`);
 }
 
@@ -4512,7 +4565,7 @@ export function handlerFn(fnExpr: ts.Expression, env: Env, kind: "discrete" | "r
   if (ts.isIdentifier(fnExpr)) {
     const s = symbolOf(env, fnExpr);
     const b = s ? env.vars.get(s) : undefined;
-    if (b?.k === "closure") return handlerFn(b.fn, { ...closureEnv(b, env), scope: env.scope }, kind, argTypes, hyps, paramTs);
+    if (b?.k === "closure") return handlerFn(b.fn, enterInline(b.fn, fnExpr, fnExpr.text, { ...closureEnv(b, env), scope: env.scope }, env), kind, argTypes, hyps, paramTs);
     if (b?.k === "callback") {
       // forward a parent callback
       const cb = comp.info.callbacks.find((c) => c.name === b.cb.name)!;
@@ -4622,7 +4675,7 @@ export function checkDeps(fn: ts.ArrowFunction | ts.FunctionExpression, depsArg:
       if (d && host && within(d, host) && !within(d, fn) && d.getStart() > fn.end && localVarDecl(d)) {
         fail(n, hook === "useMemo"
           ? `the useMemo function runs here, at the call, and reads \`${n.text}\`, declared after it (${relLoc(d, env.m.prog.root)}): JS throws a ReferenceError (temporal dead zone); declare \`${n.text}\` before the useMemo`
-          : `the ${hook} function reads \`${n.text}\`, declared after the ${hook} call (${relLoc(d, env.m.prog.root)}): the dependency array cannot list it (it is in its temporal dead zone there), so React would keep ${hook === "useEffect" ? "an effect" : "a function"} with a stale \`${n.text}\`; declare \`${n.text}\` before the ${hook}`);
+          : `the ${hook} function reads \`${n.text}\`, declared after the ${hook} call (${relLoc(d, env.m.prog.root)}): VTS translates it with the locals declared before the call, and the dependency array cannot list it there (it is in its temporal dead zone)${isStateSetter(d, env) ? "" : `, so React would keep ${hook === "useEffect" ? "an effect" : "a function"} with a stale \`${n.text}\``}; declare \`${n.text}\` before the ${hook}`);
       }
       if (b && (b.k === "val" || b.k === "closure" || b.k === "callback" || b.k === "jsx")) {
         // reactive value: covered if it, or a path starting with it, is listed
