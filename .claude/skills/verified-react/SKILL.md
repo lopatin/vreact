@@ -160,7 +160,8 @@ export function ItemList(props: ItemListProps) {
 * Effects/timers and continuous/default-priority handlers (`onMouseMove`,
   `onScroll`, `onTransitionEnd`, `onLoad`, …) must preserve the invariant from
   **any** state (stale closures): prefer functional updates there; effect deps
-  must be exhaustive. Cleanups only clear timers (and log / write `localStorage` /
+  must be exhaustive (and `useMemo`/`useCallback` deps): data paths — `[m]` for
+  `m.has(k)`, never `[m.has]`. Cleanups only clear timers (and log / write `localStorage` /
   `document.title`; the arguments of such writes are checked everywhere, like any
   expression; in a cleanup they and a timer's delay are data, reading methods only: no
   `xs.push`, setters or helpers). In such a component, clicks etc. must also be safe on top

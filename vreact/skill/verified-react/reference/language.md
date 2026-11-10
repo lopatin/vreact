@@ -520,7 +520,15 @@ Order inside the body:
    `useMemo(() => v, [deps])`, `useCallback(fn, [deps])` — top level,
    unconditional, before any `if`/`switch`/early return (never in branches,
    loops, handlers or closures; parentheses around the call do not matter); deps
-   exhaustive (`{ x }` reads `x`). An initial value may read the props, the state
+   exhaustive (`{ x }` reads `x`). Deps are data paths: variables, fields
+   (`item.count`, `props.item?.count`), `length`, `size`. A call `m.has(k)` reads
+   `m` and `k`: list `m` (or a prefix of a field path), never the method —
+   `[m.has]`, `[xs.slice]`, `[s.trim]` are rejected (the same function for every
+   receiver: React would never recompute). An effect may also list a setter or
+   `dispatch` (never changes), a local helper arrow (a new function each render:
+   the effect runs after every render) or a `useCallback` function (changes when
+   its own deps do); not a parent callback, nor `props` itself (list its
+   fields). An initial value may read the props, the state
    declared before it and top-level declarations (not render locals): React uses
    it at mount, when that state has its own initial value (`useState(a)` starts
    at `a`'s initial value), but evaluates a non-lazy one at every render, so it
