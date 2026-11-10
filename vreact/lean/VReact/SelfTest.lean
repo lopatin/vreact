@@ -288,5 +288,30 @@ example : True := by
   vreact_fails_showing_goal (∀ (c : Bool), ((if _h : c = true then [JS.Str.ofString "a"] else []) ++
     [JS.Str.ofString "a"]).Nodup)
   trivial
+-- a common first part, a string and itself with something appended, the last code units
+example (id : JS.Str) : ([id ++ JS.Str.ofString "-title"] ++ [id ++ JS.Str.ofString "-body"]).Nodup := by vreact_auto
+example (id : JS.Str) : ([JS.Str.ofString "item-" ++ id ++ JS.Str.ofString "-title"] ++
+    [JS.Str.ofString "item-" ++ id ++ JS.Str.ofString "-body"]).Nodup := by vreact_auto
+example (id : Int) : ([JS.str id] ++ [JS.str id ++ JS.Str.ofString "-edit"]).Nodup := by vreact_auto
+example (s : JS.Str) : ([s ++ JS.Str.ofString "-edit"] ++ [s]).Nodup := by vreact_auto
+example (a b : JS.Str) : ([a ++ JS.Str.ofString "-from"] ++ [b ++ JS.Str.ofString "-to"]).Nodup := by vreact_auto
+example (n : Int) (s : JS.Str) : ([JS.str n] ++ [s ++ JS.Str.ofString "-edit"]).Nodup := by vreact_auto
+example (n : Int) (s : JS.Str) : ([s ++ JS.Str.ofString "x"] ++ [JS.Str.ofString "a-" ++ JS.str n]).Nodup := by vreact_auto
+example (id : JS.Str) : ([id ++ JS.Str.ofString "-title"] ++ [JS.Str.ofString "title"]).Nodup := by vreact_auto
+example (n : Int) : ([JS.Str.ofString "title"] ++ [JS.str n ++ JS.Str.ofString "title"]).Nodup := by vreact_auto
+example (a b : JS.Str) : ([a ++ JS.Str.ofString "-x-edit"] ++ [b ++ JS.Str.ofString "-y-edit"]).Nodup := by vreact_auto
+example (id : JS.Str) : ([JS.Str.ofString "a-" ++ id ++ JS.Str.ofString "-x"] ++ [JS.Str.ofString "a-" ++ id ++ JS.Str.ofString "-x-y"]).Nodup := by vreact_auto
+example : True := by
+  -- equal for some values: the last code units agree, or one could be the other
+  vreact_fails_showing_goal (∀ (a b : JS.Str), ([a ++ JS.Str.ofString "-x"] ++ [b ++ JS.Str.ofString "-x"]).Nodup)
+  vreact_fails_showing_goal (∀ (a : JS.Str), ([a ++ JS.Str.ofString "b"] ++ [JS.Str.ofString "ab"]).Nodup)
+  vreact_fails_showing_goal (∀ (n : Int) (s : JS.Str), ([JS.str n] ++ [s ++ JS.Str.ofString "1"]).Nodup)
+  vreact_fails_showing_goal (∀ (n m : Int), ([JS.str n ++ JS.Str.ofString "0"] ++ [JS.str m]).Nodup)
+  vreact_fails_showing_goal (∀ (s : JS.Str), ([s] ++ [s ++ JS.Str.ofString ""]).Nodup)
+  vreact_fails_showing_goal (∀ (s t : JS.Str), ([s ++ t] ++ [s]).Nodup)
+  vreact_fails_showing_goal (∀ (a : JS.Str), ([a ++ JS.Str.ofString "-title"] ++ [JS.Str.ofString "x-title"]).Nodup)
+  vreact_fails_showing_goal (∀ (a b : JS.Str), ([a ++ JS.Str.ofString "x" ++ b ++ JS.Str.ofString "-t"] ++ [JS.Str.ofString "x-t"]).Nodup)
+  vreact_fails_showing_goal (∀ (n : Int), ([JS.str n ++ JS.Str.ofString "1"] ++ [JS.Str.ofString "11"]).Nodup)
+  trivial
 
 end VReact.SelfTest

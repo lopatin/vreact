@@ -281,6 +281,184 @@ simproc [vreact_simp] reduceStrIntEqLit ((_ : JS.Str) = _) := fun e => do
       return .done { expr := mkConst ``False, proof? := some (mkAppN (mkConst ``JS.eq_false_of_intHead') #[l, r, hy, uE, hx, side]) }
   return .continue
 
+/-! ### Comparing strings: a common first part, the last code units
+
+`key={`${id}-title`}` and `key={`${id}-body`}`: a common first part cancels
+(`JS.Str.append_left_cancel`, with `Str.append_assoc` putting the parts to the right);
+`key={id}` and `key={`${id}-edit`}`: a string is not itself with a non-empty string appended
+(`JS.Str.self_eq_append`); `key={`${id}-title`}` and `key="title"`: a common literal end cancels
+(`reduceStrCommonSuffix`), and what is left of the first is not empty; `key={`${a}-from`}` and
+`key={`${b}-to`}`, or `key={n}` for an integer `n` (whose decimal rendering ends with a digit) and
+`key={`${s}-edit`}`: the last code units differ (`reduceStrLastUnit`). -/
+
+@[vreact_simp] theorem JS.Str.append_left_cancel (s t u : JS.Str) : (s ++ t = s ++ u) ↔ t = u := by
+  cases s; cases t; cases u
+  show JS.Str.mk _ = JS.Str.mk _ ↔ JS.Str.mk _ = JS.Str.mk _
+  simp
+@[vreact_simp] theorem JS.Str.self_eq_append (s t : JS.Str) : (s = s ++ t) ↔ t.units = [] := by
+  cases s; cases t
+  show JS.Str.mk _ = JS.Str.mk _ ↔ _
+  simp
+@[vreact_simp] theorem JS.Str.append_eq_self (s t : JS.Str) : (s ++ t = s) ↔ t.units = [] := by
+  cases s; cases t
+  show JS.Str.mk _ = JS.Str.mk _ ↔ _
+  simp
+@[vreact_simp] theorem JS.Str.append_eq_mk_nil (s t : JS.Str) : (s ++ t = ⟨[]⟩) ↔ (s.units = [] ∧ t.units = []) := by
+  cases s; cases t
+  show JS.Str.mk _ = JS.Str.mk _ ↔ _
+  simp
+@[vreact_simp] theorem JS.Str.mk_nil_eq_append (s t : JS.Str) : ((⟨[]⟩ : JS.Str) = s ++ t) ↔ (s.units = [] ∧ t.units = []) := by
+  cases s; cases t
+  show JS.Str.mk _ = JS.Str.mk _ ↔ _
+  simp [eq_comm]
+
+/-- Two strings that end with the same string are equal exactly when what comes before is
+(`reduceStrCommonSuffix`). -/
+theorem JS.Str.eq_of_common_suffix (l r l' r' z : JS.Str) (hl : l = l' ++ z) (hr : r = r' ++ z) :
+    (l = r) = (l' = r') := by
+  subst hl; subst hr
+  cases l'; cases r'; cases z
+  apply propext
+  show JS.Str.mk _ = JS.Str.mk _ ↔ JS.Str.mk _ = JS.Str.mk _
+  simp
+
+theorem JS.Str.append_suffix (x y y' z : JS.Str) (h : y = y' ++ z) : x ++ y = (x ++ y') ++ z := by
+  rw [h, JS.Str.append_assoc]
+
+namespace JS
+
+/-- `x` ends with the code unit `u`. -/
+def LastUnit (x : Str) (u : UInt16) : Prop := x.units.getLast? = some u
+
+/-- `x` ends like the decimal rendering of an integer: with a digit (or `-`). -/
+def IntLast (x : Str) : Prop := ∃ u, x.units.getLast? = some u ∧ intUnit u = true
+
+theorem lastUnit_append (p y : Str) (u : UInt16) (h : LastUnit y u) : LastUnit (p ++ y) u := by
+  unfold LastUnit at *
+  rw [Str.units_append, List.getLast?_append, h]; rfl
+
+theorem intLast_append (p y : Str) (h : IntLast y) : IntLast (p ++ y) := by
+  obtain ⟨u, hu, hi⟩ := h
+  exact ⟨u, by rw [Str.units_append, List.getLast?_append, hu]; rfl, hi⟩
+
+theorem intLast_str (a : Int) : IntLast (str a) := by
+  obtain ⟨c, cs, hx, _⟩ := intHead_str a
+  have hne : (str a).units ≠ [] := by rw [hx]; exact List.cons_ne_nil _ _
+  have hall := str_int_units a
+  rw [List.all_eq_true] at hall
+  exact ⟨_, List.getLast?_eq_some_getLast hne, hall _ (List.getLast_mem hne)⟩
+
+/-- The decimal rendering of an integer is not empty. -/
+@[vreact_simp] theorem str_int_units_eq_nil (a : Int) : ((str a).units = []) = False := by
+  obtain ⟨c, cs, hx, _⟩ := intHead_str a
+  rw [hx]; exact _root_.eq_false (List.cons_ne_nil _ _)
+
+theorem eq_false_of_lastUnit (x y : Str) (u v : UInt16) (hx : LastUnit x u) (hy : LastUnit y v)
+    (h : (u == v) = false) : (x = y) = False := by
+  apply _root_.eq_false; intro he
+  unfold LastUnit at hx hy
+  rw [he, hy] at hx
+  have : v = u := Option.some.inj hx
+  subst this
+  simp at h
+
+theorem eq_false_of_intLast (x y : Str) (hx : IntLast x) (v : UInt16) (hy : LastUnit y v)
+    (h : intUnit v = false) : (x = y) = False := by
+  apply _root_.eq_false; intro he
+  obtain ⟨u, hu, hi⟩ := hx
+  unfold LastUnit at hy
+  rw [he, hy] at hu
+  have : v = u := Option.some.inj hu
+  subst this
+  rw [h] at hi; exact Bool.noConfusion hi
+
+theorem eq_false_of_intLast' (x y : Str) (hy : IntLast y) (v : UInt16) (hx : LastUnit x v)
+    (h : intUnit v = false) : (x = y) = False :=
+  _root_.eq_false fun he => cast (eq_false_of_intLast y x hy v hx h) he.symm
+
+end JS
+
+/-- The code units of the literal string `x` ends with (its last part, through `++`), with their
+expressions. -/
+private partial def strTrailingLit? (x : Expr) : Option (List Nat × Array Expr) :=
+  if x.isAppOfArity ``HAppend.hAppend 6 then strTrailingLit? (x.getArg! 5)
+  else do
+    let us ← unitsLit? x
+    let (_, es) ← x.appArg!.listLit?
+    some (us, es.toArray)
+
+/-- `x` with the last `k` code units of the literal it ends with dropped (`x'`), and a proof of
+`x = x' ++ z` (by evaluation for the literal, `JS.Str.append_suffix` through `++`). -/
+private partial def strDropSuffix (x z : Expr) (k : Nat) : MetaM (Expr × Expr) := do
+  if x.isAppOfArity ``HAppend.hAppend 6 then
+    let (b', hb) ← strDropSuffix (x.getArg! 5) z k
+    let args := x.getAppArgs
+    let x' := mkAppN x.getAppFn (args.set! 5 b')
+    return (x', mkAppN (mkConst ``JS.Str.append_suffix) #[x.getArg! 4, x.getArg! 5, b', z, hb])
+  let some (_, es) := x.appArg!.listLit? | throwError "strDropSuffix: not a literal string"
+  let x' := mkApp (mkConst ``JS.Str.mk) (← mkListLit (mkConst ``UInt16) (es.take (es.length - k)))
+  let ty ← mkEq x (← mkAppM ``HAppend.hAppend #[x', z])
+  return (x', ← mkExpectedTypeHint (← mkEqRefl x) ty)
+
+/-- `s + "-title" === "title"`, `a + "-x" === b + "-x"`: the longest common end of the literal
+strings both sides end with cancels (`JS.Str.eq_of_common_suffix`); then the last code units
+differ (`reduceStrLastUnit`), or one side lost its literal end.  Not for two literal strings
+(evaluated). -/
+simproc [vreact_simp] reduceStrCommonSuffix ((_ : JS.Str) = _) := fun e => do
+  let_expr Eq _ l r ← e | return .continue
+  unless l.isAppOfArity ``HAppend.hAppend 6 || r.isAppOfArity ``HAppend.hAppend 6 do return .continue
+  let (some (a, ea), some (b, _)) := (strTrailingLit? l, strTrailingLit? r) | return .continue
+  let k := ((a.reverse.zip b.reverse).takeWhile fun (x, y) => x == y).length
+  if k == 0 then return .continue
+  let z := mkApp (mkConst ``JS.Str.mk) (← mkListLit (mkConst ``UInt16) (ea.toList.drop (a.length - k)))
+  let (l', hl) ← strDropSuffix l z k
+  let (r', hr) ← strDropSuffix r z k
+  return .visit { expr := ← mkEq l' r', proof? := some (mkAppN (mkConst ``JS.Str.eq_of_common_suffix) #[l, r, l', r', z, hl, hr]) }
+
+/-- The last code unit of `x` when it ends with a non-empty literal string (as `reduceOfString`
+leaves it): the unit, as a number and as a `UInt16` numeral, and a proof of `JS.LastUnit x u` (by
+evaluation for the literal, `JS.lastUnit_append` through `++`). -/
+private partial def strLastUnit? (x : Expr) : MetaM (Option (Nat × Expr × Expr)) := do
+  if x.isAppOfArity ``HAppend.hAppend 6 then
+    let some (u, uE, h) ← strLastUnit? (x.getArg! 5) | return none
+    return some (u, uE, mkApp4 (mkConst ``JS.lastUnit_append) (x.getArg! 4) (x.getArg! 5) uE h)
+  let some us := unitsLit? x | return none
+  let some u := us.getLast? | return none
+  let uE ← mkNumeral (mkConst ``UInt16) u
+  let ty ← mkEq (← mkAppM ``List.getLast? #[← mkAppM ``JS.Str.units #[x]]) (← mkAppM ``Option.some #[uE])
+  let h ← mkExpectedTypeHint (← mkEqRefl (← mkAppM ``Option.some #[uE])) ty
+  return some (u, uE, h)
+
+/-- A proof of `JS.IntLast x` when `x` is, or ends with, `String(i)` for an integer `i`. -/
+private partial def strIntLast? (x : Expr) : Option Expr :=
+  if x.isAppOfArity ``JS.str 3 && (x.getArg! 0).isConstOf ``Int && (x.getArg! 1).isConstOf ``JS.instToJSInt then
+    some (mkApp (mkConst ``JS.intLast_str) (x.getArg! 2))
+  else if x.isAppOfArity ``HAppend.hAppend 6 then
+    (strIntLast? (x.getArg! 5)).map fun h => mkApp3 (mkConst ``JS.intLast_append) (x.getArg! 4) (x.getArg! 5) h
+  else none
+
+/-- Two strings whose last code units differ are different: both end with literal strings whose
+last code units differ (`JS.eq_false_of_lastUnit`), or one is (or ends with) the decimal rendering
+of an integer, whose last code unit is a digit, and the other ends with a literal whose last code
+unit is not a digit or `-` (`JS.eq_false_of_intLast`).  The side conditions hold by evaluation,
+which the kernel re-checks. -/
+simproc [vreact_simp] reduceStrLastUnit ((_ : JS.Str) = _) := fun e => do
+  let_expr Eq _ l r ← e | return .continue
+  let nonIntUnit (u : Nat) : Bool := !(u == 45 || (48 ≤ u && u ≤ 57))
+  let side ← mkEqRefl (mkConst ``Bool.false)
+  let ll ← strLastUnit? l
+  let rl ← strLastUnit? r
+  if let (some (u, uE, hx), some (v, vE, hy)) := (ll, rl) then
+    if u != v then
+      return .done { expr := mkConst ``False, proof? := some (mkAppN (mkConst ``JS.eq_false_of_lastUnit) #[l, r, uE, vE, hx, hy, side]) }
+  if let (some hx, some (v, vE, hy)) := (strIntLast? l, rl) then
+    if nonIntUnit v then
+      return .done { expr := mkConst ``False, proof? := some (mkAppN (mkConst ``JS.eq_false_of_intLast) #[l, r, hx, vE, hy, side]) }
+  if let (some (u, uE, hx), some hy) := (ll, strIntLast? r) then
+    if nonIntUnit u then
+      return .done { expr := mkConst ``False, proof? := some (mkAppN (mkConst ``JS.eq_false_of_intLast') #[l, r, hy, uE, hx, side]) }
+  return .continue
+
 /-! ### Callbacks over `l.attach` that do not use the membership proof
 
 A callback with proof obligations is translated over `l.attach` (`fun p => let x := p.1; have

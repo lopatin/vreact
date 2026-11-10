@@ -9,7 +9,7 @@
  */
 import ts from "typescript";
 import { T, type VType, type Param, type Field, leanType, showType, typeOfNode, checkValueType, propertyName, isLibSymbol, collectionKind } from "./types.ts";
-import { type Env, ModCtx, type CompCtx, type CompInfo, type StateVar, type FnInfo, type Binding, bind, freshLocal, refSymbol } from "./ctx.ts";
+import { type Env, type Val, type Mark, ModCtx, type CompCtx, type CompInfo, type StateVar, type FnInfo, type Binding, bind, freshLocal, refSymbol } from "./ctx.ts";
 import { expr, prop, propAll, block, branch, handlerFn, checkDeps, hookName, specFn, isGlobal, symbolOf, bindParam, type BlockCtx, typeOf, valueBlock, lambda, outcome, checkClosures, topLevelHookDecls, fnParamTsTypes, stripParens, isNumeric, evalArgs, isDocumentTitle, jsxAttrText, checkPlainParams, isNullLit, ARRAY_MUTATORS, toStr, nullishKinds } from "./translate.ts";
 import { fail, leanField, leanIdent, leanStr, jsStr, paren, nodeText, indent, VtsError, jsxTextValue, asciiLower } from "./util.ts";
 
@@ -1066,7 +1066,11 @@ function isJsx(e: ts.Node): boolean {
 
 /** How render blocks translate a JSX const at its declaration: a VNode of this render. */
 function jsxConstCtx(comp: CompCtx): NonNullable<BlockCtx["jsxConst"]> {
-  return { code: (e, env) => withBubble({ ...bubble, ns: "deferred" }, () => jsxNode(e, env)), type: `VReact.VNode ${comp.stateType} E (${comp.invName} ${comp.propsVar}) ${comp.snap}` };
+  return {
+    code: (e, env) => withBubble({ ...bubble, ns: "deferred" }, () => jsxNode(e, env)),
+    type: `VReact.VNode ${comp.stateType} E (${comp.invName} ${comp.propsVar}) ${comp.snap}`,
+    key: (e) => translatedKey(stripParens(e)),
+  };
 }
 
 /** A VNode term for a JSX-valued expression. */
@@ -1122,7 +1126,14 @@ export function jsxNode(e0: ts.Expression, env: Env): string {
  */
 function children(cs: ts.NodeArray<ts.JsxChild>, env: Env, parent: ts.Node, what: string): string {
   const items: string[] = [];
-  const slots: ts.Expression[] = [];
+  const slots: Slot[] = [];
+  const child = (x: ts.Expression) => {
+    const from = env.m.mark();
+    items.push(jsxNode(x, env));
+    const el = parensOnly(x);
+    // (the key of an element child, as just translated in it)
+    slots.push({ expr: x, from, to: env.m.mark(), key: ts.isJsxElement(el) || ts.isJsxSelfClosingElement(el) ? translatedKey(el) : undefined });
+  };
   for (const c of cs) {
     if (ts.isJsxText(c)) {
       const t = jsxTextValue(c.text, c);
@@ -1132,15 +1143,31 @@ function children(cs: ts.NodeArray<ts.JsxChild>, env: Env, parent: ts.Node, what
     if (ts.isJsxExpression(c)) {
       if (!c.expression) continue;
       if (c.dotDotDotToken) fail(c, "spread children are not supported");
-      items.push(jsxNode(c.expression, env));
-      slots.push(c.expression);
+      child(c.expression);
       continue;
     }
-    items.push(jsxNode(c as ts.Expression, env));
-    slots.push(c as ts.Expression);
+    child(c as ts.Expression);
   }
   const list = items.length ? `(VReact.VList.ofList [\n    ${items.map((i) => indent(i, 2).trimStart()).join(",\n    ")}])` : "VReact.VList.nil";
   return siblingKeys(slots, env, parent, what, list);
+}
+
+/**
+ * A child of an element or fragment written as an expression or an element: its translation
+ * ran between the marks `from` and `to` (to translate it again for its keys, `ModCtx.replay`);
+ * `key` is the translated `key={…}` of an element child.
+ */
+interface Slot {
+  expr: ts.Expression;
+  from: Mark;
+  to: Mark;
+  key: Val | undefined;
+}
+
+/** `e` without parentheses (what `jsxNode` looks through). */
+function parensOnly(e: ts.Expression): ts.Expression {
+  while (ts.isParenthesizedExpression(e)) e = e.expression;
+  return e;
 }
 
 /** An explicitly keyed element that a child can put into its parent's children array. */
@@ -1159,11 +1186,11 @@ function keyAttrOf(e: ts.JsxElement | ts.JsxSelfClosingElement): ts.JsxAttribute
 }
 
 /** The JSX const a child expression names (`{row}`), or null. */
-function jsxConstOf(e: ts.Expression, env: Env): { node: ts.Expression; env: Env } | null {
+function jsxConstOf(e: ts.Expression, env: Env): { node: ts.Expression; env: Env; key: Val | undefined } | null {
   if (!ts.isIdentifier(e)) return null;
   const s = symbolOf(env, e);
   const b = s ? env.vars.get(s) : undefined;
-  return b?.k === "jsx" ? { node: b.node, env: b.env } : null;
+  return b?.k === "jsx" ? { node: b.node, env: b.env, key: b.key } : null;
 }
 
 /**
@@ -1201,8 +1228,8 @@ function siblingKeysOf(e0: ts.Expression, env: Env, always: boolean, out: Siblin
  * all keys are strings that differ between children, the children carry a `unique-keys`
  * obligation (`VList.withKeys`) over the keys of the children present, as strings.
  */
-function siblingKeys(slots: ts.Expression[], env: Env, parent: ts.Node, what: string, list: string): string {
-  const keyed = slots.map((s) => ({ slot: s, keys: siblingKeysOf(s, env, true, []) })).filter((s) => s.keys.length);
+function siblingKeys(slots: Slot[], env: Env, parent: ts.Node, what: string, list: string): string {
+  const keyed = slots.map((s) => ({ slot: s, keys: siblingKeysOf(s.expr, env, true, []) })).filter((s) => s.keys.length);
   if (keyed.length < 2) return list;
   const seen = new Map<string, SiblingKey>();
   for (const { keys } of keyed) {
@@ -1215,50 +1242,71 @@ function siblingKeys(slots: ts.Expression[], env: Env, parent: ts.Node, what: st
   // keys written as strings that no two children share: distinct, whichever are present
   const lits = keyed.map(({ keys }) => keys.map((k) => k.lit));
   if (lits.every((ls) => ls.every((l) => l !== null)) && lits.every((ls, i) => ls.every((l) => lits.every((other, j) => j === i || !other.includes(l))))) return list;
-  const parts = keyed.map(({ slot }) => siblingKeysTerm(slot, env));
+  const parts = keyed.map(({ slot }) => slotKeysTerm(slot, env));
   const shown = keyed.flatMap(({ keys }) => keys.map((k) => (k.lit !== null ? JSON.stringify(k.lit) : nodeText(attrValue(k.attr)!, 40))));
   const ob = env.m.ob(parent, "unique-keys", `the keys of the children of ${what} are distinct (React compares them as strings): ${shown.join(", ")}`);
   return `(VReact.VList.withKeys (${parts.join(" ++\n    ")})\n  ${ob}\n  ${list})`;
 }
 
 /**
- * The keys (as strings, in a Lean list) that the child `e0` puts into its parent's children
- * array: the branches of conditionals as `jsxNode` translates them, a JSX const's element where
- * it is declared (JS evaluates its key there).
+ * The keys (as strings, in a Lean list) that the child `s` puts into its parent's children
+ * array.  Each key is the term already translated for the element (`key={…}` in `VNode.withKey`),
+ * with the same obligations: the copies are the same obligations, so a failing one is reported
+ * once.  An element child: its key as translated in it.  A JSX const: its key as translated at its
+ * declaration, where JS evaluates it (the Lean local names there are still in scope: later locals
+ * get fresh names).  A conditional child: its translation is replayed (`ModCtx.replay`: the same
+ * text, conditions, hypothesis names and obligation ids), building the same conditionals over the
+ * keys of the branches.
  */
-function siblingKeysTerm(e0: ts.Expression, env: Env): string {
-  const e = stripParens(e0);
-  const has = (x: ts.Expression, ex: Env) => siblingKeysOf(x, ex, true, []).length > 0;
-  if (ts.isJsxElement(e) || ts.isJsxSelfClosingElement(e)) {
-    const a = keyedByMap.has(e) ? null : keyAttrOf(e);
-    return a ? keyString(a, env) : "[]";
-  }
-  if (ts.isConditionalExpression(e)) {
-    if (!has(e.whenTrue, env) && !has(e.whenFalse, env)) return "[]";
-    return branch(e.condition, env, (e1) => siblingKeysTerm(e.whenTrue, e1), (e2) => siblingKeysTerm(e.whenFalse, e2));
-  }
-  if (ts.isBinaryExpression(e) && e.operatorToken.kind === ts.SyntaxKind.AmpersandAmpersandToken) {
-    if (!has(e.right, env)) return "[]";
-    return branch(e.left, env, (e1) => siblingKeysTerm(e.right, e1), () => "[]");
-  }
+function slotKeysTerm(s: Slot, env: Env): string {
+  const e = parensOnly(s.expr);
+  if (ts.isJsxElement(e) || ts.isJsxSelfClosingElement(e)) return elementKeysTerm(e, s.key, env);
   const c = jsxConstOf(e, env);
-  return c ? siblingKeysTerm(c.node, { ...c.env, scope: env.scope }) : "[]";
+  if (c) return elementKeysTerm(c.node, c.key, env);
+  return env.m.replay(s.from, s.to, () => replayKeys(s.expr, env));
+}
+
+/** The translation of `jsxNode(e0, env)` again (the same calls, in order), returning the keys `e0` puts into the array. */
+function replayKeys(e0: ts.Expression, env: Env): string {
+  const e = ts.isParenthesizedExpression(e0) ? e0.expression : e0;
+  if (ts.isParenthesizedExpression(e)) return replayKeys(e.expression, env);
+  if (ts.isJsxElement(e) || ts.isJsxSelfClosingElement(e)) {
+    element(e, env);
+    return elementKeysTerm(e, translatedKey(e), env);
+  }
+  if (ts.isConditionalExpression(e)) return branch(e.condition, env, (e1) => replayKeys(e.whenTrue, e1), (e2) => replayKeys(e.whenFalse, e2));
+  if (ts.isBinaryExpression(e) && e.operatorToken.kind === ts.SyntaxKind.AmpersandAmpersandToken) {
+    return branch(e.left, env, (e1) => replayKeys(e.right, e1), () => "[]");
+  }
+  jsxNode(e, env);
+  const c = jsxConstOf(e, env);
+  return c ? elementKeysTerm(c.node, c.key, env) : "[]";
+}
+
+/** The keys an element (or a JSX const's node) puts into the array: its `key` (`v`: as translated), or none. */
+function elementKeysTerm(e: ts.Expression, v: Val | undefined, env: Env): string {
+  if (!(ts.isJsxElement(e) || ts.isJsxSelfClosingElement(e)) || keyedByMap.has(e)) return "[]";
+  const a = keyAttrOf(e);
+  return a ? keyString(a, v, env) : "[]";
 }
 
 /**
  * The key of `key={…}` as React sees it, `'' + key`, as a Lean list: one string, or none for
  * `undefined` (React's `jsx()` ignores an undefined key, but makes a null one the key "null").
+ * `v` is the key's translation (none for a key written as a string).
  */
-function keyString(a: ts.JsxAttribute, env: Env): string {
+function keyString(a: ts.JsxAttribute, v: Val | undefined, env: Env): string {
   const lit = literalAttr(a);
   if (lit !== null) return `[${jsStr(lit)}]`;
   const val = attrValue(a)!;
-  const v = expr(val, env);
+  if (!v) throw new Error(`internal error: the key ${nodeText(val, 40)} was not translated where its element was`);
   const scalar = (t: VType) => ["str", "int", "num", "bool", "enum"].includes(t.k);
   if (scalar(v.type)) return `[${toStr(v, val)}]`;
   if (v.type.k === "opt" && scalar(v.type.elem)) {
     const kinds = nullishKinds(val, env);
-    const x = env.m.fresh("key");
+    // (the arm uses only its binder, so a fixed name cannot capture; no fresh name: a replay must
+    // not count hypotheses the translation it repeats did not)
+    const x = "key₀";
     return `(match ${v.code} with | some ${x} => [${toStr({ code: x, type: v.type.elem }, val)}] | none => [${!kinds || kinds.null ? jsStr("null") : ""}])`;
   }
   fail(val, `a key of type ${showType(v.type)} next to other keyed children: React compares the keys of the children of one element as strings ('' + key), which VTS models for string, int, number, boolean and string-enum keys (and their optional forms); key by one of these`);
@@ -1718,13 +1766,29 @@ function checkAttribute(a: ts.JsxAttribute, lname: string, tag: string, e: ts.Js
 /** Elements returned by `xs.map(…)`, whose key is translated (as the key function) by `keyedMap`. */
 const keyedByMap = new WeakSet<ts.Node>();
 
+/**
+ * The last translation of each `key={…}` (by `keyExpr`), read right after the translation of its
+ * element (`translatedKey`): the keys of siblings are these terms, with their obligations.
+ */
+const keyVals = new WeakMap<ts.JsxAttribute, Val>();
+
+/** The translation of the element's `key={…}` its translation just made (undefined: no key, or one written as a string). */
+function translatedKey(e: ts.Expression): Val | undefined {
+  if (!(ts.isJsxElement(e) || ts.isJsxSelfClosingElement(e))) return undefined;
+  const a = keyAttrOf(e);
+  return a ? keyVals.get(a) : undefined;
+}
+
 /** The translated `key={…}` of an element outside a keyed map: JS evaluates it on every render, so its obligations count. */
 function keyExpr(a: ts.JsxAttribute, e: ts.Node, env: Env): string | null {
   if (keyedByMap.has(e)) return null;
   const val = attrValue(a);
   if (!val) fail(a, "key needs a value");
+  keyVals.delete(a);
   if (ts.isStringLiteral(val)) return null;
-  return expr(val, env).code;
+  const v = expr(val, env);
+  keyVals.set(a, v);
+  return v.code;
 }
 
 function withKey(key: string | null, node: string): string {
