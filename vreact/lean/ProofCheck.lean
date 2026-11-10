@@ -54,14 +54,20 @@ This check is what stops code from running while Lean elaborates a proof file; a
 `vreact-certify` (`Certify.lean`) re-checks every declaration with the kernel and what each
 proof module added, independently of how it was written.
 
+The file's own name must be a module name: `sub/x.lean` is the module `Proofs.sub.x`, which is
+the file `import Proofs.sub.x` loads only when every directory and the file name is an
+identifier — `x.y.lean` would be read as `Proofs.x.y`, which `import` loads from `x/y.lean`;
+`my-lemmas.lean` is no module name at all (`exactModuleOfFile`).
+
 Usage: the files arrive on stdin as a JSON array `[{"name": …, "text": …}]` (`name`, the path
 relative to the proofs directory, names the module, `sub/x.lean` is `Proofs.sub.x`, and is used in
 the messages); the result is a JSON object on stdout: `issues`, an array
 `[{"file", "line", "col", "msg"}]` (lines 1-based, columns 1-based), empty when every file is
 acceptable, and `imports`, the imports of each file's header as Lean's parser reads them
-(`{"<name>": [{"name": [components…], "line", "col"}]}`, at the module name; `[]` for a header
-that does not parse): `vreact` reads a proof file's imports only from here, never from its text
-(escaped names `«VTS».m.Defs`, comments, line breaks). Exit code 0 unless the program itself
+(`{"<name>": [{"name": [components…], "line", "col"}]}`, at the module name; `null` for a
+header that does not parse): `vreact` takes a proof file's imports from here, and rejects a file
+whose header its own reading reads otherwise (comments nest, a line comment ends only at a line
+feed, …), so the import graph it follows is Lean's. Exit code 0 unless the program itself
 failed.
 -/
 open Lean Elab Command Parser
@@ -428,13 +434,26 @@ def posOf (fm : FileMap) (p : String.Pos.Raw) : Nat × Nat :=
 def moduleOfFile (name : String) : Name :=
   ("Proofs." ++ ((name.dropEnd 5).toString.replace "/" ".")).toName
 
+/-- The module lake builds from a proof file: one name component per directory and for the file
+name (`modToFilePath` in reverse). `moduleOfFile` is this module exactly when every component is
+an identifier: `x.y.lean` is `Proofs.«x.y»` here but `Proofs.x.y` (the file `x/y.lean`) there,
+and `my-lemmas.lean` is no name there (anonymous). -/
+def exactModuleOfFile (name : String) : Name :=
+  ((name.dropEnd 5).toString.splitOn "/").foldl Name.mkStr `Proofs
+
+/-- A name's components, as strings (a numeric one in decimal). -/
+def nameParts : Name → List String
+  | .anonymous => []
+  | .str p s => nameParts p ++ [s]
+  | .num p n => nameParts p ++ [toString n]
+
 /-- The imports of a proof file's header, each with the position (line, column, 1-based) of its
 module name (none if the header does not parse). -/
-def headerImports (name text : String) : IO (Array (Name × Nat × Nat)) := do
+def headerImports? (name text : String) : IO (Option (Array (Name × Nat × Nat))) := do
   let inputCtx := Parser.mkInputContext text name
   let (header, _, msgs) ← Parser.parseHeader inputCtx
-  if msgs.hasErrors then return #[]
-  return header.raw[2].getArgs.map fun imp => (imp[4].getId, posOf inputCtx.fileMap (imp[4].getPos?.getD 0))
+  if msgs.hasErrors then return none
+  return some <| header.raw[2].getArgs.map fun imp => (imp[4].getId, posOf inputCtx.fileMap (imp[4].getPos?.getD 0))
 
 /-- Whether a proof module's imports reach `VReact` (directly, through a generated module or
 through the proof files it imports), and the problems of its own imports of proof files: one
@@ -533,12 +552,18 @@ unsafe def main (_args : List String) : IO UInt32 := do
     let name ← IO.ofExcept (f.getObjValAs? String "name")
     let text ← IO.ofExcept (f.getObjValAs? String "text")
     inputs := inputs.push (name, text)
-    let imps ← headerImports name text
-    proofMods := proofMods.insert (moduleOfFile name) imps
-    -- (each component unescaped: `«VTS».m.Defs` is ["VTS", "m", "Defs"])
-    imports := imports.push (name, Json.arr <| imps.map fun (n, l, c) =>
-      Json.mkObj [("name", Json.arr (n.components.toArray.map fun x => Json.str (x.toString (escape := false)))), ("line", l), ("col", c)])
+    let imps? ← headerImports? name text
+    proofMods := proofMods.insert (moduleOfFile name) (imps?.getD #[])
+    -- (each component unescaped: `«VTS».m.Defs` is ["VTS", "m", "Defs"]; null: the header does not parse)
+    imports := imports.push (name, match imps? with
+      | some imps => Json.arr <| imps.map fun (n, l, c) =>
+          Json.mkObj [("name", Json.arr ((nameParts n).toArray.map Json.str)), ("line", l), ("col", c)]
+      | none => Json.null)
   for (name, text) in inputs do
+    if moduleOfFile name != exactModuleOfFile name then
+      out := out.push (Json.mkObj [("file", name), ("line", 1), ("col", 1), ("msg",
+        s!"the proof file proofs/{name} has no module name: `import Proofs.a.b` loads the file proofs/a/b.lean, so every directory name and the file name must be an identifier (letters, digits and `_`; no `.`, space or `-`), or `import` names another file or none: rename it")])
+      continue
     let withLib := reachesLib proofMods (moduleOfFile name)
     for (l, c, msg) in ← checkFile name text withLib proofMods cache enableInitializersExecution do
       out := out.push (Json.mkObj [("file", name), ("line", l), ("col", c), ("msg", msg)])

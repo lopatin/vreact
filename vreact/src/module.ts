@@ -666,16 +666,27 @@ function translateAll(cfg: Config): TranslateResult {
   }
   // user proofs are imported by the generated files, so what they declare takes effect while
   // the translation is checked: only lemma-like commands may pass (lean/ProofCheck.lean)
-  const proofCheck = checkProofFiles(
-    cfg.leanLib,
-    leanFiles.map((f) => ({ name: path.relative("Proofs", f.rel).split(path.sep).join("/"), text: f.text })),
-  );
-  for (const i of proofCheck.issues) {
-    const e = new VtsError(undefined, i.msg);
-    e.file = path.join(cfg.proofsDir, ...i.file.split("/"));
-    e.line = i.line;
-    e.col = i.col;
+  const proofFiles = leanFiles.map((f) => ({ name: path.relative("Proofs", f.rel).split(path.sep).join("/"), text: f.text }));
+  const proofCheck = checkProofFiles(cfg.leanLib, proofFiles);
+  const proofError = (file: string, line: number, col: number, msg: string) => {
+    const e = new VtsError(undefined, msg);
+    e.file = path.join(cfg.proofsDir, ...file.split("/"));
+    e.line = line;
+    e.col = col;
     res.errors.push(e);
+  };
+  for (const i of proofCheck.issues) proofError(i.file, i.line, i.col, i.msg);
+  if (res.errors.length) return res;
+  // vreact follows the header imports of the proof files — to tell which files Lean builds
+  // (`unimportedProofs`), which build results are current and in which order the kernel re-check
+  // replays them (`runLake`) — with its own reading (`headerImports`), which must be Lean's: the
+  // check reports how Lean's parser reads each header, and a file read otherwise is rejected
+  for (const f of proofFiles) {
+    const lean = proofCheck.imports.get(f.name)?.map((i) => i.name);
+    const ours = headerImports(f.text);
+    if (lean && lean.length === ours.length && lean.every((m, k) => m === ours[k])) continue;
+    const list = (ms: string[] | undefined) => (ms === undefined ? "(not reported)" : ms.length ? ms.join(", ") : "none");
+    proofError(f.name, 1, 1, `the header of this proof file imports ${list(lean)} as Lean reads it, but ${list(ours)} as vreact reads it (vreact follows the imports to know which files Lean builds and checks): write each \`import <Module>\` on a line of its own, outside comments`);
   }
   if (res.errors.length) return res;
   // each proof module's imports, as Lean's parser reads them (never from the text: an escaped

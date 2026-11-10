@@ -1166,7 +1166,16 @@ hook rules hold (static checks). For every function: its body is safe and its
   would never be elaborated (its errors and `sorry`s never reported): it is
   rejected (a misspelt `proofs/model.lean` next to `src/Model.ts` — names are
   case-sensitive, also on a case-insensitive disk —, a stray copy, a file of
-  theorems nothing imports; `FaReportUnimportedProof`). When every importing
+  theorems nothing imports; `FaReportUnimportedProof`). The imports are those
+  Lean's parser reads in the headers: block comments nest, a line comment ends
+  only at a line feed (not at a lone CR or a U+2028), CRLF is a line break —
+  the proof file check reports Lean's reading, and a proof file whose header
+  vreact reads otherwise is rejected (`FaReportProofHiddenImport`,
+  `FaReportProofCRLF`, `FaReportProofHeaderForms`). A proof file's path names its
+  module (`proofs/a/b.lean` is `Proofs.a.b`), so every directory name and the
+  file name must be an identifier: `proofs/x.y.lean` would be `Proofs.x.y`,
+  which `import` loads from `proofs/x/y.lean`, and `proofs/my-lemmas.lean` names
+  no module — rejected (`FaReportProofDottedName`). When every importing
   module can import them, the `ensures` theorems of the module's functions that
   no other function or constant of the module uses are proved after the lemmas,
   in `Posts.lean` (imported by the module's `View.lean` and the importing
@@ -1343,7 +1352,10 @@ hook rules hold (static checks). For every function: its body is safe and its
   namespace (`src/M/f.ts`, `VTS.M.f`, below a function `f` of `src/M.ts`; or
   `src/M/Comp.ts` below a component `Comp`) keeps its holes, errors and
   `@trusted` axioms, which are then dependencies (`VERIFIED*`), not the item's
-  own (`FaReportNestedTrusted`, `FaReportNestedHole`). An axiom that is neither
+  own (`FaReportNestedTrusted`, `FaReportNestedHole`). Names are compared as
+  Lean names, not as text: the translator writes a non-ASCII name escaped
+  (`VTS.m.«gα»`), Lean prints it as its parser needs it (`VTS.m.gα`), and both
+  are the same `@trusted` axiom (`FaReportGreekTrusted`). An axiom that is neither
   Lean's standard ones, nor `VReact.assumed`, nor emitted for a `@trusted`
   declaration (e.g. one declared
   in a user proof, which the kernel re-check below also reports as an error that
@@ -1371,7 +1383,8 @@ hook rules hold (static checks). For every function: its body is safe and its
   module importing it — `GxAssumeInProofs`.)
 * **User proofs** (`proofs/**/*.lean`, `proofs/Base.lean`) are imported into
   generated files (every one of them: a proof file that no generated module
-  imports, directly or through other proof files, is rejected, §5), so whatever
+  imports, directly or through other proof files — by the imports Lean reads in
+  the headers —, or whose path is not a module name, is rejected, §5), so whatever
   they declare takes effect while the translation is checked. Before Lean
   runs, `vreact` checks every proof file against a whitelist
   (`lean/ProofCheck.lean`, the `vreact-proofcheck` program of the library): it

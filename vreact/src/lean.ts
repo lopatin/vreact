@@ -57,8 +57,9 @@ export interface ProofIssue {
 
 /** An import of a user proof file's header, as Lean's parser reads it (`lean/ProofCheck.lean`). */
 export interface ProofImport {
-  /** the module: its components joined by `.` (`«VTS».m.Defs` is `VTS.m.Defs`); a component
-   * that itself contains a `.` stays escaped (`VTS.«m.Defs»`), naming no module of the project */
+  /** the module, in the spelling of `leanName`: its components joined by `.` (`«VTS».m.Defs` is
+   * `VTS.m.Defs`); a component that itself contains a `.` stays escaped (`VTS.«m.Defs»`), naming
+   * no module of the project */
   name: string;
   /** the name's components, unescaped */
   parts: string[];
@@ -70,7 +71,8 @@ export interface ProofImport {
 /** The result of `checkProofFiles`. */
 export interface ProofCheck {
   issues: ProofIssue[];
-  /** each file's imports (by its path relative to the proofs directory, `/`-separated) */
+  /** each file's imports (by its path relative to the proofs directory, `/`-separated), as
+   * Lean's own parser reads them; missing for a file whose header does not parse (an issue says so) */
   imports: Map<string, ProofImport[]>;
 }
 
@@ -136,13 +138,15 @@ function proofCheckResult(parsed: unknown, names: string[]): ProofCheck | null {
   const byFile = new Map<string, ProofImport[]>();
   for (const name of names) {
     const list = (imports as Record<string, unknown>)[name];
+    // (null: the header does not parse, and an issue says so: no entry)
+    if (list === null) continue;
     if (!Array.isArray(list)) return null;
     const out: ProofImport[] = [];
     for (const i of list as unknown[]) {
       const { name: parts, line, col } = (i ?? {}) as { name?: unknown; line?: unknown; col?: unknown };
       if (!Array.isArray(parts) || !parts.length || !parts.every((x) => typeof x === "string") || typeof line !== "number" || typeof col !== "number") return null;
       const ps = parts as string[];
-      out.push({ name: ps.map((x) => (x.includes(".") ? `«${x}»` : x)).join("."), parts: ps, line, col });
+      out.push({ name: leanName(ps), parts: ps, line, col });
     }
     byFile.set(name, out);
   }
@@ -164,18 +168,119 @@ const modOfRel = (rel: string) => rel.replace(/\.lean$/, "").split(/[\\/]/).join
 const relOfMod = (mod: string) => mod.split(".").join("/") + ".lean";
 
 /**
- * The modules a Lean file's header imports (the generator writes one plain `import` per line).
- * For proof files the imports Lean's parser reads come from `checkProofFiles`.
+ * A Lean name from its components, in one spelling: `«…»` only around a component that has a
+ * `.` (or a `«`/`»`, or is empty), so that the dotted text still tells the components apart —
+ * `Proofs.«x.y»` (the file `Proofs/x.y.lean`) is not `Proofs.x.y` (`Proofs/x/y.lean`).
+ */
+export function leanName(components: string[]): string {
+  return components.map((c) => (c === "" || /[.«»]/.test(c) ? `«${c}»` : c)).join(".");
+}
+
+/**
+ * A Lean name, written with or without `«…»` escapes, in the spelling of `leanName`: the
+ * generator writes `VTS.m.«gα»` where Lean prints `VTS.m.gα` (it escapes only what its parser
+ * needs), and both are the same name. Names are compared by this key, never by their text.
+ */
+export function leanNameKey(name: string): string {
+  const comps: string[] = [];
+  let i = 0;
+  for (;;) {
+    if (name[i] === "«") {
+      const j = name.indexOf("»", i + 1);
+      if (j < 0) return name;
+      comps.push(name.slice(i + 1, j));
+      i = j + 1;
+    } else {
+      const j = name.indexOf(".", i);
+      const stop = j < 0 ? name.length : j;
+      comps.push(name.slice(i, stop));
+      i = stop;
+    }
+    if (i >= name.length) return leanName(comps);
+    if (name[i] !== ".") return name;
+    i++;
+  }
+}
+
+/** Lean's identifier characters (`Init/Meta/Defs.lean`: `isLetterLike`, `isSubScriptAlnum`, `isIdFirst`, `isIdRest`). */
+const isLetterLike = (c: number) =>
+  (0x3b1 <= c && c <= 0x3c9 && c !== 0x3bb) ||
+  (0x391 <= c && c <= 0x3a9 && c !== 0x3a0 && c !== 0x3a3) ||
+  (0x3ca <= c && c <= 0x3fb) ||
+  (0x1f00 <= c && c <= 0x1ffe) ||
+  (0x2100 <= c && c <= 0x214f) ||
+  (0x1d49c <= c && c <= 0x1d59f) ||
+  (0xc0 <= c && c <= 0xff && c !== 0xd7 && c !== 0xf7) ||
+  (0x100 <= c && c <= 0x17f);
+const isSubScriptAlnum = (c: number) => (0x2080 <= c && c <= 0x2089) || (0x2090 <= c && c <= 0x209c) || (0x1d62 <= c && c <= 0x1d6a) || c === 0x2c7c;
+const isIdFirst = (c: number) => (0x41 <= c && c <= 0x5a) || (0x61 <= c && c <= 0x7a) || c === 0x5f || isLetterLike(c);
+const isIdRest = (c: number) => isIdFirst(c) || (0x30 <= c && c <= 0x39) || c === 0x27 || c === 0x21 || c === 0x3f || isSubScriptAlnum(c);
+
+/**
+ * The modules a Lean file's header imports, read as Lean's parser reads them
+ * (`Parser.parseHeader`, `whitespace`, `identFn`): CRLF is LF; between tokens, spaces, line
+ * breaks and comments — `--` up to the next LF (a CR or U+2028 does not end it), `/- … -/`
+ * nested (`/--` and `/-!` are doc comments: tokens); then `import <name>` as long as they come,
+ * a name's components `«…»` unescaped (`leanName`). A tab, a lone CR or an unterminated comment
+ * ends the reading (Lean rejects the file). For a proof file, `ProofCheck.lean` parses the
+ * header with Lean itself, and `translateAll` rejects a file where the two readings differ —
+ * so for every file Lean builds, this is the list Lean (and lake) use.
  */
 export function headerImports(text: string): string[] {
-  const code = text.replace(/\/-[\s\S]*?-\//g, " ").replace(/--.*$/gm, "");
+  const s = text.replace(/\r\n/g, "\n");
+  let i = 0;
+  const cp = (k: number) => (k < s.length ? s.codePointAt(k)! : -1);
+  const width = (k: number) => (cp(k) > 0xffff ? 2 : 1);
+  /** whitespace and comments; false at a lexical error */
+  const skip = (): boolean => {
+    for (;;) {
+      const c = s[i];
+      if (c === " " || c === "\n") i++;
+      else if (c === "-" && s[i + 1] === "-") {
+        const j = s.indexOf("\n", i);
+        i = j < 0 ? s.length : j;
+      } else if (c === "/" && s[i + 1] === "-" && s[i + 2] !== "-" && s[i + 2] !== "!") {
+        let depth = 1;
+        i += 2;
+        while (depth > 0) {
+          if (i >= s.length) return false;
+          if (s[i] === "-" && s[i + 1] === "/") depth--, (i += 2);
+          else if (s[i] === "/" && s[i + 1] === "-") depth++, (i += 2);
+          else i++;
+        }
+      } else return c !== "\t" && c !== "\r";
+    }
+  };
+  /** an identifier's components (null: no identifier here) */
+  const ident = (): string[] | null => {
+    const comps: string[] = [];
+    for (;;) {
+      if (s[i] === "«") {
+        const j = s.indexOf("»", i + 1);
+        if (j < 0) return null;
+        comps.push(s.slice(i + 1, j));
+        i = j + 1;
+      } else if (isIdFirst(cp(i))) {
+        const st = i;
+        i += width(i);
+        while (isIdRest(cp(i))) i += width(i);
+        comps.push(s.slice(st, i));
+      } else return null;
+      if (s[i] === "." && (s[i + 1] === "«" || isIdFirst(cp(i + 1)))) i++;
+      else return comps;
+    }
+  };
   const out: string[] = [];
-  for (const line of code.split("\n")) {
-    const m = /^\s*import\s+(.*)$/.exec(line);
-    if (m) out.push(...m[1].trim().split(/\s+/).filter(Boolean).map((x) => x.replace(/[«»]/g, "")));
-    else if (line.trim()) break;
+  for (;;) {
+    if (!skip()) return out;
+    const escaped = s[i] === "«";
+    const kw = ident();
+    if (escaped || !kw || kw.length !== 1 || kw[0] !== "import") return out;
+    if (!skip()) return out;
+    const m = ident();
+    if (!m) return out;
+    out.push(leanName(m));
   }
-  return out;
 }
 
 /**
@@ -441,9 +546,11 @@ function declLine(outDir: string, rel: string, decl: string): number {
   if (!decl) return 1;
   const plain = decl.replace(/^_private\.(?:[^.]+\.)*?0\./, "");
   try {
-    const ds = leanDecls(fs.readFileSync(path.join(outDir, rel), "utf8"), rel);
-    const below = ds.filter((x) => x.name !== null && plain.startsWith(x.name + ".")).sort((a, b) => b.name!.length - a.name!.length);
-    const d = ds.find((x) => x.name === plain) ?? below[0];
+    // (by name, not spelling: Lean prints `VTS.m.gα` for the generator's `VTS.m.«gα»`)
+    const key = leanNameKey(plain);
+    const ds = leanDecls(fs.readFileSync(path.join(outDir, rel), "utf8"), rel).map((x) => ({ ...x, key: x.name === null ? null : leanNameKey(x.name) }));
+    const below = ds.filter((x) => x.key !== null && key.startsWith(x.key + ".")).sort((a, b) => b.key!.length - a.key!.length);
+    const d = ds.find((x) => x.key === key) ?? below[0];
     return d?.start ?? 1;
   } catch {
     return 1;

@@ -110,7 +110,10 @@ under `a` (and `vreact synth`'s tests evaluate an ensures' `implies` only where
    proof file counts only when one of these imports it (`import Proofs.<path>`):
    a proof file that no module imports, directly or through other proof files, is
    rejected, since Lean would never check it (names are case-sensitive:
-   `proofs/model.lean` does not go with `src/Model.ts`).
+   `proofs/model.lean` does not go with `src/Model.ts`; imports in comments do not
+   count, as for Lean). The path is the module name (`proofs/a/b.lean` is
+   `Proofs.a.b`), so every directory and file name must be an identifier:
+   `proofs/x.y.lean` and `proofs/my-lemmas.lean` are rejected.
 
    `Defs.lean` holds types, constants and functions, each function followed by
    its `ensures` theorems (so later function bodies, here and in importing
