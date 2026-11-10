@@ -41,7 +41,9 @@ xs.length) console.log(xs[i].name)`). The same holds for the condition of
 evaluates at every call, render or load: there `implies(a, b)` evaluates `b` even
 when `a` is false, so `b`'s obligations get no help from `a` — write `!a || b`
 (`xs.length === 0 || xs[0] > 0`). Only an `ensures` lambda and the expression
-body of a `callbackRequires` lambda never run: there `b` is checked under `a`.
+body of a `callbackRequires` lambda never run in the app: there `b` is checked
+under `a` (and `vreact synth`'s tests evaluate an ensures' `implies` only where
+`a` holds).
 
 ## When the code and spec are right but the proof fails
 

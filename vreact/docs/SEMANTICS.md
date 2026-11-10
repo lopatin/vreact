@@ -621,9 +621,13 @@ nothing in `b`. Guard them with `!a || b` (`xs.length === 0 || xs[0] > 0`,
 `x === null || x.v > 0`) or `a ? b : true`. Only a contract that JS never calls — an
 `ensures` lambda, and the expression body of a `callbackRequires` lambda (vreact/spec's
 `callbackRequires` ignores it) — reads `implies(a, b)` as `∀ (h : a), b`, so that `b`
-may index (and narrow) under `a`. A block body `{ …; return c; }` of a
+may index (and narrow) under `a` (`vreact synth`'s tests, which call an `ensures`
+lambda, evaluate that `implies` as `!a || b`: §5). A block body `{ …; return c; }` of a
 `callbackRequires` lambda is read as code, its obligations holding for every argument.
-(In code, likewise, `implies` evaluates both arguments.)
+(In code, likewise, `implies` evaluates both arguments.) `callbackRequires(cb, p)` is a
+call as well: JS evaluates `cb` at every render (and only creates the lambda `p`), so
+`cb` must be a read that cannot throw, `props.<name>` on the props parameter or a name
+destructured from it (§2.4).
 
 Several `requires` (or `invariant`) statements are one condition
 `c₁ && c₂ && …`: a later one may rely on the earlier ones as guards. (JS evaluates
@@ -807,11 +811,13 @@ The first argument is the callback prop, taken by the binding it holds, as a cal
 of it is, never by its spelling: `props.onPick` on the props parameter, or a name
 destructured from it — with `{ onPick: pick }` the contract
 `callbackRequires(pick, …)` is onPick's, and with `{ onA: onB, onB: onA }`
-`callbackRequires(onA, …)` is props.onB's. Anything else (a module function or
-another object's property spelled like a callback prop, `Math.max` with a prop
-`max`) is rejected. The lambda's parameters are the callback's arguments; its
-body is a contract that JS never calls (§1.3: `implies(a, b)` an implication
-whose consequent may rely on its guard, as in an `ensures`; guards in scope).
+`callbackRequires(onA, …)` is props.onB's. JS evaluates this argument at every render,
+and these reads cannot throw. Anything else (a module function or another object's
+property spelled like a callback prop, `Math.max` with a prop `max`,
+`(c ? props : null)!.onPick`, `xs[i].onPick`) is rejected. The lambda's parameters are
+the callback's arguments; its body is a contract that JS never calls (§1.3:
+`implies(a, b)` an implication whose consequent may rely on its guard, as in an
+`ensures`; guards in scope).
 
 * **Guarantee (child):** every call `props.onPick(e)` (or `pick(e)`, and every
   forward of the callback to a child) must prove the contract.
@@ -1580,3 +1586,9 @@ random inputs come from a seeded generator, one per hole (its seed made from the
 run's seed, `--seed N`, default 1, the function's name and the hole's position), so
 a run tests the same inputs whatever order the holes are searched in, and two runs
 say the same up to the 60 s time limits; the seed, too, only steers the search.
+The tests run the function's own `requires` and `ensures` as JS does (a throw in an
+`ensures` fails the candidate), except that an `implies(a, b)` an `ensures` lambda
+reads as a proposition (its body, under `!`, `&&`, `||`, `?:`, `implies` and in
+quantifier bodies) is evaluated as `!a || b`: `b` only where `a` holds, as the
+prover reads it there (§1.3); vreact/spec's `implies` would evaluate `b` also where
+`a` fails (`xs[0].v` of `[]` throws) and fail every candidate.

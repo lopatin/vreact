@@ -14,7 +14,9 @@
  *      deletion), with `m.get(k)`, `m.has(k)`, `.size`.
  *   3. Test each candidate by *running the real transpiled JavaScript* on random
  *      inputs: the function's own `requires` filters inputs, its own `ensures`
- *      must hold on the result (counterexample-driven pruning). Inputs that reach
+ *      must hold on the result (counterexample-driven pruning; an `implies(a, b)`
+ *      in an `ensures` evaluates `b` only where `a` holds, as the prover reads
+ *      it: `lazyImplies`). Inputs that reach
  *      another, still unfilled hole are skipped. The inputs come from a seeded
  *      generator (`--seed N`, default 1; one per hole), so a run is reproducible
  *      up to the time limits.
@@ -97,6 +99,54 @@ const SPEC_RE = /^vreact\/spec$/;
 function applyEdits(src: string, edits: Edit[]): string {
   let out = src;
   for (const e of [...edits].sort((a, b) => b.at[0] - a.at[0])) out = out.slice(0, e.at[0]) + e.text + out.slice(e.at[1]);
+  return out;
+}
+
+/**
+ * Edits that make the tests read an own `ensures` lambda as the prover does. JS never calls that
+ * lambda (only the tests do), and the translator reads `implies(a, b)` in it as `∀ (h : a), b`
+ * (`Env.ghost`): `b` and its obligations only where `a` holds. vreact/spec's `implies` is a
+ * function, which would evaluate `b` also where `a` fails, so that a `b` throwing there (an index
+ * into an array of records, a `!`, `idiv`) would fail every candidate. Each such call becomes
+ * `(!(a) || (b))`, in the positions that `prop` reads as a proposition (the lambda's body, `!`,
+ * `&&`, `||`, `?:`, implies' arguments, the bodies of `forall`/`exists`/`every`/`some`); an
+ * `implies` anywhere else (a `filter` callback, an operand of `===`) is code, where the prover
+ * also evaluates both arguments, and stays a call.
+ */
+function lazyImplies(body: ts.Expression, sf: ts.SourceFile, specOf: (callee: ts.Expression) => string | null): Edit[] {
+  const K = ts.SyntaxKind;
+  const out: Edit[] = [];
+  const fnBody = (f: ts.Expression | undefined) => (f && (ts.isArrowFunction(f) || ts.isFunctionExpression(f)) && !ts.isBlock(f.body) ? (f.body as ts.Expression) : null);
+  const visit = (e0: ts.Expression): void => {
+    let e = e0;
+    while (ts.isParenthesizedExpression(e)) e = e.expression;
+    if (ts.isPrefixUnaryExpression(e) && e.operator === K.ExclamationToken) return visit(e.operand);
+    if (ts.isBinaryExpression(e) && (e.operatorToken.kind === K.AmpersandAmpersandToken || e.operatorToken.kind === K.BarBarToken)) {
+      visit(e.left);
+      return visit(e.right);
+    }
+    if (ts.isConditionalExpression(e)) {
+      visit(e.condition);
+      visit(e.whenTrue);
+      return visit(e.whenFalse);
+    }
+    if (!ts.isCallExpression(e)) return;
+    const k = specOf(e.expression);
+    const args = e.arguments;
+    if (k === "implies" && args.length === 2) {
+      const [a, b] = args;
+      out.push({ at: [e.getStart(sf), a.getStart(sf)], text: "(!(" });
+      out.push({ at: [a.getEnd(), b.getStart(sf)], text: ") || (" });
+      out.push({ at: [b.getEnd(), e.getEnd()], text: "))" });
+      visit(a);
+      return visit(b);
+    }
+    const q = (k === "forall" || k === "exists") && args.length === 3 ? fnBody(args[2])
+      : !k && ts.isPropertyAccessExpression(e.expression) && ["every", "some"].includes(e.expression.name.text) && args.length === 1 ? fnBody(args[0])
+      : null;
+    if (q) visit(q);
+  };
+  visit(body);
   return out;
 }
 
@@ -1717,6 +1767,10 @@ export async function synthCommand(root: string, files: string[], opts: { write?
       const k = specFn(env, callee);
       if (k === "ensures") {
         ownContract.push({ at: [callee.getStart(sf), callee.getEnd()], text: OWN_ENSURES });
+        // (`implies` in the lambda: `b` only where `a` holds, as the prover reads it)
+        const post = st.expression.arguments[0];
+        const pb = post && (ts.isArrowFunction(post) || ts.isFunctionExpression(post)) && !ts.isBlock(post.body) ? (post.body as ts.Expression) : null;
+        if (pb) ownContract.push(...lazyImplies(pb, sf, (c) => specFn(env, c)));
         task.ensures++;
       } else if (k === "requires") ownContract.push({ at: [callee.getStart(sf), callee.getEnd()], text: OWN_REQUIRES });
       else if (k !== "decreases") break;

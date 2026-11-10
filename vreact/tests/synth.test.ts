@@ -362,6 +362,19 @@ const cases: Record<string, () => Promise<void>> = {
     check("Mx-ids: allNamed (string id in an array)", solutions(by("allNamed"))[0] === "true", String(solutions(by("allNamed"))[0]));
     check("Mx-ids: nValues", solutions(by("nValues"))[0] === "m.size", String(solutions(by("nValues"))[0]));
   },
+  // an own ensures is tested as the prover reads it: implies(a, b) evaluates b only where a holds
+  // (before: vreact/spec's implies evaluated b also where a fails, `xs[0].v` of [] threw, and
+  // every candidate failed the tests), also nested, under &&, ||, !, ?: and in quantifier bodies
+  async FaImpliesSynthEnsures() {
+    const dir = project("FaImpliesSynthEnsures");
+    const { by, writes } = await synth(dir, "src/m.ts", { maxSize: 5 });
+    for (const fn of ["plus1", "plus2", "plus3", "minus1", "minus2"]) {
+      const r = by(fn)[0];
+      check(`FaImpliesSynthEnsures: ${fn} proved`, !!r?.proved && r.status === "proved", `${r?.status}: ${r?.solution ?? "(none)"}`);
+    }
+    check("FaImpliesSynthEnsures: plus1 is n + 1", solutions(by("plus1"))[0] === "n + 1", String(solutions(by("plus1"))[0]));
+    check("FaImpliesSynthEnsures: nothing written", writes.length === 0);
+  },
 };
 
 for (const [name, run] of Object.entries(cases)) {
