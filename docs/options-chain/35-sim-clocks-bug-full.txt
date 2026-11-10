@@ -1347,4 +1347,4 @@ Failed obligations
     │       [thm] JS.emod_lt_of_pos ↦ 2
     │       [thm] JS.emod_nonneg_of_ne ↦ 2
 
-✗ NOT VERIFIED  149/150 obligations proved, 1 failed; components: 6/6 verified  (35.6s)
+✗ NOT VERIFIED  149/150 obligations proved, 1 failed; components: 6/6 verified  (30.7s)

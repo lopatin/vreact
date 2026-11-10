@@ -77,22 +77,21 @@ Failed obligations
 ✗ src/App.tsx:129:3  [effect-robust] timer callbacks of the effect preserve the invariant of App from any state
     │ `grind` failed
     │ case grind.2.1.1.2
-    │ E : Type
-    │ props : Props
-    │ κ : Cb props E
-    │ σ : State
-    │ hpre : True
-    │ feed : Feed := σ.feed
-    │ paused : Bool := σ.paused
-    │ rally : Bool := σ.rally
+    │   … (8 earlier hypotheses: E, props, κ, σ, hpre, feed, paused, rally: --full shows them)
     │ offset : Int := feed.offset
     │ expiries : List model.Expiry := moveFutures EXPIRIES offset
     │ t : DomEvent → Outcome State E
     │ e : DomEvent
     │ hinv : ((-40 ≤ σ.feed.offset ∧ σ.feed.offset ≤ 40) ∧ 0 ≤ σ.feed.seed) ∧ σ.feed.seed < 65537
-    │ h :
-    │   t = fun x =>
-    │     if σ.rally = true then
-    │   …
+    │ h : …  (a long hypothesis, 10 lines: --full shows it)
+    │ s : State
+    │ left : -1 * s.feed.offset + -40 ≤ 0
+    │ left_1 : s.feed.offset + -40 ≤ 0
+    │ left_2 : -1 * s.feed.seed ≤ 0
+    │ right_2 : s.feed.seed + -65536 ≤ 0
+    │ h_4 : -1 * (List.foldl (fun s u => u s) s (t e).updates).feed.offset + 41 ≤ 0
+    │ h_5 : σ.rally = true
+    │ h_6 : ¬-1 * σ.feed.offset + 40 ≤ 0
+    │ ⊢ False
 
-✗ NOT VERIFIED  144/145 obligations proved, 1 failed; components: 5/6 verified  (32.9s)
+✗ NOT VERIFIED  144/145 obligations proved, 1 failed; components: 5/6 verified  (26.2s)

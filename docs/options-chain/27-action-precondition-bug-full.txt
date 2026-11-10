@@ -573,4 +573,4 @@ Failed obligations
 1 obligation(s) not checked:
   src/OptionsChain.tsx:150:11 [callback]: it depends on `sorry` from a failure elsewhere (a failed obligation, a declaration with an error, or a hole()) that its goal or its proof contains, so Lean could not check it on its own: fix that first
 
-✗ NOT VERIFIED  140/142 obligations proved, 1 failed, 1 unchecked; components: 4/6 verified  (25.3s)
+✗ NOT VERIFIED  140/142 obligations proved, 1 failed, 1 unchecked; components: 4/6 verified  (27.4s)

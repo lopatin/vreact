@@ -88,7 +88,7 @@ Obligations by file
   ✓ src/App.tsx                              20/20
 
 Failed obligations
-✗ src/model.ts:154:11  [postcondition] postcondition of shownRows: ks.slice(span.lo, span.hi).every((s) => r.some((x) => x.strike === s.…
+✗ src/model.ts:154:11  [postcondition] postcondition of shownRows: ks.slice(span.lo, span.hi).every((s) => r.some((x) => x.strike === s.strike))
     │ `grind` failed
     │ case grind
     │ ks : List Strike
@@ -102,7 +102,7 @@ Failed obligations
     │     a_1 ∈ JS.slice ks span.lo (some span.hi) →
     │       a_1.strike = a.strike → a ∈ ks → a.strike ∈ watch.elems → ¬a.strike = s.strike
     │ ⊢ False
-✗ src/model.ts:155:11  [postcondition] postcondition of shownRows: ks.every((s) => !watch.has(s.strike) || r.some((x) => x.strike === s.…
+✗ src/model.ts:155:11  [postcondition] postcondition of shownRows: ks.every((s) => !watch.has(s.strike) || r.some((x) => x.strike === s.strike))
     │ `grind` failed
     │ case grind
     │ ks : List Strike
@@ -111,17 +111,13 @@ Failed obligations
     │ s : Strike
     │ h : s ∈ ks
     │ hcontract : watch.elems.Nodup
-    │ hcontract_1 :
-    │   ∀ (s : Strike),
-    │     s ∈ JS.slice ks span.lo (some span.hi) →
-    │       ∃ x,
-    │         (x ∈ ks ∧ (∃ a, a ∈ JS.slice ks span.lo (some span.hi) ∧ a.strike = x.strike) ∧ x.strike ∈ watch.elems) ∧
-    │           x.strike = s.strike
+    │ hcontract_1 : …  (a contract instance, 6 lines: --full shows it)
     │ left : s.strike ∈ watch.elems
     │ right :
     │   ∀ (a a_1 : Strike),
     │     a_1 ∈ JS.slice ks span.lo (some span.hi) →
-    │   …
+    │       a_1.strike = a.strike → a ∈ ks → a.strike ∈ watch.elems → ¬a.strike = s.strike
+    │ ⊢ False
 ✗ src/reducer.ts:136:11  [postcondition] postcondition of setFilter: sameView(u, { ...r, filter: u.filter })
     │ `grind` failed
     │ case grind
@@ -133,4 +129,4 @@ Failed obligations
     │ h : x ∈ u.watch.elems
     │ ⊢ False
 
-✗ NOT VERIFIED  192/195 obligations proved, 3 failed; components: 6/6 verified  (39.7s)
+✗ NOT VERIFIED  192/195 obligations proved, 3 failed; components: 6/6 verified  (44.9s)

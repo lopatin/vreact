@@ -64,24 +64,23 @@ Failed obligations
 ✗ src/StrikeRow.tsx:55:110  [callback-contract] callback contract of onPick("put", "ask", x)
     │ `grind` failed
     │ case grind.1.1.1.1.1.1
-    │ E : Type
-    │ props : Props
-    │ κ : Cb props E
-    │ σ : State
-    │ hpre_1 : props.heat ≥ 1
-    │ hinv : True
-    │ s : model.Strike := props.strike
-    │ t : Int := props.heat
-    │ p : Option Int := props.price
-    │ callItm : Bool :=
-    │   match h₂ : p with
-    │   | some p_1 => model.inTheMoney model.Right.call s.strike p_1
-    │   | none => false
-    │ putItm : Bool :=
-    │   match h₂ : p with
-    │   | some p_1 => model.inTheMoney model.Right.put s.strike p_1
-    │   …
+    │   … (9 earlier hypotheses: E, props, κ, σ, hpre_1, hinv, s, t, …: --full shows them)
+    │ callItm, putItm := …  (2 definitions, 8 lines: --full shows them)
+    │ cq : JS.Str := if h₇ : callItm = true then JS.Str.ofString "qty itm" else JS.Str.ofString "qty"
+    │ pq : JS.Str := if h₈ : putItm = true then JS.Str.ofString "qty itm" else JS.Str.ofString "qty"
+    │ x : Int
+    │ hpre : props.heat ≥ 1
+    │ hcb₁₂ : props.strike.put.bid = some x
+    │ hcontract, hcontract_1, hcontract_2, hcontract_3, hcontract_4 : …  (5 contract instances, 77 lines: --full shows them)
+    │ h : ¬model.Right.put = model.Right.call
+    │ h_1 : ¬props.strike.put.ask = some x
+    │ h_2, h_3, h_5, h_6 : …  (4 long hypotheses, 81 lines: --full shows them)
+    │ ask : Int
+    │ h_4 : props.strike.put.bid = some ask
+    │ r_1 : Int
+    │ h₈ h_7 : props.strike.put.bid = some r_1
+    │ ⊢ False
 
 trusted (not verified, contracts assumed): TermRow, OrderTicket
 
-✗ NOT VERIFIED  97/98 obligations proved, 1 failed; components: 1/6 verified  (22.4s)
+✗ NOT VERIFIED  97/98 obligations proved, 1 failed; components: 1/6 verified  (24.5s)

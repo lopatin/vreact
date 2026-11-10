@@ -94,4 +94,4 @@ Failed obligations
     │ h_5 : ¬s.feed.seed + -872 ≤ 0
     │ ⊢ False
 
-✗ NOT VERIFIED  147/148 obligations proved, 1 failed; components: 6/6 verified  (26.2s)
+✗ NOT VERIFIED  147/148 obligations proved, 1 failed; components: 6/6 verified  (27.1s)

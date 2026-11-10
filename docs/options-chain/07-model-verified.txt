@@ -25,4 +25,4 @@ Functions
 Obligations by file
   ✓ src/model.ts                             22/22
 
-✔ VERIFIED  22/22 obligations proved; components: 0/0 verified  (8.5s)
+✔ VERIFIED  22/22 obligations proved; components: 0/0 verified  (5.9s)

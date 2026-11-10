@@ -89,22 +89,21 @@ Failed obligations
 ✗ src/OptionsChain.tsx:141:21  [unique-keys] keys s.strike are distinct across rows
     │ `grind` failed
     │ case grind.1.1.1.1.1
-    │ E : Type
-    │ props : Props
-    │ κ : Cb props E
-    │ σ : State
-    │ ui : reducer.ChainUi := σ.ui
-    │ ticket : Option model.Ticket := σ.ticket
-    │ levels : Option Int := model.levelsOf ui.filter
-    │ tExp : Option model.Expiry :=
-    │   match h₂ : ticket with
-    │   | some ticket_1 => collections.byId (fun x₃ => x₃.id) props.expiries ticket_1.expiry
-    │   | none => none
-    │ allOpen : Bool := props.expiries.all fun e => !ui.collapsed.has e.id
-    │ ids : List Int := List.map (fun e => e.id) props.expiries
-    │ e : model.Expiry
-    │ hmem₁₈ : e ∈ props.expiries
-    │ live : Option Int := model.midPrice e.future
-    │   …
+    │   … (29 earlier hypotheses: E, props, κ, σ, ui, ticket, levels, allOpen, …: --full shows them)
+    │ tExp, center, atm, span, rows, liveAtm := …  (6 definitions, 24 lines: --full shows them)
+    │ hpre, hinv, left, h_5, h₁₂_1, h_7 : …  (6 long hypotheses, 184 lines: --full shows them)
+    │ held_1 : Int
+    │ h₁₂ h_6 : σ.ui.held.get e.id = some held_1
+    │ held_2 : Int
+    │ ticket_1 : model.Ticket
+    │ h_8 : σ.ticket = some ticket_1
+    │ w_2 : Int
+    │ h_9 : (e.id, w_2) ∈ σ.ui.held.entries
+    │ w_3 : Int
+    │ h_10 : (w_3, held_1) ∈ σ.ui.held.entries
+    │ h_11 : (fun s => model.nearest e.strikes s held_2) = fun s => model.nearest e.strikes s held_1
+    │ w_4 : Int
+    │ h_12 : (w_3, w_4) ∈ σ.ui.held.entries
+    │ ⊢ False
 
-✗ NOT VERIFIED  182/183 obligations proved, 1 failed; components: 4/6 verified  (65.8s)
+✗ NOT VERIFIED  182/183 obligations proved, 1 failed; components: 4/6 verified  (75.3s)

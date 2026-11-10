@@ -84,13 +84,10 @@ Failed obligations
 ✗ src/reducer.ts:188:11  [postcondition] postcondition of place: implies(wellFormed(u), wellFormed(r))
     │ `grind` failed
     │ case grind.1
-    │ u : ChainUi
-    │ t : model.Ticket
+    │   … (2 earlier hypotheses: u, t: --full shows them)
     │ qty price : Int
     │ h_pre : 1 ≤ qty ∧ qty ≤ 500
-    │ h₂₇ :
-    │   ((1 ≤ u.heat ∧ u.heat ≤ 5) ∧ ∀ (x : model.Order), x ∈ u.orders.values → (1 ≤ x.qty ∧ x.qty ≤ 500) ∧ 0 < x.price) ∧
-    │     model.openQty u.orders.values ≤ 1000
+    │ h₂₇ : …  (a long hypothesis, 3 lines: --full shows it)
     │ h : ((1 ≤ qty ∧ qty ≤ 500) ∧ 0 < price) ∧ model.openQty u.orders.values + qty ≤ 1000
     │ h_1 :
     │   -1 *
@@ -99,9 +96,11 @@ Failed obligations
     │               { expiry := t.expiry, leg := t.leg, strike := t.strike, buy := JS.eq t.side model.Side.ask, qty := qty,
     │                 price := price }).values +
     │       1001 ≤
-    │   …
+    │     0
+    │ left : JS.eq t.side model.Side.ask = true
+    │ right : t.side = model.Side.ask
     │ ⊢ False
-✗ src/reducer.ts:192:11  [postcondition] postcondition of place: r.orders.size === (accepts(u, qty, price) ? u.orders.size + 1 : u.ord…
+✗ src/reducer.ts:192:11  [postcondition] postcondition of place: r.orders.size === (accepts(u, qty, price) ? u.orders.size + 1 : u.orders.size)
     │ `grind` failed
     │ case grind
     │ u : ChainUi
@@ -121,22 +120,21 @@ Failed obligations
 ✗ src/reducer.ts:193:11  [postcondition] postcondition of place: keepsOrders(u, r) && keepsAllHolds(u, r) && sameView(u, r)
     │ `grind` failed
     │ case grind.1.1.1.2.1.1.2.1.2.1.1.1.1.1.1.2.1.1
-    │ u : ChainUi
-    │ t : model.Ticket
-    │ qty price : Int
-    │ h_pre : 1 ≤ qty ∧ qty ≤ 500
-    │ h : ((1 ≤ qty ∧ qty ≤ 500) ∧ 0 < price) ∧ model.openQty u.orders.values + qty ≤ 1000
-    │ hcontract : (List.map Prod.fst u.orders.entries).Nodup
-    │ hcontract_1 : (List.map Prod.fst u.held.entries).Nodup
-    │ hcontract_2 : u.collapsed.elems.Nodup
-    │ fst : Int
-    │ snd : model.Order
-    │ h_1 : (fst, snd) ∈ u.orders.entries
-    │ h_2 :
-    │   (match h₁ :
-    │       (u.orders.set (u.orders.size + 1)
-    │             { expiry := t.expiry, leg := t.leg, strike := t.strike, buy := JS.eq t.side model.Side.ask, qty := qty,
-    │   …
+    │   … (56 earlier hypotheses: u, t, qty, price, h_pre, h, hcontract, hcontract_1, …: --full shows them)
+    │ h_2, h₁, h_3, h_6, left_1, left_2, left_3, right_3, h_12, h_14, h_15, h_16, h_22, snd_eq, h_26, snd_eq_1, h_28, h_32, h_34, h_39, h_41, h_44 : …  (22 long hypotheses, 114 lines: --full shows them)
+    │ w_20 : model.Order
+    │ h_36 : (w_5, w_20) ∈ (u.orders.delete (u.orders.size + 1)).entries
+    │ h_37 : p_1.buy = snd.buy
+    │ w_21 : model.Order
+    │ h_38 : (w_18, w_21) ∈ u.orders.entries
+    │ w_22 : model.Order
+    │ w_23 : model.Order
+    │ h_40 : (w_19, w_23) ∈ u.orders.entries
+    │ w_24 : model.Order
+    │ h_42 : qty = snd.qty
+    │ left_5 : (w_9, w_17) ∈ u.orders.entries
+    │ right_5 : ¬w_9 + -1 * u.orders.size + -1 = 0
+    │ h_45 : w_5 = w_9
     │ ⊢ False
 ✗ src/reducer.ts:206:11  [postcondition] postcondition of cancel: implies(wellFormed(u), wellFormed(r))
     │ `grind` failed
@@ -149,4 +147,4 @@ Failed obligations
     │ h : -1 * model.openQty (u.orders.delete id').values + 1001 ≤ 0
     │ ⊢ False
 
-✗ NOT VERIFIED  146/150 obligations proved, 4 failed; components: 4/6 verified  (49.6s)
+✗ NOT VERIFIED  146/150 obligations proved, 4 failed; components: 4/6 verified  (49.7s)

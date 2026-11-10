@@ -1,25 +1,25 @@
 hole 1/2 in quotePrice: int | null   scope: q, q.bid, q.bidQty, q.ask, q.askQty, side
-  candidate passes 188 random tests: q.bid   (1 candidate(s) tested in 0.0s)
+  candidate passes 208 random tests: q.bid   (1 candidate(s) tested in 0.0s)
   … proof pending the other hole(s) of quotePrice: searching hole 2 with this fill
 hole 2/2 in quotePrice: int | null   scope: q, q.bid, q.bidQty, q.ask, q.askQty, side
-  candidate passes 196 random tests: q.ask   (2 candidate(s) tested in 0.0s)
+  candidate passes 206 random tests: q.ask   (2 candidate(s) tested in 0.0s)
   ✔ proved by Lean: quotePrice with q.bid / q.ask
 hole in midPrice: int | null   scope: q, q.bid, q.bidQty, q.ask, q.askQty
   candidate passes 400 random tests: q.bid   (1 candidate(s) tested in 0.0s)
   ✔ proved by Lean: q.bid
 hole in atmIndex: int   scope: ks, price
-  14785 candidates tested in 60.0s, up to size 7; stopped: the 60s time limit was reached at size 7
+  23461 candidates tested in 60.0s, up to size 8; stopped: the 60s time limit was reached at size 8
   no verified solution for hole in atmIndex: no candidate passed the tests
-  most common failure (14785×): price: postcondition fails on [[{"strike":1,"call":{"bid":10,"bidQty":1,"ask":null,"askQty":-1},"put":{"bid":10,"bidQty":1,"ask":7,"askQty":0},"callTheo":-1,"putTheo":4,"vol":-10}],-1] ↦ -1
+  most common failure (23461×): price: postcondition fails on [[{"strike":2,"call":{"bid":-10,"bidQty":1,"ask":null,"askQty":2},"put":{"bid":2,"bidQty":7,"ask":-5,"askQty":-5},"callTheo":7,"putTheo":4,"vol":10}],10] ↦ 10
   write this one by hand (synth builds straight-line expressions; guarded updates need an `if`), or check that the spec is satisfiable
 hole in strikeWindow: Span   scope: n, atm, levels
-  2794 candidates tested in 88.8s, up to size 7; stopped: the 60s time limit was reached at size 7
+  5184 candidates tested in 13.0s, up to size 9; stopped: all candidates up to size 9 were tried (sub-expression lists were capped at 3000 per type and size, so some larger candidates were never built)
   no verified solution for hole in strikeWindow: no candidate passed the tests
-  most common failure (2794×): { lo: n, hi: n }: postcondition fails on [2,1,4] ↦ {"lo":2,"hi":2}
+  most common failure (5184×): { lo: n, hi: n }: postcondition fails on [7,5,1] ↦ {"lo":7,"hi":7}
   write this one by hand (synth builds straight-line expressions; guarded updates need an `if`), or check that the spec is satisfiable
 hole in heatOf: Heat   scope: side, price, theo, t
   4 candidates tested in 0.0s, up to size 9; stopped: all candidates up to size 9 were tried
   no verified solution for hole in heatOf: no candidate passed the tests
-  most common failure (4×): "none": postcondition fails on ["bid",-1,-1,10] ↦ "none"
+  most common failure (4×): "none": postcondition fails on ["bid",0,-2,10] ↦ "none"
   write this one by hand (synth builds straight-line expressions; guarded updates need an `if`), or check that the spec is satisfiable
 (src/model.ts not modified: rerun with --write to keep the proved fill(s))

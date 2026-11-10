@@ -89,4 +89,4 @@ Failed obligations
     │ ⊢ s.feed.offset - ((s.feed.seed * 75 + 74) % ↑(Int.natAbs 65537) % ↑(Int.natAbs 5) - 2) = s.feed.offset ∧
     │     (s.feed.seed * 75 + 74) % ↑(Int.natAbs 65537) = s.feed.seed
 
-✗ NOT VERIFIED  147/148 obligations proved, 1 failed; components: 6/6 verified  (74.2s)
+✗ NOT VERIFIED  147/148 obligations proved, 1 failed; components: 6/6 verified  (82.6s)

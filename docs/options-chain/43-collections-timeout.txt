@@ -87,23 +87,22 @@ Obligations by file
 Failed obligations
 ✗ src/OptionsChain.tsx:151:11  [callback] OrderTicket.onSubmit handler (passed from OptionsChain) preserves the invariant of OptionsChain, assuming OrderTicket's callback contract
     │ (deterministic) timeout: the automation did not finish within this obligation's budget of 1000000 heartbeats (set "heartbeats" in vreact.json to change it)
-    │ E : Type
-    │ props : Props
-    │ κ : Cb props E
-    │ σ : State
-    │ hpre : pre props
-    │ hinv : inv props σ
+    │   … (6 earlier hypotheses: E, props, κ, σ, hpre, hinv: --full shows them)
     │ ui : reducer.ChainUi := σ.ui
     │ ticket : Option model.Ticket := σ.ticket
     │ levels : Option Int := model.levelsOf ui.filter
-    │ tExp : Option model.Expiry :=
-    │   match h₂ : ticket with
-    │   | some ticket_1 => collections.byId (fun x₃ => x₃.id) props.expiries ticket_1.expiry
-    │   | none => none
-    │   …
+    │ tExp := …  (a definition, 4 lines: --full shows it)
+    │ allOpen : Bool := props.expiries.all fun e => !ui.collapsed.has e.id
+    │ ids : List Int := List.map (fun e => e.id) props.expiries
+    │ ticket_1 : model.Ticket
+    │ h₃₄ : ticket = some ticket_1
+    │ tExp_1 : model.Expiry
+    │ h₃₅ : tExp = some tExp_1
+    │ qty price : Int
+    │ hcb₃₆ : (model.validQty qty && JS.lt 0 price) = true
     │ ⊢ inv props
     │     ({
     │           updates :=
     │   …
 
-✗ NOT VERIFIED  170/171 obligations proved, 1 failed; components: 4/6 verified  (101.5s)
+✗ NOT VERIFIED  170/171 obligations proved, 1 failed; components: 4/6 verified  (113.5s)

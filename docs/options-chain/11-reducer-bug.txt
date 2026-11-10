@@ -49,9 +49,7 @@ Failed obligations
     │ u : ChainUi
     │ t : model.Ticket
     │ qty price : Int
-    │ h₁₅ :
-    │   ((1 ≤ u.heat ∧ u.heat ≤ 5) ∧ (List.map (fun o => o.id) u.orders).Nodup) ∧
-    │     ∀ (x : model.Order), x ∈ u.orders → ((1 ≤ x.qty ∧ x.qty ≤ 500) ∧ 0 < x.price) ∧ x.id < u.nextId
+    │ h₁₅ : …  (a long hypothesis, 3 lines: --full shows it)
     │ h : 1 ≤ qty ∧ qty ≤ 500
     │ h_1 : ¬price ≤ 0
     │ x : model.Order
@@ -62,6 +60,7 @@ Failed obligations
     │         qty := qty, price := price }
     │ h_6 : -1 * x.id + u.nextId ≤ 0
     │ left : JS.eq t.side model.Side.ask = false
-    │   …
+    │ right : ¬t.side = model.Side.ask
+    │ ⊢ False
 
-✗ NOT VERIFIED  43/44 obligations proved, 1 failed; components: 0/0 verified  (12.0s)
+✗ NOT VERIFIED  43/44 obligations proved, 1 failed; components: 0/0 verified  (10.3s)

@@ -70,4 +70,4 @@ Obligations by file
   ✓ src/OptionsChain.tsx                     37/37
   ✓ src/App.tsx                              12/12
 
-✔ VERIFIED  142/142 obligations proved; components: 6/6 verified  (25.2s)
+✔ VERIFIED  142/142 obligations proved; components: 6/6 verified  (26.8s)

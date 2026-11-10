@@ -40,4 +40,4 @@ Obligations by file
   ✓ src/model.ts                             22/22
   ✓ src/reducer.ts                           22/22
 
-✔ VERIFIED  44/44 obligations proved; components: 0/0 verified  (9.0s)
+✔ VERIFIED  44/44 obligations proved; components: 0/0 verified  (8.6s)

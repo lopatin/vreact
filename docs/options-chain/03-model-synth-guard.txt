@@ -1,8 +1,8 @@
 hole 1/2 in quotePrice: int | null   scope: q, q.bid, q.bidQty, q.ask, q.askQty, side
-  candidate passes 175 random tests: q.bid   (1 candidate(s) tested in 0.0s)
+  candidate passes 208 random tests: q.bid   (1 candidate(s) tested in 0.0s)
   … proof pending the other hole(s) of quotePrice: searching hole 2 with this fill
 hole 2/2 in quotePrice: int | null   scope: q, q.bid, q.bidQty, q.ask, q.askQty, side
-  candidate passes 205 random tests: q.ask   (2 candidate(s) tested in 0.0s)
+  candidate passes 206 random tests: q.ask   (2 candidate(s) tested in 0.0s)
   ✔ proved by Lean: quotePrice with q.bid / q.ask
 hole in midPrice: int | null   scope: q, q.bid, q.bidQty, q.ask, q.askQty
   candidate passes 400 random tests: q.bid   (1 candidate(s) tested in 0.0s)
@@ -11,13 +11,13 @@ hole in atmIndex: int   scope: ks, price
   candidate passes 400 random tests: 0 - 1   (7 candidate(s) tested in 0.0s)
   ✔ proved by Lean: 0 - 1
 hole in strikeWindow: Span   scope: n, atm, levels
-  5929 candidates tested in 17.0s, up to size 9; stopped: all candidates up to size 9 were tried (sub-expression lists were capped at 3000 per type and size, so some larger candidates were never built)
+  5929 candidates tested in 15.6s, up to size 9; stopped: all candidates up to size 9 were tried (sub-expression lists were capped at 3000 per type and size, so some larger candidates were never built)
   no verified solution for hole in strikeWindow: no candidate passed the tests
-  most common failure (5929×): { lo: n, hi: n }: postcondition fails on [10,4,0] ↦ {"lo":10,"hi":10}
+  most common failure (5929×): { lo: n, hi: n }: postcondition fails on [7,5,1] ↦ {"lo":7,"hi":7}
   write this one by hand (synth builds straight-line expressions; guarded updates need an `if`), or check that the spec is satisfiable
 hole in heatOf: Heat   scope: side, price, theo, t
   4 candidates tested in 0.0s, up to size 9; stopped: all candidates up to size 9 were tried
   no verified solution for hole in heatOf: no candidate passed the tests
-  most common failure (4×): "none": postcondition fails on ["bid",0,2,4] ↦ "none"
+  most common failure (4×): "none": postcondition fails on ["bid",0,-2,10] ↦ "none"
   write this one by hand (synth builds straight-line expressions; guarded updates need an `if`), or check that the spec is satisfiable
 (src/model.ts not modified: rerun with --write to keep the proved fill(s))

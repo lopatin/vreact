@@ -77,13 +77,10 @@ Failed obligations
     │ price : Int := σ.price
     │ buy : Bool := JS.eq props.ticket.side model.Side.ask
     │ m : Option model.Quote := props.market
-    │ marketable : Bool :=
-    │   match h₁ : m with
-    │   | some m_1 => model.crosses buy price m_1
-    │   | none => false
+    │ marketable := …  (a definition, 4 lines: --full shows it)
     │ e : DomEvent
     │ hinv : (1 ≤ σ.qty ∧ σ.qty ≤ 500) ∧ σ.price > 0
-    │   …
+    │ h : σ.price + -1 ≤ 0
     │ ⊢ False
 
-✗ NOT VERIFIED  121/122 obligations proved, 1 failed; components: 3/6 verified  (19.7s)
+✗ NOT VERIFIED  121/122 obligations proved, 1 failed; components: 3/6 verified  (22.0s)

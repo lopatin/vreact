@@ -314,4 +314,4 @@ Failed obligations
     │       [thm] JS.JSMap.keys_nodup ↦ 1
     │       [thm] JS.JSMap.nodup_entries_fst ↦ 1
 
-✗ NOT VERIFIED  149/150 obligations proved, 1 failed; components: 4/6 verified  (34.0s)
+✗ NOT VERIFIED  149/150 obligations proved, 1 failed; components: 4/6 verified  (34.8s)

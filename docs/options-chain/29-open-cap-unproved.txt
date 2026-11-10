@@ -90,14 +90,10 @@ Failed obligations
 ✗ src/reducer.ts:181:11  [postcondition] postcondition of place: implies(wellFormed(u), wellFormed(r))
     │ `grind` failed
     │ case grind.1
-    │ u : ChainUi
-    │ t : model.Ticket
+    │   … (2 earlier hypotheses: u, t: --full shows them)
     │ qty price : Int
     │ h_pre : 1 ≤ qty ∧ qty ≤ 500
-    │ h₁₄ :
-    │   (((1 ≤ u.heat ∧ u.heat ≤ 5) ∧ (List.map (fun o => o.id) u.orders).Nodup) ∧
-    │       ∀ (x : model.Order), x ∈ u.orders → ((1 ≤ x.qty ∧ x.qty ≤ 500) ∧ 0 < x.price) ∧ x.id < u.nextId) ∧
-    │     model.openQty u.orders ≤ 1000
+    │ h₁₄ : …  (a long hypothesis, 4 lines: --full shows it)
     │ h : ((1 ≤ qty ∧ qty ≤ 500) ∧ 0 < price) ∧ model.openQty u.orders + qty ≤ 1000
     │ h_1 :
     │   -1 *
@@ -106,7 +102,10 @@ Failed obligations
     │             [{ id := u.nextId, expiry := t.expiry, leg := t.leg, strike := t.strike, buy := JS.eq t.side model.Side.ask,
     │                 qty := qty, price := price }]) +
     │       1001 ≤
-    │   …
+    │     0
+    │ left : JS.eq t.side model.Side.ask = true
+    │ right : t.side = model.Side.ask
+    │ ⊢ False
 ✗ src/reducer.ts:198:11  [postcondition] postcondition of cancel: implies(wellFormed(u), wellFormed(r))
     │ `grind` failed
     │ case grind.2.1.1
@@ -123,4 +122,4 @@ Failed obligations
     │ h_3 : (fun x y => (!JS.eq x.id id') = true → (!JS.eq y.id id') = true → ¬x.id = y.id) = fun a b => ¬a.id = b.id
     │ ⊢ False
 
-✗ NOT VERIFIED  139/142 obligations proved, 3 failed; components: 4/6 verified  (38.2s)
+✗ NOT VERIFIED  139/142 obligations proved, 3 failed; components: 4/6 verified  (26.6s)

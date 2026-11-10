@@ -690,4 +690,4 @@ Failed obligations
     │       [thm] nodup_map_filter ↦ 1
     │       [thm] List.Pairwise.filter ↦ 1
 
-✗ NOT VERIFIED  139/142 obligations proved, 3 failed; components: 4/6 verified  (32.8s)
+✗ NOT VERIFIED  139/142 obligations proved, 3 failed; components: 4/6 verified  (27.7s)

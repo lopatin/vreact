@@ -111,12 +111,7 @@ Failed obligations
 ✗ src/reducer.ts:160:11  [postcondition] postcondition of holdAt: sameView(u, r) && agreeExcept(u.held, r.held, id) && sameOrders(u, r)
     │ `grind` failed
     │ case grind.1
-    │ u : ChainUi
-    │ id' price focus : Int
-    │ heq : u.focus = some focus
-    │ hcontract : u.collapsed.elems.Nodup
-    │ hcontract_1 : u.watch.elems.Nodup
-    │ hcontract_2 : (List.map Prod.fst u.held.entries).Nodup
+    │   … (8 earlier hypotheses: u, id', price, focus, heq, hcontract, hcontract_1, hcontract_2: --full shows them)
     │ hcontract_3 hcontract_4 : u.orders.keys.Nodup
     │ hcontract_5 : (List.map Prod.fst u.orders.entries).Nodup
     │ h : True
@@ -127,46 +122,48 @@ Failed obligations
     │ h_3 : fst = focus
     │ w : Int
     │ h_4 : (fst, w) ∈ u.held.entries
-    │   …
+    │ w_1 : Int
+    │ h_5 : (w_1, snd) ∈ u.held.entries
+    │ w_2 : Int
+    │ h_6 : (w_1, w_2) ∈ u.held.entries
+    │ ⊢ False
 ✗ src/reducer.ts:277:11  [postcondition] postcondition of cancel: implies(wellFormed(u), wellFormed(r))
     │ `grind` failed
     │ case grind.2.1.1
-    │ u : ChainUi
-    │ id' : Int
+    │   … (2 earlier hypotheses: u, id': --full shows them)
     │ hcontract : (List.map Prod.fst u.orders.entries).Nodup
-    │ h₄₆ :
-    │   ((1 ≤ u.heat ∧ u.heat ≤ 5) ∧
-    │       ∀ (x : Int × model.Order),
-    │         x ∈ u.orders.entries → ((1 ≤ x.snd.qty ∧ x.snd.qty ≤ 500) ∧ 0 < x.snd.price) ∧ x.fst < u.nextId) ∧
-    │     model.openQty u.orders.values ≤ 1000
-    │ hcontract_1 :
-    │   (List.map Prod.fst
-    │       (JS.JSMap.empty.setAll
-    │           (JS.toSorted (List.filter (fun tup => !JS.eq tup.fst id') u.orders.entries) fun tup tup_1 =>
-    │             tup.snd.expiry - tup_1.snd.expiry)).entries).Nodup
+    │ h₄₆ : …  (a long hypothesis, 5 lines: --full shows it)
+    │ hcontract_1 : …  (a contract instance, 5 lines: --full shows it)
     │ h :
     │   -1 *
     │         model.openQty
-    │   …
-✗ src/reducer.ts:281:11  [postcondition] postcondition of cancel: sameList([...r.orders.keys()], [...u.orders.keys()].filter((k) => k !…
+    │           (JS.JSMap.empty.setAll
+    │               (JS.toSorted (List.filter (fun tup => !JS.eq tup.fst id') u.orders.entries) fun tup tup_1 =>
+    │                 tup.snd.expiry + -1 * tup_1.snd.expiry)).values +
+    │       1001 ≤
+    │     0
+    │ h_1 : u.orders.entries.length ≤ (List.filter (fun tup => !JS.eq tup.fst id') u.orders.entries).length + 1
+    │ h_2 : (fun a => JS.eq a.fst id') = fun tup => !JS.eq tup.fst id'
+    │ h_3 : (fun x y => (!JS.eq x.fst id') = true → (!JS.eq y.fst id') = true → ¬x.fst = y.fst) = fun a b => ¬a.fst = b.fst
+    │ ⊢ False
+✗ src/reducer.ts:281:11  [postcondition] postcondition of cancel: sameList([...r.orders.keys()], [...u.orders.keys()].filter((k) => k !== id))
     │ `grind` failed
     │ case grind.1.1.1.1.2.1.1.1.1.1.1.1.1.1
-    │ u : ChainUi
-    │ id' : Int
-    │ hcontract :
-    │   (JS.JSMap.empty.setAll
-    │         (JS.toSorted (List.filter (fun tup => !JS.eq tup.fst id') u.orders.entries) fun tup tup_1 =>
-    │           tup.snd.expiry - tup_1.snd.expiry)).keys.Nodup
-    │ hcontract_1 : (List.map Prod.fst u.orders.entries).Nodup
-    │ hcontract_2 : u.orders.keys.Nodup
-    │ hcontract_3 hcontract_4 :
-    │   (JS.JSMap.empty.setAll
-    │         (JS.toSorted (List.filter (fun tup => !JS.eq tup.fst id') u.orders.entries) fun tup tup_1 =>
-    │           tup.snd.expiry - tup_1.snd.expiry)).keys.Nodup
-    │ hkey :
-    │   (List.filter (fun y => !JS.eq y id') u.orders.keys).length + List.count id' (List.map (fun k => k) u.orders.keys) =
-    │     u.orders.keys.length
-    │ h :
-    │   …
+    │   … (44 earlier hypotheses: u, id', hcontract_1, hcontract_2, val, h_4, h_5, h_6, …: --full shows them)
+    │ hcontract, hcontract_3, hcontract_4 : …  (3 contract instances, 8 lines: --full shows them)
+    │ hkey, h, h_1, property, h_3, h_7, right, h_13, h_16, left_2, right_2, h_19, h_21, h_23, left_3, left_4, right_4, h_26, left_5, h_31, h_32, left_7, h_35 : …  (23 long hypotheses, 154 lines: --full shows them)
+    │ w_18 : model.Order
+    │ fst_2 : Int
+    │ snd_2 : model.Order
+    │ right_7 : snd_2 = w_4
+    │ w_20 : model.Order
+    │ h_34 : (w_8, w_20) ∈ u.orders.entries
+    │ w_21 : model.Order
+    │ w_22 : model.Order
+    │ h_36 : (w_10, w_22) ∈ u.orders.entries
+    │ left_8 : JS.eq w_8 id' = true
+    │ right_8 : w_8 = id'
+    │ h_38 : (fun x y => (!JS.eq x.fst id') = true → (!JS.eq y.fst id') = true → ¬x.fst = y.fst) = fun a b => ¬a.fst = b.fst
+    │ ⊢ False
 
-✗ NOT VERIFIED  188/192 obligations proved, 4 failed; components: 4/6 verified  (47.8s)
+✗ NOT VERIFIED  188/192 obligations proved, 4 failed; components: 4/6 verified  (54.1s)

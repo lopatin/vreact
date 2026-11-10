@@ -63,22 +63,21 @@ Failed obligations
     │ case grind.1.1.1
     │ props props' : Props
     │ σ : State
-    │ h :
-    │   (((1 ≤ σ.ui.heat ∧ σ.ui.heat ≤ 5) ∧ (List.map (fun o => o.id) σ.ui.orders).Nodup) ∧
-    │       ∀ (x : model.Order), x ∈ σ.ui.orders → ((1 ≤ x.qty ∧ x.qty ≤ 500) ∧ 0 < x.price) ∧ x.id < σ.ui.nextId) ∧
-    │     (match σ.ticket with
-    │       | some ticket => ticket.price > 0
-    │       | none => True) ∧
-    │       match σ.ticket with
-    │       | some ticket => ∃ e, e ∈ props.expiries ∧ e.id = ticket.expiry
-    │       | none => True
-    │ h_1 :
-    │   (List.map (fun e => e.id) props'.expiries).Nodup ∧
-    │     ∀ (x : model.Expiry), x ∈ props'.expiries → (List.map (fun s => s.strike) x.strikes).Nodup
+    │ h, h_1 : …  (2 long hypotheses, 12 lines: --full shows them)
     │ ticket : Option model.Ticket
     │ ticket_1 : model.Ticket
-    │   …
+    │ heq : σ.ticket = some ticket_1
+    │ h_2 : ∀ (a : model.Expiry), a ∈ props'.expiries → ¬a.id = ticket_1.expiry
+    │ h_3 : (fun ticket => ∃ e, e ∈ props.expiries ∧ e.id = ticket.expiry) = fun ticket => -1 * ticket.price + 1 ≤ 0
+    │ ticket_2 : model.Ticket
+    │ h_4 : σ.ticket = some ticket_2
+    │ w : model.Expiry
+    │ left : w ∈ props.expiries
+    │ right : w.id = ticket_1.expiry
+    │ left_1 : (List.map (fun s => s.strike) w.strikes).Nodup
+    │ right_1 : List.Pairwise (fun x1 x2 => ¬x1 = x2) (List.map (fun s => s.strike) w.strikes)
+    │ ⊢ False
 
 trusted (not verified, contracts assumed): TermRow, StrikeRow, OrderTicket
 
-✗ NOT VERIFIED  77/78 obligations proved, 1 failed; components: 0/5 verified  (21.8s)
+✗ NOT VERIFIED  77/78 obligations proved, 1 failed; components: 0/5 verified  (27.8s)

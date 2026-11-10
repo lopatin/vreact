@@ -43,4 +43,4 @@ Failed obligations
     │ h : (JS.findIndex ks fun s => nearest ks s price) + 1 ≤ 0
     │ ⊢ False
 
-✗ NOT VERIFIED  21/22 obligations proved, 1 failed; components: 0/0 verified  (7.2s)
+✗ NOT VERIFIED  21/22 obligations proved, 1 failed; components: 0/0 verified  (5.9s)

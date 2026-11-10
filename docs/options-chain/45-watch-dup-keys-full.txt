@@ -4770,4 +4770,4 @@ Failed obligations
     │       [thm] JS.JSMap.keys_nodup ↦ 1
     │       [thm] inv.match_1.congr_eq_1 ↦ 1
 
-✗ NOT VERIFIED  182/183 obligations proved, 1 failed; components: 4/6 verified  (64.1s)
+✗ NOT VERIFIED  182/183 obligations proved, 1 failed; components: 4/6 verified  (70.4s)

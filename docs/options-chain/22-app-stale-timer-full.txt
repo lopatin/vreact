@@ -2193,4 +2193,4 @@ Failed obligations
     │       [thm] JS.emod_nonneg_of_ne ↦ 2
     │       [thm] List.nil_append ↦ 1
 
-✗ NOT VERIFIED  127/128 obligations proved, 1 failed; components: 5/6 verified  (45.8s)
+✗ NOT VERIFIED  127/128 obligations proved, 1 failed; components: 5/6 verified  (47.5s)

@@ -137,4 +137,4 @@ Errors in user proofs (proofs/*.lean):
     os : List VTS.model.Order
     ⊢ 0 + o.qty + List.foldl (fun n o => n + o.qty) 0 os = o.qty + List.foldl (fun n o => n + o.qty) 0 os
 
-✗ NOT VERIFIED  5/142 obligations proved, 137 unchecked; components: 0/6 verified  (6.2s)
+✗ NOT VERIFIED  5/142 obligations proved, 137 unchecked; components: 0/6 verified  (7.1s)

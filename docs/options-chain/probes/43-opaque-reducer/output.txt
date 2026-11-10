@@ -91,20 +91,19 @@ Failed obligations
     │   … (the goal as stated: --full shows it)
     │ The goal splits into 9 cases. A case's name lists the branches that lead to it, outermost first: `isTrue`/`isFalse` are the two branches of an `if` (a `switch` on a number or a string is a chain of `if`s, one per body), `h_k` is the k-th alternative of a `match` (a `switch` on a union or an enum has one per `case` label, in the order written, then one for the rest: `default`, wherever it is written); conditions in the translation (such as the sign test of `%`) split the same way. Each case alone, smallest first, with up to 100000 heartbeats: 8 proved, 1 did not finish. The first that did not finish, case h_8:
     │ case h_8
-    │ u : ChainUi
-    │ ticket✝ : model.Ticket
-    │ qty✝ price✝ : Int
-    │ h_pre✝¹ : validAction (Action.place ticket✝ qty✝ price✝) = true
-    │ h₃₅✝ :
-    │   ((1 ≤ u.heat ∧ u.heat ≤ 5) ∧
-    │       ∀ (x : Int × model.Order),
-    │         x ∈ u.orders.entries → ((1 ≤ x.snd.qty ∧ x.snd.qty ≤ 500) ∧ 0 < x.snd.price) ∧ x.fst < u.nextId) ∧
-    │     model.openQty u.orders.values ≤ 1000
-    │ h_pre✝ h_pre : 1 ≤ qty✝ ∧ qty✝ ≤ 500
-    │   …
+    │   … (15 earlier hypotheses: u, ticket✝, qty✝, price✝, h_pre✝¹, h_pre✝, h_pre, hcontract✝¹⁷, …: --full shows them)
+    │ h₃₅✝ : …  (a long hypothesis, 5 lines: --full shows it)
+    │ hcontract✝¹⁵, hcontract✝¹⁴, hcontract✝¹³, hcontract✝¹², hcontract✝¹¹, hcontract✝⁴, hcontract✝³, hcontract✝², hcontract✝¹, hcontract✝ : …  (10 contract instances, 152 lines: --full shows them)
+    │ hpart✝⁶ : (place u ticket✝ qty✝ price✝ ⋯).filter = u.filter
+    │ hpart✝⁵ : (place u ticket✝ qty✝ price✝ ⋯).focus = u.focus
+    │ hpart✝⁴ : (place u ticket✝ qty✝ price✝ ⋯).heat = u.heat
+    │ hpart✝³ : ∀ (x : Int), x ∈ u.collapsed.elems → x ∈ (place u ticket✝ qty✝ price✝ ⋯).collapsed.elems
+    │ hpart✝² : ∀ (x : Int), x ∈ (place u ticket✝ qty✝ price✝ ⋯).collapsed.elems → x ∈ u.collapsed.elems
+    │ hpart✝¹ : ∀ (x : Int × Int), x ∈ u.held.entries → (place u ticket✝ qty✝ price✝ ⋯).held.get x.fst = some x.snd
+    │ hpart✝ : ∀ (x : Int × Int), x ∈ (place u ticket✝ qty✝ price✝ ⋯).held.entries → u.held.get x.fst = some x.snd
     │ ⊢ ((1 ≤ (place u ticket✝ qty✝ price✝ ⋯).heat ∧ (place u ticket✝ qty✝ price✝ ⋯).heat ≤ 5) ∧
     │       ∀ (x : Int × model.Order),
     │         x ∈ (place u ticket✝ qty✝ price✝ ⋯).orders.entries →
     │   …
 
-✗ NOT VERIFIED  170/171 obligations proved, 1 failed; components: 4/6 verified  (71.0s)
+✗ NOT VERIFIED  170/171 obligations proved, 1 failed; components: 4/6 verified  (78.0s)

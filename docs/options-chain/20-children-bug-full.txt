@@ -105,4 +105,4 @@ Failed obligations
     │     [assign] σ.qty := 1
     │     [assign] props.ticket.price := 1
 
-✗ NOT VERIFIED  121/122 obligations proved, 1 failed; components: 3/6 verified  (21.3s)
+✗ NOT VERIFIED  121/122 obligations proved, 1 failed; components: 3/6 verified  (21.0s)

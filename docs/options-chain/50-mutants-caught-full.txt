@@ -1205,7 +1205,7 @@ Failed obligations
     │       [thm] JS.JSMap.size_nonneg ↦ 1
     │   [cases] Cases instances
     │     [cases] Prod ↦ 2
-✗ src/reducer.ts:281:11  [postcondition] postcondition of cancel: sameList([...r.orders.keys()], [...u.orders.keys()].filter((k) => k !…
+✗ src/reducer.ts:281:11  [postcondition] postcondition of cancel: sameList([...r.orders.keys()], [...u.orders.keys()].filter((k) => k !== id))
     │ `grind` failed
     │ case grind.1.1.1.1.2.1.1.1.1.1.1.1.1.1
     │ u : ChainUi
@@ -9652,4 +9652,4 @@ Failed obligations
     │     [cases] Prod ↦ 5
     │     [cases] Subtype ↦ 1
 
-✗ NOT VERIFIED  188/192 obligations proved, 4 failed; components: 4/6 verified  (47.9s)
+✗ NOT VERIFIED  188/192 obligations proved, 4 failed; components: 4/6 verified  (51.7s)

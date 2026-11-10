@@ -59,11 +59,10 @@ Failed obligations
     │ h : -1 * atm + min n (atm + levels) ≤ 0
     │ h_1 : ¬n + -1 * atm + -1 * levels ≤ 0
     │ ⊢ False
-✗ src/model.ts:140:11  [postcondition] postcondition of strikeWindow: forall(0, n, (i) => (r.lo <= i && i < r.hi) === inWindow(i, atm, leve…
+✗ src/model.ts:140:11  [postcondition] postcondition of strikeWindow: forall(0, n, (i) => (r.lo <= i && i < r.hi) === inWindow(i, atm, levels))
     │ `grind` failed
     │ case grind.2.2.2.1
-    │ n atm levels : Int
-    │ h_pre_1 : (0 ≤ atm ∧ atm < n) ∧ levels ≥ 0
+    │   … (4 earlier hypotheses: n, atm, levels, h_pre_1: --full shows them)
     │ i : Int
     │ h : 0 ≤ i
     │ h_1 : i < n
@@ -77,10 +76,10 @@ Failed obligations
     │ right_1 : JS.le i (atm + levels) = true
     │ h_4 : JS.lt i (min n (atm + levels)) = false
     │ h_5 : ¬n + -1 * atm + -1 * levels ≤ 0
-    │   …
+    │ h_6 : -1 * atm + levels ≤ 0
     │ ⊢ False
 
 4 obligation(s) not checked:
   src/model.ts:116:11 [postcondition], src/model.ts:119:44 [index], src/model.ts:119:11 [postcondition], src/model.ts:121:11 [postcondition]: it depends on `sorry` from a failure elsewhere (a failed obligation, a declaration with an error, or a hole()) that its goal or its proof contains, so Lean could not check it on its own: fix that first
 
-✗ NOT VERIFIED  16/24 obligations proved, 4 failed, 4 unchecked; components: 0/0 verified  (15.2s)
+✗ NOT VERIFIED  16/24 obligations proved, 4 failed, 4 unchecked; components: 0/0 verified  (11.7s)

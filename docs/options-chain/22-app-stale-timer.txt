@@ -69,22 +69,21 @@ Failed obligations
 ✗ src/App.tsx:106:3  [effect-robust] timer callbacks of the effect preserve the invariant of App from any state
     │ `grind` failed
     │ case grind.1.2.1.1.1.2.1
-    │ E : Type
-    │ props : Props
-    │ κ : Cb props E
-    │ σ : State
-    │ hpre : True
-    │ hinv : (-40 ≤ σ.offset ∧ σ.offset ≤ 40) ∧ 0 ≤ σ.seed ∧ σ.seed < 65537
-    │ offset : Int := σ.offset
-    │ seed : Int := σ.seed
+    │   … (8 earlier hypotheses: E, props, κ, σ, hpre, hinv, offset, seed: --full shows them)
     │ paused : Bool := σ.paused
     │ expiries : List model.Expiry := moveFutures EXPIRIES offset
     │ t : DomEvent → Outcome State E
     │ e : DomEvent
-    │ h :
-    │   t = fun x =>
-    │     if σ.paused = true then { }
-    │     else
-    │   …
+    │ h, h_5, h_6, h_9 : …  (4 long hypotheses, 116 lines: --full shows them)
+    │ s : State
+    │ left : -1 * s.offset + -40 ≤ 0
+    │ left_1 : s.offset + -40 ≤ 0
+    │ left_2 : -1 * s.seed ≤ 0
+    │ right_2 : s.seed + -65536 ≤ 0
+    │ h_3 : (List.foldl (fun s u => u s) s (t e).updates).offset + 41 ≤ 0
+    │ h_4 : ¬σ.paused = true
+    │ h_7 : (if -1 * σ.seed ≤ 0 then (75 * σ.seed + 74) % 65537 else -1 * ((-75 * σ.seed + -74) % 65537)) + -4 ≤ 0
+    │ h_8 : ¬σ.seed + -872 ≤ 0
+    │ ⊢ False
 
-✗ NOT VERIFIED  127/128 obligations proved, 1 failed; components: 5/6 verified  (46.5s)
+✗ NOT VERIFIED  127/128 obligations proved, 1 failed; components: 5/6 verified  (50.1s)

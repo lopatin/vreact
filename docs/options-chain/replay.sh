@@ -13,7 +13,7 @@
 #      test counts and Lean goals are ignored.
 # Exits non-zero on any mismatch.
 #
-#   bash docs/options-chain/replay.sh            # all steps (about 42 minutes: 01-26 ~20, 27-53 ~22)
+#   bash docs/options-chain/replay.sh            # all steps (about 46 minutes: 01-26 ~19, 27-57 ~27)
 #   bash docs/options-chain/replay.sh 05 23      # only the steps whose names start with 05 or 23
 #   bash docs/options-chain/replay.sh --stable docs/options-chain/26-final.txt   # the compared lines
 #
@@ -24,13 +24,13 @@
 # `bash vreact/skill/verified-react/scripts/setup.sh examples/options-chain`), the repository
 # root's node_modules, examples/kanban/node_modules.
 # Synth searches have a 60 s budget per hole: on a much slower or busier machine a fill found late
-# (step 08 found `holdAt` after 30-45 s, steps 09 and 10 found `cancel` after 35-40 s, step 39
-# found `follow`'s candidate after ~50 s) may not be found, and the replay reports it. The budget
-# is wall-clock time: keep the machine awake while the replay runs (on macOS,
+# (step 08 found `holdAt` after 30-45 s, steps 09 and 10 found `cancel` after 34-40 s, step 39
+# found `follow`'s candidate after 45-50 s) may not be found, and the replay reports it. The
+# budget is wall-clock time: keep the machine awake while the replay runs (on macOS,
 # `caffeinate -i bash docs/options-chain/replay.sh`); a laptop that sleeps during a synth step
-# makes it miss fills. A full replay took 42 minutes (steps 01-26: 20, steps 27-53: 22; synth
-# steps 02 ~85 s, 04 ~110 s, 08 ~125 s, 09 ~220 s, 10 ~200 s, 38 ~105 s, 39 ~195 s; verify
-# steps up to ~110 s).
+# makes it miss fills. A full replay of steps 01-57 took 46 minutes (steps 01-26: 19, steps
+# 27-57: 27; synth steps 02 ~85 s, 04 ~110 s, 08 ~130 s, 09 ~215 s, 10 ~190 s, 38 ~95 s,
+# 39 ~185 s; verify steps up to ~135 s, the longest 43, 55 and 56).
 #
 # Overrides (environment variables):
 #   VREACT_CLI=/path/to/vreact/bin/vreact.js   run this CLI instead of this repository's

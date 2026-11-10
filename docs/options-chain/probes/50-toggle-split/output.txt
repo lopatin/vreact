@@ -103,4 +103,4 @@ Failed obligations
     │ right : ¬id' ∈ u.collapsed.elems
     │ ⊢ False
 
-✗ NOT VERIFIED  192/193 obligations proved, 1 failed; components: 6/6 verified  (46.6s)
+✗ NOT VERIFIED  192/193 obligations proved, 1 failed; components: 6/6 verified  (41.4s)

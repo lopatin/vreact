@@ -59,4 +59,4 @@ Obligations by file
 trusted (not verified, contracts assumed): TermRow, OrderTicket
 VERIFIED* = all own obligations proved; relies on the contracts of the trusted declarations above
 
-✔ VERIFIED modulo @trusted declarations  98/98 obligations proved; components: 2/6 verified  (21.6s)
+✔ VERIFIED modulo @trusted declarations  98/98 obligations proved; components: 2/6 verified  (21.0s)

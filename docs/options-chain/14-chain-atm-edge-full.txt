@@ -1173,4 +1173,4 @@ Failed obligations
 
 trusted (not verified, contracts assumed): TermRow, StrikeRow, OrderTicket
 
-✗ NOT VERIFIED  72/75 obligations proved, 2 failed, 1 unchecked; components: 0/5 verified  (59.9s)
+✗ NOT VERIFIED  72/75 obligations proved, 2 failed, 1 unchecked; components: 0/5 verified  (67.0s)

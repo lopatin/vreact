@@ -5,19 +5,19 @@ hole in setFilter: ChainUi   scope: u, u.collapsed, u.filter, u.held, u.focus, u
   candidate passes 400 random tests: { ...u, filter: f }   (17 candidate(s) tested in 0.1s)
   ✔ proved by Lean: { ...u, filter: f }
 hole in holdAt: ChainUi   scope: u, u.collapsed, u.filter, u.held, u.focus, u.heat, u.orders, u.nextId, id, price
-  17654 candidates tested in 60.0s, up to size 6; stopped: the 60s time limit was reached at size 6
+  20051 candidates tested in 60.0s, up to size 6; stopped: the 60s time limit was reached at size 6
   no verified solution for hole in holdAt: no candidate passed the tests
-  most common failure (17654×): u: postcondition fails on [{"collapsed":[10,4],"filter":"s11","held":[{"expiry":10,"price":10}],"focus":null,"heat":1,"orders":[{"id":2,"expiry":2,"leg":"put","strike":1,"buy":true,"qty":1,"price":-10},{"id":7,"expiry":2,"leg":"put","strike":1,"buy":false,"qty":-5,"price":-1}],"nextId":0},3,1] ↦ {"collapsed":[10,4],"filter":"s11","held":[{"expiry":10,"price":10}],"focus":null,"heat":1,"orders":[{"id":2,"expiry":2,"leg":"put","strike":1,"buy":true,"qty":1,"price":-10},{"id":7,"expiry":2,"leg":"put","strike":1,"buy":false,"qty":-5,"price":-1}],"nextId":0}
+  most common failure (20051×): u: postcondition fails on [{"collapsed":[1],"filter":"s11","held":[],"focus":7,"heat":7,"orders":[],"nextId":-1},-2,-10] ↦ {"collapsed":[1],"filter":"s11","held":[],"focus":7,"heat":7,"orders":[],"nextId":-1}
   write this one by hand (synth builds straight-line expressions; guarded updates need an `if`), or check that the spec is satisfiable
 hole in follow: ChainUi   scope: u, u.collapsed, u.filter, u.held, u.focus, u.heat, u.orders, u.nextId, id
-  candidate passes 400 random tests: { ...u, held: u.held.filter((x) => x.expiry !== id) }   (9690 candidate(s) tested in 30.0s)
+  candidate passes 400 random tests: { ...u, held: u.held.filter((x) => x.expiry !== id) }   (9690 candidate(s) tested in 28.7s)
   ✔ proved by Lean: { ...u, held: u.held.filter((x) => x.expiry !== id) }
 hole in place: ChainUi   scope: u, u.collapsed, u.filter, u.held, u.focus, u.heat, u.orders, u.nextId, t, t.expiry, t.leg, t.strike, t.side, t.price, qty, price
-  19480 candidates tested in 60.0s, up to size 6; stopped: the 60s time limit was reached at size 6
+  20030 candidates tested in 60.0s, up to size 6; stopped: the 60s time limit was reached at size 6
   no verified solution for hole in place: no candidate passed the tests
-  most common failure (19480×): u: postcondition fails on [{"collapsed":[-1,-5],"filter":"s11","held":[],"focus":-1,"heat":0,"orders":[{"id":1,"expiry":3,"leg":"put","strike":-1,"buy":true,"qty":0,"price":2},{"id":3,"expiry":1,"leg":"put","strike":10,"buy":true,"qty":0,"price":0}],"nextId":3},{"expiry":4,"leg":"put","strike":5,"side":"ask","price":-1},1,2] ↦ {"collapsed":[-1,-5],"filter":"s11","held":[],"focus":-1,"heat":0,"orders":[{"id":1,"expiry":3,"leg":"put","strike":-1,"buy":true,"qty":0,"price":2},{"id":3,"expiry":1,"leg":"put","strike":10,"buy":true,"qty":0,"price":0}],"nextId":3}
+  most common failure (20030×): u: postcondition fails on [{"collapsed":[0,5],"filter":"s3","held":[{"expiry":10,"price":7},{"expiry":-10,"price":-10},{"expiry":5,"price":2}],"focus":null,"heat":1,"orders":[],"nextId":0},{"expiry":-2,"leg":"call","strike":0,"side":"bid","price":0},2,5] ↦ {"collapsed":[0,5],"filter":"s3","held":[{"expiry":10,"price":7},{"expiry":-10,"price":-10},{"expiry":5,"price":2}],"focus":null,"heat":1,"orders":[],"nextId":0}
   write this one by hand (synth builds straight-line expressions; guarded updates need an `if`), or check that the spec is satisfiable
 hole in cancel: ChainUi   scope: u, u.collapsed, u.filter, u.held, u.focus, u.heat, u.orders, u.nextId, id
-  candidate passes 400 random tests: { ...u, orders: u.orders.filter((x) => x.id !== id) }   (12887 candidate(s) tested in 39.4s)
+  candidate passes 400 random tests: { ...u, orders: u.orders.filter((x) => x.id !== id) }   (12887 candidate(s) tested in 38.4s)
   ✔ proved by Lean: { ...u, orders: u.orders.filter((x) => x.id !== id) }
 wrote src/reducer.ts

@@ -70,7 +70,7 @@ Obligations by file
   ✓ src/App.tsx                              12/12
 
 Failed obligations
-✗ src/reducer.ts:175:11  [postcondition] postcondition of place: implies(validQty(qty) && price > 0, r.orders.some((o) => orderFor(o, …
+✗ src/reducer.ts:175:11  [postcondition] postcondition of place: implies(validQty(qty) && price > 0, r.orders.some((o) => orderFor(o, u.nextId, t, qty, price)))
     │ `grind` failed
     │ case grind
     │ u : ChainUi
@@ -90,4 +90,4 @@ Failed obligations
     │           ¬a.leg = t.leg ∨ ¬a.strike = t.strike ∨ ¬a.buy = JS.eq t.side model.Side.ask ∨ ¬a.qty = qty ∨ ¬a.price = price
     │ ⊢ False
 
-✗ NOT VERIFIED  130/131 obligations proved, 1 failed; components: 6/6 verified  (22.0s)
+✗ NOT VERIFIED  130/131 obligations proved, 1 failed; components: 6/6 verified  (22.9s)

@@ -90,12 +90,7 @@ Failed obligations
 ✗ src/reducer.ts:160:11  [postcondition] postcondition of holdAt: sameView(u, r) && agreeExcept(u.held, r.held, id) && sameOrders(u, r)
     │ `grind` failed
     │ case grind.1
-    │ u : ChainUi
-    │ id' price focus : Int
-    │ heq : u.focus = some focus
-    │ hcontract : u.collapsed.elems.Nodup
-    │ hcontract_1 : u.watch.elems.Nodup
-    │ hcontract_2 : (List.map Prod.fst u.held.entries).Nodup
+    │   … (8 earlier hypotheses: u, id', price, focus, heq, hcontract, hcontract_1, hcontract_2: --full shows them)
     │ hcontract_3 hcontract_4 : u.orders.keys.Nodup
     │ hcontract_5 : (List.map Prod.fst u.orders.entries).Nodup
     │ h : True
@@ -106,6 +101,10 @@ Failed obligations
     │ h_3 : fst = focus
     │ w : Int
     │ h_4 : (fst, w) ∈ u.held.entries
-    │   …
+    │ w_1 : Int
+    │ h_5 : (w_1, snd) ∈ u.held.entries
+    │ w_2 : Int
+    │ h_6 : (w_1, w_2) ∈ u.held.entries
+    │ ⊢ False
 
-✗ NOT VERIFIED  191/192 obligations proved, 1 failed; components: 6/6 verified  (45.7s)
+✗ NOT VERIFIED  191/192 obligations proved, 1 failed; components: 6/6 verified  (41.1s)
