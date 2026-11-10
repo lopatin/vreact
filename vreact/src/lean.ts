@@ -121,7 +121,7 @@ const modOfRel = (rel: string) => rel.replace(/\.lean$/, "").split(/[\\/]/).join
 const relOfMod = (mod: string) => mod.split(".").join("/") + ".lean";
 
 /** The modules a Lean file's header imports (the generator writes one `import` per line; proof files are checked to have plain imports only). */
-function headerImports(text: string): string[] {
+export function headerImports(text: string): string[] {
   const code = text.replace(/\/-[\s\S]*?-\//g, " ").replace(/--.*$/gm, "");
   const out: string[] = [];
   for (const line of code.split("\n")) {
@@ -377,12 +377,19 @@ function runCertify(outDir: string, leanLib: string, env: NodeJS.ProcessEnv, bas
   return out;
 }
 
-/** The line of declaration `decl` in a Lean file (private names without their `_private.<module>.0.` prefix), 1 if not found. */
+/**
+ * The line of declaration `decl` in a Lean file (private names without their
+ * `_private.<module>.0.` prefix), 1 if not found: the declaration of that name, else the
+ * closest one it lies below (an auxiliary `f.match_1`, `f.proof_1`, … of `f`) — never one
+ * merely above it in the file (`f` for its contract `f.post`).
+ */
 function declLine(outDir: string, rel: string, decl: string): number {
   if (!decl) return 1;
   const plain = decl.replace(/^_private\.(?:[^.]+\.)*?0\./, "");
   try {
-    const d = leanDecls(fs.readFileSync(path.join(outDir, rel), "utf8"), rel).find((x) => x.name === plain || (x.name !== null && plain.startsWith(x.name + ".")));
+    const ds = leanDecls(fs.readFileSync(path.join(outDir, rel), "utf8"), rel);
+    const below = ds.filter((x) => x.name !== null && plain.startsWith(x.name + ".")).sort((a, b) => b.name!.length - a.name!.length);
+    const d = ds.find((x) => x.name === plain) ?? below[0];
     return d?.start ?? 1;
   } catch {
     return 1;

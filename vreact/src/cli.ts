@@ -121,15 +121,16 @@ export function isNativeAxiom(a: string): boolean {
  * `VReact.assumed` stands for the program's `assume(…)` facts (ASSUMES) only where
  * `#vreact_assumed` (`outside`) found no declaration outside the generated code that uses it
  * directly: a user proof that does is an axiom of its own (TRUSTED), and without that report
- * the item is not checked.
+ * the item is not checked. `ownTrusted`: the item's own @trusted axioms (by name, never by a
+ * name prefix: see `Item.ownTrusted`).
  */
-function classify(axioms: string[] | undefined, own: string, trustedAxioms: Set<string>, outside: string[] | undefined): Status {
+function classify(axioms: string[] | undefined, ownTrusted: Set<string>, trustedAxioms: Set<string>, outside: string[] | undefined): Status {
   if (!axioms) return "unchecked";
   if (axioms.includes("sorryAx") || axioms.some(isNativeAxiom)) return "incomplete";
   const assumed = axioms.some((a) => ASSUMED.has(a));
   if (assumed && outside === undefined) return "unchecked";
   const vts = axioms.filter((a) => trustedAxioms.has(a));
-  if (vts.some((a) => a === own || a.startsWith(own + "."))) return "trusted";
+  if (vts.some((a) => ownTrusted.has(a))) return "trusted";
   if (axioms.some((a) => !STD_AXIOMS.has(a) && !ASSUMED.has(a) && !trustedAxioms.has(a))) return "trusted";
   if (assumed && outside!.length) return "trusted";
   if (assumed) return "assumes";
@@ -153,7 +154,7 @@ function itemStatus(v: Verdict, it: Item, trustedAxioms: Set<string>, broken: bo
   if (v.failed.some((f) => ids.has(f.ob.id))) return "incomplete";
   const decl = [...v.declErrors.keys()].some(it.owns) || v.sorries.some((s) => !!s.decl && it.owns(s.decl));
   if (decl || broken) return "incomplete";
-  const sts = it.axiomNames.map((q) => classify(v.axioms.get(q), it.own, trustedAxioms, v.assumedOutside.get(q)));
+  const sts = it.axiomNames.map((q) => classify(v.axioms.get(q), it.ownTrusted, trustedAxioms, v.assumedOutside.get(q)));
   // obligations Lean did not finish although their file was elaborated
   if (v.unchecked.some((u) => ids.has(u.id)) && !sts.includes("unchecked")) return "incomplete";
   return worst(sts);
@@ -174,33 +175,47 @@ interface Item {
   owns: (lean: string) => boolean;
   /** the declarations whose axioms make up its status */
   axiomNames: string[];
-  /** its own namespace (for its own @trusted axioms) */
-  own: string;
+  /**
+   * its own @trusted axioms (those of its @trusted declaration; for a certificate, its root
+   * component's), by name: a @trusted declaration of a module nested in its namespace (`g` of
+   * `src/M/f.ts`, `VTS.M.f.g`, below a function `f` of `src/M.ts`) is a dependency, not its own
+   */
+  ownTrusted: Set<string>;
 }
+
+/** The axioms the translator emits for a @trusted function. */
+const trustedFnAxioms = (f: TranslateResult["modules"][number]["functions"][number]): string[] => (f.trusted ? [f.qname, ...f.posts] : []);
+/** The axioms the translator emits for a @trusted component (component.ts). */
+const trustedCompAxioms = (c: TranslateResult["modules"][number]["components"][number]): string[] => (c.trusted ? ["init_inv", "stable", "renderTrusted"].map((s) => `${c.ns}.${s}`) : []);
 
 function items(tr: TranslateResult, root: string): { comps: Item[]; certs: Item[]; fns: Item[]; consts: Item[] } {
   const out = { comps: [] as Item[], certs: [] as Item[], fns: [] as Item[], consts: [] as Item[] };
   for (const mr of tr.modules) {
     const file = relp(root, mr.tsFile);
+    // the declarations of this module (no other module declares any of them): a component's are
+    // those in its namespace — a module nested there (`src/M/Comp.ts` next to a component `Comp`
+    // of `src/M.tsx`) declares names with the same prefix, which are not the component's
+    const mine = new Set(mr.declNames);
     for (const c of mr.components) {
       const root = new Set(["root_pre", "element", "certificate"].map((s) => `${c.ns}.${s}`));
-      out.comps.push({ key: c.ns, name: c.name, file, module: mr.ns, obs: c.obs, ownObs: c.obs, refs: c.refs, owns: (q) => q.startsWith(c.ns + ".") && !root.has(q), axiomNames: [`${c.ns}.component`], own: c.ns });
+      out.comps.push({ key: c.ns, name: c.name, file, module: mr.ns, obs: c.obs, ownObs: c.obs, refs: c.refs, owns: (q) => mine.has(q) && q.startsWith(c.ns + ".") && !root.has(q), axiomNames: [`${c.ns}.component`], ownTrusted: new Set(trustedCompAxioms(c)) });
     }
     for (const c of mr.certificates) {
       const base = c.qname.replace(/\.certificate$/, "");
       const root = new Set(["root_pre", "element", "certificate"].map((s) => `${base}.${s}`));
       // (its obligations include its root component's, which belong to the component)
-      const comp = new Set(mr.components.find((x) => x.ns === base)?.obs ?? []);
-      out.certs.push({ key: c.qname, name: `${c.name}.certificate`, file, module: mr.ns, obs: c.obs, ownObs: c.obs.filter((o) => !comp.has(o)), refs: c.refs, owns: (q) => root.has(q), axiomNames: [c.qname], own: base });
+      const rootComp = mr.components.find((x) => x.ns === base);
+      const comp = new Set(rootComp?.obs ?? []);
+      out.certs.push({ key: c.qname, name: `${c.name}.certificate`, file, module: mr.ns, obs: c.obs, ownObs: c.obs.filter((o) => !comp.has(o)), refs: c.refs, owns: (q) => root.has(q), axiomNames: [c.qname], ownTrusted: new Set(rootComp ? trustedCompAxioms(rootComp) : []) });
     }
     for (const f of mr.functions) {
       // a function is as verified as its definition and all its postcondition theorems
       const names = new Set([f.qname, ...f.posts]);
-      out.fns.push({ key: f.qname, name: f.name, file, module: mr.ns, obs: f.obs, ownObs: f.obs, refs: f.refs, owns: (q) => names.has(q), axiomNames: [...names], own: f.qname });
+      out.fns.push({ key: f.qname, name: f.name, file, module: mr.ns, obs: f.obs, ownObs: f.obs, refs: f.refs, owns: (q) => names.has(q), axiomNames: [...names], ownTrusted: new Set(trustedFnAxioms(f)) });
     }
     for (const c of mr.constants) {
       const names = new Set([c.qname, ...c.facts]);
-      out.consts.push({ key: c.qname, name: c.name, file, module: mr.ns, obs: c.obs, ownObs: c.obs, refs: c.refs, owns: (q) => names.has(q), axiomNames: [...names], own: c.qname });
+      out.consts.push({ key: c.qname, name: c.name, file, module: mr.ns, obs: c.obs, ownObs: c.obs, refs: c.refs, owns: (q) => names.has(q), axiomNames: [...names], ownTrusted: new Set() });
     }
   }
   return out;
@@ -272,8 +287,8 @@ function brokenCones(tr: TranslateResult, v: Verdict, all: Item[]): Map<string, 
 function trustedAxiomsOf(tr: TranslateResult): Set<string> {
   const out = new Set<string>();
   for (const mr of tr.modules) {
-    for (const f of mr.functions) if (f.trusted) [f.qname, ...f.posts].forEach((q) => out.add(q));
-    for (const c of mr.components) if (c.trusted) ["init_inv", "stable", "renderTrusted"].forEach((s) => out.add(`${c.ns}.${s}`));
+    for (const f of mr.functions) trustedFnAxioms(f).forEach((q) => out.add(q));
+    for (const c of mr.components) trustedCompAxioms(c).forEach((q) => out.add(q));
   }
   return out;
 }
@@ -509,7 +524,7 @@ export function reportFrom(cfg: Config, tr: TranslateResult, messages: LeanMessa
   const trustReason = (it: Item): string | undefined => {
     const axs = it.axiomNames.flatMap((q) => v.axioms.get(q) ?? []);
     // (an @trusted declaration is TRUSTED for its own sake)
-    if (axs.some((a) => trustedAxioms.has(a) && (a === it.own || a.startsWith(it.own + ".")))) return undefined;
+    if (axs.some((a) => it.ownTrusted.has(a))) return undefined;
     const foreign = [...new Set(axs.filter((a) => !STD_AXIOMS.has(a) && !ASSUMED.has(a) && a !== "sorryAx" && !trustedAxioms.has(a) && !isNativeAxiom(a)))];
     const viaProofs = [...new Set(it.axiomNames.flatMap((q) => (v.axioms.get(q)?.some((a) => ASSUMED.has(a)) ? (v.assumedOutside.get(q) ?? []) : [])))];
     const parts: string[] = [];

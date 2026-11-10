@@ -900,10 +900,17 @@ hook rules hold (static checks). For every function: its body is safe and its
   `Board` of `src/ui.tsx`). User lemmas `proofs/<path>.lean` are imported by
   that module's `View.lean` and by the `Defs.lean` of every module importing it
   (unless that would close an import cycle); `proofs/Base.lean` by every
-  `Defs.lean`. When every importing module can import them, the `ensures`
-  theorems of the module's functions that no other function or constant of the
-  module uses are proved after the lemmas, in `Posts.lean` (imported by the
-  module's `View.lean` and the importing modules' `Defs.lean`).
+  `Defs.lean`; any other proof file only through the imports of these. Lake
+  builds the root module `VTS` and what it imports, nothing else, so a proof
+  file that no generated module imports, directly or through other proof files,
+  would never be elaborated (its errors and `sorry`s never reported): it is
+  rejected (a misspelt `proofs/model.lean` next to `src/Model.ts` — names are
+  case-sensitive, also on a case-insensitive disk —, a stray copy, a file of
+  theorems nothing imports; `FaReportUnimportedProof`). When every importing
+  module can import them, the `ensures` theorems of the module's functions that
+  no other function or constant of the module uses are proved after the lemmas,
+  in `Posts.lean` (imported by the module's `View.lean` and the importing
+  modules' `Defs.lean`).
   Generated files set `autoImplicit false`, so a binder the translation failed to
   emit is a Lean error, never an auto-bound variable.
   For generic functions (§1.1), Lean checks that each call's type arguments and
@@ -1068,8 +1075,17 @@ hook rules hold (static checks). For every function: its body is safe and its
   with an error makes every obligation of its item unproved; when Lean still
   reports clean axioms for its name, something else (e.g. a declaration of a
   user proof) stands in for it, so every item that uses it, directly or not, is
-  `INCOMPLETE` as well. An axiom that is neither Lean's standard ones, nor
-  `VReact.assumed`, nor emitted for a `@trusted` declaration (e.g. one declared
+  `INCOMPLETE` as well. Declarations and axioms are attributed to items by
+  identity, never by a name prefix: an item's declarations are among those its
+  own module generates (no other module generates the same name, §5), and its
+  own `@trusted` axioms are exactly those emitted for its `@trusted` declaration
+  (for a certificate, its root component's) — a module nested in an item's
+  namespace (`src/M/f.ts`, `VTS.M.f`, below a function `f` of `src/M.ts`; or
+  `src/M/Comp.ts` below a component `Comp`) keeps its holes, errors and
+  `@trusted` axioms, which are then dependencies (`VERIFIED*`), not the item's
+  own (`FaReportNestedTrusted`, `FaReportNestedHole`). An axiom that is neither
+  Lean's standard ones, nor `VReact.assumed`, nor emitted for a `@trusted`
+  declaration (e.g. one declared
   in a user proof, which the kernel re-check below also reports as an error that
   breaks every module importing it) makes the items that depend on it `TRUSTED` (the verdict
   says "modulo axioms from outside the translation"), except an axiom of native
@@ -1094,8 +1110,10 @@ hook rules hold (static checks). For every function: its body is safe and its
   module with a declaration that uses `VReact.assumed` directly, which breaks every
   module importing it — `GxAssumeInProofs`.)
 * **User proofs** (`proofs/**/*.lean`, `proofs/Base.lean`) are imported into
-  generated files, so whatever they declare takes effect while the translation is
-  checked. Before Lean runs, `vreact` checks every proof file against a whitelist
+  generated files (every one of them: a proof file that no generated module
+  imports, directly or through other proof files, is rejected, §5), so whatever
+  they declare takes effect while the translation is checked. Before Lean
+  runs, `vreact` checks every proof file against a whitelist
   (`lean/ProofCheck.lean`, the `vreact-proofcheck` program of the library): it
   parses the file with Lean's own parser, in exactly the environment the file is
   elaborated in — `Init` + `VReact` when its imports reach `VReact` or a generated

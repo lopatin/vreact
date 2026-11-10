@@ -283,7 +283,10 @@ postcondition, root-precondition, unreachable, assert).
    import only `VReact` (the whole library), `VTS.…`, `Proofs.…`:
    `vreact` rejects anything else — macros, `macro_rules`, instances, axioms,
    `VReact.assumed`, `#eval`, other options — before Lean runs, and re-checks what
-   they added with Lean's kernel after the build. See `reference/obligations.md`.
+   they added with Lean's kernel after the build. A proof file that no module
+   imports (named after no module, e.g. `proofs/model.lean` for `src/Model.ts`, and
+   imported by no such proof file) is rejected: Lean would never check it. See
+   `reference/obligations.md`.
 5. Never use `assume(…)` or `@trusted` to make a failure go away without telling
    the user; both are reported and keep the result from being `VERIFIED`.
 
