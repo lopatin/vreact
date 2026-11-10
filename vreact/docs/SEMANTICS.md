@@ -377,7 +377,14 @@ Every expression maps to a Lean term whose value is the JavaScript value.
   about an `@opaque` constant of the same module; one about an imported constant
   is rejected) is a theorem placed after every declaration it mentions (its
   constant, other constants, the functions it calls — function declarations are
-  hoisted, so they may be declared below the constant).
+  hoisted, so they may be declared below the constant). It is proved by
+  evaluation: every `@opaque` constant it mentions (of the module or an imported
+  one) is unfolded to its value, in its proof and in the obligations inside its
+  statement (an index `A[0]`, a divisor, a precondition — Lean elaborates those
+  with the statement, before the proof runs, so each unfolds the constants
+  itself). The theorem is named after the first `@opaque` constant of the module
+  that the fact mentions (`A.post`, `A.post2`, …), and the automation adds it to
+  a goal that mentions that constant.
 * Per-file compilation: the bundler compiles each file on its own (Vite: esbuild),
   so it cannot tell that an imported name is a type, and keeps `export { Item }`
   or `export default Item` of an imported type (and the import): the module then
@@ -1284,7 +1291,10 @@ hook rules hold (static checks). For every function: its body is safe and its
   `vreact: …` (failed: the failure text and the goal) or `vreact:blocked …`
   (it depends on `sorry` from a failure elsewhere: its goal contains one, the
   proof found uses one — also through a definition it unfolded, or an
-  auxiliary lemma —, it failed on a goal that unfolds to a `hole()`, or Lean
+  auxiliary lemma —, it failed on a goal that unfolds to a `hole()` through
+  the definitions the automation unfolds — reducible ones, the `@[vreact_simp]`
+  ones (a component's `inv`, `pre` and `init`), and the `@opaque` constants
+  that an obligation inside a module-level fact unfolds —, or Lean
   hid the automation's error because it mentions such a `sorry`), and the goal
   is admitted with `sorry`. A blocked obligation is *not checked*: neither
   proved (a proof through the admitted proof of a false statement proves
