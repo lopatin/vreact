@@ -1,4 +1,4 @@
-translated 8 module(s), 195 proof obligation(s) → .vreact/ ; checking with Lean…
+translated 8 module(s), 210 proof obligation(s) → .vreact/ ; checking with Lean…
 
 Components
   VERIFIED           PriceCell              src/StrikeRow.tsx:12
@@ -6,7 +6,7 @@ Components
   VERIFIED           TermRow                src/TermRow.tsx:19
   VERIFIED           OrderTicket            src/OrderTicket.tsx:19
   VERIFIED           OptionsChain           src/OptionsChain.tsx:34
-  VERIFIED           App                    src/App.tsx:156
+  VERIFIED           App                    src/App.tsx:172
 Functions
   VERIFIED           sameMembers
   VERIFIED           sameMembersExcept
@@ -29,8 +29,8 @@ Functions
   VERIFIED           inWindow
   VERIFIED           strikeWindow
   VERIFIED           shownRows
-  VERIFIED           filterLabel
   VERIFIED           levelsOf
+  VERIFIED           filterLabel
   VERIFIED           edge
   VERIFIED           heatOf
   VERIFIED           legFor
@@ -49,6 +49,7 @@ Functions
   VERIFIED           sameOrder
   VERIFIED           keepsOrders
   VERIFIED           keepsOrdersExcept
+  VERIFIED           freshIds
   VERIFIED           sameOrders
   VERIFIED           orderFor
   VERIFIED           toggle
@@ -60,6 +61,7 @@ Functions
   VERIFIED           jump
   VERIFIED           setHeat
   VERIFIED           accepts
+  VERIFIED           withOrder
   VERIFIED           place
   VERIFIED           repriced
   VERIFIED           amend
@@ -67,6 +69,7 @@ Functions
   VERIFIED           validAction
   VERIFIED           chainReducer
   VERIFIED           shiftQuote
+  VERIFIED           shifted
   VERIFIED           moveFutures
   VERIFIED           nextSeed
   VERIFIED           validFeed
@@ -78,11 +81,11 @@ App certificates (VReact.run_allInv instantiated)
 Obligations by file
   ✓ src/collections.ts                       6/6
   ✓ src/model.ts                             26/26
-  ✓ src/reducer.ts                           49/49
+  ✓ src/reducer.ts                           52/52
   ✓ src/StrikeRow.tsx                        24/24
   ✓ src/TermRow.tsx                          12/12
   ✓ src/OrderTicket.tsx                      12/12
   ✓ src/OptionsChain.tsx                     46/46
-  ✓ src/App.tsx                              20/20
+  ✓ src/App.tsx                              32/32
 
-✔ VERIFIED  195/195 obligations proved; components: 6/6 verified  (38.4s)
+✔ VERIFIED  210/210 obligations proved; components: 6/6 verified  (69.9s)

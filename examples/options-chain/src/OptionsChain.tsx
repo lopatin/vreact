@@ -65,7 +65,7 @@ export function OptionsChain(props: OptionsChainProps) {
         <div className="filter">
           <span>Strikes ±</span>
           {FILTERS.map((f) => (
-            <button key={filterLabel(f)} className={ui.filter === f ? "on" : ""} onClick={() => dispatch({ kind: "filter", filter: f })}>
+            <button key={f} className={ui.filter === f ? "on" : ""} onClick={() => dispatch({ kind: "filter", filter: f })}>
               {filterLabel(f)}
             </button>
           ))}

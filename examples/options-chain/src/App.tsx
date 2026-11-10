@@ -1,7 +1,7 @@
 // Root component: demo data for a hypothetical index futures contract "DIX" and the chain.
 // Prices are ticks of 0.05; theoretical values were computed offline (Black-76) and are data.
 import { useReducer, useEffect } from "react";
-import { assert, ensures, implies, invariant, type int } from "vreact/spec";
+import { assert, ensures, forall, implies, invariant, type int } from "vreact/spec";
 import { type Expiry, type Quote, validChain } from "./model";
 import { OptionsChain } from "./OptionsChain";
 
@@ -85,9 +85,16 @@ export function shiftQuote(q: Quote, d: int): Quote {
   return { ...q, bid: q.bid === null ? null : q.bid + d, ask: q.ask === null ? null : q.ask + d };
 }
 
+/** `r` is the market `q` moved by d ticks: a missing side stays missing, the quantities stay. */
+export function shifted(q: Quote, r: Quote, d: int): boolean {
+  return r.bid === (q.bid === null ? null : q.bid + d) && r.ask === (q.ask === null ? null : q.ask + d) && r.bidQty === q.bidQty && r.askQty === q.askQty;
+}
+
 /** The demo feed: every expiry's futures market moved by d ticks. */
 export function moveFutures(es: readonly Expiry[], d: int): readonly Expiry[] {
   ensures((r: readonly Expiry[]) => implies(validChain(es), validChain(r)));
+  // every expiry, in its place, with its futures market moved by exactly d ticks
+  ensures((r: readonly Expiry[]) => r.length === es.length && forall(0, es.length, (i) => r[i].id === es[i].id && shifted(es[i].future, r[i].future, d)));
   return es.map((e) => ({ ...e, future: shiftQuote(e.future, d) }));
 }
 
@@ -106,6 +113,9 @@ export function validFeed(f: Feed): boolean {
 /** One tick of the feed: move by -2..+2 ticks, bouncing back at ±MAX_MOVE. Total. */
 export function stepFeed(f: Feed): Feed {
   ensures((r: Feed) => implies(validFeed(f), validFeed(r)));
+  // one draw of the generator, and a move of exactly as many ticks as it drew (0, 1 or 2)
+  ensures((r: Feed) => r.seed === nextSeed(f.seed));
+  ensures((r: Feed) => Math.abs(r.offset - f.offset) === Math.abs((nextSeed(f.seed) % 5) - 2));
   const seed = nextSeed(f.seed);
   const move = (seed % 5) - 2;
   const next = f.offset + move;
@@ -131,7 +141,7 @@ export function simReducer(s: Sim, a: SimAction): Sim {
   ensures((r: Sim) => implies(validFeed(s.feed), validFeed(r.feed)));
   // while paused, nothing moves the feed
   ensures((r: Sim) => implies(s.paused, sameFeed(r.feed, s.feed)));
-  // ... and while running, a tick is one step of the random walk (so "never move" is not a fix)
+  // ... and while running, a tick is exactly one step of the random walk
   ensures((r: Sim) => implies(!s.paused && a.kind === "tick", sameFeed(r.feed, stepFeed(s.feed))));
   // a rally tick moves the feed only while a rally is on ...
   ensures((r: Sim) => implies(a.kind === "rallyTick" && !s.rally, sameFeed(r.feed, s.feed)));
@@ -139,6 +149,12 @@ export function simReducer(s: Sim, a: SimAction): Sim {
   ensures((r: Sim) =>
     implies(a.kind === "rallyTick" && s.rally && !s.paused && s.feed.offset < MAX_MOVE, r.feed.offset === s.feed.offset + 1),
   );
+  // a rally tick never draws from the generator, and at the top of the band it changes nothing
+  ensures((r: Sim) => implies(a.kind === "rallyTick", r.feed.seed === s.feed.seed && (s.feed.offset < MAX_MOVE || r.feed.offset === s.feed.offset)));
+  // each button flips its own flag and leaves the feed alone; nothing else changes a flag
+  ensures((r: Sim) => r.paused === (a.kind === "togglePause" ? !s.paused : s.paused));
+  ensures((r: Sim) => r.rally === (a.kind === "toggleRally" ? !s.rally : s.rally));
+  ensures((r: Sim) => implies(a.kind === "togglePause" || a.kind === "toggleRally", sameFeed(r.feed, s.feed)));
   // The rules live only here, checked on the state the action is applied to: App's intervals
   // tick unconditionally, and a tick may arrive after a pause or after the rally is stopped.
   switch (a.kind) {

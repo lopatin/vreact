@@ -163,19 +163,10 @@ export function shownRows(ks: readonly Strike[], span: Span, watch: ReadonlySet<
 /** Quick strike filter: 3, 7, 11 or 99 strikes above and below the price, or all strikes. */
 export type StrikeFilter = "s3" | "s7" | "s11" | "s99" | "all";
 
+/** A filter button's label: the number of rows it shows on each side, so the two cannot disagree. */
 export function filterLabel(f: StrikeFilter): string {
-  switch (f) {
-    case "s3":
-      return "3";
-    case "s7":
-      return "7";
-    case "s11":
-      return "11";
-    case "s99":
-      return "99";
-    case "all":
-      return "All";
-  }
+  const n = levelsOf(f);
+  return n === null ? "All" : `${n}`;
 }
 
 export function levelsOf(f: StrikeFilter): int | null {

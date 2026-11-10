@@ -1,4 +1,5 @@
-// The chain's UI state, its invariant, and a total reducer over a discriminated-union action.
+// The chain's UI state, its invariant, and its reducer: total in the state, with a precondition
+// on the action only.
 import { ensures, implies, type int, requires } from "vreact/spec";
 import { type StrikeFilter, type Ticket, type Order, validOrder, validQty, openQty, MAX_OPEN } from "./model";
 import { agreeExcept, sameEntries, sameList, sameMembers, sameMembersExcept, toggleIn } from "./collections";
@@ -81,6 +82,14 @@ export function keepsOrdersExcept(u: ChainUi, r: ChainUi, id: int): boolean {
     [...u.orders].every(([k, o]) => k === id || sameOrder(o, r.orders.get(k))) &&
     [...r.orders].every(([k, o]) => k === id || sameOrder(o, u.orders.get(k)))
   );
+}
+
+/**
+ * Every order of `r` that `u` does not have got an id from `u.nextId` up to, not including,
+ * `r.nextId`: an id that `u`'s next id had not handed out yet, and that `r`'s next id has passed.
+ */
+export function freshIds(u: ChainUi, r: ChainUi): boolean {
+  return [...r.orders].every(([k]) => u.orders.has(k) || (u.nextId <= k && k < r.nextId));
 }
 
 /** Frame condition: the same working orders, listed in the same order, and the same next id. */
@@ -206,11 +215,20 @@ export function setHeat(u: ChainUi, t: int): ChainUi {
 
 /**
  * The orders `place` accepts: a valid quantity, a positive price, and working orders that stay
- * within MAX_OPEN lots in total. This is the rule itself: the guard and the contract of `place`
- * both refer to it, so a new rule is added here only.
+ * within MAX_OPEN lots in total. The guard and the contract of `place` both refer to it, and
+ * `place`'s contract ties it to the invariant: it refuses only what `wellFormed` forbids.
  */
 export function accepts(u: ChainUi, qty: int, price: int): boolean {
   return validQty(qty) && price > 0 && openQty([...u.orders.values()]) + qty <= MAX_OPEN;
+}
+
+/**
+ * The state with the ticket's order added under the next id, without the check: the state that
+ * `place` builds when it accepts, written out again for `place`'s contract.
+ */
+export function withOrder(u: ChainUi, t: Ticket, qty: int, price: int): ChainUi {
+  const o: Order = { expiry: t.expiry, leg: t.leg, strike: t.strike, buy: t.side === "ask", qty: qty, price: price };
+  return { ...u, orders: new Map(u.orders).set(u.nextId, o), nextId: u.nextId + 1 };
 }
 
 /** Place an order for a ticket if it is accepted; otherwise nothing changes. @opaque */
@@ -219,15 +237,20 @@ export function place(u: ChainUi, t: Ticket, qty: int, price: int): ChainUi {
   ensures((r: ChainUi) => implies(wellFormed(u), wellFormed(r)));
   // an accepted order is added exactly as the ticket says, under the next id ...
   ensures((r: ChainUi) => implies(accepts(u, qty, price), orderFor(r.orders.get(u.nextId), t, qty, price)));
-  // ... listed last, with the others kept in their places (where the next id is not in use,
-  // which the invariant says: Map.set would overwrite) ...
+  // ... listed last, with every other order still there, unchanged (where the next id is not in
+  // use, which the invariant says: Map.set would overwrite) ...
   ensures((r: ChainUi) =>
     implies(wellFormed(u) && accepts(u, qty, price), [...r.orders.keys()].indexOf(u.nextId) === u.orders.size && keepsOrders(u, r)),
   );
   ensures((r: ChainUi) => r.nextId === (accepts(u, qty, price) ? u.nextId + 1 : u.nextId));
+  // ... no other order appears (the only new id can be the old next id) ...
+  ensures((r: ChainUi) => freshIds(u, r));
   // ... and nothing else changes; a rejected order changes nothing at all
   ensures((r: ChainUi) => implies(!accepts(u, qty, price), sameOrders(u, r)));
   ensures((r: ChainUi) => sameView(u, r) && sameEntries(u.held, r.held));
+  // the rule is the invariant's: from a well-formed state, an order is refused only when the
+  // state with it would not be well-formed
+  ensures((r: ChainUi) => implies(wellFormed(u) && !accepts(u, qty, price), !wellFormed(withOrder(u, t, qty, price))));
   // the limit depends on the current state, so it is checked here, not at the dispatch site
   if (!accepts(u, qty, price)) return u;
   const o: Order = { expiry: t.expiry, leg: t.leg, strike: t.strike, buy: t.side === "ask", qty: qty, price: price };
@@ -308,8 +331,11 @@ export function validAction(a: Action): boolean {
 export function chainReducer(u: ChainUi, a: Action): ChainUi {
   requires(validAction(a));
   ensures((r: ChainUi) => implies(wellFormed(u), wellFormed(r)));
-  // ids are never reused: the next id only grows
+  // the next id only grows ...
   ensures((r: ChainUi) => r.nextId >= u.nextId);
+  // ... and every new order gets an id at or above the old next id and below the new one. With
+  // the line above, by induction over the actions: no id is ever given to two orders.
+  ensures((r: ChainUi) => freshIds(u, r));
   switch (a.kind) {
     case "toggle":
       return toggle(u, a.expiry);
