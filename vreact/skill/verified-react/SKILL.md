@@ -303,7 +303,8 @@ each case of the goal alone (the branches of its `if`s and `switch`es, smallest 
 names the case that fails, with that case's goal (or the first that did not finish); the short
 report then shows only that goal. A case's name lists the branches that lead to it, outermost
 first: `isTrue`/`isFalse` are the two branches of an `if` (a `switch` on a number or a string is
-a chain of `if`s, one per body), `h_k` is the k-th alternative of a `match` (a `switch` on a
+a chain of `if`s, one per group of labels sharing a body, in the order written, `default`'s own
+labels too), `h_k` is the k-th alternative of a `match` (a `switch` on a
 union or an enum has one per `case` label in the order written, then one for the rest:
 `default`, wherever it is written). The lines of obligations that were not checked name each
 one's position and kind (`src/OptionsChain.tsx:150:11 [callback]: it depends on …`).

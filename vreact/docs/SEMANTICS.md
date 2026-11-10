@@ -421,8 +421,15 @@ Every expression maps to a Lean term whose value is the JavaScript value.
   a `switch` case), `switch` ↦ `match` / if-chain (first matching
   label; `default` in any position takes the values no label matches; labels of
   a switch on an int, string, boolean or number are compared with `===`, and may be
-  literals, negated literals or constants — a non-integer label on an int is
-  rejected, it can never match), `throw`
+  literals, negated literals, constants or other expressions of the
+  discriminant's type (`xs[3]`, `idiv(10, d)`) — a non-integer label on an int is
+  rejected, it can never match. As in JS, the discriminant is evaluated once, then
+  the labels in the order written, those grouped with `default` (`case X:
+  default:`, `default: case X:`) included, until one matches: a label's
+  obligations are under the negation of the labels before it, a match on a label
+  of the default group takes the default body and evaluates no later label, and a
+  discriminant no label is compared with, as in `switch (e) { default: … }`, still
+  has its obligations), `throw`
   ↦ an obligation that the point is unreachable. Statements after a `return` in
   the same block never run and are rejected (in function bodies, component
   bodies, handlers, effects and timer callbacks alike), so the translation never
@@ -1059,8 +1066,12 @@ there); others are left out, which only weakens the facts.
 
 Hooks (`useState`, `useReducer`, `useEffect`, `useMemo`, `useCallback`) are
 matched by React by call order, so they must be top-level statements of the
-component, before any statement that may return (an `if`, a `switch`, …); a hook
-in a branch, loop, handler or closure is rejected. Parentheses around a hook call
+component, before any top-level `if` or `switch` and any statement that may
+return; a hook in a branch, loop, handler or closure is rejected. A block before
+a hook may still branch without returning (`{ if (x !== null) { … } }`): the
+hook runs at every render all the same, and the translation, which goes on once
+per path, gives each path's render each effect once, translated in that path's
+environment (`FaStmtsBlockIfEffect.tsx`). Parentheses around a hook call
 (`(useEffect(…))`, `const [n, setN] = (useState(0))`) do not change it. The other
 React hooks (`useLayoutEffect`, whose updates are synchronous during the commit,
 `useRef`, `useContext`, …) are not modelled and are rejected, as is a hook other
@@ -1304,7 +1315,8 @@ hook rules hold (static checks). For every function: its body is safe and its
   looks for the case that fails, as a diagnosis: the goal's cases (the branches
   of its `if`s and `switch`es, named as Lean's `split` names them, outermost
   first: `isTrue`/`isFalse` the branches of an `if`, also of a `switch` on a
-  number or a string, which is a chain of `if`s, one per body; `h_k` the k-th
+  number or a string, which is a chain of `if`s, one per group of labels sharing
+  a body, in the order written (`default`'s own labels too); `h_k` the k-th
   alternative of a `match`, and a `switch` on a union or an enum has one per
   `case` label in the order written, then one for the rest, `default` wherever
   it is written; conditions in the translation, such as the sign test of `%`,

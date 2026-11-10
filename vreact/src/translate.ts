@@ -4654,7 +4654,9 @@ function switchStmt(s: ts.SwitchStatement, env: Env, bc: BlockCtx, rest: (e: Env
     }
   }
   // switch on an enum value: exhaustive match on its constructors
+  const discObs = m.obCount();
   const dv = expr(disc, env);
+  const dvObs = m.obCount() > discObs;
   if (dv.type.k === "enum") {
     const lits = m.reg.enumLits(dv.type);
     const covered = new Set<string>();
@@ -4669,26 +4671,51 @@ function switchStmt(s: ts.SwitchStatement, env: Env, bc: BlockCtx, rest: (e: Env
     const h = m.fresh("h");
     return `(match ${h} : ${dv.code} with${arms})`;
   }
-  // generic switch on a primitive value: if-chain (the labels of a group tested in order)
+  // generic switch on a primitive value: an if-chain.  JS evaluates the case labels in the order
+  // written — those before the default clause, then those after it, the default clause's own
+  // labels (`case X: default:`, `default: case X:`) included — until one matches, and takes the
+  // default body only when none does.  So every group with labels, the default one too, is tested
+  // at its place: a match on a label of the default group takes the default body and evaluates no
+  // later label (`case 1: default: … case k:` never tests k when the value is 1), and each
+  // label's obligations are under the negation of the labels before it.
+  const labelled = groups.filter((g) => g.labels.length > 0);
   let elseCode = defaultGroup ? block(defaultGroup.body, 0, env, bc, after) : rest(env);
-  const tests = caseGroups.map((g) => {
+  const tests = labelled.map((g) => {
     const ls = g.labels.map((l) => {
       const before = m.obCount();
       const code = caseTest(dv, l, disc, env);
       return { code, obs: m.obCount() > before };
     });
-    if (!ls.slice(1).some((l) => l.obs)) return ls.map((l) => l.code).join(" || ");
+    const obs = ls.some((l) => l.obs);
+    if (!ls.slice(1).some((l) => l.obs)) return { code: ls.map((l) => l.code).join(" || "), obs };
     // a later label of the group is evaluated only when the earlier ones do not match (JS): its
     // obligations (`case 0: case xs[3]:`) are under their negation
     let acc = ls[ls.length - 1].code;
     for (let i = ls.length - 2; i >= 0; i--) acc = `(if ${m.fresh("h")} : (${ls[i].code}) = true then true else ${paren(acc)})`;
-    return acc;
+    return { code: acc, obs };
   });
-  for (let gi = caseGroups.length - 1; gi >= 0; gi--) {
-    const g = caseGroups[gi];
-    const h = m.fresh("h");
-    elseCode = `(if ${h} : (${tests[gi]}) = true then ${paren(block(g.body, 0, env, bc, after))} else ${paren(elseCode)})`;
+  // the discriminant is evaluated once, before any label: every test below mentions it
+  let discUsed = false;
+  let gi = labelled.length - 1;
+  if (gi >= 0 && labelled[gi].isDefault) {
+    // the last labels select the default body, as no match does: they are only evaluated (their
+    // obligations stand, bound and unused; labels without obligations have no effect)
+    if (tests[gi].obs) {
+      elseCode = `(let _ := ${tests[gi].code}; ${elseCode})`;
+      discUsed = true;
+    }
+    gi--;
   }
+  for (; gi >= 0; gi--) {
+    // (the default group's body is the default body: then translated a second time, at its labels)
+    const g = labelled[gi];
+    const h = m.fresh("h");
+    elseCode = `(if ${h} : (${tests[gi].code}) = true then ${paren(block(g.body, 0, env, bc, after))} else ${paren(elseCode)})`;
+    discUsed = true;
+  }
+  // no test mentions the discriminant (`switch (e) { default: … }`): JS still evaluates it once,
+  // so one with obligations is kept, bound and unused, for them
+  if (dvObs && !discUsed) elseCode = `(let _ := ${dv.code}; ${elseCode})`;
   return elseCode;
 }
 

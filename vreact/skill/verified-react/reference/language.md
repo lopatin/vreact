@@ -365,8 +365,11 @@ appear: parameters, results, state, props, record fields, array elements, reduce
 `const`, `let` + reassignment (locals only), `if/else`, `return`, `switch`
 (cases end with `return`/`break`, also `case "x": { …; break; }`; no fall-through;
 `default` anywhere, also grouped `case "a": default:`; on an int/string/boolean/number:
-literal, negated-literal or constant labels compared with `===`, a non-integer label
-on an int is rejected; on an enum or `x.kind`: string literals), `for (const x of xs)` (may
+labels compared with `===` — literals, constants or other expressions of the
+discriminant's type, evaluated as in JS in the order written (`default`'s own labels
+too) until one matches, so a label's obligations hold under the negation of the labels
+before it —, a non-integer label on an int is rejected; on an enum or `x.kind`: string
+literals), `for (const x of xs)` (may
 assign outer `let`s; no `return`/`continue` inside, `break` only to end a `switch`
 case), `throw` (must be provably
 unreachable), `assert(c)`, `assume(c)`. No `while`, `try`, `var`, recursion (a function
@@ -594,7 +597,8 @@ Order inside the body:
 3. hooks: `const [x, setX] = useState<T>(init)`, `const [s, dispatch] =
    useReducer(reducer, init)`, `useEffect(() => {…}, [deps])`,
    `useMemo(() => v, [deps])`, `useCallback(fn, [deps])` — top level,
-   unconditional, before any `if`/`switch`/early return (never in branches,
+   unconditional, before any top-level `if`/`switch` and any early return (a block
+   `{ … }` before them may branch, without returning; never in branches,
    loops, handlers or closures; parentheses around the call do not matter); deps
    exhaustive (`{ x }` reads `x`). Deps are data paths: variables, fields
    (`item.count`, `props.item?.count`), `length`, `size`. A call `m.has(k)` reads
