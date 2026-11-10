@@ -383,9 +383,15 @@ export class ModCtx {
     this.hyp++;
     return subscripted(base, this.hyp);
   }
-  /** Emit a proof obligation discharged by `vreact_auto`, tagged with a source marker;
-   * `vreact_ob` gives it its own heartbeat budget (VReact/Budget.lean). */
-  ob(node: ts.Node, kind: string, desc: string, tactic = "vreact_auto"): string {
+  /**
+   * The tactic of the obligations emitted now (`ob`): `vreact_auto`, except while a
+   * module-level fact's statement is translated, whose obligations (an index, a divisor, a
+   * precondition) first unfold the `@opaque` constants the fact mentions (translateFact).
+   */
+  obTactic = "vreact_auto";
+  /** Emit a proof obligation discharged by `vreact_auto` (`obTactic`), tagged with a source
+   * marker; `vreact_ob` gives it its own heartbeat budget (VReact/Budget.lean). */
+  ob(node: ts.Node, kind: string, desc: string, tactic = this.obTactic): string {
     const id = ++this.counter.n;
     const sf = node.getSourceFile();
     const { line } = sf.getLineAndCharacterOfPosition(node.getStart(sf));

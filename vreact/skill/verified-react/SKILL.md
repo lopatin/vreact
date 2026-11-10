@@ -262,9 +262,11 @@ postcondition, root-precondition, unreachable, assert).
    helper, a `requires` on a child component. Facts about **constant data**
    (a seat map, a catalogue): mark the constant `/** @opaque */` and state the
    fact at module level, e.g. `assert(distinct(SEATS, (s) => s.id));` — it is
-   proved once by evaluation and supplied to every proof that mentions the
-   constant. (Transparent constants are unfolded into every goal; large ones
-   become long disjunctions that slow or defeat the prover.)
+   proved once by evaluation (every `@opaque` constant it mentions unfolded)
+   and supplied to every proof that mentions the constant (the first `@opaque`
+   constant of the module it mentions). (Transparent constants are unfolded
+   into every goal; large ones become long disjunctions that slow or defeat the
+   prover.)
 2. Split work: make a large function `@opaque` with precise `ensures`.
 3. Add an intermediate fact: `assert(cond)` (proved, then available).
 4. Write a Lean lemma in `proofs/<Module>.lean` (`import VTS.<Module>.Defs`);

@@ -3,7 +3,9 @@ import VReact.Tactic
 /-!
 # `vreact_ob` — one proof obligation: its own heartbeat budget, and its result as a message
 
-Every generated obligation is `(/-⟦obN⟧-/ by vreact_ob vreact_auto)`.
+Every generated obligation is `(/-⟦obN⟧-/ by vreact_ob vreact_auto)` (the obligations in the
+statement of a module-level fact first unfold the fact's `@opaque` constants:
+`(/-⟦obN⟧-/ by vreact_ob (try unfold VTS.M.A at *); vreact_auto)`).
 
 **Budget.** Lean's `maxHeartbeats` is a budget per *command*: all `by` blocks of one
 declaration (e.g. every handler obligation inside a component's `render`) share it, and
@@ -40,7 +42,9 @@ first obligation that needs it (about 0.6% there).  A copy of a theorem placed a
   a definition the proof unfolded — a proof through the admitted proof of a false statement
   proves nothing), or the automation failed on a goal that mentions one, or Lean hid the
   automation's error because it does (Lean does not show errors that mention such a `sorry`),
-  or it failed on a goal whose (reducible) definitions unfold to a `sorry` that stands for
+  or it failed on a goal whose definitions that the automation unfolds (reducible ones, the
+  `@[vreact_simp]` ones such as a component's `inv`, and those the obligation's own tactic
+  unfolds: a module-level fact's `@opaque` constants) unfold to a `sorry` that stands for
   data (a `hole()`: the automation cannot know its value).
   The goal is admitted too; the report counts the obligation as not checked, neither proved
   nor failed (fix the failure it depends on first).
@@ -176,13 +180,23 @@ private def isDataSorry (e : Expr) : Bool :=
     | .const _ [u] => !u.normalize.isZero
     | _ => true
 
-/-- Whether the goals mention, through reducible definitions of user code (which the
-automation unfolds), a `sorry` that stands for data (a `hole()`, a declaration with an error):
-a failure on such a goal may be the `sorry`'s, whose value the automation cannot know. (An
-admitted *proof* in a definition does not matter: any two proofs of a proposition are equal,
-so a failure there is the obligation's own.) -/
-private partial def unfoldsToDataSorry (goals : List MVarId) : MetaM Bool := do
+/-- Whether the goals mention, through definitions of user code that the automation unfolds
+(reducible ones, and the `@[vreact_simp]` ones its `simp` set unfolds: a component's `inv`,
+`pre` and `init`; and the constants `unfolded` that the obligation's own tactic unfolds: the
+`@opaque` constants of a module-level fact), a `sorry` that stands for data (a `hole()`, a
+declaration with an error): a failure on such a goal may be the `sorry`'s, whose value the
+automation cannot know. (An admitted *proof* in a definition does not matter: any two proofs
+of a proposition are equal, so a failure there is the obligation's own.  A definition the
+automation does not unfold — an `@opaque` function, or an `@opaque` constant outside its
+facts — is not followed: a failure through it is the obligation's.) -/
+private partial def unfoldsToDataSorry (goals : List MVarId) (unfolded : NameSet := {}) : MetaM Bool := do
   let env ← getEnv
+  let simpSet ← match ← getSimpExtension? `vreact_simp with
+    | some ext => some <$> ext.getTheorems
+    | none => pure none
+  let unfoldedBySimp (c : Name) : Bool := match simpSet with
+    | some s => s.isDeclToUnfold c || s.toUnfoldThms.contains c
+    | none => false
   let seen ← IO.mkRef ({} : NameSet)
   let rec visit (e : Expr) : MetaM Bool := do
     for c in e.getUsedConstants do
@@ -190,7 +204,7 @@ private partial def unfoldsToDataSorry (goals : List MVarId) : MetaM Bool := do
       seen.modify (·.insert c)
       unless isUserConst env c do continue
       let some (.defnInfo d) := env.find? c | continue
-      unless (← getReducibilityStatus c) == .reducible do continue
+      unless (← getReducibilityStatus c) == .reducible || unfoldedBySimp c || unfolded.contains c do continue
       if (d.value.find? isDataSorry).isSome then return true
       if ← visit d.value then return true
     return false
@@ -201,6 +215,18 @@ private partial def unfoldsToDataSorry (goals : List MVarId) : MetaM Bool := do
       if let some v := d.value? then
         if ← visit (← instantiateMVars v) then return true
     return false
+
+/-- The global constants that the `unfold` steps of the tactic `stx` name (a module-level fact's
+obligations unfold its `@opaque` constants first: `(try unfold VTS.M.A at *); vreact_auto`). -/
+private partial def unfoldTargets (stx : Syntax) : TacticM NameSet := do
+  let mut out : NameSet := {}
+  if stx.isOfKind ``Lean.Parser.Tactic.unfold then
+    for id in stx[1].getArgs do
+      if id.isIdent then
+        try out := out.insert (← resolveGlobalConstNoOverload id) catch _ => pure ()
+  for a in stx.getArgs do
+    for c in (← unfoldTargets a) do out := out.insert c
+  return out
 
 /-- `vreact:…` texts are `vreact_ob`'s own results; nobody else may log them inside it. -/
 private def isResultText (m : Message) : BaseIO Bool := do
@@ -275,7 +301,7 @@ private structure Failure where
     -- the goal as the obligation stated it, unless the failure text shows one already
     let shown ← (← addMessageContext f.why).toString
     let goal := if shown.contains '⊢' then m!"" else m!"\n{goalsToMessageData goals}"
-    if f.blocked || sorryBefore || f.why.hasSyntheticSorry || (← unfoldsToDataSorry goals) then
+    if f.blocked || sorryBefore || f.why.hasSyntheticSorry || (← unfoldsToDataSorry goals (← unfoldTargets stx[1])) then
       logWarningAt ref m!"vreact:blocked it depends on `sorry` from elsewhere (an obligation \
         that failed, a declaration with an error, or a hole()) that its goal or its proof \
         contains, so this obligation could not be checked on its own; fix that first\n{f.why}{goal}"

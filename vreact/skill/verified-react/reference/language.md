@@ -391,7 +391,12 @@ the same module (a fact about an imported constant is stated in its module).
 They may call functions declared anywhere in the module (function declarations
 are hoisted) and mention other constants declared above them; the fact is proved
 once everything it mentions is defined, and declarations after that point can use
-it.
+it. A fact is checked by evaluation: every `@opaque` constant it mentions (also
+one of an imported module) is unfolded to its value, also in the obligations
+inside it (an index `A[0]`, a divisor, a precondition). It belongs to the first
+`@opaque` constant of the module that it mentions, and proofs get it where they
+mention that constant: for proofs about `B`, state `assert(B.length === 3)` on
+its own rather than only `assert(A.length === B.length)`.
 
 Spec helpers (usable in code and contracts): `forall(lo, hi, i => …)`,
 `exists(lo, hi, i => …)`, `distinct(xs, x => key)`, `implies(a, b)`,

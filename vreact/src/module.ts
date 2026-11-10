@@ -1434,16 +1434,63 @@ function translateConst(d: ts.VariableDeclaration, info: ConstInfo, m: ModCtx): 
   return `${info.opaque ? "" : "@[vreact_simp, reducible] "}def ${short} : ${leanType(info.type)} :=\n  ${v.code}\n`;
 }
 
-/** The theorem of the `k`-th module-level assert(…) about the constant `d` (emitted once what it mentions is declared). */
+/**
+ * The theorem of the `k`-th module-level assert(…) about the constant `d` (emitted once what it
+ * mentions is declared).  A fact is checked by evaluation: every `@opaque` constant it mentions
+ * (`d`, the owner the theorem is named after, and any other, also of an imported module) is
+ * unfolded to its value — in the proof of the fact, and in the obligations inside its statement
+ * (an index `A[0]`, a divisor, a precondition), which Lean elaborates with the statement, before
+ * the proof runs: they unfold the constants themselves (`ModCtx.obTactic`).
+ */
 function translateFact(d: ts.VariableDeclaration, info: ConstInfo, k: number, m: ModCtx): string {
   const env = baseEnv(m);
   const short = leanIdent((d.name as ts.Identifier).text);
   const f = info.facts[k];
   const name = k === 0 ? `${short}.post` : `${short}.post${k + 1}`;
-  const stmt = prop(f, env);
-  // (`unfold` fails where the statement does not mention the constant)
-  const unfold = stmt.includes(info.qname) ? `\n  unfold ${short}` : "";
+  const consts = opaqueConstsOf(f, m);
+  // (by their full names: a binder of the fact may have a constant's short name; `try`: an
+  // obligation's goal and hypotheses need not mention every constant, and `unfold … at *`
+  // fails where none does)
+  const unfoldOb = consts.map((q) => `(try unfold ${q} at *); `).join("") + "vreact_auto";
+  const saved = m.obTactic;
+  m.obTactic = unfoldOb;
+  let stmt: string;
+  try {
+    stmt = prop(f, env);
+  } finally {
+    m.obTactic = saved;
+  }
+  // (`unfold` fails where the statement does not mention the constant: the statement without
+  // its obligations' tactics, which name every constant)
+  const bare = stmt.split(unfoldOb).join("vreact_auto");
+  const unfold = consts.filter((q) => mentionsConst(bare, q)).map((q) => `\n  unfold ${q}`).join("");
   return `/-- fact: ${docText(f, 80)} -/\ntheorem ${name} : ${stmt} := by${unfold}\n  exact ${m.ob(f, "fact", `fact about ${short}: ${exprText(f)}`)}\n`;
+}
+
+/** The Lean names of the `@opaque` constants (of any module) that the expression `f` mentions, in order of first mention. */
+function opaqueConstsOf(f: ts.Expression, m: ModCtx): string[] {
+  const out: string[] = [];
+  const visit = (n: ts.Node) => {
+    if (isErasedType(n)) return;
+    if (ts.isIdentifier(n)) {
+      const dd = m.prog.refDecl(n);
+      const g = dd ? m.prog.globals.get(dd) : undefined;
+      if (g?.k === "const" && g.info.opaque && !out.includes(g.info.qname)) out.push(g.info.qname);
+    }
+    ts.forEachChild(n, visit);
+  };
+  visit(f);
+  return out;
+}
+
+/** Lean code `code` mentions the constant `qname` (not only a longer name it is a prefix of: `VTS.M.A` in `VTS.M.AB`). */
+function mentionsConst(code: string, qname: string): boolean {
+  for (let i = code.indexOf(qname); i >= 0; i = code.indexOf(qname, i + 1)) {
+    const before = i > 0 ? code[i - 1] : " ";
+    const after = code[i + qname.length] ?? " ";
+    if (!/[\p{L}\p{N}_'.»!?]/u.test(before) && !/[\p{L}\p{N}_'»!?]/u.test(after)) return true;
+  }
+  return false;
 }
 
 /**
