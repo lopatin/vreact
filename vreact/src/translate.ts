@@ -4553,10 +4553,51 @@ function depPath(env: Env, e: ts.Expression): string | null {
 }
 
 /** The first link of the property path `e` that is not a data link (`xs.slice` in `xs.slice.length`), if any. */
-function methodLink(env: Env, e: ts.Expression): ts.PropertyAccessExpression | null {
+function nonDataLink(env: Env, e: ts.Expression): ts.PropertyAccessExpression | null {
   while (ts.isParenthesizedExpression(e)) e = e.expression;
   if (!ts.isPropertyAccessExpression(e)) return null;
-  return methodLink(env, e.expression) ?? (isDataLink(env, e) ? null : e);
+  return nonDataLink(env, e.expression) ?? (isDataLink(env, e) ? null : e);
+}
+
+/**
+ * Why the dependency `d` (not a data path) is rejected, when it is a data path followed by links
+ * that are not data links (`nonDataLink`), else null. A method (`m.has`: declared as a method,
+ * also in each member of a union) gets the method reason; any other link (a library constant such
+ * as `Number.MAX_SAFE_INTEGER`, a tuple's `length`, an undeclared property) only that it is not a
+ * data path. The advice names the receiver to list, unless the path starts outside the component
+ * (a global, an import, a top-level declaration: no binding in `env.vars`), which the check never
+ * requires listing.
+ */
+function nonDataPathReason(env: Env, d: ts.Expression): string | null {
+  const l = nonDataLink(env, d);
+  if (!l || !depPath(env, l.expression)) return null;
+  let root: ts.Expression = l.expression;
+  while (ts.isParenthesizedExpression(root) || ts.isPropertyAccessExpression(root)) root = root.expression;
+  const rs = ts.isIdentifier(root) ? symbolOf(env, root) : undefined;
+  const outside = !rs || !env.vars.has(rs);
+  const recv = nodeText(l.expression);
+  const s = env.m.checker.getSymbolAtLocation(l.name);
+  const ds = s?.declarations ?? [];
+  const method = !!s && ds.length > 0 && (!!(s.flags & ts.SymbolFlags.Method) || ds.every((x) => ts.isMethodSignature(x) || ts.isMethodDeclaration(x)));
+  // (an effect may not list the props object itself: name its fields instead)
+  const onProps = !outside && root === stripParens(l.expression) && env.vars.get(rs!)?.k === "props";
+  const advice = outside
+    ? `a value from outside the component (\`${nodeText(root)}\`) never needs listing: leave it out`
+    : onProps
+      ? `list the fields of \`${recv}\` the body reads (\`${recv}.x\`)`
+      : `list the value it is read on (\`${recv}\`)`;
+  if (method) {
+    const adv = outside || onProps ? advice : `list the value it is called on (\`${recv}\`)`;
+    return `\`${nodeText(l)}\` is a method, not a dependency: it is the same function for every receiver, so React never sees it change; ${adv}`;
+  }
+  const rt = env.m.checker.getTypeAtLocation(l.expression);
+  const why =
+    l.name.text === "length" && env.m.checker.isTupleType(env.m.checker.getNonNullableType(rt))
+      ? `\`${recv}\` is a tuple`
+      : ds.some((x) => env.m.prog.typeEnv.isLibraryFile(x.getSourceFile()))
+        ? `\`${l.name.text}\` is declared by a library`
+        : `\`${l.name.text}\` is not a declared field`;
+  return `\`${nodeText(l)}\` is not a dependency path: ${why}, and after a variable a dependency names only fields the program declares, \`length\` (of arrays and strings) or \`size\` (of Maps and Sets); ${advice}`;
 }
 
 /**
@@ -4577,10 +4618,8 @@ export function checkDeps(fn: ts.ArrowFunction | ts.FunctionExpression, depsArg:
   for (const d of depsArg.elements) {
     const k = depPath(env, d);
     if (!k) {
-      const ml = methodLink(env, d);
-      if (ml && depPath(env, ml.expression)) {
-        fail(ml, `\`${nodeText(ml)}\` is a method, not a dependency: it is the same function for every receiver, so React never sees it change; list the value it is called on (\`${nodeText(ml.expression)}\`)`);
-      }
+      const why = nonDataPathReason(env, d);
+      if (why) fail(nonDataLink(env, d)!, why);
       fail(d, "dependencies must be identifiers or property paths (fields, `length`, `size`)");
     }
     listed.add(k);

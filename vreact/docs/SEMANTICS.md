@@ -751,7 +751,12 @@ change, and before, `[m.has]` covered `m.has(2)`: a `useMemo` kept its first
 value in React while the model recomputed it, and a broken invariant was
 VERIFIED (`FaDepsMemoMethod.tsx`, `FaDepsCallbackMethod.tsx`,
 `FaDepsArraySlice.tsx`). Such a dependency is rejected, naming the receiver to
-list instead.
+list instead. So is any other link that is not a data link — a library constant
+(`Number.MAX_SAFE_INTEGER`), a tuple's `length` — with that reason, not the
+method one (`FaDepsLibConstantMsg.tsx`, `FaDepsTupleLengthMsg.tsx`). A path that
+starts outside the component (a global such as `Math` or `Number`, an import, a
+top-level declaration) is never required, and the message says to leave it out
+rather than list it (`FaDepsOutsideMethodMsg.tsx`, `FaDepsOutsideValueOk.tsx`).
 
 An effect's dependency values (`VReact.DepVal`, compared with the previous
 render's) follow React's identities: a number, string, boolean or enum by value;
