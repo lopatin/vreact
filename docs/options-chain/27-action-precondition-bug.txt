@@ -1,0 +1,100 @@
+translated 7 module(s), 142 proof obligation(s) → .vreact/ ; checking with Lean…
+
+Components
+  VERIFIED           PriceCell              src/StrikeRow.tsx:12
+  VERIFIED           StrikeRow              src/StrikeRow.tsx:39
+  VERIFIED           TermRow                src/TermRow.tsx:19
+  VERIFIED           OrderTicket            src/OrderTicket.tsx:19
+  INCOMPLETE         OptionsChain           src/OptionsChain.tsx:32
+      ↳ an obligation of it failed
+  INCOMPLETE         App                    src/App.tsx:115
+      ↳ it uses OptionsChain (src/OptionsChain.tsx), which is not verified: an obligation of it failed
+Functions
+  VERIFIED           validChain
+  VERIFIED           legOf
+  VERIFIED           theoOf
+  VERIFIED           quotePrice
+  VERIFIED           withinSpread
+  VERIFIED           isMid
+  VERIFIED           midPrice
+  VERIFIED           inTheMoney
+  VERIFIED           dist
+  VERIFIED           nearest
+  VERIFIED           atmIndex
+  VERIFIED           inWindow
+  VERIFIED           strikeWindow
+  VERIFIED           filterLabel
+  VERIFIED           levelsOf
+  VERIFIED           edge
+  VERIFIED           heatOf
+  VERIFIED           legFor
+  VERIFIED           labelOf
+  VERIFIED           marketOf
+  VERIFIED           validQty
+  VERIFIED           validOrder
+  VERIFIED           openQty
+  VERIFIED           fmtPrice
+  VERIFIED           contractText
+  VERIFIED           quoteText
+  VERIFIED           crosses
+  VERIFIED           fmtVol
+  VERIFIED           wellFormed
+  VERIFIED           heldPrice
+  VERIFIED           sameView
+  VERIFIED           keepsHolds
+  VERIFIED           keepsAllHolds
+  VERIFIED           keepsOrders
+  VERIFIED           orderFor
+  VERIFIED           toggle
+  VERIFIED           setCollapsed
+  VERIFIED           setFilter
+  VERIFIED           holdAt
+  VERIFIED           follow
+  VERIFIED           jump
+  VERIFIED           setHeat
+  VERIFIED           place
+  VERIFIED           cancel
+  VERIFIED           validAction
+  VERIFIED           chainReducer
+  VERIFIED           shiftQuote
+  VERIFIED           moveFutures
+  VERIFIED           nextSeed
+  VERIFIED           validFeed
+  VERIFIED           stepFeed
+App certificates (VReact.run_allInv instantiated)
+  INCOMPLETE         VTS.App.App.certificate  axioms: propext, sorryAx, Classical.choice, Quot.sound
+      ↳ it uses OptionsChain (src/OptionsChain.tsx), which is not verified: an obligation of it failed
+Obligations by file
+  ✓ src/model.ts                             22/22
+  ✓ src/reducer.ts                           25/25
+  ✓ src/StrikeRow.tsx                        22/22
+  ✓ src/TermRow.tsx                          12/12
+  ✓ src/OrderTicket.tsx                      12/12
+  ✗ src/OptionsChain.tsx                     35/37  (1 not checked)
+  ✓ src/App.tsx                              12/12
+
+Failed obligations
+✗ src/OptionsChain.tsx:151:13  [precondition] precondition of chainReducer(…, { kind: "place", ticket: ticket, qty: qty - 1, price: price })
+    │ `grind` failed
+    │ case grind.1.1.1
+    │   … (14 earlier hypotheses: E, props, κ, σ, ui, ticket, levels, allOpen, …: --full shows them)
+    │ tExp := …  (a definition, 4 lines: --full shows it)
+    │ h₃₄, hpre, hinv : …  (3 long hypotheses, 14 lines: --full shows them)
+    │ τ : State
+    │ hcb₃₅ : (1 ≤ qty ∧ qty ≤ 500) ∧ 0 < price
+    │ h : qty + -1 ≤ 0
+    │ w : model.Expiry
+    │ h_2 : ¬(w ∈ props.expiries → JS.eq w.id ticket_1.expiry = false)
+    │ ticket_2 : model.Ticket
+    │ h_3 : σ.ticket = some ticket_2
+    │ w_1 : model.Expiry
+    │ h_5 : ¬(w_1 ∈ props.expiries → JS.eq w_1.id ticket_2.expiry = false)
+    │ ticket_3 : model.Ticket
+    │ h₂ h_6 : σ.ticket = some ticket_3
+    │ h_7 : (fun e => JS.eq e.id ticket_2.expiry) = fun e => JS.eq e.id ticket_1.expiry
+    │ ⊢ False
+
+1 obligation(s) not checked:
+  src/OptionsChain.tsx:150:11 [callback]: it depends on `sorry` from a failure elsewhere (a failed obligation, a declaration with an error, or a hole()) that its goal or its proof contains, so Lean could not check it on its own: fix that first
+
+✗ NOT VERIFIED  140/142 obligations proved, 1 failed, 1 unchecked; components: 4/6 verified  (28.7s)

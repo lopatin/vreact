@@ -1,0 +1,85 @@
+translated 1 module(s), 24 proof obligation(s) → .vreact/ ; checking with Lean…
+
+Components
+Functions
+  VERIFIED           validChain
+  VERIFIED           legOf
+  VERIFIED           theoOf
+  VERIFIED           quotePrice
+  VERIFIED           withinSpread
+  VERIFIED           isMid
+  VERIFIED           midPrice
+  VERIFIED           inTheMoney
+  VERIFIED           dist
+  VERIFIED           nearest
+  INCOMPLETE         atmIndex
+      ↳ 2 obligations of it failed
+  VERIFIED           inWindow
+  INCOMPLETE         strikeWindow
+      ↳ 2 obligations of it failed
+  VERIFIED           levelsOf
+  VERIFIED           edge
+  VERIFIED           heatOf
+  VERIFIED           validQty
+  VERIFIED           validOrder
+  VERIFIED           fmtPrice
+  VERIFIED           fmtVol
+Obligations by file
+  ✗ src/model.ts                             16/24  (4 not checked)
+
+Failed obligations
+✗ src/model.ts:125:18  [index] index k - 1 is within bounds of ks
+    │ `grind` failed
+    │ case grind.1.2
+    │ ks : List Strike
+    │ price : Int
+    │ k : Int := JS.findIndex ks fun s => JS.le price s.strike
+    │ hcontract :
+    │   (-1 ≤ JS.findIndex ks fun s => JS.le price s.strike) ∧ (JS.findIndex ks fun s => JS.le price s.strike) < ↑ks.length
+    │ h : (JS.findIndex ks fun s => JS.le price s.strike) ≤ 0
+    │ h_1 : (JS.findIndex ks fun s => JS.le price s.strike) = -1
+    │ left : (JS.findIndex ks fun s => JS.le price s.strike) + 1 ≤ 0
+    │ right : ∀ (x : Strike), x ∈ ks → JS.le price x.strike = false
+    │ ⊢ False
+✗ src/model.ts:125:38  [index] index k is within bounds of ks
+    │ `grind` failed
+    │ case grind
+    │ ks : List Strike
+    │ price : Int
+    │ k : Int := JS.findIndex ks fun s => JS.le price s.strike
+    │ hcontract :
+    │   (-1 ≤ JS.findIndex ks fun s => JS.le price s.strike) ∧ (JS.findIndex ks fun s => JS.le price s.strike) < ↑ks.length
+    │ h : (JS.findIndex ks fun s => JS.le price s.strike) + 1 ≤ 0
+    │ ⊢ False
+✗ src/model.ts:139:11  [postcondition] postcondition of strikeWindow: 0 <= r.lo && r.lo <= atm && atm < r.hi && r.hi <= n
+    │ `grind` failed
+    │ case grind.2
+    │ n atm levels : Int
+    │ h_pre_1 h_pre : (0 ≤ atm ∧ atm < n) ∧ levels ≥ 0
+    │ h : -1 * atm + min n (atm + levels) ≤ 0
+    │ h_1 : ¬n + -1 * atm + -1 * levels ≤ 0
+    │ ⊢ False
+✗ src/model.ts:140:11  [postcondition] postcondition of strikeWindow: forall(0, n, (i) => (r.lo <= i && i < r.hi) === inWindow(i, atm, levels))
+    │ `grind` failed
+    │ case grind.2.2.2.1
+    │   … (4 earlier hypotheses: n, atm, levels, h_pre_1: --full shows them)
+    │ i : Int
+    │ h : 0 ≤ i
+    │ h_1 : i < n
+    │ h_pre : (0 ≤ atm ∧ atm < n) ∧ levels ≥ 0
+    │ hcontract : …  (a contract instance, 2 lines: --full shows it)
+    │ h_2 :
+    │   (JS.le (max 0 (atm + -1 * levels)) i = true ∧ JS.lt i (min n (atm + levels)) = true) =
+    │     (JS.le (atm + -1 * levels) i = false ∨ JS.le i (atm + levels) = false)
+    │ left : JS.le (max 0 (atm + -1 * levels)) i = false ∨ JS.lt i (min n (atm + levels)) = false
+    │ left_1 : JS.le (atm + -1 * levels) i = true
+    │ right_1 : JS.le i (atm + levels) = true
+    │ h_4 : JS.lt i (min n (atm + levels)) = false
+    │ h_5 : ¬n + -1 * atm + -1 * levels ≤ 0
+    │ h_6 : -1 * atm + levels ≤ 0
+    │ ⊢ False
+
+4 obligation(s) not checked:
+  src/model.ts:116:11 [postcondition], src/model.ts:119:44 [index], src/model.ts:119:11 [postcondition], src/model.ts:121:11 [postcondition]: it depends on `sorry` from a failure elsewhere (a failed obligation, a declaration with an error, or a hole()) that its goal or its proof contains, so Lean could not check it on its own: fix that first
+
+✗ NOT VERIFIED  16/24 obligations proved, 4 failed, 4 unchecked; components: 0/0 verified  (11.7s)

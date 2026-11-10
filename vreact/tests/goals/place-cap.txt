@@ -1,0 +1,24 @@
+`grind` failed
+case grind.1
+u : ChainUi
+t : model.Ticket
+qty price : Int
+h_pre : 1 ≤ qty ∧ qty ≤ 500
+h₂₇ :
+  ((1 ≤ u.heat ∧ u.heat ≤ 5) ∧ ∀ (x : model.Order), x ∈ u.orders.values → (1 ≤ x.qty ∧ x.qty ≤ 500) ∧ 0 < x.price) ∧
+    model.openQty u.orders.values ≤ 1000
+h : ((1 ≤ qty ∧ qty ≤ 500) ∧ 0 < price) ∧ model.openQty u.orders.values + qty ≤ 1000
+h_1 :
+  -1 *
+        model.openQty
+          (u.orders.set (u.orders.size + 1)
+              { expiry := t.expiry, leg := t.leg, strike := t.strike, buy := JS.eq t.side model.Side.ask, qty := qty,
+                price := price }).values +
+      1001 ≤
+    0
+left : JS.eq t.side model.Side.ask = true
+right : t.side = model.Side.ask
+⊢ False
+[grind] Goal diagnostics
+  [facts] Asserted facts
+    [prop] -1 * qty + 1 ≤ 0 ∧ qty + -500 ≤ 0

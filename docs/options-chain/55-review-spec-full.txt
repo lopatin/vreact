@@ -1,0 +1,3221 @@
+translated 8 module(s), 211 proof obligation(s) → .vreact/ ; checking with Lean…
+
+Components
+  VERIFIED           PriceCell              src/StrikeRow.tsx:12
+  VERIFIED           StrikeRow              src/StrikeRow.tsx:41
+  VERIFIED           TermRow                src/TermRow.tsx:19
+  VERIFIED           OrderTicket            src/OrderTicket.tsx:19
+  VERIFIED           OptionsChain           src/OptionsChain.tsx:34
+  VERIFIED           App                    src/App.tsx:172
+Functions
+  VERIFIED           sameMembers
+  VERIFIED           sameMembersExcept
+  VERIFIED           toggleIn
+  VERIFIED           sameEntries
+  VERIFIED           agreeExcept
+  VERIFIED           sameList
+  VERIFIED           byId
+  VERIFIED           validChain
+  VERIFIED           legOf
+  VERIFIED           theoOf
+  VERIFIED           quotePrice
+  VERIFIED           withinSpread
+  VERIFIED           isMid
+  VERIFIED           midPrice
+  VERIFIED           inTheMoney
+  VERIFIED           dist
+  VERIFIED           nearest
+  VERIFIED           atmIndex
+  VERIFIED           inWindow
+  VERIFIED           strikeWindow
+  VERIFIED           shownRows
+  VERIFIED           filterLabel
+  INCOMPLETE         levelsOf
+      ↳ an obligation of it failed
+  VERIFIED           edge
+  VERIFIED           heatOf
+  VERIFIED           legFor
+  VERIFIED           labelOf
+  VERIFIED           marketOf
+  VERIFIED           validQty
+  VERIFIED           validOrder
+  VERIFIED           openQty
+  VERIFIED           fmtPrice
+  VERIFIED           contractText
+  VERIFIED           quoteText
+  VERIFIED           crosses
+  VERIFIED           fmtVol
+  VERIFIED           wellFormed
+  VERIFIED           sameView
+  VERIFIED           sameOrder
+  VERIFIED           keepsOrders
+  VERIFIED           keepsOrdersExcept
+  VERIFIED           sameOrders
+  VERIFIED           orderFor
+  VERIFIED           toggle
+  VERIFIED           setCollapsed
+  VERIFIED           setFilter
+  VERIFIED           watchStrike
+  VERIFIED           holdAt
+  VERIFIED           follow
+  VERIFIED           jump
+  VERIFIED           setHeat
+  VERIFIED           accepts
+  VERIFIED           withOrder
+  INCOMPLETE         place
+      ↳ 2 obligations of it failed
+  VERIFIED           repriced
+  VERIFIED           amend
+  VERIFIED           cancel
+  VERIFIED           validAction
+  INCOMPLETE         chainReducer
+      ↳ an obligation of it failed
+  VERIFIED           shiftQuote
+  VERIFIED           shifted
+  INCOMPLETE         moveFutures
+      ↳ an obligation of it failed
+  VERIFIED           nextSeed
+  VERIFIED           validFeed
+  INCOMPLETE         stepFeed
+      ↳ an obligation of it failed
+  VERIFIED           sameFeed
+  INCOMPLETE         simReducer
+      ↳ 2 obligations of it failed
+App certificates (VReact.run_allInv instantiated)
+  VERIFIED           VTS.App.App.certificate  axioms: propext, Classical.choice, Quot.sound
+Obligations by file
+  ✓ src/collections.ts                       6/6
+  ✗ src/model.ts                             26/27
+  ✗ src/reducer.ts                           49/52
+  ✓ src/StrikeRow.tsx                        24/24
+  ✓ src/TermRow.tsx                          12/12
+  ✓ src/OrderTicket.tsx                      12/12
+  ✓ src/OptionsChain.tsx                     46/46
+  ✗ src/App.tsx                              28/32
+
+Failed obligations
+✗ src/App.tsx:97:11  [postcondition] postcondition of moveFutures: r.length === es.length && forall(0, es.length, (i) => r[i].id === es[i].id && shifted(es[i].future, r[i].future, d))
+    │ `grind` failed
+    │ case grind.1.1.2.1.1.1.1.1.1.1.2.2.2
+    │ es : List model.Expiry
+    │ d : Int
+    │ hcontract hcontract_1 hcontract_2 :
+    │   ((List.map (fun e => e.id) es).Nodup ∧
+    │       ∀ (x : model.Expiry), x ∈ es → (List.map (fun s => s.strike) x.strikes).Nodup) →
+    │     (List.map (fun e => e.id) es).Nodup ∧
+    │       ∀ (x : model.Expiry),
+    │         (∃ a,
+    │             a ∈ es ∧
+    │               { id := a.id, symbol := a.symbol, label := a.label,
+    │                   future :=
+    │                     {
+    │                       bid :=
+    │                         match h₁ : a.future.bid with
+    │                         | some bid => some (bid + d * 10)
+    │                         | none => none,
+    │                       bidQty := a.future.bidQty,
+    │                       ask :=
+    │                         match h₁ : a.future.ask with
+    │                         | some ask => some (ask + d * 10)
+    │                         | none => none,
+    │                       askQty := a.future.askQty },
+    │                   strikes := a.strikes } =
+    │                 x) →
+    │           (List.map (fun s => s.strike) x.strikes).Nodup
+    │ x : Int
+    │ x_1 : -1 * x ≤ 0
+    │ x_2 : x + -1 * ↑es.length + 1 ≤ 0
+    │ hp0 hp1 hp0_1 hp0_2 : x.toNat + 1 ≤ es.length
+    │ h :
+    │   ¬(List.map
+    │               (fun e =>
+    │                 { id := e.id, symbol := e.symbol, label := e.label,
+    │                   future :=
+    │                     {
+    │                       bid :=
+    │                         match h₁ : e.future.bid with
+    │                         | some bid => some (10 * d + bid)
+    │                         | none => none,
+    │                       bidQty := e.future.bidQty,
+    │                       ask :=
+    │                         match h₁ : e.future.ask with
+    │                         | some ask => some (10 * d + ask)
+    │                         | none => none,
+    │                       askQty := e.future.askQty },
+    │                   strikes := e.strikes })
+    │               es)[x.toNat].future.bid =
+    │       match h₁ : es[x.toNat].future.bid with
+    │       | some bid => some (d + bid)
+    │       | none => none
+    │ bid : Int
+    │ h₁ h_1 : es[x.toNat].future.bid = some bid
+    │ h_2 : x ≤ 0
+    │ h_3 : ¬(fun bid h₁ => some (10 * d + bid)) = fun bid h₃ => some (d + bid)
+    │ bid_1 : Int
+    │ h₁_1 h_4 : es[x.toNat].future.bid = some bid_1
+    │ left : (List.map (fun e => e.id) es).Nodup
+    │ right : List.Pairwise (fun x1 x2 => ¬x1 = x2) (List.map (fun e => e.id) es)
+    │ bid_2 : Int
+    │ h₁_2 h_6 : es[x.toNat].future.ask = some bid_2
+    │ h_7 : (fun h₁ => none) = fun h₃ => none
+    │ w : Int
+    │ h_8 : ¬(fun h₁ => some (10 * d + w)) = fun h₃ => some (d + w)
+    │ w_1 : model.Expiry
+    │ left_1 : w_1 ∈ es
+    │ right_1 :
+    │   { id := w_1.id, symbol := w_1.symbol, label := w_1.label,
+    │       future :=
+    │         {
+    │           bid :=
+    │             match h₁ : w_1.future.bid with
+    │             | some bid => some (10 * d + bid)
+    │             | none => none,
+    │           bidQty := w_1.future.bidQty,
+    │           ask :=
+    │             match h₁ : w_1.future.ask with
+    │             | some ask => some (10 * d + ask)
+    │             | none => none,
+    │           askQty := w_1.future.askQty },
+    │       strikes := w_1.strikes } =
+    │     (List.map
+    │         (fun e =>
+    │           { id := e.id, symbol := e.symbol, label := e.label,
+    │             future :=
+    │               {
+    │                 bid :=
+    │                   match h₁ : e.future.bid with
+    │                   | some bid => some (10 * d + bid)
+    │                   | none => none,
+    │                 bidQty := e.future.bidQty,
+    │                 ask :=
+    │                   match h₁ : e.future.ask with
+    │                   | some ask => some (10 * d + ask)
+    │                   | none => none,
+    │                 askQty := e.future.askQty },
+    │             strikes := e.strikes })
+    │         es)[x.toNat]
+    │ bid_3 : Int
+    │ h₁_3 h_10 : w_1.future.ask = some bid_3
+    │ bid_4 : Int
+    │ h₁_4 h_11 : w_1.future.bid = some bid_4
+    │ h_12 : bid_1 = bid_2
+    │ h_13 : ¬bid_2 = 10 * d + bid_1
+    │ h_14 : ¬bid_2 = d + bid_1
+    │ h_15 : ¬d + bid_1 = 10 * d + bid_1
+    │ ⊢ False
+    │ [grind] Goal diagnostics
+    │   [facts] Asserted facts
+    │     [prop] (((List.map (fun e => e.id) es).Nodup ∧
+    │               ∀ (x : model.Expiry), x ∈ es → (List.map (fun s => s.strike) x.strikes).Nodup) →
+    │             (List.map (fun e => e.id) es).Nodup) ∧
+    │           (((List.map (fun e => e.id) es).Nodup ∧
+    │               ∀ (x : model.Expiry), x ∈ es → (List.map (fun s => s.strike) x.strikes).Nodup) →
+    │             ∀ (x : model.Expiry),
+    │               (∃ a,
+    │                   a ∈ es ∧
+    │                     { id := a.id, symbol := a.symbol, label := a.label,
+    │                         future :=
+    │                           {
+    │                             bid :=
+    │                               match h₁ : a.future.bid with
+    │                               | some bid => some (10 * d + bid)
+    │                               | none => none,
+    │                             bidQty := a.future.bidQty,
+    │                             ask :=
+    │                               match h₁ : a.future.ask with
+    │                               | some ask => some (10 * d + ask)
+    │                               | none => none,
+    │                             askQty := a.future.askQty },
+    │                         strikes := a.strikes } =
+    │                       x) →
+    │                 (List.map (fun s => s.strike) x.strikes).Nodup)
+    │     [prop] (((List.map (fun e => e.id) es).Nodup ∧
+    │               ∀ (x : model.Expiry), x ∈ es → (List.map (fun s => s.strike) x.strikes).Nodup) →
+    │             (List.map (fun e => e.id) es).Nodup) ∧
+    │           (((List.map (fun e => e.id) es).Nodup ∧
+    │               ∀ (x : model.Expiry), x ∈ es → (List.map (fun s => s.strike) x.strikes).Nodup) →
+    │             ∀ (x : model.Expiry),
+    │               (∃ a,
+    │                   a ∈ es ∧
+    │                     { id := a.id, symbol := a.symbol, label := a.label,
+    │                         future :=
+    │                           {
+    │                             bid :=
+    │                               match h₁ : a.future.bid with
+    │                               | some bid => some (10 * d + bid)
+    │                               | none => none,
+    │                             bidQty := a.future.bidQty,
+    │                             ask :=
+    │                               match h₁ : a.future.ask with
+    │                               | some ask => some (10 * d + ask)
+    │                               | none => none,
+    │                             askQty := a.future.askQty },
+    │                         strikes := a.strikes } =
+    │                       x) →
+    │                 (List.map (fun s => s.strike) x.strikes).Nodup)
+    │     [prop] (((List.map (fun e => e.id) es).Nodup ∧
+    │               ∀ (x : model.Expiry), x ∈ es → (List.map (fun s => s.strike) x.strikes).Nodup) →
+    │             (List.map (fun e => e.id) es).Nodup) ∧
+    │           (((List.map (fun e => e.id) es).Nodup ∧
+    │               ∀ (x : model.Expiry), x ∈ es → (List.map (fun s => s.strike) x.strikes).Nodup) →
+    │             ∀ (x : model.Expiry),
+    │               (∃ a,
+    │                   a ∈ es ∧
+    │                     { id := a.id, symbol := a.symbol, label := a.label,
+    │                         future :=
+    │                           {
+    │                             bid :=
+    │                               match h₁ : a.future.bid with
+    │                               | some bid => some (10 * d + bid)
+    │                               | none => none,
+    │                             bidQty := a.future.bidQty,
+    │                             ask :=
+    │                               match h₁ : a.future.ask with
+    │                               | some ask => some (10 * d + ask)
+    │                               | none => none,
+    │                             askQty := a.future.askQty },
+    │                         strikes := a.strikes } =
+    │                       x) →
+    │                 (List.map (fun s => s.strike) x.strikes).Nodup)
+    │     [prop] -1 * x ≤ 0
+    │     [prop] x + -1 * ↑es.length + 1 ≤ 0
+    │     [prop] x.toNat + 1 ≤ es.length
+    │     [prop] ↑x.toNat = if x ≤ 0 then 0 else x
+    │     [prop] x.toNat + 1 ≤ es.length
+    │     [prop] x.toNat + 1 ≤ es.length
+    │     [prop] x.toNat + 1 ≤ es.length
+    │     [prop] ¬(List.map
+    │                     (fun e =>
+    │                       { id := e.id, symbol := e.symbol, label := e.label,
+    │                         future :=
+    │                           {
+    │                             bid :=
+    │                               match h₁ : e.future.bid with
+    │                               | some bid => some (10 * d + bid)
+    │                               | none => none,
+    │                             bidQty := e.future.bidQty,
+    │                             ask :=
+    │                               match h₁ : e.future.ask with
+    │                               | some ask => some (10 * d + ask)
+    │                               | none => none,
+    │                             askQty := e.future.askQty },
+    │                         strikes := e.strikes })
+    │                     es)[x.toNat].future.bid =
+    │             match h₁ : es[x.toNat].future.bid with
+    │             | some bid => some (d + bid)
+    │             | none => none
+    │     [prop] (List.map (fun e => e.id) es).Nodup = ∀ (a : Int), List.count a (List.map (fun e => e.id) es) ≤ 1
+    │     [prop] (List.map (fun e => e.id) es).Nodup = List.Pairwise (fun x1 x2 => ¬x1 = x2) (List.map (fun e => e.id) es)
+    │     [prop] (List.map
+    │               (fun e =>
+    │                 { id := e.id, symbol := e.symbol, label := e.label,
+    │                   future :=
+    │                     {
+    │                       bid :=
+    │                         match h₁ : e.future.bid with
+    │                         | some bid => some (10 * d + bid)
+    │                         | none => none,
+    │                       bidQty := e.future.bidQty,
+    │                       ask :=
+    │                         match h₁ : e.future.ask with
+    │                         | some ask => some (10 * d + ask)
+    │                         | none => none,
+    │                       askQty := e.future.askQty },
+    │                   strikes := e.strikes })
+    │               es).length =
+    │           es.length
+    │     [prop] max x 0 = if x ≤ 0 then 0 else x
+    │     [prop] (List.map
+    │               (fun e =>
+    │                 { id := e.id, symbol := e.symbol, label := e.label,
+    │                   future :=
+    │                     {
+    │                       bid :=
+    │                         match h₁ : e.future.bid with
+    │                         | some bid => some (10 * d + bid)
+    │                         | none => none,
+    │                       bidQty := e.future.bidQty,
+    │                       ask :=
+    │                         match h₁ : e.future.ask with
+    │                         | some ask => some (10 * d + ask)
+    │                         | none => none,
+    │                       askQty := e.future.askQty },
+    │                   strikes := e.strikes })
+    │               es)[x.toNat] =
+    │           { id := es[x.toNat].id, symbol := es[x.toNat].symbol, label := es[x.toNat].label,
+    │             future :=
+    │               {
+    │                 bid :=
+    │                   match h₁ : es[x.toNat].future.bid with
+    │                   | some bid => some (10 * d + bid)
+    │                   | none => none,
+    │                 bidQty := es[x.toNat].future.bidQty,
+    │                 ask :=
+    │                   match h₁ : es[x.toNat].future.ask with
+    │                   | some ask => some (10 * d + ask)
+    │                   | none => none,
+    │                 askQty := es[x.toNat].future.askQty },
+    │             strikes := es[x.toNat].strikes }
+    │     [prop] ∀ (h : -1 * x ≤ 0 ∧ x + -1 * ↑es.length + 1 ≤ 0), es[x.toNat] ∈ es
+    │     [prop] ∀
+    │           (h :
+    │             -1 * x ≤ 0 ∧
+    │               x +
+    │                     -1 *
+    │                       ↑(List.map
+    │                             (fun e =>
+    │                               { id := e.id, symbol := e.symbol, label := e.label,
+    │                                 future :=
+    │                                   {
+    │                                     bid :=
+    │                                       match h₁ : e.future.bid with
+    │                                       | some bid => some (10 * d + bid)
+    │                                       | none => none,
+    │                                     bidQty := e.future.bidQty,
+    │                                     ask :=
+    │                                       match h₁ : e.future.ask with
+    │                                       | some ask => some (10 * d + ask)
+    │                                       | none => none,
+    │                                     askQty := e.future.askQty },
+    │                                 strikes := e.strikes })
+    │                             es).length +
+    │                   1 ≤
+    │                 0),
+    │           (List.map
+    │                 (fun e =>
+    │                   { id := e.id, symbol := e.symbol, label := e.label,
+    │                     future :=
+    │                       {
+    │                         bid :=
+    │                           match h₁ : e.future.bid with
+    │                           | some bid => some (10 * d + bid)
+    │                           | none => none,
+    │                         bidQty := e.future.bidQty,
+    │                         ask :=
+    │                           match h₁ : e.future.ask with
+    │                           | some ask => some (10 * d + ask)
+    │                           | none => none,
+    │                         askQty := e.future.askQty },
+    │                     strikes := e.strikes })
+    │                 es)[x.toNat] ∈
+    │             List.map
+    │               (fun e =>
+    │                 { id := e.id, symbol := e.symbol, label := e.label,
+    │                   future :=
+    │                     {
+    │                       bid :=
+    │                         match h₁ : e.future.bid with
+    │                         | some bid => some (10 * d + bid)
+    │                         | none => none,
+    │                       bidQty := e.future.bidQty,
+    │                       ask :=
+    │                         match h₁ : e.future.ask with
+    │                         | some ask => some (10 * d + ask)
+    │                         | none => none,
+    │                       askQty := e.future.askQty },
+    │                   strikes := e.strikes })
+    │               es
+    │     [prop] es[x.toNat] ∈ es
+    │     [prop] (List.map
+    │               (fun e =>
+    │                 { id := e.id, symbol := e.symbol, label := e.label,
+    │                   future :=
+    │                     {
+    │                       bid :=
+    │                         match h₁ : e.future.bid with
+    │                         | some bid => some (10 * d + bid)
+    │                         | none => none,
+    │                       bidQty := e.future.bidQty,
+    │                       ask :=
+    │                         match h₁ : e.future.ask with
+    │                         | some ask => some (10 * d + ask)
+    │                         | none => none,
+    │                       askQty := e.future.askQty },
+    │                   strikes := e.strikes })
+    │               es)[x.toNat] ∈
+    │           List.map
+    │             (fun e =>
+    │               { id := e.id, symbol := e.symbol, label := e.label,
+    │                 future :=
+    │                   {
+    │                     bid :=
+    │                       match h₁ : e.future.bid with
+    │                       | some bid => some (10 * d + bid)
+    │                       | none => none,
+    │                     bidQty := e.future.bidQty,
+    │                     ask :=
+    │                       match h₁ : e.future.ask with
+    │                       | some ask => some (10 * d + ask)
+    │                       | none => none,
+    │                     askQty := e.future.askQty },
+    │                 strikes := e.strikes })
+    │             es
+    │     [prop] List.Pairwise (fun x1 x2 => ¬x1 = x2) (List.map (fun e => e.id) es) =
+    │           List.Pairwise (fun a b => ¬a.id = b.id) es
+    │     [prop] ((List.map
+    │                 (fun e =>
+    │                   { id := e.id, symbol := e.symbol, label := e.label,
+    │                     future :=
+    │                       {
+    │                         bid :=
+    │                           match h₁ : e.future.bid with
+    │                           | some bid => some (10 * d + bid)
+    │                           | none => none,
+    │                         bidQty := e.future.bidQty,
+    │                         ask :=
+    │                           match h₁ : e.future.ask with
+    │                           | some ask => some (10 * d + ask)
+    │                           | none => none,
+    │                         askQty := e.future.askQty },
+    │                     strikes := e.strikes })
+    │                 es)[x.toNat] ∈
+    │             List.map
+    │               (fun e =>
+    │                 { id := e.id, symbol := e.symbol, label := e.label,
+    │                   future :=
+    │                     {
+    │                       bid :=
+    │                         match h₁ : e.future.bid with
+    │                         | some bid => some (10 * d + bid)
+    │                         | none => none,
+    │                       bidQty := e.future.bidQty,
+    │                       ask :=
+    │                         match h₁ : e.future.ask with
+    │                         | some ask => some (10 * d + ask)
+    │                         | none => none,
+    │                       askQty := e.future.askQty },
+    │                   strikes := e.strikes })
+    │               es) =
+    │           ∃ a,
+    │             a ∈ es ∧
+    │               { id := a.id, symbol := a.symbol, label := a.label,
+    │                   future :=
+    │                     {
+    │                       bid :=
+    │                         match h₁ : a.future.bid with
+    │                         | some bid => some (10 * d + bid)
+    │                         | none => none,
+    │                       bidQty := a.future.bidQty,
+    │                       ask :=
+    │                         match h₁ : a.future.ask with
+    │                         | some ask => some (10 * d + ask)
+    │                         | none => none,
+    │                       askQty := a.future.askQty },
+    │                   strikes := a.strikes } =
+    │                 (List.map
+    │                     (fun e =>
+    │                       { id := e.id, symbol := e.symbol, label := e.label,
+    │                         future :=
+    │                           {
+    │                             bid :=
+    │                               match h₁ : e.future.bid with
+    │                               | some bid => some (10 * d + bid)
+    │                               | none => none,
+    │                             bidQty := e.future.bidQty,
+    │                             ask :=
+    │                               match h₁ : e.future.ask with
+    │                               | some ask => some (10 * d + ask)
+    │                               | none => none,
+    │                             askQty := e.future.askQty },
+    │                         strikes := e.strikes })
+    │                     es)[x.toNat]
+    │     [prop] (List.map
+    │                 (fun e =>
+    │                   { id := e.id, symbol := e.symbol, label := e.label,
+    │                     future :=
+    │                       {
+    │                         bid :=
+    │                           match h₁ : e.future.bid with
+    │                           | some bid => some (10 * d + bid)
+    │                           | none => none,
+    │                         bidQty := e.future.bidQty,
+    │                         ask :=
+    │                           match h₁ : e.future.ask with
+    │                           | some ask => some (10 * d + ask)
+    │                           | none => none,
+    │                         askQty := e.future.askQty },
+    │                     strikes := e.strikes })
+    │                 es)[x.toNat] ∈
+    │             List.map
+    │               (fun e =>
+    │                 { id := e.id, symbol := e.symbol, label := e.label,
+    │                   future :=
+    │                     {
+    │                       bid :=
+    │                         match h₁ : e.future.bid with
+    │                         | some bid => some (10 * d + bid)
+    │                         | none => none,
+    │                       bidQty := e.future.bidQty,
+    │                       ask :=
+    │                         match h₁ : e.future.ask with
+    │                         | some ask => some (10 * d + ask)
+    │                         | none => none,
+    │                       askQty := e.future.askQty },
+    │                   strikes := e.strikes })
+    │               es →
+    │           1 ≤
+    │             (List.map
+    │                 (fun e =>
+    │                   { id := e.id, symbol := e.symbol, label := e.label,
+    │                     future :=
+    │                       {
+    │                         bid :=
+    │                           match h₁ : e.future.bid with
+    │                           | some bid => some (10 * d + bid)
+    │                           | none => none,
+    │                         bidQty := e.future.bidQty,
+    │                         ask :=
+    │                           match h₁ : e.future.ask with
+    │                           | some ask => some (10 * d + ask)
+    │                           | none => none,
+    │                         askQty := e.future.askQty },
+    │                     strikes := e.strikes })
+    │                 es).length
+    │     [prop] es[x.toNat] ∈ es → 1 ≤ es.length
+    │     [prop] (∀ (a b : model.Expiry), True) →
+    │           List.Pairwise (fun a b => ¬a.id = b.id) es →
+    │             List.Pairwise (fun x1 x2 => ¬x1 = x2) (List.map (fun e => e.id) es)
+    │     [prop] es[x.toNat].future.bid = some bid
+    │     [prop] es[x.toNat].future.bid = some bid
+    │     [prop] (match h₁ : es[x.toNat].future.bid with
+    │           | some bid => some (10 * d + bid)
+    │           | none => none) =
+    │           some (10 * d + bid)
+    │     [prop] (match h₁ : es[x.toNat].future.bid with
+    │           | some bid => some (d + bid)
+    │           | none => none) =
+    │           some (d + bid)
+    │     [prop] x ≤ 0
+    │     [prop] ¬(fun bid h₁ => some (10 * d + bid)) = fun bid h₃ => some (d + bid)
+    │     [prop] ∃ x_3, ¬(fun h₁ => some (10 * d + x_3)) = fun h₃ => some (d + x_3)
+    │     [prop] es[x.toNat].future.bid = some bid_1
+    │     [prop] es[x.toNat].future.bid = some bid_1
+    │     [prop] (match h₁ : es[x.toNat].future.bid with
+    │           | some bid => some (10 * d + bid)
+    │           | none => none) =
+    │           some (10 * d + bid_1)
+    │     [prop] (match h₁ : es[x.toNat].future.bid with
+    │           | some bid => some (d + bid)
+    │           | none => none) =
+    │           some (d + bid_1)
+    │     [prop] (List.map (fun e => e.id) es).Nodup
+    │     [prop] List.Pairwise (fun x1 x2 => ¬x1 = x2) (List.map (fun e => e.id) es)
+    │     [prop] es[x.toNat].future.ask = some bid_2
+    │     [prop] es[x.toNat].future.ask = some bid_2
+    │     [prop] (match h₁ : es[x.toNat].future.ask with
+    │           | some ask => some (10 * d + ask)
+    │           | none => none) =
+    │           some (10 * d + bid_2)
+    │     [prop] (fun h₁ => none) = fun h₃ => none
+    │     [prop] ¬(fun h₁ => some (10 * d + w)) = fun h₃ => some (d + w)
+    │     [prop] ∀ {h : es[x.toNat].future.bid = some w → some (10 * d + w) = some (d + w)}, False
+    │     [prop] w_1 ∈ es
+    │     [prop] { id := w_1.id, symbol := w_1.symbol, label := w_1.label,
+    │             future :=
+    │               {
+    │                 bid :=
+    │                   match h₁ : w_1.future.bid with
+    │                   | some bid => some (10 * d + bid)
+    │                   | none => none,
+    │                 bidQty := w_1.future.bidQty,
+    │                 ask :=
+    │                   match h₁ : w_1.future.ask with
+    │                   | some ask => some (10 * d + ask)
+    │                   | none => none,
+    │                 askQty := w_1.future.askQty },
+    │             strikes := w_1.strikes } =
+    │           (List.map
+    │               (fun e =>
+    │                 { id := e.id, symbol := e.symbol, label := e.label,
+    │                   future :=
+    │                     {
+    │                       bid :=
+    │                         match h₁ : e.future.bid with
+    │                         | some bid => some (10 * d + bid)
+    │                         | none => none,
+    │                       bidQty := e.future.bidQty,
+    │                       ask :=
+    │                         match h₁ : e.future.ask with
+    │                         | some ask => some (10 * d + ask)
+    │                         | none => none,
+    │                       askQty := e.future.askQty },
+    │                   strikes := e.strikes })
+    │               es)[x.toNat]
+    │     [prop] w_1 ∈ es → 1 ≤ es.length
+    │     [prop] w_1.future.ask = some bid_3
+    │     [prop] w_1.future.ask = some bid_3
+    │     [prop] (match h₁ : w_1.future.ask with
+    │           | some ask => some (10 * d + ask)
+    │           | none => none) =
+    │           some (10 * d + bid_3)
+    │     [prop] (match h₁ : w_1.future.ask with
+    │           | some ask => some (10 * d + ask)
+    │           | none => none) =
+    │           some (10 * d + bid_2)
+    │     [prop] w_1.future.bid = some bid_4
+    │     [prop] w_1.future.bid = some bid_4
+    │     [prop] (match h₁ : w_1.future.bid with
+    │           | some bid => some (10 * d + bid)
+    │           | none => none) =
+    │           some (10 * d + bid_4)
+    │     [prop] (match h₁ : w_1.future.bid with
+    │           | some bid => some (10 * d + bid)
+    │           | none => none) =
+    │           some (10 * d + bid_1)
+    │     [prop] bid_1 = bid_2
+    │     [prop] (match h₁ : w_1.future.ask with
+    │           | some ask => some (10 * d + ask)
+    │           | none => none) =
+    │           some (10 * d + bid_1)
+    │     [prop] (match h₁ : es[x.toNat].future.ask with
+    │           | some ask => some (10 * d + ask)
+    │           | none => none) =
+    │           some (10 * d + bid_1)
+    │     [prop] ¬bid_2 = 10 * d + bid_1
+    │     [prop] ¬bid_2 = d + bid_1
+    │     [prop] ¬d + bid_1 = 10 * d + bid_1
+    │   [eqc] True propositions
+    │     [prop] (((List.map (fun e => e.id) es).Nodup ∧
+    │               ∀ (x : model.Expiry), x ∈ es → (List.map (fun s => s.strike) x.strikes).Nodup) →
+    │             (List.map (fun e => e.id) es).Nodup) ∧
+    │           (((List.map (fun e => e.id) es).Nodup ∧
+    │               ∀ (x : model.Expiry), x ∈ es → (List.map (fun s => s.strike) x.strikes).Nodup) →
+    │             ∀ (x : model.Expiry),
+    │               (∃ a,
+    │                   a ∈ es ∧
+    │                     { id := a.id, symbol := a.symbol, label := a.label,
+    │                         future :=
+    │                           {
+    │                             bid :=
+    │                               match h₁ : a.future.bid with
+    │                               | some bid => some (10 * d + bid)
+    │                               | none => none,
+    │                             bidQty := a.future.bidQty,
+    │                             ask :=
+    │                               match h₁ : a.future.ask with
+    │                               | some ask => some (10 * d + ask)
+    │                               | none => none,
+    │                             askQty := a.future.askQty },
+    │                         strikes := a.strikes } =
+    │                       x) →
+    │                 (List.map (fun s => s.strike) x.strikes).Nodup)
+    │     [prop] (List.map (fun e => e.id) es).Nodup
+    │     [prop] x ≤ 0
+    │     [prop] x + -1 * ↑es.length + 1 ≤ 0
+    │     [prop] -1 * x ≤ 0
+    │     [prop] x.toNat + 1 ≤ es.length
+    │     [prop] x.toNat < es.length
+    │     [prop] x.toNat <
+    │           (List.map
+    │               (fun e =>
+    │                 { id := e.id, symbol := e.symbol, label := e.label,
+    │                   future :=
+    │                     {
+    │                       bid :=
+    │                         match h₁ : e.future.bid with
+    │                         | some bid => some (10 * d + bid)
+    │                         | none => none,
+    │                       bidQty := e.future.bidQty,
+    │                       ask :=
+    │                         match h₁ : e.future.ask with
+    │                         | some ask => some (10 * d + ask)
+    │                         | none => none,
+    │                       askQty := e.future.askQty },
+    │                   strikes := e.strikes })
+    │               es).length
+    │     [prop] ((List.map (fun e => e.id) es).Nodup ∧
+    │             ∀ (x : model.Expiry), x ∈ es → (List.map (fun s => s.strike) x.strikes).Nodup) →
+    │           (List.map (fun e => e.id) es).Nodup
+    │     [prop] ((List.map (fun e => e.id) es).Nodup ∧
+    │             ∀ (x : model.Expiry), x ∈ es → (List.map (fun s => s.strike) x.strikes).Nodup) →
+    │           ∀ (x : model.Expiry),
+    │             (∃ a,
+    │                 a ∈ es ∧
+    │                   { id := a.id, symbol := a.symbol, label := a.label,
+    │                       future :=
+    │                         {
+    │                           bid :=
+    │                             match h₁ : a.future.bid with
+    │                             | some bid => some (10 * d + bid)
+    │                             | none => none,
+    │                           bidQty := a.future.bidQty,
+    │                           ask :=
+    │                             match h₁ : a.future.ask with
+    │                             | some ask => some (10 * d + ask)
+    │                             | none => none,
+    │                           askQty := a.future.askQty },
+    │                       strikes := a.strikes } =
+    │                     x) →
+    │               (List.map (fun s => s.strike) x.strikes).Nodup
+    │     [prop] -1 * x ≤ 0 ∧ x + -1 * ↑es.length + 1 ≤ 0
+    │     [prop] -1 * x ≤ 0 ∧
+    │           x +
+    │                 -1 *
+    │                   ↑(List.map
+    │                         (fun e =>
+    │                           { id := e.id, symbol := e.symbol, label := e.label,
+    │                             future :=
+    │                               {
+    │                                 bid :=
+    │                                   match h₁ : e.future.bid with
+    │                                   | some bid => some (10 * d + bid)
+    │                                   | none => none,
+    │                                 bidQty := e.future.bidQty,
+    │                                 ask :=
+    │                                   match h₁ : e.future.ask with
+    │                                   | some ask => some (10 * d + ask)
+    │                                   | none => none,
+    │                                 askQty := e.future.askQty },
+    │                             strikes := e.strikes })
+    │                         es).length +
+    │               1 ≤
+    │             0
+    │     [prop] (List.map (fun e => e.id) es).Nodup = List.Pairwise (fun x1 x2 => ¬x1 = x2) (List.map (fun e => e.id) es)
+    │     [prop] (List.map (fun e => e.id) es).Nodup = ∀ (a : Int), List.count a (List.map (fun e => e.id) es) ≤ 1
+    │     [prop] (fun h₁ => none) = fun h₃ => none
+    │     [prop] List.Pairwise (fun x1 x2 => ¬x1 = x2) (List.map (fun e => e.id) es)
+    │     [prop] x +
+    │               -1 *
+    │                 ↑(List.map
+    │                       (fun e =>
+    │                         { id := e.id, symbol := e.symbol, label := e.label,
+    │                           future :=
+    │                             {
+    │                               bid :=
+    │                                 match h₁ : e.future.bid with
+    │                                 | some bid => some (10 * d + bid)
+    │                                 | none => none,
+    │                               bidQty := e.future.bidQty,
+    │                               ask :=
+    │                                 match h₁ : e.future.ask with
+    │                                 | some ask => some (10 * d + ask)
+    │                                 | none => none,
+    │                               askQty := e.future.askQty },
+    │                           strikes := e.strikes })
+    │                       es).length +
+    │             1 ≤
+    │           0
+    │     [prop] es[x.toNat] ∈ es
+    │     [prop] es[x.toNat] ∈ es
+    │     [prop] (List.map
+    │               (fun e =>
+    │                 { id := e.id, symbol := e.symbol, label := e.label,
+    │                   future :=
+    │                     {
+    │                       bid :=
+    │                         match h₁ : e.future.bid with
+    │                         | some bid => some (10 * d + bid)
+    │                         | none => none,
+    │                       bidQty := e.future.bidQty,
+    │                       ask :=
+    │                         match h₁ : e.future.ask with
+    │                         | some ask => some (10 * d + ask)
+    │                         | none => none,
+    │                       askQty := e.future.askQty },
+    │                   strikes := e.strikes })
+    │               es)[x.toNat] ∈
+    │           List.map
+    │             (fun e =>
+    │               { id := e.id, symbol := e.symbol, label := e.label,
+    │                 future :=
+    │                   {
+    │                     bid :=
+    │                       match h₁ : e.future.bid with
+    │                       | some bid => some (10 * d + bid)
+    │                       | none => none,
+    │                     bidQty := e.future.bidQty,
+    │                     ask :=
+    │                       match h₁ : e.future.ask with
+    │                       | some ask => some (10 * d + ask)
+    │                       | none => none,
+    │                     askQty := e.future.askQty },
+    │                 strikes := e.strikes })
+    │             es
+    │     [prop] (List.map
+    │               (fun e =>
+    │                 { id := e.id, symbol := e.symbol, label := e.label,
+    │                   future :=
+    │                     {
+    │                       bid :=
+    │                         match h₁ : e.future.bid with
+    │                         | some bid => some (10 * d + bid)
+    │                         | none => none,
+    │                       bidQty := e.future.bidQty,
+    │                       ask :=
+    │                         match h₁ : e.future.ask with
+    │                         | some ask => some (10 * d + ask)
+    │                         | none => none,
+    │                       askQty := e.future.askQty },
+    │                   strikes := e.strikes })
+    │               es)[x.toNat] ∈
+    │           List.map
+    │             (fun e =>
+    │               { id := e.id, symbol := e.symbol, label := e.label,
+    │                 future :=
+    │                   {
+    │                     bid :=
+    │                       match h₁ : e.future.bid with
+    │                       | some bid => some (10 * d + bid)
+    │                       | none => none,
+    │                     bidQty := e.future.bidQty,
+    │                     ask :=
+    │                       match h₁ : e.future.ask with
+    │                       | some ask => some (10 * d + ask)
+    │                       | none => none,
+    │                     askQty := e.future.askQty },
+    │                 strikes := e.strikes })
+    │             es
+    │     [prop] ∀ (a : Int), List.count a (List.map (fun e => e.id) es) ≤ 1
+    │     [prop] ∀ (h : -1 * x ≤ 0 ∧ x + -1 * ↑es.length + 1 ≤ 0), es[x.toNat] ∈ es
+    │     [prop] ∀
+    │           (h :
+    │             -1 * x ≤ 0 ∧
+    │               x +
+    │                     -1 *
+    │                       ↑(List.map
+    │                             (fun e =>
+    │                               { id := e.id, symbol := e.symbol, label := e.label,
+    │                                 future :=
+    │                                   {
+    │                                     bid :=
+    │                                       match h₁ : e.future.bid with
+    │                                       | some bid => some (10 * d + bid)
+    │                                       | none => none,
+    │                                     bidQty := e.future.bidQty,
+    │                                     ask :=
+    │                                       match h₁ : e.future.ask with
+    │                                       | some ask => some (10 * d + ask)
+    │                                       | none => none,
+    │                                     askQty := e.future.askQty },
+    │                                 strikes := e.strikes })
+    │                             es).length +
+    │                   1 ≤
+    │                 0),
+    │           (List.map
+    │                 (fun e =>
+    │                   { id := e.id, symbol := e.symbol, label := e.label,
+    │                     future :=
+    │                       {
+    │                         bid :=
+    │                           match h₁ : e.future.bid with
+    │                           | some bid => some (10 * d + bid)
+    │                           | none => none,
+    │                         bidQty := e.future.bidQty,
+    │                         ask :=
+    │                           match h₁ : e.future.ask with
+    │                           | some ask => some (10 * d + ask)
+    │                           | none => none,
+    │                         askQty := e.future.askQty },
+    │                     strikes := e.strikes })
+    │                 es)[x.toNat] ∈
+    │             List.map
+    │               (fun e =>
+    │                 { id := e.id, symbol := e.symbol, label := e.label,
+    │                   future :=
+    │                     {
+    │                       bid :=
+    │                         match h₁ : e.future.bid with
+    │                         | some bid => some (10 * d + bid)
+    │                         | none => none,
+    │                       bidQty := e.future.bidQty,
+    │                       ask :=
+    │                         match h₁ : e.future.ask with
+    │                         | some ask => some (10 * d + ask)
+    │                         | none => none,
+    │                       askQty := e.future.askQty },
+    │                   strikes := e.strikes })
+    │               es
+    │     [prop] ∃ x_3, ¬(fun h₁ => some (10 * d + x_3)) = fun h₃ => some (d + x_3)
+    │     [prop] ∃ a,
+    │           a ∈ es ∧
+    │             { id := a.id, symbol := a.symbol, label := a.label,
+    │                 future :=
+    │                   {
+    │                     bid :=
+    │                       match h₁ : a.future.bid with
+    │                       | some bid => some (10 * d + bid)
+    │                       | none => none,
+    │                     bidQty := a.future.bidQty,
+    │                     ask :=
+    │                       match h₁ : a.future.ask with
+    │                       | some ask => some (10 * d + ask)
+    │                       | none => none,
+    │                     askQty := a.future.askQty },
+    │                 strikes := a.strikes } =
+    │               (List.map
+    │                   (fun e =>
+    │                     { id := e.id, symbol := e.symbol, label := e.label,
+    │                       future :=
+    │                         {
+    │                           bid :=
+    │                             match h₁ : e.future.bid with
+    │                             | some bid => some (10 * d + bid)
+    │                             | none => none,
+    │                           bidQty := e.future.bidQty,
+    │                           ask :=
+    │                             match h₁ : e.future.ask with
+    │                             | some ask => some (10 * d + ask)
+    │                             | none => none,
+    │                           askQty := e.future.askQty },
+    │                       strikes := e.strikes })
+    │                   es)[x.toNat]
+    │     [prop] List.Pairwise (fun x1 x2 => ¬x1 = x2) (List.map (fun e => e.id) es) =
+    │           List.Pairwise (fun a b => ¬a.id = b.id) es
+    │     [prop] ((List.map
+    │                 (fun e =>
+    │                   { id := e.id, symbol := e.symbol, label := e.label,
+    │                     future :=
+    │                       {
+    │                         bid :=
+    │                           match h₁ : e.future.bid with
+    │                           | some bid => some (10 * d + bid)
+    │                           | none => none,
+    │                         bidQty := e.future.bidQty,
+    │                         ask :=
+    │                           match h₁ : e.future.ask with
+    │                           | some ask => some (10 * d + ask)
+    │                           | none => none,
+    │                         askQty := e.future.askQty },
+    │                     strikes := e.strikes })
+    │                 es)[x.toNat] ∈
+    │             List.map
+    │               (fun e =>
+    │                 { id := e.id, symbol := e.symbol, label := e.label,
+    │                   future :=
+    │                     {
+    │                       bid :=
+    │                         match h₁ : e.future.bid with
+    │                         | some bid => some (10 * d + bid)
+    │                         | none => none,
+    │                       bidQty := e.future.bidQty,
+    │                       ask :=
+    │                         match h₁ : e.future.ask with
+    │                         | some ask => some (10 * d + ask)
+    │                         | none => none,
+    │                       askQty := e.future.askQty },
+    │                   strikes := e.strikes })
+    │               es) =
+    │           ∃ a,
+    │             a ∈ es ∧
+    │               { id := a.id, symbol := a.symbol, label := a.label,
+    │                   future :=
+    │                     {
+    │                       bid :=
+    │                         match h₁ : a.future.bid with
+    │                         | some bid => some (10 * d + bid)
+    │                         | none => none,
+    │                       bidQty := a.future.bidQty,
+    │                       ask :=
+    │                         match h₁ : a.future.ask with
+    │                         | some ask => some (10 * d + ask)
+    │                         | none => none,
+    │                       askQty := a.future.askQty },
+    │                   strikes := a.strikes } =
+    │                 (List.map
+    │                     (fun e =>
+    │                       { id := e.id, symbol := e.symbol, label := e.label,
+    │                         future :=
+    │                           {
+    │                             bid :=
+    │                               match h₁ : e.future.bid with
+    │                               | some bid => some (10 * d + bid)
+    │                               | none => none,
+    │                             bidQty := e.future.bidQty,
+    │                             ask :=
+    │                               match h₁ : e.future.ask with
+    │                               | some ask => some (10 * d + ask)
+    │                               | none => none,
+    │                             askQty := e.future.askQty },
+    │                         strikes := e.strikes })
+    │                     es)[x.toNat]
+    │     [prop] bid_1 = bid_2
+    │     [prop] es[x.toNat].future.bid = some w
+    │     [prop] List.Pairwise (fun a b => ¬a.id = b.id) es
+    │     [prop] 1 ≤ es.length
+    │     [prop] 1 ≤
+    │           (List.map
+    │               (fun e =>
+    │                 { id := e.id, symbol := e.symbol, label := e.label,
+    │                   future :=
+    │                     {
+    │                       bid :=
+    │                         match h₁ : e.future.bid with
+    │                         | some bid => some (10 * d + bid)
+    │                         | none => none,
+    │                       bidQty := e.future.bidQty,
+    │                       ask :=
+    │                         match h₁ : e.future.ask with
+    │                         | some ask => some (10 * d + ask)
+    │                         | none => none,
+    │                       askQty := e.future.askQty },
+    │                   strikes := e.strikes })
+    │               es).length
+    │     [prop] w_1 ∈ es
+    │     [prop] es[x.toNat] ∈ es → 1 ≤ es.length
+    │     [prop] (List.map
+    │                 (fun e =>
+    │                   { id := e.id, symbol := e.symbol, label := e.label,
+    │                     future :=
+    │                       {
+    │                         bid :=
+    │                           match h₁ : e.future.bid with
+    │                           | some bid => some (10 * d + bid)
+    │                           | none => none,
+    │                         bidQty := e.future.bidQty,
+    │                         ask :=
+    │                           match h₁ : e.future.ask with
+    │                           | some ask => some (10 * d + ask)
+    │                           | none => none,
+    │                         askQty := e.future.askQty },
+    │                     strikes := e.strikes })
+    │                 es)[x.toNat] ∈
+    │             List.map
+    │               (fun e =>
+    │                 { id := e.id, symbol := e.symbol, label := e.label,
+    │                   future :=
+    │                     {
+    │                       bid :=
+    │                         match h₁ : e.future.bid with
+    │                         | some bid => some (10 * d + bid)
+    │                         | none => none,
+    │                       bidQty := e.future.bidQty,
+    │                       ask :=
+    │                         match h₁ : e.future.ask with
+    │                         | some ask => some (10 * d + ask)
+    │                         | none => none,
+    │                       askQty := e.future.askQty },
+    │                   strikes := e.strikes })
+    │               es →
+    │           1 ≤
+    │             (List.map
+    │                 (fun e =>
+    │                   { id := e.id, symbol := e.symbol, label := e.label,
+    │                     future :=
+    │                       {
+    │                         bid :=
+    │                           match h₁ : e.future.bid with
+    │                           | some bid => some (10 * d + bid)
+    │                           | none => none,
+    │                         bidQty := e.future.bidQty,
+    │                         ask :=
+    │                           match h₁ : e.future.ask with
+    │                           | some ask => some (10 * d + ask)
+    │                           | none => none,
+    │                         askQty := e.future.askQty },
+    │                     strikes := e.strikes })
+    │                 es).length
+    │     [prop] List.Pairwise (fun a b => ¬a.id = b.id) es →
+    │           List.Pairwise (fun x1 x2 => ¬x1 = x2) (List.map (fun e => e.id) es)
+    │     [prop] w_1 ∈ es → 1 ≤ es.length
+    │     [prop] (∀ (a b : model.Expiry), True) →
+    │           List.Pairwise (fun a b => ¬a.id = b.id) es →
+    │             List.Pairwise (fun x1 x2 => ¬x1 = x2) (List.map (fun e => e.id) es)
+    │     [prop] ∀ {h : es[x.toNat].future.bid = some w → some (10 * d + w) = some (d + w)}, False
+    │     [prop] 10 * d + bid_1 = 10 * d + bid_3
+    │   [eqc] False propositions
+    │     [prop] (List.map
+    │                   (fun e =>
+    │                     { id := e.id, symbol := e.symbol, label := e.label,
+    │                       future :=
+    │                         {
+    │                           bid :=
+    │                             match h₁ : e.future.bid with
+    │                             | some bid => some (10 * d + bid)
+    │                             | none => none,
+    │                           bidQty := e.future.bidQty,
+    │                           ask :=
+    │                             match h₁ : e.future.ask with
+    │                             | some ask => some (10 * d + ask)
+    │                             | none => none,
+    │                           askQty := e.future.askQty },
+    │                       strikes := e.strikes })
+    │                   es)[x.toNat].future.bid =
+    │           match h₁ : es[x.toNat].future.bid with
+    │           | some bid => some (d + bid)
+    │           | none => none
+    │     [prop] es[x.toNat].future.bid = none
+    │     [prop] (fun bid h₁ => some (10 * d + bid)) = fun bid h₃ => some (d + bid)
+    │     [prop] (fun h₁ => some (10 * d + w)) = fun h₃ => some (d + w)
+    │     [prop] bid_1 = d + bid_1
+    │     [prop] bid_1 = 10 * d + bid_1
+    │     [prop] bid_2 = d + bid_1
+    │     [prop] bid_2 = 10 * d + bid_1
+    │     [prop] d + bid_1 = 10 * d + bid_1
+    │     [prop] some (10 * d + w) = some (d + w)
+    │     [prop] es[x.toNat].future.bid = some w → some (10 * d + w) = some (d + w)
+    │     [prop] bid_1 = 10 * d + bid_3
+    │     [prop] bid_2 = 10 * d + bid_3
+    │     [prop] d + bid_1 = 10 * d + bid_3
+    │   [eqc] Equivalence classes
+    │     [eqc] {x, 0, max x 0}
+    │       [eqc] {↑x.toNat, ↑0, if x ≤ 0 then 0 else x}
+    │     [eqc] {model.Expiry.id, fun e => e.id}
+    │     [eqc] {(List.map
+    │               (fun e =>
+    │                 { id := e.id, symbol := e.symbol, label := e.label,
+    │                   future :=
+    │                     {
+    │                       bid :=
+    │                         match h₁ : e.future.bid with
+    │                         | some bid => some (10 * d + bid)
+    │                         | none => none,
+    │                       bidQty := e.future.bidQty,
+    │                       ask :=
+    │                         match h₁ : e.future.ask with
+    │                         | some ask => some (10 * d + ask)
+    │                         | none => none,
+    │                       askQty := e.future.askQty },
+    │                   strikes := e.strikes })
+    │               es)[x.toNat].future,
+    │         {
+    │           bid :=
+    │             match h₁ : es[x.toNat].future.bid with
+    │             | some bid => some (10 * d + bid)
+    │             | none => none,
+    │           bidQty := es[x.toNat].future.bidQty,
+    │           ask :=
+    │             match h₁ : es[x.toNat].future.ask with
+    │             | some ask => some (10 * d + ask)
+    │             | none => none,
+    │           askQty := es[x.toNat].future.askQty },
+    │         {
+    │           bid :=
+    │             match h₁ : w_1.future.bid with
+    │             | some bid => some (10 * d + bid)
+    │             | none => none,
+    │           bidQty := w_1.future.bidQty,
+    │           ask :=
+    │             match h₁ : w_1.future.ask with
+    │             | some ask => some (10 * d + ask)
+    │             | none => none,
+    │           askQty := w_1.future.askQty }}
+    │       [eqc] {{ id := es[x.toNat].id, symbol := es[x.toNat].symbol, label := es[x.toNat].label,
+    │               future :=
+    │                 {
+    │                   bid :=
+    │                     match h₁ : es[x.toNat].future.bid with
+    │                     | some bid => some (10 * d + bid)
+    │                     | none => none,
+    │                   bidQty := es[x.toNat].future.bidQty,
+    │                   ask :=
+    │                     match h₁ : es[x.toNat].future.ask with
+    │                     | some ask => some (10 * d + ask)
+    │                     | none => none,
+    │                   askQty := es[x.toNat].future.askQty },
+    │               strikes := es[x.toNat].strikes }.future}
+    │     [eqc] {es[x.toNat].future, es[x.toNat].future}
+    │     [eqc] {es[x.toNat].future.bid,
+    │         es[x.toNat].future.ask,
+    │         es[x.toNat].future.bid,
+    │         some bid,
+    │         w_1.future.ask,
+    │         w_1.future.bid,
+    │         some bid_1,
+    │         some bid_2,
+    │         some w,
+    │         some bid_3,
+    │         some bid_4}
+    │     [eqc] {(List.map
+    │                 (fun e =>
+    │                   { id := e.id, symbol := e.symbol, label := e.label,
+    │                     future :=
+    │                       {
+    │                         bid :=
+    │                           match h₁ : e.future.bid with
+    │                           | some bid => some (10 * d + bid)
+    │                           | none => none,
+    │                         bidQty := e.future.bidQty,
+    │                         ask :=
+    │                           match h₁ : e.future.ask with
+    │                           | some ask => some (10 * d + ask)
+    │                           | none => none,
+    │                         askQty := e.future.askQty },
+    │                     strikes := e.strikes })
+    │                 es)[x.toNat].future.bid,
+    │         some (10 * d + bid),
+    │         some (10 * d + bid_1),
+    │         some (10 * d + bid_2),
+    │         some (10 * d + w),
+    │         some (10 * d + bid_3),
+    │         some (10 * d + bid_4)}
+    │       [eqc] {{
+    │               bid :=
+    │                 match h₁ : es[x.toNat].future.bid with
+    │                 | some bid => some (10 * d + bid)
+    │                 | none => none,
+    │               bidQty := es[x.toNat].future.bidQty,
+    │               ask :=
+    │                 match h₁ : es[x.toNat].future.ask with
+    │                 | some ask => some (10 * d + ask)
+    │                 | none => none,
+    │               askQty := es[x.toNat].future.askQty }.bid,
+    │           match h₁ : es[x.toNat].future.ask with
+    │           | some ask => some (10 * d + ask)
+    │           | none => none,
+    │           match h₁ : es[x.toNat].future.bid with
+    │           | some bid => some (10 * d + bid)
+    │           | none => none,
+    │           match h₁ : w_1.future.ask with
+    │           | some ask => some (10 * d + ask)
+    │           | none => none,
+    │           match h₁ : w_1.future.bid with
+    │           | some bid => some (10 * d + bid)
+    │           | none => none}
+    │     [eqc] {(List.map (fun e => e.id) es).Nodup ∧
+    │           ∀ (x : model.Expiry), x ∈ es → (List.map (fun s => s.strike) x.strikes).Nodup,
+    │         ∀ (x : model.Expiry), x ∈ es → (List.map (fun s => s.strike) x.strikes).Nodup}
+    │     [eqc] {es.length,
+    │         (List.map
+    │             (fun e =>
+    │               { id := e.id, symbol := e.symbol, label := e.label,
+    │                 future :=
+    │                   {
+    │                     bid :=
+    │                       match h₁ : e.future.bid with
+    │                       | some bid => some (10 * d + bid)
+    │                       | none => none,
+    │                     bidQty := e.future.bidQty,
+    │                     ask :=
+    │                       match h₁ : e.future.ask with
+    │                       | some ask => some (10 * d + ask)
+    │                       | none => none,
+    │                     askQty := e.future.askQty },
+    │                 strikes := e.strikes })
+    │             es).length}
+    │     [eqc] {List.map (fun e => e.id) es, List.map model.Expiry.id es}
+    │     [eqc] {some (d + bid), some (d + bid_1), some (d + w)}
+    │       [eqc] {match h₁ : es[x.toNat].future.bid with
+    │           | some bid => some (d + bid)
+    │           | none => none}
+    │     [eqc] {x + -1 * ↑es.length,
+    │         x +
+    │           -1 *
+    │             ↑(List.map
+    │                   (fun e =>
+    │                     { id := e.id, symbol := e.symbol, label := e.label,
+    │                       future :=
+    │                         {
+    │                           bid :=
+    │                             match h₁ : e.future.bid with
+    │                             | some bid => some (10 * d + bid)
+    │                             | none => none,
+    │                           bidQty := e.future.bidQty,
+    │                           ask :=
+    │                             match h₁ : e.future.ask with
+    │                             | some ask => some (10 * d + ask)
+    │                             | none => none,
+    │                           askQty := e.future.askQty },
+    │                       strikes := e.strikes })
+    │                   es).length}
+    │     [eqc] {x + -1 * ↑es.length + 1,
+    │         x +
+    │             -1 *
+    │               ↑(List.map
+    │                     (fun e =>
+    │                       { id := e.id, symbol := e.symbol, label := e.label,
+    │                         future :=
+    │                           {
+    │                             bid :=
+    │                               match h₁ : e.future.bid with
+    │                               | some bid => some (10 * d + bid)
+    │                               | none => none,
+    │                             bidQty := e.future.bidQty,
+    │                             ask :=
+    │                               match h₁ : e.future.ask with
+    │                               | some ask => some (10 * d + ask)
+    │                               | none => none,
+    │                             askQty := e.future.askQty },
+    │                         strikes := e.strikes })
+    │                     es).length +
+    │           1}
+    │     [eqc] {es[x.toNat], es[x.toNat], es[x.toNat]}
+    │     [eqc] {(List.map
+    │             (fun e =>
+    │               { id := e.id, symbol := e.symbol, label := e.label,
+    │                 future :=
+    │                   {
+    │                     bid :=
+    │                       match h₁ : e.future.bid with
+    │                       | some bid => some (10 * d + bid)
+    │                       | none => none,
+    │                     bidQty := e.future.bidQty,
+    │                     ask :=
+    │                       match h₁ : e.future.ask with
+    │                       | some ask => some (10 * d + ask)
+    │                       | none => none,
+    │                     askQty := e.future.askQty },
+    │                 strikes := e.strikes })
+    │             es)[x.toNat],
+    │         { id := es[x.toNat].id, symbol := es[x.toNat].symbol, label := es[x.toNat].label,
+    │           future :=
+    │             {
+    │               bid :=
+    │                 match h₁ : es[x.toNat].future.bid with
+    │                 | some bid => some (10 * d + bid)
+    │                 | none => none,
+    │               bidQty := es[x.toNat].future.bidQty,
+    │               ask :=
+    │                 match h₁ : es[x.toNat].future.ask with
+    │                 | some ask => some (10 * d + ask)
+    │                 | none => none,
+    │               askQty := es[x.toNat].future.askQty },
+    │           strikes := es[x.toNat].strikes },
+    │         (List.map
+    │             (fun e =>
+    │               { id := e.id, symbol := e.symbol, label := e.label,
+    │                 future :=
+    │                   {
+    │                     bid :=
+    │                       match h₁ : e.future.bid with
+    │                       | some bid => some (10 * d + bid)
+    │                       | none => none,
+    │                     bidQty := e.future.bidQty,
+    │                     ask :=
+    │                       match h₁ : e.future.ask with
+    │                       | some ask => some (10 * d + ask)
+    │                       | none => none,
+    │                     askQty := e.future.askQty },
+    │                 strikes := e.strikes })
+    │             es)[x.toNat],
+    │         { id := w_1.id, symbol := w_1.symbol, label := w_1.label,
+    │           future :=
+    │             {
+    │               bid :=
+    │                 match h₁ : w_1.future.bid with
+    │                 | some bid => some (10 * d + bid)
+    │                 | none => none,
+    │               bidQty := w_1.future.bidQty,
+    │               ask :=
+    │                 match h₁ : w_1.future.ask with
+    │                 | some ask => some (10 * d + ask)
+    │                 | none => none,
+    │               askQty := w_1.future.askQty },
+    │           strikes := w_1.strikes }}
+    │     [eqc] {fun h₃ => none, fun h₁ => none}
+    │     [eqc] {bid, bid_1, bid_2, w, bid_3, bid_4}
+    │     [eqc] {es[x.toNat].id, w_1.id}
+    │     [eqc] {es[x.toNat].label, w_1.label}
+    │     [eqc] {es[x.toNat].strikes, w_1.strikes}
+    │     [eqc] {es[x.toNat].symbol, w_1.symbol}
+    │     [eqc] {es[x.toNat].future.askQty, w_1.future.askQty}
+    │     [eqc] {es[x.toNat].future.bidQty, w_1.future.bidQty}
+    │     [eqc] {es.length = 0,
+    │         (List.map
+    │               (fun e =>
+    │                 { id := e.id, symbol := e.symbol, label := e.label,
+    │                   future :=
+    │                     {
+    │                       bid :=
+    │                         match h₁ : e.future.bid with
+    │                         | some bid => some (10 * d + bid)
+    │                         | none => none,
+    │                       bidQty := e.future.bidQty,
+    │                       ask :=
+    │                         match h₁ : e.future.ask with
+    │                         | some ask => some (10 * d + ask)
+    │                         | none => none,
+    │                       askQty := e.future.askQty },
+    │                   strikes := e.strikes })
+    │               es).length =
+    │           0}
+    │     [eqc] {d + bid, d + bid_1, d + w}
+    │     [eqc] {10 * d + bid, 10 * d + bid_1, 10 * d + bid_2, 10 * d + w, 10 * d + bid_3, 10 * d + bid_4}
+    │     [eqc] others
+    │       [eqc] {shiftQuote.match_1 (fun x => Option Int) es[x.toNat].future.bid,
+    │           shiftQuote.match_1 (fun x => Option Int) es[x.toNat].future.bid}
+    │       [eqc] {↑es.length,
+    │           ↑(List.map
+    │                 (fun e =>
+    │                   { id := e.id, symbol := e.symbol, label := e.label,
+    │                     future :=
+    │                       {
+    │                         bid :=
+    │                           match h₁ : e.future.bid with
+    │                           | some bid => some (10 * d + bid)
+    │                           | none => none,
+    │                         bidQty := e.future.bidQty,
+    │                         ask :=
+    │                           match h₁ : e.future.ask with
+    │                           | some ask => some (10 * d + ask)
+    │                           | none => none,
+    │                         askQty := e.future.askQty },
+    │                     strikes := e.strikes })
+    │                 es).length}
+    │       [eqc] {-1 * ↑es.length,
+    │           -1 *
+    │             ↑(List.map
+    │                   (fun e =>
+    │                     { id := e.id, symbol := e.symbol, label := e.label,
+    │                       future :=
+    │                         {
+    │                           bid :=
+    │                             match h₁ : e.future.bid with
+    │                             | some bid => some (10 * d + bid)
+    │                             | none => none,
+    │                           bidQty := e.future.bidQty,
+    │                           ask :=
+    │                             match h₁ : e.future.ask with
+    │                             | some ask => some (10 * d + ask)
+    │                             | none => none,
+    │                           askQty := e.future.askQty },
+    │                       strikes := e.strikes })
+    │                   es).length}
+    │   [cases] Case analyses
+    │     [cases] [1/2]: match h₁ : es[x.toNat].future.bid with
+    │         | some bid => some (d + bid)
+    │         | none => none
+    │       [cases] source: Initial goal
+    │     [cases] [1/2]: if x ≤ 0 then 0 else x
+    │       [cases] source: Initial goal
+    │     [cases] [2/2]: (fun bid h₁ => some (10 * d + bid)) = fun bid h₃ => some (d + bid)
+    │       [cases] source: E-matching `List.getElem_map`
+    │     [cases] [1/2]: match h₁ : es[x.toNat].future.bid with
+    │         | some bid => some (10 * d + bid)
+    │         | none => none
+    │       [cases] source: E-matching `List.getElem_map`
+    │     [cases] [1/2]: (List.map (fun e => e.id) es).Nodup =
+    │           List.Pairwise (fun x1 x2 => ¬x1 = x2) (List.map (fun e => e.id) es)
+    │       [cases] source: E-matching `List.nodup_iff_pairwise_ne`
+    │     [cases] [1/2]: match h₁ : es[x.toNat].future.ask with
+    │         | some ask => some (10 * d + ask)
+    │         | none => none
+    │       [cases] source: E-matching `List.getElem_map`
+    │     [cases] [1/2]: (fun h₁ => none) = fun h₃ => none
+    │       [cases] source: E-matching `List.getElem_map`
+    │     [cases] [1/1]: ∃ x_3, ¬(fun h₁ => some (10 * d + x_3)) = fun h₃ => some (d + x_3)
+    │       [cases] source: Extensionality `funext`
+    │     [cases] [1/1]: ∃ a,
+    │           a ∈ es ∧
+    │             { id := a.id, symbol := a.symbol, label := a.label,
+    │                 future :=
+    │                   {
+    │                     bid :=
+    │                       match h₁ : a.future.bid with
+    │                       | some bid => some (10 * d + bid)
+    │                       | none => none,
+    │                     bidQty := a.future.bidQty,
+    │                     ask :=
+    │                       match h₁ : a.future.ask with
+    │                       | some ask => some (10 * d + ask)
+    │                       | none => none,
+    │                     askQty := a.future.askQty },
+    │                 strikes := a.strikes } =
+    │               (List.map
+    │                   (fun e =>
+    │                     { id := e.id, symbol := e.symbol, label := e.label,
+    │                       future :=
+    │                         {
+    │                           bid :=
+    │                             match h₁ : e.future.bid with
+    │                             | some bid => some (10 * d + bid)
+    │                             | none => none,
+    │                           bidQty := e.future.bidQty,
+    │                           ask :=
+    │                             match h₁ : e.future.ask with
+    │                             | some ask => some (10 * d + ask)
+    │                             | none => none,
+    │                           askQty := e.future.askQty },
+    │                       strikes := e.strikes })
+    │                   es)[x.toNat]
+    │       [cases] source: E-matching `List.mem_map`
+    │     [cases] [1/2]: match h₁ : w_1.future.ask with
+    │         | some ask => some (10 * d + ask)
+    │         | none => none
+    │       [cases] source: Extensionality `funext`
+    │     [cases] [1/2]: match h₁ : w_1.future.bid with
+    │         | some bid => some (10 * d + bid)
+    │         | none => none
+    │       [cases] source: Extensionality `funext`
+    │     [cases] [1/2]: bid_1 = bid_2
+    │       [cases] source: Model-based theory combination at argument #1 of
+    │             some bid_2
+    │           and
+    │             some bid_1
+    │     [cases] [2/2]: bid_2 = 10 * d + bid_1
+    │       [cases] source: Model-based theory combination at argument #1 of
+    │             some bid_2
+    │           and
+    │             some (10 * d + bid_1)
+    │     [cases] [2/2]: bid_2 = d + bid_1
+    │       [cases] source: Model-based theory combination at argument #1 of
+    │             some bid_2
+    │           and
+    │             some (d + bid_1)
+    │     [cases] [2/2]: d + bid_1 = 10 * d + bid_1
+    │       [cases] source: Model-based theory combination at argument #1 of
+    │             some (d + bid_1)
+    │           and
+    │             some (10 * d + bid_1)
+    │   [ematch] E-matching patterns
+    │     [thm] List.nodup_iff_count: [@List.Nodup #3 #0]
+    │     [thm] List.nodup_iff_pairwise_ne: [@List.Nodup #1 #0]
+    │     [thm] List.map_map: [@List.map #5 #4 #2 (@List.map #3 _ #1 #0)]
+    │     [thm] List.length_map: [@List.length #2 (@List.map #3 _ #0 #1)]
+    │     [thm] List.eq_nil_of_length_eq_zero: [@List.length #2 #1]
+    │     [thm] Rat.max_def: [@max `[Rat] `[Rat.instMax] #1 #0]
+    │     [thm] Int.max_def: [@max `[Int] `[Int.instMax] #1 #0]
+    │     [thm] Nat.max_def: [@max `[Nat] `[Nat.instMax] #1 #0]
+    │     [thm] List.getElem_map: [@getElem (List #4) `[Nat] _ _ _ (@List.map #5 _ #3 #2) #1 #0]
+    │     [thm] JS.get_mem: [@getElem (List #3) `[Nat] _ _ _ #2 (Int.toNat #1) _]
+    │     [thm] List.getElem_mem: [@getElem (List #3) `[Nat] _ _ _ #2 #1 #0]
+    │     [thm] List.Nodup.getElem_inj: [@List.Nodup #6 #3,
+    │          @getElem (List _) `[Nat] _ _ _ #3 #5 #1,
+    │          @getElem (List _) `[Nat] _ _ _ #3 #4 #0]
+    │     [thm] shiftQuote.match_1.congr_eq_1: [shiftQuote.match_1 #5 (@Lean.Grind.genPattern `[Option
+    │             Int] #0 #4 (@some `[Int] #1)) #3 #2]
+    │     [thm] Option.not_lt_none: [@LT.lt (Option #2) _ #0 (@none _)]
+    │     [thm] Option.none_le: [@LE.le (Option #2) _ (@none _) #0]
+    │     [thm] Option.max_none_right: [@max (Option #2) _ #0 (@none _)]
+    │     [thm] Option.max_none_left: [@max (Option #2) _ (@none _) #0]
+    │     [thm] shiftQuote.match_1.congr_eq_2: [shiftQuote.match_1 #4 (@Lean.Grind.genPattern `[Option
+    │             Int] #0 #3 `[none]) #2 #1]
+    │     [thm] List.Pairwise.map: [@List.Pairwise #7 #3 (@List.map #6 _ #2 #4), @List.Pairwise _ #5 #4]
+    │     [thm] List.pairwise_map: [@List.Pairwise #3 #1 (@List.map #4 _ #2 #0)]
+    │     [thm] List.mem_map: [@Membership.mem #3 (List _) _ (@List.map #4 _ #1 #0) #2]
+    │     [thm] List.length_pos_of_mem: [@Membership.mem #3 (List _) _ #1 #2, @List.length _ #1]
+    │     [thm] Option.not_mem_none: [@Membership.mem #1 (Option _) _ (@none _) #0]
+    │     [thm] List.getElem_mem: [@Membership.mem #3 (List _) _ #2 (@getElem (List _) `[Nat] _ _ _ #2 #1 #0)]
+    │     [thm] Option.mem_some: [@Membership.mem #2 (Option _) _ (@some _ #0) #1]
+    │     [thm] Option.none_lt_some: [@LT.lt (Option #2) _ (@none _) (@some _ #0)]
+    │     [thm] Option.some_lt_some: [@LT.lt (Option #3) _ (@some _ #1) (@some _ #0)]
+    │     [thm] Option.some_le_some: [@LE.le (Option #3) _ (@some _ #1) (@some _ #0)]
+    │     [thm] Option.not_some_le_none: [@LE.le (Option #2) _ (@some _ #0) (@none _)]
+    │     [thm] Option.max_some_some: [@max (Option #3) _ (@some _ #1) (@some _ #0)]
+    │     [thm] local_0: [@LE.le `[Nat] `[instLENat] (@List.count `[Int] `[Int.instLinearOrderPackage.toBEq] #0 `[List.map
+    │             (fun e => e.id) es]) `[1]]
+    │     [thm] local_0: [@List.count `[Int] `[Int.instLinearOrderPackage.toBEq] #0 `[List.map (fun e => e.id) es]]
+    │     [thm] local_0: [@List.count `[Int] `[Int.instLinearOrderPackage.toBEq] #0 `[List.map model.Expiry.id es]]
+    │   [cutsat] Assignment satisfying linear constraints
+    │     [assign] d := 1
+    │     [assign] x := 0
+    │     [assign] x.toNat := 0
+    │     [assign] es.length := 1
+    │     [assign] (List.map
+    │             (fun e =>
+    │               { id := e.id, symbol := e.symbol, label := e.label,
+    │                 future :=
+    │                   {
+    │                     bid :=
+    │                       match h₁ : e.future.bid with
+    │                       | some bid => some (10 * d + bid)
+    │                       | none => none,
+    │                     bidQty := e.future.bidQty,
+    │                     ask :=
+    │                       match h₁ : e.future.ask with
+    │                       | some ask => some (10 * d + ask)
+    │                       | none => none,
+    │                     askQty := e.future.askQty },
+    │                 strikes := e.strikes })
+    │             es).length := 1
+    │     [assign] max x 0 := 0
+    │     [assign] bid := 0
+    │     [assign] es[x.toNat].id := 7
+    │     [assign] es[x.toNat].future.askQty := 9
+    │     [assign] es[x.toNat].future.bidQty := 8
+    │     [assign] bid_1 := 0
+    │     [assign] bid_2 := 0
+    │     [assign] w := 0
+    │     [assign] w_1.id := 7
+    │     [assign] w_1.future.askQty := 9
+    │     [assign] w_1.future.bidQty := 8
+    │     [assign] bid_3 := 0
+    │     [assign] bid_4 := 0
+    │   [ring] Ring `Int`
+    │     [basis] Basis
+    │       [_] x = 0
+    │       [_] ↑es.length +
+    │               -1 *
+    │                 ↑(List.map
+    │                       (fun e =>
+    │                         { id := e.id, symbol := e.symbol, label := e.label,
+    │                           future :=
+    │                             {
+    │                               bid :=
+    │                                 match h₁ : e.future.bid with
+    │                                 | some bid => some (10 * d + bid)
+    │                                 | none => none,
+    │                               bidQty := e.future.bidQty,
+    │                               ask :=
+    │                                 match h₁ : e.future.ask with
+    │                                 | some ask => some (10 * d + ask)
+    │                                 | none => none,
+    │                               askQty := e.future.askQty },
+    │                           strikes := e.strikes })
+    │                       es).length =
+    │             0
+    │       [_] ↑x.toNat = 0
+    │       [_] bid + -1 * bid_1 = 0
+    │       [_] bid_1 + -1 * w = 0
+    │       [_] bid_2 + -1 * bid_3 = 0
+    │       [_] w + -1 * bid_4 = 0
+    │       [_] bid_3 + -1 * bid_4 = 0
+    │     [diseqs] Disequalities
+    │       [_] ¬-10 * d = 0
+    │       [_] ¬-10 * d = 0
+    │       [_] ¬-10 * d = 0
+    │       [_] ¬-10 * d = 0
+    │       [_] ¬-1 * d = 0
+    │       [_] ¬-1 * d = 0
+    │       [_] ¬-9 * d = 0
+    │       [_] ¬-9 * d = 0
+    │   [assoc] Operator `max`
+    │     [basis] Basis
+    │       [_] 0 = x
+    │     [properties] Properties
+    │       [_] commutative
+    │       [_] idempotent
+    │ [grind] Diagnostics
+    │   [ematch] E-matching Diagnostics
+    │     [thm] Theorem Instance Count
+    │       [thm] shiftQuote.match_1.congr_eq_1 ↦ 15
+    │       [thm] List.length_pos_of_mem ↦ 3
+    │       [thm] List.getElem_mem ↦ 2
+    │       [thm] List.mem_map ↦ 2
+    │       [thm] JS.get_mem ↦ 2
+    │       [thm] shiftQuote.match_1.congr_eq_2 ↦ 2
+    │       [thm] Int.max_def ↦ 1
+    │       [thm] List.count_eq_zero ↦ 1
+    │       [thm] List.getElem_map ↦ 1
+    │       [thm] List.length_map ↦ 1
+    │       [thm] List.nodup_iff_count ↦ 1
+    │       [thm] List.nodup_iff_pairwise_ne ↦ 1
+    │       [thm] List.pairwise_map ↦ 1
+    │       [thm] List.Nodup.count ↦ 1
+    │       [thm] List.Pairwise.map ↦ 1
+✗ src/App.tsx:118:11  [postcondition] postcondition of stepFeed: Math.abs(r.offset - f.offset) === Math.abs((nextSeed(f.seed) % 5) - 2)
+    │ (deterministic) timeout: the automation did not finish within this obligation's budget of 1000000 heartbeats (set "heartbeats" in vreact.json to change it)
+    │ f : Feed
+    │ ⊢ JS.abs ((stepFeed f).offset - f.offset) = JS.abs (JS.rem (nextSeed f.seed) 5 ⋯ - 2)
+    │ The goal splits into 2 cases. A case's name lists the branches that lead to it, outermost first: `isTrue`/`isFalse` are the two branches of an `if` (a `switch` on a number or a string is a chain of `if`s, one per body), `h_k` is the k-th alternative of a `match` (a `switch` on a union or an enum has one per `case` label, in the order written, then one for the rest: `default`, wherever it is written); conditions in the translation (such as the sign test of `%`) split the same way. Each case alone, smallest first, with up to 100000 heartbeats: 0 proved, 2 did not finish. The first that did not finish, case isTrue:
+    │ case isTrue
+    │ f : Feed
+    │ hcontract✝¹³ :
+    │   ((0 ≤
+    │         if 0 ≤ f.seed * 75 + 74 then (f.seed * 75 + 74) % ↑(Int.natAbs 65537)
+    │         else -(-(f.seed * 75 + 74) % ↑(Int.natAbs 65537))) →
+    │       (0 ≤
+    │           if
+    │               0 ≤
+    │                 if 0 ≤ f.seed * 75 + 74 then (f.seed * 75 + 74) % ↑(Int.natAbs 65537)
+    │                 else -(-(f.seed * 75 + 74) % ↑(Int.natAbs 65537)) then
+    │             (if 0 ≤ f.seed * 75 + 74 then (f.seed * 75 + 74) % ↑(Int.natAbs 65537)
+    │               else -(-(f.seed * 75 + 74) % ↑(Int.natAbs 65537))) %
+    │               ↑(Int.natAbs 5)
+    │           else
+    │             -((-if 0 ≤ f.seed * 75 + 74 then (f.seed * 75 + 74) % ↑(Int.natAbs 65537)
+    │                   else -(-(f.seed * 75 + 74) % ↑(Int.natAbs 65537))) %
+    │                 ↑(Int.natAbs 5))) ∧
+    │         (if
+    │               0 ≤
+    │                 if 0 ≤ f.seed * 75 + 74 then (f.seed * 75 + 74) % ↑(Int.natAbs 65537)
+    │                 else -(-(f.seed * 75 + 74) % ↑(Int.natAbs 65537)) then
+    │             (if 0 ≤ f.seed * 75 + 74 then (f.seed * 75 + 74) % ↑(Int.natAbs 65537)
+    │               else -(-(f.seed * 75 + 74) % ↑(Int.natAbs 65537))) %
+    │               ↑(Int.natAbs 5)
+    │           else
+    │             -((-if 0 ≤ f.seed * 75 + 74 then (f.seed * 75 + 74) % ↑(Int.natAbs 65537)
+    │                   else -(-(f.seed * 75 + 74) % ↑(Int.natAbs 65537))) %
+    │                 ↑(Int.natAbs 5))) <
+    │           ↑(Int.natAbs 5)) ∧
+    │     ((if 0 ≤ f.seed * 75 + 74 then (f.seed * 75 + 74) % ↑(Int.natAbs 65537)
+    │         else -(-(f.seed * 75 + 74) % ↑(Int.natAbs 65537))) <
+    │         0 →
+    │       (-↑(Int.natAbs 5) <
+    │           if
+    │               0 ≤
+    │                 if 0 ≤ f.seed * 75 + 74 then (f.seed * 75 + 74) % ↑(Int.natAbs 65537)
+    │                 else -(-(f.seed * 75 + 74) % ↑(Int.natAbs 65537)) then
+    │             (if 0 ≤ f.seed * 75 + 74 then (f.seed * 75 + 74) % ↑(Int.natAbs 65537)
+    │               else -(-(f.seed * 75 + 74) % ↑(Int.natAbs 65537))) %
+    │               ↑(Int.natAbs 5)
+    │           else
+    │             -((-if 0 ≤ f.seed * 75 + 74 then (f.seed * 75 + 74) % ↑(Int.natAbs 65537)
+    │                   else -(-(f.seed * 75 + 74) % ↑(Int.natAbs 65537))) %
+    │                 ↑(Int.natAbs 5))) ∧
+    │         (if
+    │               0 ≤
+    │                 if 0 ≤ f.seed * 75 + 74 then (f.seed * 75 + 74) % ↑(Int.natAbs 65537)
+    │                 else -(-(f.seed * 75 + 74) % ↑(Int.natAbs 65537)) then
+    │             (if 0 ≤ f.seed * 75 + 74 then (f.seed * 75 + 74) % ↑(Int.natAbs 65537)
+    │               else -(-(f.seed * 75 + 74) % ↑(Int.natAbs 65537))) %
+    │               ↑(Int.natAbs 5)
+    │           else
+    │             -((-if 0 ≤ f.seed * 75 + 74 then (f.seed * 75 + 74) % ↑(Int.natAbs 65537)
+    │                   else -(-(f.seed * 75 + 74) % ↑(Int.natAbs 65537))) %
+    │                 ↑(Int.natAbs 5))) ≤
+    │           0)
+    │ hcontract✝¹² :
+    │   ((0 ≤
+    │         if 0 ≤ f.seed * 75 + 74 then (f.seed * 75 + 74) % ↑(Int.natAbs 65537)
+    │         else -(-(f.seed * 75 + 74) % ↑(Int.natAbs 65537))) →
+    │       (if 0 ≤ f.seed * 75 + 74 then (f.seed * 75 + 74) % ↑(Int.natAbs 65537)
+    │           else -(-(f.seed * 75 + 74) % ↑(Int.natAbs 65537))) <
+    │           ↑(Int.natAbs 5) →
+    │         (if
+    │               0 ≤
+    │                 if 0 ≤ f.seed * 75 + 74 then (f.seed * 75 + 74) % ↑(Int.natAbs 65537)
+    │                 else -(-(f.seed * 75 + 74) % ↑(Int.natAbs 65537)) then
+    │             (if 0 ≤ f.seed * 75 + 74 then (f.seed * 75 + 74) % ↑(Int.natAbs 65537)
+    │               else -(-(f.seed * 75 + 74) % ↑(Int.natAbs 65537))) %
+    │               ↑(Int.natAbs 5)
+    │           else
+    │             -((-if 0 ≤ f.seed * 75 + 74 then (f.seed * 75 + 74) % ↑(Int.natAbs 65537)
+    │                   else -(-(f.seed * 75 + 74) % ↑(Int.natAbs 65537))) %
+    │                 ↑(Int.natAbs 5))) =
+    │           if 0 ≤ f.seed * 75 + 74 then (f.seed * 75 + 74) % ↑(Int.natAbs 65537)
+    │           else -(-(f.seed * 75 + 74) % ↑(Int.natAbs 65537))) ∧
+    │     ((-↑(Int.natAbs 5) <
+    │           if 0 ≤ f.seed * 75 + 74 then (f.seed * 75 + 74) % ↑(Int.natAbs 65537)
+    │           else -(-(f.seed * 75 + 74) % ↑(Int.natAbs 65537))) →
+    │         (if 0 ≤ f.seed * 75 + 74 then (f.seed * 75 + 74) % ↑(Int.natAbs 65537)
+    │             else -(-(f.seed * 75 + 74) % ↑(Int.natAbs 65537))) ≤
+    │             0 →
+    │           (if
+    │                 0 ≤
+    │                   if 0 ≤ f.seed * 75 + 74 then (f.seed * 75 + 74) % ↑(Int.natAbs 65537)
+    │                   else -(-(f.seed * 75 + 74) % ↑(Int.natAbs 65537)) then
+    │               (if 0 ≤ f.seed * 75 + 74 then (f.seed * 75 + 74) % ↑(Int.natAbs 65537)
+    │                 else -(-(f.seed * 75 + 74) % ↑(Int.natAbs 65537))) %
+    │                 ↑(Int.natAbs 5)
+    │             else
+    │               -((-if 0 ≤ f.seed * 75 + 74 then (f.seed * 75 + 74) % ↑(Int.natAbs 65537)
+    │                     else -(-(f.seed * 75 + 74) % ↑(Int.natAbs 65537))) %
+    │                   ↑(Int.natAbs 5))) =
+    │             if 0 ≤ f.seed * 75 + 74 then (f.seed * 75 + 74) % ↑(Int.natAbs 65537)
+    │             else -(-(f.seed * 75 + 74) % ↑(Int.natAbs 65537))) ∧
+    │       ((if 0 ≤ f.seed * 75 + 74 then (f.seed * 75 + 74) % ↑(Int.natAbs 65537)
+    │             else -(-(f.seed * 75 + 74) % ↑(Int.natAbs 65537))) =
+    │             5 ∨
+    │           (if 0 ≤ f.seed * 75 + 74 then (f.seed * 75 + 74) % ↑(Int.natAbs 65537)
+    │             else -(-(f.seed * 75 + 74) % ↑(Int.natAbs 65537))) =
+    │             -5 →
+    │         (if
+    │               0 ≤
+    │                 if 0 ≤ f.seed * 75 + 74 then (f.seed * 75 + 74) % ↑(Int.natAbs 65537)
+    │                 else -(-(f.seed * 75 + 74) % ↑(Int.natAbs 65537)) then
+    │             (if 0 ≤ f.seed * 75 + 74 then (f.seed * 75 + 74) % ↑(Int.natAbs 65537)
+    │               else -(-(f.seed * 75 + 74) % ↑(Int.natAbs 65537))) %
+    │               ↑(Int.natAbs 5)
+    │           else
+    │             -((-if 0 ≤ f.seed * 75 + 74 then (f.seed * 75 + 74) % ↑(Int.natAbs 65537)
+    │                   else -(-(f.seed * 75 + 74) % ↑(Int.natAbs 65537))) %
+    │                 ↑(Int.natAbs 5))) =
+    │           0)
+    │ hcontract✝¹¹ :
+    │   ((-40 ≤ f.offset ∧ f.offset ≤ 40) ∧ 0 ≤ f.seed) ∧ f.seed < 65537 →
+    │     (((-40 ≤
+    │             if h₁₀ :
+    │                 JS.lt 40
+    │                     (f.offset +
+    │                       ((if
+    │                             0 ≤
+    │                               if 0 ≤ f.seed * 75 + 74 then (f.seed * 75 + 74) % ↑(Int.natAbs 65537)
+    │                               else -(-(f.seed * 75 + 74) % ↑(Int.natAbs 65537)) then
+    │                           (if 0 ≤ f.seed * 75 + 74 then (f.seed * 75 + 74) % ↑(Int.natAbs 65537)
+    │                             else -(-(f.seed * 75 + 74) % ↑(Int.natAbs 65537))) %
+    │                             ↑(Int.natAbs 5)
+    │                         else
+    │                           -((-if 0 ≤ f.seed * 75 + 74 then (f.seed * 75 + 74) % ↑(Int.natAbs 65537)
+    │                                 else -(-(f.seed * 75 + 74) % ↑(Int.natAbs 65537))) %
+    │                               ↑(Int.natAbs 5))) -
+    │                         2)) =
+    │                   true then
+    │               f.offset
+    │             else
+    │               if h₁₁ :
+    │                   JS.lt
+    │                       (f.offset +
+    │                         ((if
+    │                               0 ≤
+    │                                 if 0 ≤ f.seed * 75 + 74 then (f.seed * 75 + 74) % ↑(Int.natAbs 65537)
+    │                                 else -(-(f.seed * 75 + 74) % ↑(Int.natAbs 65537)) then
+    │                             (if 0 ≤ f.seed * 75 + 74 then (f.seed * 75 + 74) % ↑(Int.natAbs 65537)
+    │                               else -(-(f.seed * 75 + 74) % ↑(Int.natAbs 65537))) %
+    │                               ↑(Int.natAbs 5)
+    │                           else
+    │                             -((-if 0 ≤ f.seed * 75 + 74 then (f.seed * 75 + 74) % ↑(Int.natAbs 65537)
+    │                                   else -(-(f.seed * 75 + 74) % ↑(Int.natAbs 65537))) %
+    │                                 ↑(Int.natAbs 5))) -
+    │                           2))
+    │                       (-40) =
+    │                     true then
+    │                 f.offset
+    │               else f.offset) ∧
+    │           (if h₁₀ :
+    │                 JS.lt 40
+    │                     (f.offset +
+    │                       ((if
+    │                             0 ≤
+    │                               if 0 ≤ f.seed * 75 + 74 then (f.seed * 75 + 74) % ↑(Int.natAbs 65537)
+    │                               else -(-(f.seed * 75 + 74) % ↑(Int.natAbs 65537)) then
+    │                           (if 0 ≤ f.seed * 75 + 74 then (f.seed * 75 + 74) % ↑(Int.natAbs 65537)
+    │                             else -(-(f.seed * 75 + 74) % ↑(Int.natAbs 65537))) %
+    │                             ↑(Int.natAbs 5)
+    │                         else
+    │                           -((-if 0 ≤ f.seed * 75 + 74 then (f.seed * 75 + 74) % ↑(Int.natAbs 65537)
+    │                                 else -(-(f.seed * 75 + 74) % ↑(Int.natAbs 65537))) %
+    │                               ↑(Int.natAbs 5))) -
+    │                         2)) =
+    │                   true then
+    │               f.offset
+    │             else
+    │               if h₁₁ :
+    │                   JS.lt
+    │                       (f.offset +
+    │                         ((if
+    │                               0 ≤
+    │                                 if 0 ≤ f.seed * 75 + 74 then (f.seed * 75 + 74) % ↑(Int.natAbs 65537)
+    │                                 else -(-(f.seed * 75 + 74) % ↑(Int.natAbs 65537)) then
+    │                             (if 0 ≤ f.seed * 75 + 74 then (f.seed * 75 + 74) % ↑(Int.natAbs 65537)
+    │                               else -(-(f.seed * 75 + 74) % ↑(Int.natAbs 65537))) %
+    │                               ↑(Int.natAbs 5)
+    │                           else
+    │                             -((-if 0 ≤ f.seed * 75 + 74 then (f.seed * 75 + 74) % ↑(Int.natAbs 65537)
+    │                                   else -(-(f.seed * 75 + 74) % ↑(Int.natAbs 65537))) %
+    │                                 ↑(Int.natAbs 5))) -
+    │                           2))
+    │                       (-40) =
+    │                     true then
+    │                 f.offset
+    │               else f.offset) ≤
+    │             40) ∧
+    │         0 ≤
+    │           if 0 ≤ f.seed * 75 + 74 then (f.seed * 75 + 74) % ↑(Int.natAbs 65537)
+    │           else -(-(f.seed * 75 + 74) % ↑(Int.natAbs 65537))) ∧
+    │       (if 0 ≤ f.seed * 75 + 74 then (f.seed * 75 + 74) % ↑(Int.natAbs 65537)
+    │         else -(-(f.seed * 75 + 74) % ↑(Int.natAbs 65537))) <
+    │         65537
+    │ hcontract✝¹⁰ : True
+    │ hcontract✝⁹ :
+    │   ((0 ≤
+    │         if 0 ≤ f.seed * 75 + 74 then (f.seed * 75 + 74) % ↑(Int.natAbs 65537)
+    │         else -(-(f.seed * 75 + 74) % ↑(Int.natAbs 65537))) →
+    │       (0 ≤
+    │           if
+    │               0 ≤
+    │                 if 0 ≤ f.seed * 75 + 74 then (f.seed * 75 + 74) % ↑(Int.natAbs 65537)
+    │                 else -(-(f.seed * 75 + 74) % ↑(Int.natAbs 65537)) then
+    │             (if 0 ≤ f.seed * 75 + 74 then (f.seed * 75 + 74) % ↑(Int.natAbs 65537)
+    │               else -(-(f.seed * 75 + 74) % ↑(Int.natAbs 65537))) %
+    │               ↑(Int.natAbs 5)
+    │           else
+    │             -((-if 0 ≤ f.seed * 75 + 74 then (f.seed * 75 + 74) % ↑(Int.natAbs 65537)
+    │                   else -(-(f.seed * 75 + 74) % ↑(Int.natAbs 65537))) %
+    │                 ↑(Int.natAbs 5))) ∧
+    │         (if
+    │               0 ≤
+    │                 if 0 ≤ f.seed * 75 + 74 then (f.seed * 75 + 74) % ↑(Int.natAbs 65537)
+    │                 else -(-(f.seed * 75 + 74) % ↑(Int.natAbs 65537)) then
+    │             (if 0 ≤ f.seed * 75 + 74 then (f.seed * 75 + 74) % ↑(Int.natAbs 65537)
+    │               else -(-(f.seed * 75 + 74) % ↑(Int.natAbs 65537))) %
+    │               ↑(Int.natAbs 5)
+    │           else
+    │             -((-if 0 ≤ f.seed * 75 + 74 then (f.seed * 75 + 74) % ↑(Int.natAbs 65537)
+    │                   else -(-(f.seed * 75 + 74) % ↑(Int.natAbs 65537))) %
+    │                 ↑(Int.natAbs 5))) <
+    │           ↑(Int.natAbs 5)) ∧
+    │     ((if 0 ≤ f.seed * 75 + 74 then (f.seed * 75 + 74) % ↑(Int.natAbs 65537)
+    │         else -(-(f.seed * 75 + 74) % ↑(Int.natAbs 65537))) <
+    │         0 →
+    │       (-↑(Int.natAbs 5) <
+    │           if
+    │               0 ≤
+    │                 if 0 ≤ f.seed * 75 + 74 then (f.seed * 75 + 74) % ↑(Int.natAbs 65537)
+    │                 else -(-(f.seed * 75 + 74) % ↑(Int.natAbs 65537)) then
+    │             (if 0 ≤ f.seed * 75 + 74 then (f.seed * 75 + 74) % ↑(Int.natAbs 65537)
+    │               else -(-(f.seed * 75 + 74) % ↑(Int.natAbs 65537))) %
+    │               ↑(Int.natAbs 5)
+    │           else
+    │             -((-if 0 ≤ f.seed * 75 + 74 then (f.seed * 75 + 74) % ↑(Int.natAbs 65537)
+    │                   else -(-(f.seed * 75 + 74) % ↑(Int.natAbs 65537))) %
+    │                 ↑(Int.natAbs 5))) ∧
+    │         (if
+    │               0 ≤
+    │                 if 0 ≤ f.seed * 75 + 74 then (f.seed * 75 + 74) % ↑(Int.natAbs 65537)
+    │                 else -(-(f.seed * 75 + 74) % ↑(Int.natAbs 65537)) then
+    │             (if 0 ≤ f.seed * 75 + 74 then (f.seed * 75 + 74) % ↑(Int.natAbs 65537)
+    │               else -(-(f.seed * 75 + 74) % ↑(Int.natAbs 65537))) %
+    │               ↑(Int.natAbs 5)
+    │           else
+    │             -((-if 0 ≤ f.seed * 75 + 74 then (f.seed * 75 + 74) % ↑(Int.natAbs 65537)
+    │                   else -(-(f.seed * 75 + 74) % ↑(Int.natAbs 65537))) %
+    │                 ↑(Int.natAbs 5))) ≤
+    │           0)
+    │ hcontract✝⁸ :
+    │   ((0 ≤
+    │         if 0 ≤ f.seed * 75 + 74 then (f.seed * 75 + 74) % ↑(Int.natAbs 65537)
+    │         else -(-(f.seed * 75 + 74) % ↑(Int.natAbs 65537))) →
+    │       (if 0 ≤ f.seed * 75 + 74 then (f.seed * 75 + 74) % ↑(Int.natAbs 65537)
+    │           else -(-(f.seed * 75 + 74) % ↑(Int.natAbs 65537))) <
+    │           ↑(Int.natAbs 5) →
+    │         (if
+    │               0 ≤
+    │                 if 0 ≤ f.seed * 75 + 74 then (f.seed * 75 + 74) % ↑(Int.natAbs 65537)
+    │                 else -(-(f.seed * 75 + 74) % ↑(Int.natAbs 65537)) then
+    │             (if 0 ≤ f.seed * 75 + 74 then (f.seed * 75 + 74) % ↑(Int.natAbs 65537)
+    │               else -(-(f.seed * 75 + 74) % ↑(Int.natAbs 65537))) %
+    │               ↑(Int.natAbs 5)
+    │           else
+    │             -((-if 0 ≤ f.seed * 75 + 74 then (f.seed * 75 + 74) % ↑(Int.natAbs 65537)
+    │                   else -(-(f.seed * 75 + 74) % ↑(Int.natAbs 65537))) %
+    │                 ↑(Int.natAbs 5))) =
+    │           if 0 ≤ f.seed * 75 + 74 then (f.seed * 75 + 74) % ↑(Int.natAbs 65537)
+    │           else -(-(f.seed * 75 + 74) % ↑(Int.natAbs 65537))) ∧
+    │     ((-↑(Int.natAbs 5) <
+    │           if 0 ≤ f.seed * 75 + 74 then (f.seed * 75 + 74) % ↑(Int.natAbs 65537)
+    │           else -(-(f.seed * 75 + 74) % ↑(Int.natAbs 65537))) →
+    │         (if 0 ≤ f.seed * 75 + 74 then (f.seed * 75 + 74) % ↑(Int.natAbs 65537)
+    │             else -(-(f.seed * 75 + 74) % ↑(Int.natAbs 65537))) ≤
+    │             0 →
+    │           (if
+    │                 0 ≤
+    │                   if 0 ≤ f.seed * 75 + 74 then (f.seed * 75 + 74) % ↑(Int.natAbs 65537)
+    │                   else -(-(f.seed * 75 + 74) % ↑(Int.natAbs 65537)) then
+    │               (if 0 ≤ f.seed * 75 + 74 then (f.seed * 75 + 74) % ↑(Int.natAbs 65537)
+    │                 else -(-(f.seed * 75 + 74) % ↑(Int.natAbs 65537))) %
+    │                 ↑(Int.natAbs 5)
+    │             else
+    │               -((-if 0 ≤ f.seed * 75 + 74 then (f.seed * 75 + 74) % ↑(Int.natAbs 65537)
+    │                     else -(-(f.seed * 75 + 74) % ↑(Int.natAbs 65537))) %
+    │                   ↑(Int.natAbs 5))) =
+    │             if 0 ≤ f.seed * 75 + 74 then (f.seed * 75 + 74) % ↑(Int.natAbs 65537)
+    │             else -(-(f.seed * 75 + 74) % ↑(Int.natAbs 65537))) ∧
+    │       ((if 0 ≤ f.seed * 75 + 74 then (f.seed * 75 + 74) % ↑(Int.natAbs 65537)
+    │             else -(-(f.seed * 75 + 74) % ↑(Int.natAbs 65537))) =
+    │             5 ∨
+    │           (if 0 ≤ f.seed * 75 + 74 then (f.seed * 75 + 74) % ↑(Int.natAbs 65537)
+    │             else -(-(f.seed * 75 + 74) % ↑(Int.natAbs 65537))) =
+    │             -5 →
+    │         (if
+    │               0 ≤
+    │                 if 0 ≤ f.seed * 75 + 74 then (f.seed * 75 + 74) % ↑(Int.natAbs 65537)
+    │                 else -(-(f.seed * 75 + 74) % ↑(Int.natAbs 65537)) then
+    │             (if 0 ≤ f.seed * 75 + 74 then (f.seed * 75 + 74) % ↑(Int.natAbs 65537)
+    │               else -(-(f.seed * 75 + 74) % ↑(Int.natAbs 65537))) %
+    │               ↑(Int.natAbs 5)
+    │           else
+    │             -((-if 0 ≤ f.seed * 75 + 74 then (f.seed * 75 + 74) % ↑(Int.natAbs 65537)
+    │                   else -(-(f.seed * 75 + 74) % ↑(Int.natAbs 65537))) %
+    │                 ↑(Int.natAbs 5))) =
+    │           0)
+    │ hcontract✝⁷ :
+    │   ((0 ≤
+    │         if 0 ≤ f.seed * 75 + 74 then (f.seed * 75 + 74) % ↑(Int.natAbs 65537)
+    │         else -(-(f.seed * 75 + 74) % ↑(Int.natAbs 65537))) →
+    │       (0 ≤
+    │           if
+    │               0 ≤
+    │                 if 0 ≤ f.seed * 75 + 74 then (f.seed * 75 + 74) % ↑(Int.natAbs 65537)
+    │                 else -(-(f.seed * 75 + 74) % ↑(Int.natAbs 65537)) then
+    │             (if 0 ≤ f.seed * 75 + 74 then (f.seed * 75 + 74) % ↑(Int.natAbs 65537)
+    │               else -(-(f.seed * 75 + 74) % ↑(Int.natAbs 65537))) %
+    │               ↑(Int.natAbs 5)
+    │           else
+    │             -((-if 0 ≤ f.seed * 75 + 74 then (f.seed * 75 + 74) % ↑(Int.natAbs 65537)
+    │                   else -(-(f.seed * 75 + 74) % ↑(Int.natAbs 65537))) %
+    │                 ↑(Int.natAbs 5))) ∧
+    │         (if
+    │               0 ≤
+    │                 if 0 ≤ f.seed * 75 + 74 then (f.seed * 75 + 74) % ↑(Int.natAbs 65537)
+    │                 else -(-(f.seed * 75 + 74) % ↑(Int.natAbs 65537)) then
+    │             (if 0 ≤ f.seed * 75 + 74 then (f.seed * 75 + 74) % ↑(Int.natAbs 65537)
+    │               else -(-(f.seed * 75 + 74) % ↑(Int.natAbs 65537))) %
+    │               ↑(Int.natAbs 5)
+    │           else
+    │             -((-if 0 ≤ f.seed * 75 + 74 then (f.seed * 75 + 74) % ↑(Int.natAbs 65537)
+    │                   else -(-(f.seed * 75 + 74) % ↑(Int.natAbs 65537))) %
+    │                 ↑(Int.natAbs 5))) <
+    │           ↑(Int.natAbs 5)) ∧
+    │     ((if 0 ≤ f.seed * 75 + 74 then (f.seed * 75 + 74) % ↑(Int.natAbs 65537)
+    │         else -(-(f.seed * 75 + 74) % ↑(Int.natAbs 65537))) <
+    │         0 →
+    │       (-↑(Int.natAbs 5) <
+    │           if
+    │               0 ≤
+    │                 if 0 ≤ f.seed * 75 + 74 then (f.seed * 75 + 74) % ↑(Int.natAbs 65537)
+    │                 else -(-(f.seed * 75 + 74) % ↑(Int.natAbs 65537)) then
+    │             (if 0 ≤ f.seed * 75 + 74 then (f.seed * 75 + 74) % ↑(Int.natAbs 65537)
+    │               else -(-(f.seed * 75 + 74) % ↑(Int.natAbs 65537))) %
+    │               ↑(Int.natAbs 5)
+    │           else
+    │             -((-if 0 ≤ f.seed * 75 + 74 then (f.seed * 75 + 74) % ↑(Int.natAbs 65537)
+    │                   else -(-(f.seed * 75 + 74) % ↑(Int.natAbs 65537))) %
+    │                 ↑(Int.natAbs 5))) ∧
+    │         (if
+    │               0 ≤
+    │                 if 0 ≤ f.seed * 75 + 74 then (f.seed * 75 + 74) % ↑(Int.natAbs 65537)
+    │                 else -(-(f.seed * 75 + 74) % ↑(Int.natAbs 65537)) then
+    │             (if 0 ≤ f.seed * 75 + 74 then (f.seed * 75 + 74) % ↑(Int.natAbs 65537)
+    │               else -(-(f.seed * 75 + 74) % ↑(Int.natAbs 65537))) %
+    │               ↑(Int.natAbs 5)
+    │           else
+    │             -((-if 0 ≤ f.seed * 75 + 74 then (f.seed * 75 + 74) % ↑(Int.natAbs 65537)
+    │                   else -(-(f.seed * 75 + 74) % ↑(Int.natAbs 65537))) %
+    │                 ↑(Int.natAbs 5))) ≤
+    │           0)
+    │ hcontract✝⁶ :
+    │   ((0 ≤
+    │         if 0 ≤ f.seed * 75 + 74 then (f.seed * 75 + 74) % ↑(Int.natAbs 65537)
+    │         else -(-(f.seed * 75 + 74) % ↑(Int.natAbs 65537))) →
+    │       (if 0 ≤ f.seed * 75 + 74 then (f.seed * 75 + 74) % ↑(Int.natAbs 65537)
+    │           else -(-(f.seed * 75 + 74) % ↑(Int.natAbs 65537))) <
+    │           ↑(Int.natAbs 5) →
+    │         (if
+    │               0 ≤
+    │                 if 0 ≤ f.seed * 75 + 74 then (f.seed * 75 + 74) % ↑(Int.natAbs 65537)
+    │                 else -(-(f.seed * 75 + 74) % ↑(Int.natAbs 65537)) then
+    │             (if 0 ≤ f.seed * 75 + 74 then (f.seed * 75 + 74) % ↑(Int.natAbs 65537)
+    │               else -(-(f.seed * 75 + 74) % ↑(Int.natAbs 65537))) %
+    │               ↑(Int.natAbs 5)
+    │           else
+    │             -((-if 0 ≤ f.seed * 75 + 74 then (f.seed * 75 + 74) % ↑(Int.natAbs 65537)
+    │                   else -(-(f.seed * 75 + 74) % ↑(Int.natAbs 65537))) %
+    │                 ↑(Int.natAbs 5))) =
+    │           if 0 ≤ f.seed * 75 + 74 then (f.seed * 75 + 74) % ↑(Int.natAbs 65537)
+    │           else -(-(f.seed * 75 + 74) % ↑(Int.natAbs 65537))) ∧
+    │     ((-↑(Int.natAbs 5) <
+    │           if 0 ≤ f.seed * 75 + 74 then (f.seed * 75 + 74) % ↑(Int.natAbs 65537)
+    │           else -(-(f.seed * 75 + 74) % ↑(Int.natAbs 65537))) →
+    │         (if 0 ≤ f.seed * 75 + 74 then (f.seed * 75 + 74) % ↑(Int.natAbs 65537)
+    │             else -(-(f.seed * 75 + 74) % ↑(Int.natAbs 65537))) ≤
+    │             0 →
+    │           (if
+    │                 0 ≤
+    │                   if 0 ≤ f.seed * 75 + 74 then (f.seed * 75 + 74) % ↑(Int.natAbs 65537)
+    │                   else -(-(f.seed * 75 + 74) % ↑(Int.natAbs 65537)) then
+    │               (if 0 ≤ f.seed * 75 + 74 then (f.seed * 75 + 74) % ↑(Int.natAbs 65537)
+    │                 else -(-(f.seed * 75 + 74) % ↑(Int.natAbs 65537))) %
+    │                 ↑(Int.natAbs 5)
+    │             else
+    │               -((-if 0 ≤ f.seed * 75 + 74 then (f.seed * 75 + 74) % ↑(Int.natAbs 65537)
+    │                     else -(-(f.seed * 75 + 74) % ↑(Int.natAbs 65537))) %
+    │                   ↑(Int.natAbs 5))) =
+    │             if 0 ≤ f.seed * 75 + 74 then (f.seed * 75 + 74) % ↑(Int.natAbs 65537)
+    │             else -(-(f.seed * 75 + 74) % ↑(Int.natAbs 65537))) ∧
+    │       ((if 0 ≤ f.seed * 75 + 74 then (f.seed * 75 + 74) % ↑(Int.natAbs 65537)
+    │             else -(-(f.seed * 75 + 74) % ↑(Int.natAbs 65537))) =
+    │             5 ∨
+    │           (if 0 ≤ f.seed * 75 + 74 then (f.seed * 75 + 74) % ↑(Int.natAbs 65537)
+    │             else -(-(f.seed * 75 + 74) % ↑(Int.natAbs 65537))) =
+    │             -5 →
+    │         (if
+    │               0 ≤
+    │                 if 0 ≤ f.seed * 75 + 74 then (f.seed * 75 + 74) % ↑(Int.natAbs 65537)
+    │                 else -(-(f.seed * 75 + 74) % ↑(Int.natAbs 65537)) then
+    │             (if 0 ≤ f.seed * 75 + 74 then (f.seed * 75 + 74) % ↑(Int.natAbs 65537)
+    │               else -(-(f.seed * 75 + 74) % ↑(Int.natAbs 65537))) %
+    │               ↑(Int.natAbs 5)
+    │           else
+    │             -((-if 0 ≤ f.seed * 75 + 74 then (f.seed * 75 + 74) % ↑(Int.natAbs 65537)
+    │                   else -(-(f.seed * 75 + 74) % ↑(Int.natAbs 65537))) %
+    │                 ↑(Int.natAbs 5))) =
+    │           0)
+    │ hcontract✝⁵ :
+    │   ((-40 ≤ f.offset ∧ f.offset ≤ 40) ∧ 0 ≤ f.seed) ∧ f.seed < 65537 →
+    │     (((-40 ≤
+    │             if h₁₀ :
+    │                 JS.lt 40
+    │                     (f.offset +
+    │                       ((if
+    │                             0 ≤
+    │                               if 0 ≤ f.seed * 75 + 74 then (f.seed * 75 + 74) % ↑(Int.natAbs 65537)
+    │                               else -(-(f.seed * 75 + 74) % ↑(Int.natAbs 65537)) then
+    │                           (if 0 ≤ f.seed * 75 + 74 then (f.seed * 75 + 74) % ↑(Int.natAbs 65537)
+    │                             else -(-(f.seed * 75 + 74) % ↑(Int.natAbs 65537))) %
+    │                             ↑(Int.natAbs 5)
+    │                         else
+    │                           -((-if 0 ≤ f.seed * 75 + 74 then (f.seed * 75 + 74) % ↑(Int.natAbs 65537)
+    │                                 else -(-(f.seed * 75 + 74) % ↑(Int.natAbs 65537))) %
+    │                               ↑(Int.natAbs 5))) -
+    │                         2)) =
+    │                   true then
+    │               f.offset
+    │             else
+    │               if h₁₁ :
+    │                   JS.lt
+    │                       (f.offset +
+    │                         ((if
+    │                               0 ≤
+    │                                 if 0 ≤ f.seed * 75 + 74 then (f.seed * 75 + 74) % ↑(Int.natAbs 65537)
+    │                                 else -(-(f.seed * 75 + 74) % ↑(Int.natAbs 65537)) then
+    │                             (if 0 ≤ f.seed * 75 + 74 then (f.seed * 75 + 74) % ↑(Int.natAbs 65537)
+    │                               else -(-(f.seed * 75 + 74) % ↑(Int.natAbs 65537))) %
+    │                               ↑(Int.natAbs 5)
+    │                           else
+    │                             -((-if 0 ≤ f.seed * 75 + 74 then (f.seed * 75 + 74) % ↑(Int.natAbs 65537)
+    │                                   else -(-(f.seed * 75 + 74) % ↑(Int.natAbs 65537))) %
+    │                                 ↑(Int.natAbs 5))) -
+    │                           2))
+    │                       (-40) =
+    │                     true then
+    │                 f.offset
+    │               else f.offset) ∧
+    │           (if h₁₀ :
+    │                 JS.lt 40
+    │                     (f.offset +
+    │                       ((if
+    │                             0 ≤
+    │                               if 0 ≤ f.seed * 75 + 74 then (f.seed * 75 + 74) % ↑(Int.natAbs 65537)
+    │                               else -(-(f.seed * 75 + 74) % ↑(Int.natAbs 65537)) then
+    │                           (if 0 ≤ f.seed * 75 + 74 then (f.seed * 75 + 74) % ↑(Int.natAbs 65537)
+    │                             else -(-(f.seed * 75 + 74) % ↑(Int.natAbs 65537))) %
+    │                             ↑(Int.natAbs 5)
+    │                         else
+    │                           -((-if 0 ≤ f.seed * 75 + 74 then (f.seed * 75 + 74) % ↑(Int.natAbs 65537)
+    │                                 else -(-(f.seed * 75 + 74) % ↑(Int.natAbs 65537))) %
+    │                               ↑(Int.natAbs 5))) -
+    │                         2)) =
+    │                   true then
+    │               f.offset
+    │             else
+    │               if h₁₁ :
+    │                   JS.lt
+    │                       (f.offset +
+    │                         ((if
+    │                               0 ≤
+    │                                 if 0 ≤ f.seed * 75 + 74 then (f.seed * 75 + 74) % ↑(Int.natAbs 65537)
+    │                                 else -(-(f.seed * 75 + 74) % ↑(Int.natAbs 65537)) then
+    │                             (if 0 ≤ f.seed * 75 + 74 then (f.seed * 75 + 74) % ↑(Int.natAbs 65537)
+    │                               else -(-(f.seed * 75 + 74) % ↑(Int.natAbs 65537))) %
+    │                               ↑(Int.natAbs 5)
+    │                           else
+    │                             -((-if 0 ≤ f.seed * 75 + 74 then (f.seed * 75 + 74) % ↑(Int.natAbs 65537)
+    │                                   else -(-(f.seed * 75 + 74) % ↑(Int.natAbs 65537))) %
+    │                                 ↑(Int.natAbs 5))) -
+    │                           2))
+    │                       (-40) =
+    │                     true then
+    │                 f.offset
+    │               else f.offset) ≤
+    │             40) ∧
+    │         0 ≤
+    │           if 0 ≤ f.seed * 75 + 74 then (f.seed * 75 + 74) % ↑(Int.natAbs 65537)
+    │           else -(-(f.seed * 75 + 74) % ↑(Int.natAbs 65537))) ∧
+    │       (if 0 ≤ f.seed * 75 + 74 then (f.seed * 75 + 74) % ↑(Int.natAbs 65537)
+    │         else -(-(f.seed * 75 + 74) % ↑(Int.natAbs 65537))) <
+    │         65537
+    │ hcontract✝⁴ : True
+    │ h✝ : 0 ≤ f.seed * 75 + 74
+    │ hcontract✝³ :
+    │   ((0 ≤
+    │         if 0 ≤ f.seed * 75 + 74 then (f.seed * 75 + 74) % ↑(Int.natAbs 65537)
+    │         else -(-(f.seed * 75 + 74) % ↑(Int.natAbs 65537))) →
+    │       (0 ≤
+    │           if
+    │               0 ≤
+    │                 if 0 ≤ f.seed * 75 + 74 then (f.seed * 75 + 74) % ↑(Int.natAbs 65537)
+    │                 else -(-(f.seed * 75 + 74) % ↑(Int.natAbs 65537)) then
+    │             (if 0 ≤ f.seed * 75 + 74 then (f.seed * 75 + 74) % ↑(Int.natAbs 65537)
+    │               else -(-(f.seed * 75 + 74) % ↑(Int.natAbs 65537))) %
+    │               ↑(Int.natAbs 5)
+    │           else
+    │             -((-if 0 ≤ f.seed * 75 + 74 then (f.seed * 75 + 74) % ↑(Int.natAbs 65537)
+    │                   else -(-(f.seed * 75 + 74) % ↑(Int.natAbs 65537))) %
+    │                 ↑(Int.natAbs 5))) ∧
+    │         (if
+    │               0 ≤
+    │                 if 0 ≤ f.seed * 75 + 74 then (f.seed * 75 + 74) % ↑(Int.natAbs 65537)
+    │                 else -(-(f.seed * 75 + 74) % ↑(Int.natAbs 65537)) then
+    │             (if 0 ≤ f.seed * 75 + 74 then (f.seed * 75 + 74) % ↑(Int.natAbs 65537)
+    │               else -(-(f.seed * 75 + 74) % ↑(Int.natAbs 65537))) %
+    │               ↑(Int.natAbs 5)
+    │           else
+    │             -((-if 0 ≤ f.seed * 75 + 74 then (f.seed * 75 + 74) % ↑(Int.natAbs 65537)
+    │                   else -(-(f.seed * 75 + 74) % ↑(Int.natAbs 65537))) %
+    │                 ↑(Int.natAbs 5))) <
+    │           ↑(Int.natAbs 5)) ∧
+    │     ((if 0 ≤ f.seed * 75 + 74 then (f.seed * 75 + 74) % ↑(Int.natAbs 65537)
+    │         else -(-(f.seed * 75 + 74) % ↑(Int.natAbs 65537))) <
+    │         0 →
+    │       (-↑(Int.natAbs 5) <
+    │           if
+    │               0 ≤
+    │                 if 0 ≤ f.seed * 75 + 74 then (f.seed * 75 + 74) % ↑(Int.natAbs 65537)
+    │                 else -(-(f.seed * 75 + 74) % ↑(Int.natAbs 65537)) then
+    │             (if 0 ≤ f.seed * 75 + 74 then (f.seed * 75 + 74) % ↑(Int.natAbs 65537)
+    │               else -(-(f.seed * 75 + 74) % ↑(Int.natAbs 65537))) %
+    │               ↑(Int.natAbs 5)
+    │           else
+    │             -((-if 0 ≤ f.seed * 75 + 74 then (f.seed * 75 + 74) % ↑(Int.natAbs 65537)
+    │                   else -(-(f.seed * 75 + 74) % ↑(Int.natAbs 65537))) %
+    │                 ↑(Int.natAbs 5))) ∧
+    │         (if
+    │               0 ≤
+    │                 if 0 ≤ f.seed * 75 + 74 then (f.seed * 75 + 74) % ↑(Int.natAbs 65537)
+    │                 else -(-(f.seed * 75 + 74) % ↑(Int.natAbs 65537)) then
+    │             (if 0 ≤ f.seed * 75 + 74 then (f.seed * 75 + 74) % ↑(Int.natAbs 65537)
+    │               else -(-(f.seed * 75 + 74) % ↑(Int.natAbs 65537))) %
+    │               ↑(Int.natAbs 5)
+    │           else
+    │             -((-if 0 ≤ f.seed * 75 + 74 then (f.seed * 75 + 74) % ↑(Int.natAbs 65537)
+    │                   else -(-(f.seed * 75 + 74) % ↑(Int.natAbs 65537))) %
+    │                 ↑(Int.natAbs 5))) ≤
+    │           0)
+    │ hcontract✝² :
+    │   ((0 ≤
+    │         if 0 ≤ f.seed * 75 + 74 then (f.seed * 75 + 74) % ↑(Int.natAbs 65537)
+    │         else -(-(f.seed * 75 + 74) % ↑(Int.natAbs 65537))) →
+    │       (if 0 ≤ f.seed * 75 + 74 then (f.seed * 75 + 74) % ↑(Int.natAbs 65537)
+    │           else -(-(f.seed * 75 + 74) % ↑(Int.natAbs 65537))) <
+    │           ↑(Int.natAbs 5) →
+    │         (if
+    │               0 ≤
+    │                 if 0 ≤ f.seed * 75 + 74 then (f.seed * 75 + 74) % ↑(Int.natAbs 65537)
+    │                 else -(-(f.seed * 75 + 74) % ↑(Int.natAbs 65537)) then
+    │             (if 0 ≤ f.seed * 75 + 74 then (f.seed * 75 + 74) % ↑(Int.natAbs 65537)
+    │               else -(-(f.seed * 75 + 74) % ↑(Int.natAbs 65537))) %
+    │               ↑(Int.natAbs 5)
+    │           else
+    │             -((-if 0 ≤ f.seed * 75 + 74 then (f.seed * 75 + 74) % ↑(Int.natAbs 65537)
+    │                   else -(-(f.seed * 75 + 74) % ↑(Int.natAbs 65537))) %
+    │                 ↑(Int.natAbs 5))) =
+    │           if 0 ≤ f.seed * 75 + 74 then (f.seed * 75 + 74) % ↑(Int.natAbs 65537)
+    │           else -(-(f.seed * 75 + 74) % ↑(Int.natAbs 65537))) ∧
+    │     ((-↑(Int.natAbs 5) <
+    │           if 0 ≤ f.seed * 75 + 74 then (f.seed * 75 + 74) % ↑(Int.natAbs 65537)
+    │           else -(-(f.seed * 75 + 74) % ↑(Int.natAbs 65537))) →
+    │         (if 0 ≤ f.seed * 75 + 74 then (f.seed * 75 + 74) % ↑(Int.natAbs 65537)
+    │             else -(-(f.seed * 75 + 74) % ↑(Int.natAbs 65537))) ≤
+    │             0 →
+    │           (if
+    │                 0 ≤
+    │                   if 0 ≤ f.seed * 75 + 74 then (f.seed * 75 + 74) % ↑(Int.natAbs 65537)
+    │                   else -(-(f.seed * 75 + 74) % ↑(Int.natAbs 65537)) then
+    │               (if 0 ≤ f.seed * 75 + 74 then (f.seed * 75 + 74) % ↑(Int.natAbs 65537)
+    │                 else -(-(f.seed * 75 + 74) % ↑(Int.natAbs 65537))) %
+    │                 ↑(Int.natAbs 5)
+    │             else
+    │               -((-if 0 ≤ f.seed * 75 + 74 then (f.seed * 75 + 74) % ↑(Int.natAbs 65537)
+    │                     else -(-(f.seed * 75 + 74) % ↑(Int.natAbs 65537))) %
+    │                   ↑(Int.natAbs 5))) =
+    │             if 0 ≤ f.seed * 75 + 74 then (f.seed * 75 + 74) % ↑(Int.natAbs 65537)
+    │             else -(-(f.seed * 75 + 74) % ↑(Int.natAbs 65537))) ∧
+    │       ((if 0 ≤ f.seed * 75 + 74 then (f.seed * 75 + 74) % ↑(Int.natAbs 65537)
+    │             else -(-(f.seed * 75 + 74) % ↑(Int.natAbs 65537))) =
+    │             5 ∨
+    │           (if 0 ≤ f.seed * 75 + 74 then (f.seed * 75 + 74) % ↑(Int.natAbs 65537)
+    │             else -(-(f.seed * 75 + 74) % ↑(Int.natAbs 65537))) =
+    │             -5 →
+    │         (if
+    │               0 ≤
+    │                 if 0 ≤ f.seed * 75 + 74 then (f.seed * 75 + 74) % ↑(Int.natAbs 65537)
+    │                 else -(-(f.seed * 75 + 74) % ↑(Int.natAbs 65537)) then
+    │             (if 0 ≤ f.seed * 75 + 74 then (f.seed * 75 + 74) % ↑(Int.natAbs 65537)
+    │               else -(-(f.seed * 75 + 74) % ↑(Int.natAbs 65537))) %
+    │               ↑(Int.natAbs 5)
+    │           else
+    │             -((-if 0 ≤ f.seed * 75 + 74 then (f.seed * 75 + 74) % ↑(Int.natAbs 65537)
+    │                   else -(-(f.seed * 75 + 74) % ↑(Int.natAbs 65537))) %
+    │                 ↑(Int.natAbs 5))) =
+    │           0)
+    │ hcontract✝¹ :
+    │   ((-40 ≤ f.offset ∧ f.offset ≤ 40) ∧ 0 ≤ f.seed) ∧ f.seed < 65537 →
+    │     (((-40 ≤
+    │             if h₁₀ :
+    │                 JS.lt 40
+    │                     (f.offset +
+    │                       ((if
+    │                             0 ≤
+    │                               if 0 ≤ f.seed * 75 + 74 then (f.seed * 75 + 74) % ↑(Int.natAbs 65537)
+    │                               else -(-(f.seed * 75 + 74) % ↑(Int.natAbs 65537)) then
+    │                           (if 0 ≤ f.seed * 75 + 74 then (f.seed * 75 + 74) % ↑(Int.natAbs 65537)
+    │                             else -(-(f.seed * 75 + 74) % ↑(Int.natAbs 65537))) %
+    │                             ↑(Int.natAbs 5)
+    │                         else
+    │                           -((-if 0 ≤ f.seed * 75 + 74 then (f.seed * 75 + 74) % ↑(Int.natAbs 65537)
+    │                                 else -(-(f.seed * 75 + 74) % ↑(Int.natAbs 65537))) %
+    │                               ↑(Int.natAbs 5))) -
+    │                         2)) =
+    │                   true then
+    │               f.offset
+    │             else
+    │               if h₁₁ :
+    │                   JS.lt
+    │                       (f.offset +
+    │                         ((if
+    │                               0 ≤
+    │                                 if 0 ≤ f.seed * 75 + 74 then (f.seed * 75 + 74) % ↑(Int.natAbs 65537)
+    │                                 else -(-(f.seed * 75 + 74) % ↑(Int.natAbs 65537)) then
+    │                             (if 0 ≤ f.seed * 75 + 74 then (f.seed * 75 + 74) % ↑(Int.natAbs 65537)
+    │                               else -(-(f.seed * 75 + 74) % ↑(Int.natAbs 65537))) %
+    │                               ↑(Int.natAbs 5)
+    │                           else
+    │                             -((-if 0 ≤ f.seed * 75 + 74 then (f.seed * 75 + 74) % ↑(Int.natAbs 65537)
+    │                                   else -(-(f.seed * 75 + 74) % ↑(Int.natAbs 65537))) %
+    │                                 ↑(Int.natAbs 5))) -
+    │                           2))
+    │                       (-40) =
+    │                     true then
+    │                 f.offset
+    │               else f.offset) ∧
+    │           (if h₁₀ :
+    │                 JS.lt 40
+    │                     (f.offset +
+    │                       ((if
+    │                             0 ≤
+    │                               if 0 ≤ f.seed * 75 + 74 then (f.seed * 75 + 74) % ↑(Int.natAbs 65537)
+    │                               else -(-(f.seed * 75 + 74) % ↑(Int.natAbs 65537)) then
+    │                           (if 0 ≤ f.seed * 75 + 74 then (f.seed * 75 + 74) % ↑(Int.natAbs 65537)
+    │                             else -(-(f.seed * 75 + 74) % ↑(Int.natAbs 65537))) %
+    │                             ↑(Int.natAbs 5)
+    │                         else
+    │                           -((-if 0 ≤ f.seed * 75 + 74 then (f.seed * 75 + 74) % ↑(Int.natAbs 65537)
+    │                                 else -(-(f.seed * 75 + 74) % ↑(Int.natAbs 65537))) %
+    │                               ↑(Int.natAbs 5))) -
+    │                         2)) =
+    │                   true then
+    │               f.offset
+    │             else
+    │               if h₁₁ :
+    │                   JS.lt
+    │                       (f.offset +
+    │                         ((if
+    │                               0 ≤
+    │                                 if 0 ≤ f.seed * 75 + 74 then (f.seed * 75 + 74) % ↑(Int.natAbs 65537)
+    │                                 else -(-(f.seed * 75 + 74) % ↑(Int.natAbs 65537)) then
+    │                             (if 0 ≤ f.seed * 75 + 74 then (f.seed * 75 + 74) % ↑(Int.natAbs 65537)
+    │                               else -(-(f.seed * 75 + 74) % ↑(Int.natAbs 65537))) %
+    │                               ↑(Int.natAbs 5)
+    │                           else
+    │                             -((-if 0 ≤ f.seed * 75 + 74 then (f.seed * 75 + 74) % ↑(Int.natAbs 65537)
+    │                                   else -(-(f.seed * 75 + 74) % ↑(Int.natAbs 65537))) %
+    │                                 ↑(Int.natAbs 5))) -
+    │                           2))
+    │                       (-40) =
+    │                     true then
+    │                 f.offset
+    │               else f.offset) ≤
+    │             40) ∧
+    │         0 ≤
+    │           if 0 ≤ f.seed * 75 + 74 then (f.seed * 75 + 74) % ↑(Int.natAbs 65537)
+    │           else -(-(f.seed * 75 + 74) % ↑(Int.natAbs 65537))) ∧
+    │       (if 0 ≤ f.seed * 75 + 74 then (f.seed * 75 + 74) % ↑(Int.natAbs 65537)
+    │         else -(-(f.seed * 75 + 74) % ↑(Int.natAbs 65537))) <
+    │         65537
+    │ hcontract✝ : True
+    │ ⊢ (if
+    │         (if h₁₀ :
+    │                 JS.lt 40
+    │                     (f.offset +
+    │                       ((if
+    │                             0 ≤
+    │                               if 0 ≤ f.seed * 75 + 74 then (f.seed * 75 + 74) % ↑(Int.natAbs 65537)
+    │                               else -(-(f.seed * 75 + 74) % ↑(Int.natAbs 65537)) then
+    │                           (if 0 ≤ f.seed * 75 + 74 then (f.seed * 75 + 74) % ↑(Int.natAbs 65537)
+    │                             else -(-(f.seed * 75 + 74) % ↑(Int.natAbs 65537))) %
+    │                             ↑(Int.natAbs 5)
+    │                         else
+    │                           -((-if 0 ≤ f.seed * 75 + 74 then (f.seed * 75 + 74) % ↑(Int.natAbs 65537)
+    │                                 else -(-(f.seed * 75 + 74) % ↑(Int.natAbs 65537))) %
+    │                               ↑(Int.natAbs 5))) -
+    │                         2)) =
+    │                   true then
+    │               f.offset
+    │             else
+    │               if h₁₁ :
+    │                   JS.lt
+    │                       (f.offset +
+    │                         ((if
+    │                               0 ≤
+    │                                 if 0 ≤ f.seed * 75 + 74 then (f.seed * 75 + 74) % ↑(Int.natAbs 65537)
+    │                                 else -(-(f.seed * 75 + 74) % ↑(Int.natAbs 65537)) then
+    │                             (if 0 ≤ f.seed * 75 + 74 then (f.seed * 75 + 74) % ↑(Int.natAbs 65537)
+    │                               else -(-(f.seed * 75 + 74) % ↑(Int.natAbs 65537))) %
+    │                               ↑(Int.natAbs 5)
+    │                           else
+    │                             -((-if 0 ≤ f.seed * 75 + 74 then (f.seed * 75 + 74) % ↑(Int.natAbs 65537)
+    │                                   else -(-(f.seed * 75 + 74) % ↑(Int.natAbs 65537))) %
+    │                                 ↑(Int.natAbs 5))) -
+    │                           2))
+    │                       (-40) =
+    │                     true then
+    │                 f.offset
+    │               else f.offset) -
+    │             f.offset <
+    │           0 then
+    │       -((if h₁₀ :
+    │               JS.lt 40
+    │                   (f.offset +
+    │                     ((if
+    │                           0 ≤
+    │                             if 0 ≤ f.seed * 75 + 74 then (f.seed * 75 + 74) % ↑(Int.natAbs 65537)
+    │                             else -(-(f.seed * 75 + 74) % ↑(Int.natAbs 65537)) then
+    │                         (if 0 ≤ f.seed * 75 + 74 then (f.seed * 75 + 74) % ↑(Int.natAbs 65537)
+    │                           else -(-(f.seed * 75 + 74) % ↑(Int.natAbs 65537))) %
+    │                           ↑(Int.natAbs 5)
+    │                       else
+    │                         -((-if 0 ≤ f.seed * 75 + 74 then (f.seed * 75 + 74) % ↑(Int.natAbs 65537)
+    │                               else -(-(f.seed * 75 + 74) % ↑(Int.natAbs 65537))) %
+    │                             ↑(Int.natAbs 5))) -
+    │                       2)) =
+    │                 true then
+    │             f.offset
+    │           else
+    │             if h₁₁ :
+    │                 JS.lt
+    │                     (f.offset +
+    │                       ((if
+    │                             0 ≤
+    │                               if 0 ≤ f.seed * 75 + 74 then (f.seed * 75 + 74) % ↑(Int.natAbs 65537)
+    │                               else -(-(f.seed * 75 + 74) % ↑(Int.natAbs 65537)) then
+    │                           (if 0 ≤ f.seed * 75 + 74 then (f.seed * 75 + 74) % ↑(Int.natAbs 65537)
+    │                             else -(-(f.seed * 75 + 74) % ↑(Int.natAbs 65537))) %
+    │                             ↑(Int.natAbs 5)
+    │                         else
+    │                           -((-if 0 ≤ f.seed * 75 + 74 then (f.seed * 75 + 74) % ↑(Int.natAbs 65537)
+    │                                 else -(-(f.seed * 75 + 74) % ↑(Int.natAbs 65537))) %
+    │                               ↑(Int.natAbs 5))) -
+    │                         2))
+    │                     (-40) =
+    │                   true then
+    │               f.offset
+    │             else f.offset) -
+    │           f.offset)
+    │     else
+    │       (if h₁₀ :
+    │             JS.lt 40
+    │                 (f.offset +
+    │                   ((if
+    │                         0 ≤
+    │                           if 0 ≤ f.seed * 75 + 74 then (f.seed * 75 + 74) % ↑(Int.natAbs 65537)
+    │                           else -(-(f.seed * 75 + 74) % ↑(Int.natAbs 65537)) then
+    │                       (if 0 ≤ f.seed * 75 + 74 then (f.seed * 75 + 74) % ↑(Int.natAbs 65537)
+    │                         else -(-(f.seed * 75 + 74) % ↑(Int.natAbs 65537))) %
+    │                         ↑(Int.natAbs 5)
+    │                     else
+    │                       -((-if 0 ≤ f.seed * 75 + 74 then (f.seed * 75 + 74) % ↑(Int.natAbs 65537)
+    │                             else -(-(f.seed * 75 + 74) % ↑(Int.natAbs 65537))) %
+    │                           ↑(Int.natAbs 5))) -
+    │                     2)) =
+    │               true then
+    │           f.offset
+    │         else
+    │           if h₁₁ :
+    │               JS.lt
+    │                   (f.offset +
+    │                     ((if
+    │                           0 ≤
+    │                             if 0 ≤ f.seed * 75 + 74 then (f.seed * 75 + 74) % ↑(Int.natAbs 65537)
+    │                             else -(-(f.seed * 75 + 74) % ↑(Int.natAbs 65537)) then
+    │                         (if 0 ≤ f.seed * 75 + 74 then (f.seed * 75 + 74) % ↑(Int.natAbs 65537)
+    │                           else -(-(f.seed * 75 + 74) % ↑(Int.natAbs 65537))) %
+    │                           ↑(Int.natAbs 5)
+    │                       else
+    │                         -((-if 0 ≤ f.seed * 75 + 74 then (f.seed * 75 + 74) % ↑(Int.natAbs 65537)
+    │                               else -(-(f.seed * 75 + 74) % ↑(Int.natAbs 65537))) %
+    │                             ↑(Int.natAbs 5))) -
+    │                       2))
+    │                   (-40) =
+    │                 true then
+    │             f.offset
+    │           else f.offset) -
+    │         f.offset) =
+    │     if
+    │         (if 0 ≤ (f.seed * 75 + 74) % ↑(Int.natAbs 65537) then (f.seed * 75 + 74) % ↑(Int.natAbs 65537) % ↑(Int.natAbs 5)
+    │             else -(-((f.seed * 75 + 74) % ↑(Int.natAbs 65537)) % ↑(Int.natAbs 5))) -
+    │             2 <
+    │           0 then
+    │       -((if 0 ≤ (f.seed * 75 + 74) % ↑(Int.natAbs 65537) then (f.seed * 75 + 74) % ↑(Int.natAbs 65537) % ↑(Int.natAbs 5)
+    │           else -(-((f.seed * 75 + 74) % ↑(Int.natAbs 65537)) % ↑(Int.natAbs 5))) -
+    │           2)
+    │     else
+    │       (if 0 ≤ (f.seed * 75 + 74) % ↑(Int.natAbs 65537) then (f.seed * 75 + 74) % ↑(Int.natAbs 65537) % ↑(Int.natAbs 5)
+    │         else -(-((f.seed * 75 + 74) % ↑(Int.natAbs 65537)) % ↑(Int.natAbs 5))) -
+    │         2
+✗ src/App.tsx:155:11  [postcondition] postcondition of simReducer: r.paused === (a.kind === "togglePause" ? !s.paused : s.paused)
+    │ `grind` failed
+    │ case grind.1
+    │ s : Sim
+    │ hcontract : True
+    │ hcontract_1 :
+    │   ((-40 ≤ s.feed.offset ∧ s.feed.offset ≤ 40) ∧ 0 ≤ s.feed.seed) ∧ s.feed.seed < 65537 →
+    │     ((-40 ≤ s.feed.offset ∧ s.feed.offset ≤ 40) ∧ 0 ≤ s.feed.seed) ∧ s.feed.seed < 65537
+    │ hcontract_2 hcontract_3 hcontract_4 hcontract_5 : True
+    │ h : (s.paused = true) = ((!s.paused) = false)
+    │ left : s.paused = true
+    │ right : (!s.paused) = false
+    │ ⊢ False
+    │ [grind] Goal diagnostics
+    │   [facts] Asserted facts
+    │     [prop] (s.paused = true) = ((!s.paused) = false)
+    │     [prop] s.paused = true
+    │     [prop] (!s.paused) = false
+    │   [eqc] True propositions
+    │     [prop] (s.paused = true) = ((!s.paused) = false)
+    │     [prop] (!s.paused) = false
+    │     [prop] s.paused = true
+    │   [eqc] Equivalence classes
+    │     [eqc] {false, !s.paused}
+    │     [eqc] {true, s.paused}
+    │   [cases] Case analyses
+    │     [cases] [1/2]: (s.paused = true) = ((!s.paused) = false)
+    │       [cases] source: Initial goal
+✗ src/App.tsx:156:11  [postcondition] postcondition of simReducer: r.rally === (a.kind === "toggleRally" ? !s.rally : s.rally)
+    │ `grind` failed
+    │ case grind.1
+    │ s : Sim
+    │ hcontract hcontract_1 : True
+    │ hcontract_2 :
+    │   ((-40 ≤ s.feed.offset ∧ s.feed.offset ≤ 40) ∧ 0 ≤ s.feed.seed) ∧ s.feed.seed < 65537 →
+    │     ((-40 ≤ s.feed.offset ∧ s.feed.offset ≤ 40) ∧ 0 ≤ s.feed.seed) ∧ s.feed.seed < 65537
+    │ hcontract_3 hcontract_4 hcontract_5 hcontract_6 : True
+    │ h : (s.rally = true) = ((!s.rally) = false)
+    │ left : s.rally = true
+    │ right : (!s.rally) = false
+    │ ⊢ False
+    │ [grind] Goal diagnostics
+    │   [facts] Asserted facts
+    │     [prop] (s.rally = true) = ((!s.rally) = false)
+    │     [prop] s.rally = true
+    │     [prop] (!s.rally) = false
+    │   [eqc] True propositions
+    │     [prop] (s.rally = true) = ((!s.rally) = false)
+    │     [prop] (!s.rally) = false
+    │     [prop] s.rally = true
+    │   [eqc] Equivalence classes
+    │     [eqc] {false, !s.rally}
+    │     [eqc] {true, s.rally}
+    │   [cases] Case analyses
+    │     [cases] [1/2]: (s.rally = true) = ((!s.rally) = false)
+    │       [cases] source: Initial goal
+✗ src/model.ts:184:11  [postcondition] postcondition of levelsOf: filterLabel(f) === (r === null ? "All" : `${r}`)
+    │ `grind` failed
+    │ case grind
+    │ r : Int
+    │ hcontract : 4 ≥ 1
+    │ heq : some 4 = some r
+    │ h : ¬{ units := [51] } = JS.str r
+    │ ⊢ False
+    │ [grind] Goal diagnostics
+    │   [facts] Asserted facts
+    │     [prop] some 4 = some r
+    │     [prop] ¬{ units := [51] } = JS.str r
+    │   [eqc] False propositions
+    │     [prop] { units := [51] } = JS.str r
+    │   [eqc] Equivalence classes
+    │     [eqc] {r, 4}
+    │     [eqc] {some r, some 4}
+    │   [cutsat] Assignment satisfying linear constraints
+    │     [assign] r := 4
+✗ src/reducer.ts:239:11  [postcondition] postcondition of place: implies(accepts(u, qty, price), keepsOrdersExcept(u, r, u.nextId))
+    │ `grind` failed
+    │ case grind
+    │ u : ChainUi
+    │ t : model.Ticket
+    │ qty price : Int
+    │ h_pre : 1 ≤ qty ∧ qty ≤ 500
+    │ h₃₅ h : ((1 ≤ qty ∧ qty ≤ 500) ∧ 0 < price) ∧ model.openQty u.orders.values + qty < 1000
+    │ h_1 : 1 < u.nextId
+    │ h_2 : ¬u.nextId - 1 ∈ u.orders.keys
+    │ h_3 : model.openQty u.orders.values + qty + qty ≤ 1000
+    │ hcontract : (List.map Prod.fst u.orders.entries).Nodup
+    │ hcontract_1 : u.orders.keys.Nodup
+    │ heq : u.orders.get (u.nextId - 1) = none
+    │ ⊢ False
+    │ [grind] Goal diagnostics
+    │   [facts] Asserted facts
+    │     [prop] -1 * qty + 1 ≤ 0 ∧ qty + -500 ≤ 0
+    │     [prop] -1 * qty + 1 ≤ 0 ∧ qty + -500 ≤ 0 ∧ -1 * price + 1 ≤ 0 ∧ qty + model.openQty u.orders.values + -999 ≤ 0
+    │     [prop] -1 * qty + 1 ≤ 0 ∧ qty + -500 ≤ 0 ∧ -1 * price + 1 ≤ 0 ∧ qty + model.openQty u.orders.values + -999 ≤ 0
+    │     [prop] -1 * u.nextId + 2 ≤ 0
+    │     [prop] ¬u.nextId + -1 ∈ u.orders.keys
+    │     [prop] 2 * qty + model.openQty u.orders.values + -1000 ≤ 0
+    │     [prop] (List.map Prod.fst u.orders.entries).Nodup
+    │     [prop] u.orders.keys.Nodup
+    │     [prop] u.orders.get (u.nextId + -1) = none
+    │     [prop] u.nextId + -1 ∈ u.orders.keys → ∃ v, (u.nextId + -1, v) ∈ u.orders.entries
+    │     [prop] u.orders.keys.Nodup
+    │     [prop] u.orders.keys.Nodup = ∀ (a : Int), List.count a u.orders.keys ≤ 1
+    │     [prop] (List.map Prod.fst u.orders.entries).Nodup =
+    │           ∀ (a : Int), List.count a (List.map Prod.fst u.orders.entries) ≤ 1
+    │     [prop] u.orders.keys.Nodup = List.Pairwise (fun x1 x2 => ¬x1 = x2) u.orders.keys
+    │     [prop] (List.map Prod.fst u.orders.entries).Nodup =
+    │           List.Pairwise (fun x1 x2 => ¬x1 = x2) (List.map Prod.fst u.orders.entries)
+    │     [prop] (List.map (fun p => p.fst) u.orders.entries).Nodup
+    │     [prop] (u.orders.get (u.nextId + -1) = none) = ¬u.nextId + -1 ∈ u.orders.keys
+    │     [prop] List.Pairwise (fun x1 x2 => ¬x1 = x2) (List.map Prod.fst u.orders.entries) =
+    │           List.Pairwise (fun a b => ¬a.fst = b.fst) u.orders.entries
+    │     [prop] (∀ (a b : Int × model.Order), True) →
+    │           List.Pairwise (fun a b => ¬a.fst = b.fst) u.orders.entries →
+    │             List.Pairwise (fun x1 x2 => ¬x1 = x2) (List.map Prod.fst u.orders.entries)
+    │   [eqc] True propositions
+    │     [prop] qty + -500 ≤ 0 ∧ -1 * price + 1 ≤ 0 ∧ qty + model.openQty u.orders.values + -999 ≤ 0
+    │     [prop] -1 * qty + 1 ≤ 0 ∧ qty + -500 ≤ 0 ∧ -1 * price + 1 ≤ 0 ∧ qty + model.openQty u.orders.values + -999 ≤ 0
+    │     [prop] -1 * qty + 1 ≤ 0 ∧ qty + -500 ≤ 0
+    │     [prop] -1 * price + 1 ≤ 0 ∧ qty + model.openQty u.orders.values + -999 ≤ 0
+    │     [prop] u.orders.keys.Nodup
+    │     [prop] (List.map Prod.fst u.orders.entries).Nodup
+    │     [prop] qty + -500 ≤ 0
+    │     [prop] qty + model.openQty u.orders.values + -999 ≤ 0
+    │     [prop] 2 * qty + model.openQty u.orders.values + -1000 ≤ 0
+    │     [prop] -1 * qty + 1 ≤ 0
+    │     [prop] -1 * price + 1 ≤ 0
+    │     [prop] -1 * u.nextId + 2 ≤ 0
+    │     [prop] ¬u.nextId + -1 ∈ u.orders.keys
+    │     [prop] (List.map (fun p => p.fst) u.orders.entries).Nodup
+    │     [prop] u.orders.keys.Nodup = List.Pairwise (fun x1 x2 => ¬x1 = x2) u.orders.keys
+    │     [prop] u.orders.keys.Nodup = ∀ (a : Int), List.count a u.orders.keys ≤ 1
+    │     [prop] (List.map Prod.fst u.orders.entries).Nodup =
+    │           List.Pairwise (fun x1 x2 => ¬x1 = x2) (List.map Prod.fst u.orders.entries)
+    │     [prop] (List.map Prod.fst u.orders.entries).Nodup =
+    │           ∀ (a : Int), List.count a (List.map Prod.fst u.orders.entries) ≤ 1
+    │     [prop] (u.orders.get (u.nextId + -1) = none) = ¬u.nextId + -1 ∈ u.orders.keys
+    │     [prop] u.orders.get (u.nextId + -1) = none
+    │     [prop] List.Pairwise (fun x1 x2 => ¬x1 = x2) u.orders.keys
+    │     [prop] List.Pairwise (fun x1 x2 => ¬x1 = x2) (List.map Prod.fst u.orders.entries)
+    │     [prop] ∀ (a : Int), List.count a u.orders.keys ≤ 1
+    │     [prop] ∀ (a : Int), List.count a (List.map Prod.fst u.orders.entries) ≤ 1
+    │     [prop] u.nextId + -1 ∈ u.orders.keys → ∃ v, (u.nextId + -1, v) ∈ u.orders.entries
+    │     [prop] List.Pairwise (fun x1 x2 => ¬x1 = x2) (List.map Prod.fst u.orders.entries) =
+    │           List.Pairwise (fun a b => ¬a.fst = b.fst) u.orders.entries
+    │     [prop] List.Pairwise (fun a b => ¬a.fst = b.fst) u.orders.entries
+    │     [prop] List.Pairwise (fun a b => ¬a.fst = b.fst) u.orders.entries →
+    │           List.Pairwise (fun x1 x2 => ¬x1 = x2) (List.map Prod.fst u.orders.entries)
+    │     [prop] (∀ (a b : Int × model.Order), True) →
+    │           List.Pairwise (fun a b => ¬a.fst = b.fst) u.orders.entries →
+    │             List.Pairwise (fun x1 x2 => ¬x1 = x2) (List.map Prod.fst u.orders.entries)
+    │   [eqc] False propositions
+    │     [prop] u.nextId + -1 ∈ u.orders.keys
+    │   [eqc] Equivalence classes
+    │     [eqc] {none, u.orders.get (u.nextId + -1)}
+    │     [eqc] {Prod.fst, fun p => p.fst}
+    │     [eqc] {List.map Prod.fst u.orders.entries, List.map (fun p => p.fst) u.orders.entries}
+    │   [ematch] E-matching patterns
+    │     [thm] JS.JSMap.entry_of_mem_values: [@Membership.mem #3 (List _) _ (@JS.JSMap.values #4 _ #2) #1]
+    │     [thm] JS.JSMap.entry_of_mem_keys: [@Membership.mem #4 (List _) _ (@JS.JSMap.keys _ #3 #2) #1]
+    │     [thm] JS.JSMap.keys_nodup: [@JS.JSMap.keys #2 #1 #0]
+    │     [thm] List.nodup_iff_count: [@List.Nodup #3 #0]
+    │     [thm] List.nodup_iff_pairwise_ne: [@List.Nodup #1 #0]
+    │     [thm] JS.JSMap.nodup_map_values_of_key: [@List.Nodup #4 (@List.map #3 _ #1 (@JS.JSMap.values _ _ #2))]
+    │     [thm] List.mem_map: [@Membership.mem #3 (List _) _ (@List.map #4 _ #1 #0) #2]
+    │     [thm] List.map_map: [@List.map #5 #4 #2 (@List.map #3 _ #1 #0)]
+    │     [thm] JS.JSMap.mem_keys_of_mem_entries: [@Membership.mem (Prod #4 #3) (List (Prod _ _)) _ (@JS.JSMap.entries _ _ #2) #1]
+    │     [thm] JS.JSMap.nodup_entries_fst: [@JS.JSMap.entries #2 #1 #0]
+    │     [thm] JS.JSMap.get_eq_none_iff: [@JS.JSMap.get #4 #3 #2 #1 #0]
+    │     [thm] local_0: [@LE.le `[Nat] `[instLENat] (@List.count `[Int] `[Int.instLinearOrderPackage.toBEq] #0 `[u.orders.keys]) `[1]]
+    │     [thm] local_0: [@List.count `[Int] `[Int.instLinearOrderPackage.toBEq] #0 `[u.orders.keys]]
+    │     [thm] local_1: [@LE.le `[Nat] `[instLENat] (@List.count `[Int] `[Int.instLinearOrderPackage.toBEq] #0 `[List.map
+    │             Prod.fst u.orders.entries]) `[1]]
+    │     [thm] local_1: [@List.count `[Int] `[Int.instLinearOrderPackage.toBEq] #0 `[List.map Prod.fst u.orders.entries]]
+    │     [thm] List.Pairwise.map: [@List.Pairwise #7 #3 (@List.map #6 _ #2 #4), @List.Pairwise _ #5 #4]
+    │     [thm] List.pairwise_map: [@List.Pairwise #3 #1 (@List.map #4 _ #2 #0)]
+    │     [thm] Option.not_mem_none: [@Membership.mem #1 (Option _) _ (@none _) #0]
+    │     [thm] Option.none_le: [@LE.le (Option #2) _ (@none _) #0]
+    │   [cutsat] Assignment satisfying linear constraints
+    │     [assign] qty := 1
+    │     [assign] price := 1
+    │     [assign] model.openQty u.orders.values := 998
+    │     [assign] u.nextId := 2
+    │ [grind] Diagnostics
+    │   [ematch] E-matching Diagnostics
+    │     [thm] Theorem Instance Count
+    │       [thm] List.nodup_iff_count ↦ 2
+    │       [thm] List.nodup_iff_pairwise_ne ↦ 2
+    │       [thm] List.pairwise_map ↦ 1
+    │       [thm] List.Pairwise.map ↦ 1
+    │       [thm] JS.JSMap.entry_of_mem_keys ↦ 1
+    │       [thm] JS.JSMap.get_eq_none_iff ↦ 1
+    │       [thm] JS.JSMap.keys_nodup ↦ 1
+    │       [thm] JS.JSMap.nodup_entries_fst ↦ 1
+✗ src/reducer.ts:245:11  [postcondition] postcondition of place: implies(wellFormed(u) && !accepts(u, qty, price), !wellFormed(withOrder(u, t, qty, price)))
+    │ `grind` failed
+    │ case grind.1.2
+    │ u : ChainUi
+    │ t : model.Ticket
+    │ qty price : Int
+    │ h_pre : 1 ≤ qty ∧ qty ≤ 500
+    │ h₃₇ :
+    │   (((1 ≤ u.heat ∧ u.heat ≤ 5) ∧
+    │         ∀ (x : Int × model.Order),
+    │           x ∈ u.orders.entries → ((1 ≤ x.snd.qty ∧ x.snd.qty ≤ 500) ∧ 0 < x.snd.price) ∧ x.fst < u.nextId) ∧
+    │       model.openQty u.orders.values ≤ 1000) ∧
+    │     ¬(((1 ≤ qty ∧ qty ≤ 500) ∧ 0 < price) ∧ model.openQty u.orders.values + qty < 1000)
+    │ hcontract : (List.map Prod.fst u.orders.entries).Nodup
+    │ left : -1 * u.heat + 1 ≤ 0
+    │ left_1 : u.heat + -5 ≤ 0
+    │ left_2 : -1 * qty + 1 ≤ 0
+    │ left_3 : qty + -500 ≤ 0
+    │ left_4 : -1 * price + 1 ≤ 0
+    │ left_5 : ∀ (a : Int × model.Order), a ∈ u.orders.entries ∧ ¬a.fst = u.nextId → -1 * a.snd.qty + 1 ≤ 0
+    │ left_6 : ∀ (a : Int × model.Order), a ∈ u.orders.entries ∧ ¬a.fst = u.nextId → a.snd.qty + -500 ≤ 0
+    │ left_7 : ∀ (a : Int × model.Order), a ∈ u.orders.entries ∧ ¬a.fst = u.nextId → -1 * a.snd.price + 1 ≤ 0
+    │ left_8 : ∀ (a : Int × model.Order), a ∈ u.orders.entries ∧ ¬a.fst = u.nextId → -1 * u.nextId + a.fst ≤ 0
+    │ right_8 :
+    │   model.openQty
+    │         (u.orders.set u.nextId
+    │             { expiry := t.expiry, leg := t.leg, strike := t.strike, buy := JS.eq t.side model.Side.ask, qty := qty,
+    │               price := price }).values +
+    │       -1000 ≤
+    │     0
+    │ left_9 : JS.eq t.side model.Side.ask = true
+    │ right_9 : t.side = model.Side.ask
+    │ h_2 : ¬u.nextId ∈ u.orders.keys
+    │ ⊢ False
+    │ [grind] Goal diagnostics
+    │   [facts] Asserted facts
+    │     [prop] -1 * qty + 1 ≤ 0 ∧ qty + -500 ≤ 0
+    │     [prop] -1 * u.heat + 1 ≤ 0 ∧
+    │           u.heat + -5 ≤ 0 ∧
+    │             (∀ (x : Int × model.Order), x ∈ u.orders.entries → -1 * x.snd.qty + 1 ≤ 0) ∧
+    │               (∀ (x : Int × model.Order), x ∈ u.orders.entries → x.snd.qty + -500 ≤ 0) ∧
+    │                 (∀ (x : Int × model.Order), x ∈ u.orders.entries → -1 * x.snd.price + 1 ≤ 0) ∧
+    │                   (∀ (x : Int × model.Order), x ∈ u.orders.entries → -1 * u.nextId + x.fst + 1 ≤ 0) ∧
+    │                     model.openQty u.orders.values + -1000 ≤ 0 ∧
+    │                       (qty ≤ 0 ∨
+    │                         -1 * qty + 501 ≤ 0 ∨ price ≤ 0 ∨ -1 * qty + -1 * model.openQty u.orders.values + 1000 ≤ 0)
+    │     [prop] (List.map Prod.fst u.orders.entries).Nodup
+    │     [prop] -1 * u.heat + 1 ≤ 0
+    │     [prop] u.heat + -5 ≤ 0
+    │     [prop] -1 * qty + 1 ≤ 0
+    │     [prop] qty + -500 ≤ 0
+    │     [prop] -1 * price + 1 ≤ 0
+    │     [prop] ∀ (a : Int × model.Order), a ∈ u.orders.entries ∧ ¬a.fst = u.nextId → -1 * a.snd.qty + 1 ≤ 0
+    │     [prop] ∀ (a : Int × model.Order), a ∈ u.orders.entries ∧ ¬a.fst = u.nextId → a.snd.qty + -500 ≤ 0
+    │     [prop] ∀ (a : Int × model.Order), a ∈ u.orders.entries ∧ ¬a.fst = u.nextId → -1 * a.snd.price + 1 ≤ 0
+    │     [prop] ∀ (a : Int × model.Order), a ∈ u.orders.entries ∧ ¬a.fst = u.nextId → -1 * u.nextId + a.fst ≤ 0
+    │     [prop] model.openQty
+    │               (u.orders.set u.nextId
+    │                   { expiry := t.expiry, leg := t.leg, strike := t.strike, buy := JS.eq t.side model.Side.ask,
+    │                     qty := qty, price := price }).values +
+    │             -1000 ≤
+    │           0
+    │     [prop] (List.map (fun p => p.fst) u.orders.entries).Nodup
+    │     [prop] (List.map Prod.fst u.orders.entries).Nodup =
+    │           ∀ (a : Int), List.count a (List.map Prod.fst u.orders.entries) ≤ 1
+    │     [prop] (List.map Prod.fst u.orders.entries).Nodup =
+    │           List.Pairwise (fun x1 x2 => ¬x1 = x2) (List.map Prod.fst u.orders.entries)
+    │     [prop] model.openQty
+    │             (u.orders.set u.nextId
+    │                 { expiry := t.expiry, leg := t.leg, strike := t.strike, buy := JS.eq t.side model.Side.ask, qty := qty,
+    │                   price := price }).values =
+    │           if u.nextId ∈ u.orders.keys then
+    │             qty +
+    │                 -1 *
+    │                   ((u.orders.get u.nextId).getD
+    │                       { expiry := t.expiry, leg := t.leg, strike := t.strike, buy := JS.eq t.side model.Side.ask,
+    │                         qty := qty, price := price }).qty +
+    │               model.openQty u.orders.values
+    │           else qty + model.openQty u.orders.values
+    │     [prop] (JS.eq t.side model.Side.ask = false) = ¬t.side = model.Side.ask
+    │     [prop] (JS.eq t.side model.Side.ask = true) = (t.side = model.Side.ask)
+    │     [prop] List.Pairwise (fun x1 x2 => ¬x1 = x2) (List.map Prod.fst u.orders.entries) =
+    │           List.Pairwise (fun a b => ¬a.fst = b.fst) u.orders.entries
+    │     [prop] u.nextId ∈ u.orders.keys → ∃ v, (u.nextId, v) ∈ u.orders.entries
+    │     [prop] u.orders.keys.Nodup
+    │     [prop] u.orders.keys.Nodup = ∀ (a : Int), List.count a u.orders.keys ≤ 1
+    │     [prop] u.orders.keys.Nodup = List.Pairwise (fun x1 x2 => ¬x1 = x2) u.orders.keys
+    │     [prop] (∀ (a b : Int × model.Order), True) →
+    │           List.Pairwise (fun a b => ¬a.fst = b.fst) u.orders.entries →
+    │             List.Pairwise (fun x1 x2 => ¬x1 = x2) (List.map Prod.fst u.orders.entries)
+    │     [prop] JS.eq t.side model.Side.ask = true
+    │     [prop] t.side = model.Side.ask
+    │     [prop] ¬u.nextId ∈ u.orders.keys
+    │   [eqc] True propositions
+    │     [prop] model.openQty u.orders.values + -1000 ≤ 0 ∧
+    │           (qty ≤ 0 ∨ -1 * qty + 501 ≤ 0 ∨ price ≤ 0 ∨ -1 * qty + -1 * model.openQty u.orders.values + 1000 ≤ 0)
+    │     [prop] u.heat + -5 ≤ 0 ∧
+    │           (∀ (x : Int × model.Order), x ∈ u.orders.entries → -1 * x.snd.qty + 1 ≤ 0) ∧
+    │             (∀ (x : Int × model.Order), x ∈ u.orders.entries → x.snd.qty + -500 ≤ 0) ∧
+    │               (∀ (x : Int × model.Order), x ∈ u.orders.entries → -1 * x.snd.price + 1 ≤ 0) ∧
+    │                 (∀ (x : Int × model.Order), x ∈ u.orders.entries → -1 * u.nextId + x.fst + 1 ≤ 0) ∧
+    │                   model.openQty u.orders.values + -1000 ≤ 0 ∧
+    │                     (qty ≤ 0 ∨
+    │                       -1 * qty + 501 ≤ 0 ∨ price ≤ 0 ∨ -1 * qty + -1 * model.openQty u.orders.values + 1000 ≤ 0)
+    │     [prop] -1 * qty + 1 ≤ 0 ∧ qty + -500 ≤ 0
+    │     [prop] -1 * u.heat + 1 ≤ 0 ∧
+    │           u.heat + -5 ≤ 0 ∧
+    │             (∀ (x : Int × model.Order), x ∈ u.orders.entries → -1 * x.snd.qty + 1 ≤ 0) ∧
+    │               (∀ (x : Int × model.Order), x ∈ u.orders.entries → x.snd.qty + -500 ≤ 0) ∧
+    │                 (∀ (x : Int × model.Order), x ∈ u.orders.entries → -1 * x.snd.price + 1 ≤ 0) ∧
+    │                   (∀ (x : Int × model.Order), x ∈ u.orders.entries → -1 * u.nextId + x.fst + 1 ≤ 0) ∧
+    │                     model.openQty u.orders.values + -1000 ≤ 0 ∧
+    │                       (qty ≤ 0 ∨
+    │                         -1 * qty + 501 ≤ 0 ∨ price ≤ 0 ∨ -1 * qty + -1 * model.openQty u.orders.values + 1000 ≤ 0)
+    │     [prop] (∀ (x : Int × model.Order), x ∈ u.orders.entries → x.snd.qty + -500 ≤ 0) ∧
+    │           (∀ (x : Int × model.Order), x ∈ u.orders.entries → -1 * x.snd.price + 1 ≤ 0) ∧
+    │             (∀ (x : Int × model.Order), x ∈ u.orders.entries → -1 * u.nextId + x.fst + 1 ≤ 0) ∧
+    │               model.openQty u.orders.values + -1000 ≤ 0 ∧
+    │                 (qty ≤ 0 ∨ -1 * qty + 501 ≤ 0 ∨ price ≤ 0 ∨ -1 * qty + -1 * model.openQty u.orders.values + 1000 ≤ 0)
+    │     [prop] (∀ (x : Int × model.Order), x ∈ u.orders.entries → -1 * u.nextId + x.fst + 1 ≤ 0) ∧
+    │           model.openQty u.orders.values + -1000 ≤ 0 ∧
+    │             (qty ≤ 0 ∨ -1 * qty + 501 ≤ 0 ∨ price ≤ 0 ∨ -1 * qty + -1 * model.openQty u.orders.values + 1000 ≤ 0)
+    │     [prop] (∀ (x : Int × model.Order), x ∈ u.orders.entries → -1 * x.snd.price + 1 ≤ 0) ∧
+    │           (∀ (x : Int × model.Order), x ∈ u.orders.entries → -1 * u.nextId + x.fst + 1 ≤ 0) ∧
+    │             model.openQty u.orders.values + -1000 ≤ 0 ∧
+    │               (qty ≤ 0 ∨ -1 * qty + 501 ≤ 0 ∨ price ≤ 0 ∨ -1 * qty + -1 * model.openQty u.orders.values + 1000 ≤ 0)
+    │     [prop] (∀ (x : Int × model.Order), x ∈ u.orders.entries → -1 * x.snd.qty + 1 ≤ 0) ∧
+    │           (∀ (x : Int × model.Order), x ∈ u.orders.entries → x.snd.qty + -500 ≤ 0) ∧
+    │             (∀ (x : Int × model.Order), x ∈ u.orders.entries → -1 * x.snd.price + 1 ≤ 0) ∧
+    │               (∀ (x : Int × model.Order), x ∈ u.orders.entries → -1 * u.nextId + x.fst + 1 ≤ 0) ∧
+    │                 model.openQty u.orders.values + -1000 ≤ 0 ∧
+    │                   (qty ≤ 0 ∨ -1 * qty + 501 ≤ 0 ∨ price ≤ 0 ∨ -1 * qty + -1 * model.openQty u.orders.values + 1000 ≤ 0)
+    │     [prop] (List.map Prod.fst u.orders.entries).Nodup
+    │     [prop] qty ≤ 0 ∨ -1 * qty + 501 ≤ 0 ∨ price ≤ 0 ∨ -1 * qty + -1 * model.openQty u.orders.values + 1000 ≤ 0
+    │     [prop] price ≤ 0 ∨ -1 * qty + -1 * model.openQty u.orders.values + 1000 ≤ 0
+    │     [prop] -1 * qty + 501 ≤ 0 ∨ price ≤ 0 ∨ -1 * qty + -1 * model.openQty u.orders.values + 1000 ≤ 0
+    │     [prop] qty + -500 ≤ 0
+    │     [prop] model.openQty u.orders.values + -1000 ≤ 0
+    │     [prop] model.openQty
+    │               (u.orders.set u.nextId
+    │                   { expiry := t.expiry, leg := t.leg, strike := t.strike, buy := JS.eq t.side model.Side.ask,
+    │                     qty := qty, price := price }).values +
+    │             -1000 ≤
+    │           0
+    │     [prop] u.heat + -5 ≤ 0
+    │     [prop] -1 * qty + -1 * model.openQty u.orders.values + 1000 ≤ 0
+    │     [prop] -1 * qty + 1 ≤ 0
+    │     [prop] -1 * price + 1 ≤ 0
+    │     [prop] -1 * u.heat + 1 ≤ 0
+    │     [prop] ∀ (a : Int × model.Order), a ∈ u.orders.entries ∧ ¬a.fst = u.nextId → a.snd.qty + -500 ≤ 0
+    │     [prop] ∀ (a : Int × model.Order), a ∈ u.orders.entries ∧ ¬a.fst = u.nextId → -1 * a.snd.price + 1 ≤ 0
+    │     [prop] ∀ (a : Int × model.Order), a ∈ u.orders.entries ∧ ¬a.fst = u.nextId → -1 * a.snd.qty + 1 ≤ 0
+    │     [prop] ∀ (a : Int × model.Order), a ∈ u.orders.entries ∧ ¬a.fst = u.nextId → -1 * u.nextId + a.fst ≤ 0
+    │     [prop] ∀ (x : Int × model.Order), x ∈ u.orders.entries → x.snd.qty + -500 ≤ 0
+    │     [prop] ∀ (x : Int × model.Order), x ∈ u.orders.entries → -1 * u.nextId + x.fst + 1 ≤ 0
+    │     [prop] ∀ (x : Int × model.Order), x ∈ u.orders.entries → -1 * x.snd.price + 1 ≤ 0
+    │     [prop] ∀ (x : Int × model.Order), x ∈ u.orders.entries → -1 * x.snd.qty + 1 ≤ 0
+    │     [prop] (List.map (fun p => p.fst) u.orders.entries).Nodup
+    │     [prop] (List.map Prod.fst u.orders.entries).Nodup =
+    │           List.Pairwise (fun x1 x2 => ¬x1 = x2) (List.map Prod.fst u.orders.entries)
+    │     [prop] (List.map Prod.fst u.orders.entries).Nodup =
+    │           ∀ (a : Int), List.count a (List.map Prod.fst u.orders.entries) ≤ 1
+    │     [prop] (JS.eq t.side model.Side.ask = false) = ¬t.side = model.Side.ask
+    │     [prop] (JS.eq t.side model.Side.ask = true) = (t.side = model.Side.ask)
+    │     [prop] JS.eq t.side model.Side.ask = true
+    │     [prop] t.side = model.Side.ask
+    │     [prop] List.Pairwise (fun x1 x2 => ¬x1 = x2) (List.map Prod.fst u.orders.entries)
+    │     [prop] ∀ (a : Int), List.count a (List.map Prod.fst u.orders.entries) ≤ 1
+    │     [prop] u.orders.keys.Nodup
+    │     [prop] List.Pairwise (fun x1 x2 => ¬x1 = x2) (List.map Prod.fst u.orders.entries) =
+    │           List.Pairwise (fun a b => ¬a.fst = b.fst) u.orders.entries
+    │     [prop] List.Pairwise (fun a b => ¬a.fst = b.fst) u.orders.entries
+    │     [prop] u.nextId ∈ u.orders.keys → ∃ v, (u.nextId, v) ∈ u.orders.entries
+    │     [prop] u.orders.keys.Nodup = List.Pairwise (fun x1 x2 => ¬x1 = x2) u.orders.keys
+    │     [prop] u.orders.keys.Nodup = ∀ (a : Int), List.count a u.orders.keys ≤ 1
+    │     [prop] List.Pairwise (fun x1 x2 => ¬x1 = x2) u.orders.keys
+    │     [prop] ∀ (a : Int), List.count a u.orders.keys ≤ 1
+    │     [prop] List.Pairwise (fun a b => ¬a.fst = b.fst) u.orders.entries →
+    │           List.Pairwise (fun x1 x2 => ¬x1 = x2) (List.map Prod.fst u.orders.entries)
+    │     [prop] (∀ (a b : Int × model.Order), True) →
+    │           List.Pairwise (fun a b => ¬a.fst = b.fst) u.orders.entries →
+    │             List.Pairwise (fun x1 x2 => ¬x1 = x2) (List.map Prod.fst u.orders.entries)
+    │   [eqc] False propositions
+    │     [prop] qty ≤ 0
+    │     [prop] price ≤ 0
+    │     [prop] -1 * qty + 501 ≤ 0
+    │     [prop] ¬t.side = model.Side.ask
+    │     [prop] JS.eq t.side model.Side.ask = false
+    │     [prop] u.nextId ∈ u.orders.keys
+    │   [eqc] Equivalence classes
+    │     [eqc] {true, JS.eq t.side model.Side.ask}
+    │     [eqc] {model.Side.ask, t.side}
+    │     [eqc] {model.openQty
+    │           (u.orders.set u.nextId
+    │               { expiry := t.expiry, leg := t.leg, strike := t.strike, buy := JS.eq t.side model.Side.ask, qty := qty,
+    │                 price := price }).values,
+    │         qty + model.openQty u.orders.values}
+    │       [eqc] {if u.nextId ∈ u.orders.keys then
+    │             qty +
+    │                 -1 *
+    │                   ((u.orders.get u.nextId).getD
+    │                       { expiry := t.expiry, leg := t.leg, strike := t.strike, buy := JS.eq t.side model.Side.ask,
+    │                         qty := qty, price := price }).qty +
+    │               model.openQty u.orders.values
+    │           else qty + model.openQty u.orders.values}
+    │     [eqc] {Prod.fst, fun p => p.fst}
+    │     [eqc] {List.map Prod.fst u.orders.entries, List.map (fun p => p.fst) u.orders.entries}
+    │     [eqc] others
+    │       [eqc] {1, ↑1}
+    │   [cases] Case analyses
+    │     [cases] [1/2]: (JS.eq t.side model.Side.ask = true) = (t.side = model.Side.ask)
+    │       [cases] source: E-matching `JS.eq_iff`
+    │     [cases] [2/2]: if u.nextId ∈ u.orders.keys then
+    │           qty +
+    │               -1 *
+    │                 ((u.orders.get u.nextId).getD
+    │                     { expiry := t.expiry, leg := t.leg, strike := t.strike, buy := JS.eq t.side model.Side.ask,
+    │                       qty := qty, price := price }).qty +
+    │             model.openQty u.orders.values
+    │         else qty + model.openQty u.orders.values
+    │       [cases] source: E-matching `OrdersMap.openQty_set`
+    │   [ematch] E-matching patterns
+    │     [thm] JS.JSMap.nodup_entries_fst: [@JS.JSMap.entries #2 #1 #0]
+    │     [thm] local_0: [@Membership.mem `[Int ×
+    │            model.Order] `[List (Int × model.Order)] `[List.instMembership] `[u.orders.entries] #1]
+    │     [thm] local_0: [@LE.le `[Int] `[Int.instLEInt] (@HAdd.hAdd `[Int] `[Int] `[Int] `[instHAdd] (@HAdd.hAdd `[Int] `[Int] `[Int] `[instHAdd] `[-1 *
+    │              u.nextId] (@Prod.fst `[Int] `[model.Order] #1)) `[1]) `[0]]
+    │     [thm] local_0: [@Prod.fst `[Int] `[model.Order] #1]
+    │     [thm] local_1: [@Membership.mem `[Int ×
+    │            model.Order] `[List (Int × model.Order)] `[List.instMembership] `[u.orders.entries] #1]
+    │     [thm] local_1: [@LE.le `[Int] `[Int.instLEInt] (@HAdd.hAdd `[Int] `[Int] `[Int] `[instHAdd] (@HMul.hMul `[Int] `[Int] `[Int] `[instHMul] `[-1] (model.Order.price (@Prod.snd `[Int] `[model.Order] #1))) `[1]) `[0]]
+    │     [thm] local_1: [model.Order.price (@Prod.snd `[Int] `[model.Order] #1)]
+    │     [thm] local_1: [@Prod.snd `[Int] `[model.Order] #1]
+    │     [thm] local_2: [@Membership.mem `[Int ×
+    │            model.Order] `[List (Int × model.Order)] `[List.instMembership] `[u.orders.entries] #1]
+    │     [thm] local_2: [@LE.le `[Int] `[Int.instLEInt] (@HAdd.hAdd `[Int] `[Int] `[Int] `[instHAdd] (model.Order.qty (@Prod.snd `[Int] `[model.Order] #1)) `[-500]) `[0]]
+    │     [thm] local_2: [model.Order.qty (@Prod.snd `[Int] `[model.Order] #1)]
+    │     [thm] local_2: [@Prod.snd `[Int] `[model.Order] #1]
+    │     [thm] local_3: [@Membership.mem `[Int ×
+    │            model.Order] `[List (Int × model.Order)] `[List.instMembership] `[u.orders.entries] #1]
+    │     [thm] local_3: [@LE.le `[Int] `[Int.instLEInt] (@HAdd.hAdd `[Int] `[Int] `[Int] `[instHAdd] (@HMul.hMul `[Int] `[Int] `[Int] `[instHMul] `[-1] (model.Order.qty (@Prod.snd `[Int] `[model.Order] #1))) `[1]) `[0]]
+    │     [thm] local_3: [model.Order.qty (@Prod.snd `[Int] `[model.Order] #1)]
+    │     [thm] local_3: [@Prod.snd `[Int] `[model.Order] #1]
+    │     [thm] List.nodup_iff_count: [@List.Nodup #3 #0]
+    │     [thm] List.nodup_iff_pairwise_ne: [@List.Nodup #1 #0]
+    │     [thm] JS.JSMap.nodup_map_values_of_key: [@List.Nodup #4 (@List.map #3 _ #1 (@JS.JSMap.values _ _ #2))]
+    │     [thm] List.map_map: [@List.map #5 #4 #2 (@List.map #3 _ #1 #0)]
+    │     [thm] left_5: [@Membership.mem `[Int ×
+    │            model.Order] `[List (Int × model.Order)] `[List.instMembership] `[u.orders.entries] #1]
+    │     [thm] left_5: [@Prod.fst `[Int] `[model.Order] #1]
+    │     [thm] left_5: [@LE.le `[Int] `[Int.instLEInt] (@HAdd.hAdd `[Int] `[Int] `[Int] `[instHAdd] (@HMul.hMul `[Int] `[Int] `[Int] `[instHMul] `[-1] (model.Order.qty (@Prod.snd `[Int] `[model.Order] #1))) `[1]) `[0]]
+    │     [thm] left_5: [model.Order.qty (@Prod.snd `[Int] `[model.Order] #1)]
+    │     [thm] left_5: [@Prod.snd `[Int] `[model.Order] #1]
+    │     [thm] left_6: [@Membership.mem `[Int ×
+    │            model.Order] `[List (Int × model.Order)] `[List.instMembership] `[u.orders.entries] #1]
+    │     [thm] left_6: [@Prod.fst `[Int] `[model.Order] #1]
+    │     [thm] left_6: [@LE.le `[Int] `[Int.instLEInt] (@HAdd.hAdd `[Int] `[Int] `[Int] `[instHAdd] (model.Order.qty (@Prod.snd `[Int] `[model.Order] #1)) `[-500]) `[0]]
+    │     [thm] left_6: [model.Order.qty (@Prod.snd `[Int] `[model.Order] #1)]
+    │     [thm] left_6: [@Prod.snd `[Int] `[model.Order] #1]
+    │     [thm] left_7: [@Membership.mem `[Int ×
+    │            model.Order] `[List (Int × model.Order)] `[List.instMembership] `[u.orders.entries] #1]
+    │     [thm] left_7: [@Prod.fst `[Int] `[model.Order] #1]
+    │     [thm] left_7: [@LE.le `[Int] `[Int.instLEInt] (@HAdd.hAdd `[Int] `[Int] `[Int] `[instHAdd] (@HMul.hMul `[Int] `[Int] `[Int] `[instHMul] `[-1] (model.Order.price (@Prod.snd `[Int] `[model.Order] #1))) `[1]) `[0]]
+    │     [thm] left_7: [model.Order.price (@Prod.snd `[Int] `[model.Order] #1)]
+    │     [thm] left_7: [@Prod.snd `[Int] `[model.Order] #1]
+    │     [thm] left_8: [@Membership.mem `[Int ×
+    │            model.Order] `[List (Int × model.Order)] `[List.instMembership] `[u.orders.entries] #1]
+    │     [thm] left_8: [@Prod.fst `[Int] `[model.Order] #1]
+    │     [thm] left_8: [@LE.le `[Int] `[Int.instLEInt] (@HAdd.hAdd `[Int] `[Int] `[Int] `[instHAdd] `[-1 *
+    │             u.nextId] (@Prod.fst `[Int] `[model.Order] #1)) `[0]]
+    │     [thm] OrdersMap.openQty_set: [model.openQty (@JS.JSMap.values `[Int] `[model.Order] (@JS.JSMap.set `[Int] `[model.Order] `[Int.instDecidableEq] #2 #1 #0))]
+    │     [thm] JS.eq_false: [@JS.eq #3 #2 #1 #0, false]
+    │     [thm] JS.eq_iff: [@JS.eq #3 #2 #1 #0, true]
+    │     [thm] local_4: [@LE.le `[Nat] `[instLENat] (@List.count `[Int] `[Int.instLinearOrderPackage.toBEq] #0 `[List.map
+    │             Prod.fst u.orders.entries]) `[1]]
+    │     [thm] local_4: [@List.count `[Int] `[Int.instLinearOrderPackage.toBEq] #0 `[List.map Prod.fst u.orders.entries]]
+    │     [thm] List.Pairwise.map: [@List.Pairwise #7 #3 (@List.map #6 _ #2 #4), @List.Pairwise _ #5 #4]
+    │     [thm] List.pairwise_map: [@List.Pairwise #3 #1 (@List.map #4 _ #2 #0)]
+    │     [thm] JS.JSMap.mem_keys_of_mem_entries: [@Membership.mem (Prod #4 #3) (List (Prod _ _)) _ (@JS.JSMap.entries _ _ #2) #1]
+    │     [thm] JS.JSMap.entry_of_mem_values: [@Membership.mem #3 (List _) _ (@JS.JSMap.values #4 _ #2) #1]
+    │     [thm] JS.JSMap.mem_entries_set: [@Membership.mem (Prod #6 #5) (List (Prod _ _)) _ (@JS.JSMap.entries _ _ (@JS.JSMap.set _ _ #4 #3 #2 #1)) #0]
+    │     [thm] JS.JSMap.mem_values_set: [@Membership.mem #5 (List _) _ (@JS.JSMap.values #6 _ (@JS.JSMap.set _ _ #4 #3 #2 #1)) #0]
+    │     [thm] List.mem_map: [@Membership.mem #3 (List _) _ (@List.map #4 _ #1 #0) #2]
+    │     [thm] JS.JSMap.mem_keys_set: [@Membership.mem #6 (List _) _ (@JS.JSMap.keys _ #5 (@JS.JSMap.set _ _ #4 #3 #2 #0)) #1]
+    │     [thm] JS.JSMap.entry_of_mem_keys: [@Membership.mem #4 (List _) _ (@JS.JSMap.keys _ #3 #2) #1]
+    │     [thm] JS.JSMap.keys_nodup: [@JS.JSMap.keys #2 #1 #0]
+    │     [thm] JS.JSMap.keys_set: [@JS.JSMap.keys #5 #4 (@JS.JSMap.set _ _ #3 #2 #1 #0)]
+    │     [thm] local_5: [@LE.le `[Nat] `[instLENat] (@List.count `[Int] `[Int.instLinearOrderPackage.toBEq] #0 `[u.orders.keys]) `[1]]
+    │     [thm] local_5: [@List.count `[Int] `[Int.instLinearOrderPackage.toBEq] #0 `[u.orders.keys]]
+    │   [cutsat] Assignment satisfying linear constraints
+    │     [assign] qty := 1
+    │     [assign] price := 1
+    │     [assign] t.expiry := 16
+    │     [assign] t.strike := 17
+    │     [assign] model.openQty u.orders.values := 999
+    │     [assign] model.openQty
+    │           (u.orders.set u.nextId
+    │               { expiry := t.expiry, leg := t.leg, strike := t.strike, buy := JS.eq t.side model.Side.ask, qty := qty,
+    │                 price := price }).values := 1000
+    │     [assign] u.heat := 1
+    │     [assign] u.nextId := 0
+    │   [ring] Ring `Int`
+    │     [basis] Basis
+    │       [_] qty + model.openQty u.orders.values +
+    │               -1 *
+    │                 model.openQty
+    │                   (u.orders.set u.nextId
+    │                       { expiry := t.expiry, leg := t.leg, strike := t.strike, buy := JS.eq t.side model.Side.ask,
+    │                         qty := qty, price := price }).values =
+    │             0
+    │ [grind] Diagnostics
+    │   [ematch] E-matching Diagnostics
+    │     [thm] Theorem Instance Count
+    │       [thm] left_5 ↦ 2
+    │       [thm] left_6 ↦ 2
+    │       [thm] left_7 ↦ 2
+    │       [thm] left_8 ↦ 2
+    │       [thm] local_0 ↦ 2
+    │       [thm] local_1 ↦ 2
+    │       [thm] local_2 ↦ 2
+    │       [thm] local_3 ↦ 2
+    │       [thm] List.nodup_iff_count ↦ 2
+    │       [thm] List.nodup_iff_pairwise_ne ↦ 2
+    │       [thm] JS.JSMap.get_of_mem_entries ↦ 2
+    │       [thm] JS.JSMap.mem_keys_of_mem_entries ↦ 2
+    │       [thm] List.pairwise_map ↦ 1
+    │       [thm] OrdersMap.openQty_set ↦ 1
+    │       [thm] List.Pairwise.map ↦ 1
+    │       [thm] JS.eq_false ↦ 1
+    │       [thm] JS.eq_iff ↦ 1
+    │       [thm] JS.getD_mem_or ↦ 1
+    │       [thm] JS.JSMap.entry_of_mem_keys ↦ 1
+    │       [thm] JS.JSMap.entry_of_mem_values ↦ 1
+    │       [thm] JS.JSMap.get_eq_none_iff ↦ 1
+    │       [thm] JS.JSMap.keys_nodup ↦ 1
+    │       [thm] JS.JSMap.mem_entries_of_get ↦ 1
+    │       [thm] JS.JSMap.mem_keys_of_get ↦ 1
+    │       [thm] JS.JSMap.mem_values_of_get ↦ 1
+    │       [thm] JS.JSMap.nodup_entries_fst ↦ 1
+✗ src/reducer.ts:333:11  [postcondition] postcondition of chainReducer: [...r.orders].every(([k]) => u.orders.has(k) || (u.nextId <= k && k < r.nextId))
+    │ (deterministic) timeout: the automation did not finish within this obligation's budget of 1000000 heartbeats (set "heartbeats" in vreact.json to change it)
+    │ u : ChainUi
+    │ a : Action
+    │ h_pre : validAction a = true
+    │ ⊢ ∀ (tup : Int × model.Order),
+    │     tup ∈ (chainReducer u a h_pre).orders.entries →
+    │       tup.fst ∈ u.orders.keys ∨ u.nextId ≤ tup.fst ∧ tup.fst < (chainReducer u a h_pre).nextId
+    │ The goal splits into 11 cases. A case's name lists the branches that lead to it, outermost first: `isTrue`/`isFalse` are the two branches of an `if` (a `switch` on a number or a string is a chain of `if`s, one per body), `h_k` is the k-th alternative of a `match` (a `switch` on a union or an enum has one per `case` label, in the order written, then one for the rest: `default`, wherever it is written); conditions in the translation (such as the sign test of `%`) split the same way. Each case alone, smallest first, with up to 100000 heartbeats: 10 proved, 1 did not finish. The first that did not finish, case h_9:
+    │ case h_9
+    │ u : ChainUi
+    │ tup✝ : Int × model.Order
+    │ hcontract✝¹¹ : u.orders.keys.Nodup
+    │ hcontract✝¹⁰ : (List.map Prod.fst u.orders.entries).Nodup
+    │ ticket✝ : model.Ticket
+    │ qty✝ price✝ : Int
+    │ h_pre✝¹ : validAction (Action.place ticket✝ qty✝ price✝) = true
+    │ a✝ : tup✝ ∈ (place u ticket✝ qty✝ price✝ ⋯).orders.entries
+    │ hcontract✝⁹ : (place u ticket✝ qty✝ price✝ ⋯).nextId ≥ u.nextId
+    │ hcontract✝⁸ : (List.map Prod.fst (place u ticket✝ qty✝ price✝ ⋯).orders.entries).Nodup
+    │ hcontract✝⁷ :
+    │   ((1 ≤ u.heat ∧ u.heat ≤ 5) ∧
+    │         ∀ (x : Int × model.Order),
+    │           x ∈ u.orders.entries → ((1 ≤ x.snd.qty ∧ x.snd.qty ≤ 500) ∧ 0 < x.snd.price) ∧ x.fst < u.nextId) ∧
+    │       model.openQty u.orders.values ≤ 1000 →
+    │     ((1 ≤ (place u ticket✝ qty✝ price✝ ⋯).heat ∧ (place u ticket✝ qty✝ price✝ ⋯).heat ≤ 5) ∧
+    │         ∀ (x : Int × model.Order),
+    │           x ∈ (place u ticket✝ qty✝ price✝ ⋯).orders.entries →
+    │             ((1 ≤ x.snd.qty ∧ x.snd.qty ≤ 500) ∧ 0 < x.snd.price) ∧ x.fst < (place u ticket✝ qty✝ price✝ ⋯).nextId) ∧
+    │       model.openQty (place u ticket✝ qty✝ price✝ ⋯).orders.values ≤ 1000
+    │ h_pre✝ h_pre : 1 ≤ qty✝ ∧ qty✝ ≤ 500
+    │ hcontract✝⁶ :
+    │   ((1 ≤ u.heat ∧ u.heat ≤ 5) ∧
+    │         ∀ (x : Int × model.Order),
+    │           x ∈ u.orders.entries → ((1 ≤ x.snd.qty ∧ x.snd.qty ≤ 500) ∧ 0 < x.snd.price) ∧ x.fst < u.nextId) ∧
+    │       model.openQty u.orders.values ≤ 1000 →
+    │     ((1 ≤ (place u ticket✝ qty✝ price✝ ⋯).heat ∧ (place u ticket✝ qty✝ price✝ ⋯).heat ≤ 5) ∧
+    │         ∀ (x : Int × model.Order),
+    │           x ∈ (place u ticket✝ qty✝ price✝ ⋯).orders.entries →
+    │             ((1 ≤ x.snd.qty ∧ x.snd.qty ≤ 500) ∧ 0 < x.snd.price) ∧ x.fst < (place u ticket✝ qty✝ price✝ ⋯).nextId) ∧
+    │       model.openQty (place u ticket✝ qty✝ price✝ ⋯).orders.values ≤ 1000
+    │ hcontract✝⁵ :
+    │   ((1 ≤ qty✝ ∧ qty✝ ≤ 500) ∧ 0 < price✝) ∧ model.openQty u.orders.values + qty✝ < 1000 →
+    │     (match h₁ : (place u ticket✝ qty✝ price✝ ⋯).orders.get u.nextId with
+    │       | some o_1 =>
+    │         if o_1.expiry = ticket✝.expiry then
+    │           if o_1.leg = ticket✝.leg then
+    │             if o_1.strike = ticket✝.strike then
+    │               if o_1.buy = JS.eq ticket✝.side model.Side.ask then
+    │                 if o_1.qty = qty✝ then JS.eq o_1.price price✝ else false
+    │               else false
+    │             else false
+    │           else false
+    │         else false
+    │       | none => false) =
+    │       true
+    │ hcontract✝⁴ :
+    │   (((1 ≤ u.heat ∧ u.heat ≤ 5) ∧
+    │           ∀ (x : Int × model.Order),
+    │             x ∈ u.orders.entries → ((1 ≤ x.snd.qty ∧ x.snd.qty ≤ 500) ∧ 0 < x.snd.price) ∧ x.fst < u.nextId) ∧
+    │         model.openQty u.orders.values ≤ 1000) ∧
+    │       ((1 ≤ qty✝ ∧ qty✝ ≤ 500) ∧ 0 < price✝) ∧ model.openQty u.orders.values + qty✝ < 1000 →
+    │     JS.indexOf (place u ticket✝ qty✝ price✝ ⋯).orders.keys u.nextId = u.orders.size ∧
+    │       ∀ (x : Int × model.Order),
+    │         x ∈ u.orders.entries →
+    │           (match h₁ : (place u ticket✝ qty✝ price✝ ⋯).orders.get x.fst with
+    │             | some p_1 =>
+    │               if p_1.expiry = x.snd.expiry then
+    │                 if p_1.leg = x.snd.leg then
+    │                   if p_1.strike = x.snd.strike then
+    │                     if p_1.buy = x.snd.buy then if p_1.qty = x.snd.qty then JS.eq p_1.price x.snd.price else false
+    │                     else false
+    │                   else false
+    │                 else false
+    │               else false
+    │             | none => false) =
+    │             true
+    │ hcontract✝³ :
+    │   (place u ticket✝ qty✝ price✝ ⋯).nextId =
+    │     if ((1 ≤ qty✝ ∧ qty✝ ≤ 500) ∧ 0 < price✝) ∧ model.openQty u.orders.values + qty✝ < 1000 then u.nextId + 1
+    │     else u.nextId
+    │ hcontract✝² :
+    │   ((1 ≤ qty✝ ∧ qty✝ ≤ 500) ∧ 0 < price✝) ∧ model.openQty u.orders.values + qty✝ < 1000 →
+    │     (∀ (x : Int × model.Order),
+    │         x ∈ u.orders.entries →
+    │           x.fst = u.nextId ∨
+    │             (match h₁ : (place u ticket✝ qty✝ price✝ ⋯).orders.get x.fst with
+    │               | some p_1 =>
+    │                 if p_1.expiry = x.snd.expiry then
+    │                   if p_1.leg = x.snd.leg then
+    │                     if p_1.strike = x.snd.strike then
+    │                       if p_1.buy = x.snd.buy then if p_1.qty = x.snd.qty then JS.eq p_1.price x.snd.price else false
+    │                       else false
+    │                     else false
+    │                   else false
+    │                 else false
+    │               | none => false) =
+    │               true) ∧
+    │       ∀ (x : Int × model.Order),
+    │         x ∈ (place u ticket✝ qty✝ price✝ ⋯).orders.entries →
+    │           x.fst = u.nextId ∨
+    │             (match h₁ : u.orders.get x.fst with
+    │               | some p_1 =>
+    │                 if p_1.expiry = x.snd.expiry then
+    │                   if p_1.leg = x.snd.leg then
+    │                     if p_1.strike = x.snd.strike then
+    │                       if p_1.buy = x.snd.buy then if p_1.qty = x.snd.qty then JS.eq p_1.price x.snd.price else false
+    │                       else false
+    │                     else false
+    │                   else false
+    │                 else false
+    │               | none => false) =
+    │               true
+    │ hcontract✝¹ :
+    │   ¬(((1 ≤ qty✝ ∧ qty✝ ≤ 500) ∧ 0 < price✝) ∧ model.openQty u.orders.values + qty✝ < 1000) →
+    │     ((place u ticket✝ qty✝ price✝ ⋯).nextId = u.nextId ∧
+    │         (if h : ↑(place u ticket✝ qty✝ price✝ ⋯).orders.keys.length = ↑u.orders.keys.length then
+    │             (JS.rangeFrom 0 ↑(place u ticket✝ qty✝ price✝ ⋯).orders.keys.length).attach.all fun p₃ =>
+    │               JS.eq (place u ticket✝ qty✝ price✝ ⋯).orders.keys[p₃.val.toNat] u.orders.keys[p₃.val.toNat]
+    │           else false) =
+    │           true) ∧
+    │       ∀ (x : Int × model.Order),
+    │         x ∈ u.orders.entries →
+    │           (match h₁ : (place u ticket✝ qty✝ price✝ ⋯).orders.get x.fst with
+    │             | some p_1 =>
+    │               if p_1.expiry = x.snd.expiry then
+    │                 if p_1.leg = x.snd.leg then
+    │                   if p_1.strike = x.snd.strike then
+    │                     if p_1.buy = x.snd.buy then if p_1.qty = x.snd.qty then JS.eq p_1.price x.snd.price else false
+    │                     else false
+    │                   else false
+    │                 else false
+    │               else false
+    │             | none => false) =
+    │             true
+    │ hcontract✝ :
+    │   (((1 ≤ u.heat ∧ u.heat ≤ 5) ∧
+    │           ∀ (x : Int × model.Order),
+    │             x ∈ u.orders.entries → ((1 ≤ x.snd.qty ∧ x.snd.qty ≤ 500) ∧ 0 < x.snd.price) ∧ x.fst < u.nextId) ∧
+    │         model.openQty u.orders.values ≤ 1000) ∧
+    │       ¬(((1 ≤ qty✝ ∧ qty✝ ≤ 500) ∧ 0 < price✝) ∧ model.openQty u.orders.values + qty✝ < 1000) →
+    │     ¬(((1 ≤ u.heat ∧ u.heat ≤ 5) ∧
+    │           (((1 ≤ qty✝ ∧ qty✝ ≤ 500) ∧ 0 < price✝) ∧ u.nextId < u.nextId + 1) ∧
+    │             ∀ (a : Int × model.Order),
+    │               a ∈ u.orders.entries ∧ ¬a.fst = u.nextId →
+    │                 ((1 ≤ a.snd.qty ∧ a.snd.qty ≤ 500) ∧ 0 < a.snd.price) ∧ a.fst < u.nextId + 1) ∧
+    │         model.openQty
+    │             (u.orders.set u.nextId
+    │                 { expiry := ticket✝.expiry, leg := ticket✝.leg, strike := ticket✝.strike,
+    │                   buy := JS.eq ticket✝.side model.Side.ask, qty := qty✝, price := price✝ }).values ≤
+    │           1000)
+    │ hpart✝⁸ : (place u ticket✝ qty✝ price✝ ⋯).filter = u.filter
+    │ hpart✝⁷ : (place u ticket✝ qty✝ price✝ ⋯).focus = u.focus
+    │ hpart✝⁶ : (place u ticket✝ qty✝ price✝ ⋯).heat = u.heat
+    │ hpart✝⁵ : ∀ (x : Int), x ∈ u.collapsed.elems → x ∈ (place u ticket✝ qty✝ price✝ ⋯).collapsed.elems
+    │ hpart✝⁴ : ∀ (x : Int), x ∈ (place u ticket✝ qty✝ price✝ ⋯).collapsed.elems → x ∈ u.collapsed.elems
+    │ hpart✝³ : ∀ (x : Int), x ∈ u.watch.elems → x ∈ (place u ticket✝ qty✝ price✝ ⋯).watch.elems
+    │ hpart✝² : ∀ (x : Int), x ∈ (place u ticket✝ qty✝ price✝ ⋯).watch.elems → x ∈ u.watch.elems
+    │ hpart✝¹ : ∀ (x : Int × Int), x ∈ u.held.entries → (place u ticket✝ qty✝ price✝ ⋯).held.get x.fst = some x.snd
+    │ hpart✝ : ∀ (x : Int × Int), x ∈ (place u ticket✝ qty✝ price✝ ⋯).held.entries → u.held.get x.fst = some x.snd
+    │ ⊢ tup✝.fst ∈ u.orders.keys ∨ u.nextId ≤ tup✝.fst ∧ tup✝.fst < (place u ticket✝ qty✝ price✝ ⋯).nextId
+
+✗ NOT VERIFIED  203/211 obligations proved, 8 failed; components: 6/6 verified  (143.3s)

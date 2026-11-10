@@ -1,0 +1,42 @@
+translated 1 module(s), 12 proof obligation(s) → .vreact/ ; checking with Lean…
+
+Components
+Functions
+  VERIFIED           validTitle
+  VERIFIED           validPoints
+  VERIFIED           allCards
+  VERIFIED           wellFormed
+  VERIFIED           cardsIn
+  VERIFIED           findCard
+  VERIFIED           keepsCards
+  VERIFIED           removeEverywhere
+  VERIFIED           addCard
+  VERIFIED           deleteCard
+  INCOMPLETE         moveCard
+  VERIFIED           setWipLimit
+Obligations by file
+  ✗ src/model.ts                             11/12
+
+Failed obligations
+✗ src/model.ts:89:11  [postcondition] postcondition of moveCard: implies(wellFormed(b), wellFormed(r))
+    │ `grind` failed
+    │ case grind.2.2.2.2.2.2.2.2.1.1
+    │ b : Board
+    │ id' : Int
+    │ card_1 : Card
+    │ h :
+    │   ((((List.map (fun c => c.id) b.todo).Nodup ∧
+    │           ((List.map (fun c => c.id) b.doing).Nodup ∧
+    │               (List.map (fun c => c.id) b.done).Nodup ∧
+    │                 ∀ (a : Card), a ∈ b.doing → ∀ (a_2 : Card), a_2 ∈ b.done → ¬a.id = a_2.id) ∧
+    │             ∀ (a : Card),
+    │               a ∈ b.todo →
+    │                 ∀ (b_1 : Int), ((∃ a, a ∈ b.doing ∧ a.id = b_1) ∨ ∃ a, a ∈ b.done ∧ a.id = b_1) → ¬a.id = b_1) ∧
+    │         ∀ (x : Card),
+    │           x ∈ b.todo ∨ x ∈ b.doing ∨ x ∈ b.done →
+    │             (x.id < b.nextId ∧ 0 < x.title.units.length ∧ ↑x.title.units.length ≤ 60) ∧ 1 ≤ x.points ∧ x.points ≤ 13) ∧
+    │       1 ≤ b.wipLimit) ∧
+    │     ↑b.doing.length ≤ b.wipLimit
+    │   …
+
+✗ NOT VERIFIED  11/12 obligations proved, 1 failed; components: 0/0 verified  (3.5s)

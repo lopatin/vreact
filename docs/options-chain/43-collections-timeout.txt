@@ -1,0 +1,108 @@
+translated 8 module(s), 171 proof obligation(s) → .vreact/ ; checking with Lean…
+
+Components
+  VERIFIED           PriceCell              src/StrikeRow.tsx:12
+  VERIFIED           StrikeRow              src/StrikeRow.tsx:39
+  VERIFIED           TermRow                src/TermRow.tsx:19
+  VERIFIED           OrderTicket            src/OrderTicket.tsx:19
+  INCOMPLETE         OptionsChain           src/OptionsChain.tsx:33
+      ↳ an obligation of it failed
+  INCOMPLETE         App                    src/App.tsx:156
+      ↳ it uses OptionsChain (src/OptionsChain.tsx), which is not verified: an obligation of it failed
+Functions
+  VERIFIED           sameMembers
+  VERIFIED           sameMembersExcept
+  VERIFIED           toggleIn
+  VERIFIED           sameEntries
+  VERIFIED           agreeExcept
+  VERIFIED           sameList
+  VERIFIED           byId
+  VERIFIED           validChain
+  VERIFIED           legOf
+  VERIFIED           theoOf
+  VERIFIED           quotePrice
+  VERIFIED           withinSpread
+  VERIFIED           isMid
+  VERIFIED           midPrice
+  VERIFIED           inTheMoney
+  VERIFIED           dist
+  VERIFIED           nearest
+  VERIFIED           atmIndex
+  VERIFIED           inWindow
+  VERIFIED           strikeWindow
+  VERIFIED           filterLabel
+  VERIFIED           levelsOf
+  VERIFIED           edge
+  VERIFIED           heatOf
+  VERIFIED           legFor
+  VERIFIED           labelOf
+  VERIFIED           marketOf
+  VERIFIED           validQty
+  VERIFIED           validOrder
+  VERIFIED           openQty
+  VERIFIED           fmtPrice
+  VERIFIED           contractText
+  VERIFIED           quoteText
+  VERIFIED           crosses
+  VERIFIED           fmtVol
+  VERIFIED           wellFormed
+  VERIFIED           sameView
+  VERIFIED           sameOrder
+  VERIFIED           keepsOrders
+  VERIFIED           keepsOrdersExcept
+  VERIFIED           sameOrders
+  VERIFIED           orderFor
+  VERIFIED           toggle
+  VERIFIED           setCollapsed
+  VERIFIED           setFilter
+  VERIFIED           holdAt
+  VERIFIED           follow
+  VERIFIED           jump
+  VERIFIED           setHeat
+  VERIFIED           accepts
+  VERIFIED           place
+  VERIFIED           cancel
+  VERIFIED           validAction
+  VERIFIED           chainReducer
+  VERIFIED           shiftQuote
+  VERIFIED           moveFutures
+  VERIFIED           nextSeed
+  VERIFIED           validFeed
+  VERIFIED           stepFeed
+  VERIFIED           sameFeed
+  VERIFIED           simReducer
+App certificates (VReact.run_allInv instantiated)
+  INCOMPLETE         VTS.App.App.certificate  axioms: propext, sorryAx, Classical.choice, Quot.sound
+      ↳ it uses OptionsChain (src/OptionsChain.tsx), which is not verified: an obligation of it failed
+Obligations by file
+  ✓ src/collections.ts                       6/6
+  ✓ src/model.ts                             22/22
+  ✓ src/reducer.ts                           40/40
+  ✓ src/StrikeRow.tsx                        22/22
+  ✓ src/TermRow.tsx                          12/12
+  ✓ src/OrderTicket.tsx                      12/12
+  ✗ src/OptionsChain.tsx                     36/37
+  ✓ src/App.tsx                              20/20
+
+Failed obligations
+✗ src/OptionsChain.tsx:151:11  [callback] OrderTicket.onSubmit handler (passed from OptionsChain) preserves the invariant of OptionsChain, assuming OrderTicket's callback contract
+    │ (deterministic) timeout: the automation did not finish within this obligation's budget of 1000000 heartbeats (set "heartbeats" in vreact.json to change it)
+    │   … (6 earlier hypotheses: E, props, κ, σ, hpre, hinv: --full shows them)
+    │ ui : reducer.ChainUi := σ.ui
+    │ ticket : Option model.Ticket := σ.ticket
+    │ levels : Option Int := model.levelsOf ui.filter
+    │ tExp := …  (a definition, 4 lines: --full shows it)
+    │ allOpen : Bool := props.expiries.all fun e => !ui.collapsed.has e.id
+    │ ids : List Int := List.map (fun e => e.id) props.expiries
+    │ ticket_1 : model.Ticket
+    │ h₃₄ : ticket = some ticket_1
+    │ tExp_1 : model.Expiry
+    │ h₃₅ : tExp = some tExp_1
+    │ qty price : Int
+    │ hcb₃₆ : (model.validQty qty && JS.lt 0 price) = true
+    │ ⊢ inv props
+    │     ({
+    │           updates :=
+    │   …
+
+✗ NOT VERIFIED  170/171 obligations proved, 1 failed; components: 4/6 verified  (113.5s)

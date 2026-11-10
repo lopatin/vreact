@@ -1,0 +1,518 @@
+import ts from "typescript";
+import path from "node:path";
+import { LEAN_TOKENS, LEAN_ROOT_NAMES, LEAN_TYPE_AUX } from "./leanNames.ts";
+
+/** A diagnostic attached to a TypeScript source location. */
+export class VtsError extends Error {
+  file: string;
+  line: number;
+  col: number;
+  constructor(node: ts.Node | undefined, message: string) {
+    super(message);
+    if (node && node.getSourceFile()) {
+      const sf = node.getSourceFile();
+      const { line, character } = sf.getLineAndCharacterOfPosition(node.getStart(sf));
+      this.file = sf.fileName;
+      this.line = line + 1;
+      this.col = character + 1;
+    } else {
+      this.file = "";
+      this.line = 0;
+      this.col = 0;
+    }
+  }
+}
+
+export function fail(node: ts.Node | undefined, message: string): never {
+  throw new VtsError(node, message);
+}
+
+export function loc(node: ts.Node): { file: string; line: number; col: number } {
+  const sf = node.getSourceFile();
+  const { line, character } = sf.getLineAndCharacterOfPosition(node.getStart(sf));
+  return { file: sf.fileName, line: line + 1, col: character + 1 };
+}
+
+export function relLoc(node: ts.Node, root: string): string {
+  const l = loc(node);
+  return `${path.relative(root, l.file)}:${l.line}:${l.col}`;
+}
+
+/**
+ * The source text of `node` on one line: runs of whitespace become one space, except inside
+ * string, template and regular expression literals, whose contents stay exact (escape sequences
+ * as written; a line break of a template literal is shown as `\n`, a line continuation `\` +
+ * line break is left out: the same value).
+ */
+export function flatText(node: ts.Node): string {
+  const sf = node.getSourceFile();
+  const base = node.getStart(sf);
+  const text = node.getText(sf);
+  const lits: [number, number][] = [];
+  const visit = (n: ts.Node) => {
+    if (ts.isStringLiteral(n) || ts.isNoSubstitutionTemplateLiteral(n) || ts.isRegularExpressionLiteral(n) || ts.isTemplateHead(n) || ts.isTemplateMiddle(n) || ts.isTemplateTail(n)) {
+      lits.push([n.getStart(sf) - base, n.getEnd() - base]);
+      return;
+    }
+    ts.forEachChild(n, visit);
+  };
+  visit(node);
+  // inside a literal, from left to right: an escape sequence stays as written (`\\` then a line
+  // break is a backslash, then a line break), a line continuation is left out, and a line
+  // terminator is shown as its escape, so the text stays on one line (a template's CR, CRLF or
+  // LF is an LF in its value: `\n`; U+2028 and U+2029: `\u2028`, `\u2029`)
+  const lit = (t: string) =>
+    t.replace(/\\(?:\r\n|[\r\n\u2028\u2029])|\\[^]|\r\n|[\r\n\u2028\u2029]/g, (m) =>
+      m[0] === "\\" ? (/^\\[\r\n\u2028\u2029]/.test(m) ? "" : m) : m === "\u2028" ? "\\u2028" : m === "\u2029" ? "\\u2029" : "\\n");
+  let out = "";
+  let at = 0;
+  for (const [s, e] of lits) {
+    out += text.slice(at, s).replace(/\s+/g, " ") + lit(text.slice(s, e));
+    at = e;
+  }
+  return out + text.slice(at).replace(/\s+/g, " ");
+}
+
+export function nodeText(node: ts.Node, max = 80): string {
+  const t = flatText(node);
+  return t.length > max ? t.slice(0, max - 1) + "…" : t;
+}
+
+/** `t` in at most `max` characters: its start and its end around `…`, cut after/before a space, comma or parenthesis when one is near. */
+export function cutMiddle(t: string, max: number): string {
+  if (t.length <= max) return t;
+  if (max < 5) return "…";
+  const k = Math.ceil((max - 1) / 2);
+  const j = max - 1 - k;
+  let left = t.slice(0, k);
+  for (let p = k; p > 0 && p >= k - 10; p--)
+    if (" ,(".includes(t[p - 1])) {
+      left = t.slice(0, p).trimEnd();
+      break;
+    }
+  let right = t.slice(t.length - j);
+  for (let q = t.length - j; q < t.length && q <= t.length - j + 10; q++)
+    if (" ,)".includes(t[q])) {
+      right = t.slice(q).trimStart();
+      break;
+    }
+  return `${left}…${right}`;
+}
+
+/**
+ * The text of a contract (a postcondition, an assertion, a fact) in an obligation's description:
+ * whole when it has at most `max` characters. A longer one keeps its outer shape: the arguments
+ * of its outer call (`implies(a, b)`, `forall(lo, hi, f)`, `xs.every(f)`) or the operands of its
+ * outer operator (`a && b && c`) are shown in turn, the short ones whole and each longer one by
+ * its start and its end (`cutMiddle`), so that every part, and the end of each, stays in view;
+ * anything else by its start and its end.
+ */
+export function exprText(node: ts.Node, max = 120): string {
+  const t = flatText(node);
+  if (t.length <= max) return t;
+  let open = "";
+  let close = "";
+  let sep = ", ";
+  let parts: ts.Node[] = [];
+  if (ts.isCallExpression(node) && node.arguments.length) {
+    // (with its type arguments and `?.`, as written)
+    open = `${flatText(node.expression)}${node.questionDotToken ? "?." : ""}${node.typeArguments ? `<${node.typeArguments.map(flatText).join(", ")}>` : ""}(`;
+    close = ")";
+    parts = [...node.arguments];
+  } else if (ts.isBinaryExpression(node)) {
+    // a chain of one operator (`a && b && c`) as its operands
+    const op = node.operatorToken.kind;
+    const operands = (e: ts.Expression): ts.Expression[] => (ts.isBinaryExpression(e) && e.operatorToken.kind === op ? [...operands(e.left), ...operands(e.right)] : [e]);
+    sep = ` ${node.operatorToken.getText()} `;
+    parts = operands(node);
+  }
+  const room = max - open.length - close.length - sep.length * (parts.length - 1);
+  if (!parts.length || room < 8 * parts.length) return cutMiddle(t, max);
+  // the short parts whole, the others sharing what is left equally
+  const texts = parts.map((p) => flatText(p));
+  const budget = texts.map(() => 0);
+  let left = room;
+  let rest = texts.map((_, i) => i);
+  while (rest.length) {
+    const each = Math.floor(left / rest.length);
+    const small = rest.filter((i) => texts[i].length <= each);
+    if (!small.length) {
+      for (const i of rest) budget[i] = each;
+      break;
+    }
+    for (const i of small) {
+      budget[i] = texts[i].length;
+      left -= texts[i].length;
+    }
+    rest = rest.filter((i) => !small.includes(i));
+  }
+  return open + texts.map((x, i) => cutMiddle(x, budget[i])).join(sep) + close;
+}
+
+/**
+ * The text of an argument in an obligation's description: whole when it has at most `max`
+ * characters; a longer object or array literal element by element, each element (a field's
+ * value) cut at `each` characters, so that every field stays in view (the `qty: qty - 1` of a
+ * dispatched `{ kind: "place", ticket: …, qty: qty - 1, price: … }`), at most 160 characters in
+ * all; anything else cut at `max`.
+ */
+export function argText(node: ts.Node, max = 40, each = 24): string {
+  const t = flatText(node);
+  if (t.length <= max) return t;
+  const cut = (s: string) => (s.length > 160 ? s.slice(0, 159) + "…" : s);
+  if (ts.isObjectLiteralExpression(node))
+    return cut(`{ ${node.properties.map((p) => (ts.isPropertyAssignment(p) ? `${p.name.getText()}: ${nodeText(p.initializer, each)}` : nodeText(p, each))).join(", ")} }`);
+  if (ts.isArrayLiteralExpression(node)) return cut(`[${node.elements.map((e) => nodeText(e, each)).join(", ")}]`);
+  return nodeText(node, max);
+}
+
+/*
+ * Names.  VTS identifiers are TypeScript identifiers; Lean names generated by the
+ * translator must never coincide with them (no capture in either direction):
+ *
+ *  - a user name that is a Lean token (`fun`, `matches`, `_`, …), a root-level
+ *    Lean name the generated code may refer to unqualified (`max`, `some`, `List`,
+ *    `Float`, …; a user declaration would be found first by Lean's namespace
+ *    resolution, a local would shadow it), or a fixed name of the generated code
+ *    (`σ`, `props`, `h_pre`, `VTS`, …) gets a `'` suffix, which TypeScript
+ *    identifiers cannot contain;
+ *  - a user name of the shape of the instances Lean declares in the module namespace
+ *    (`instReprP`, `instToJSK`, `instToJSList'` for a type `List'`: `inst` + class + the
+ *    type's Lean name, which may end in one `'`) gets `''`, which no generated name ends in
+ *    (VTS rejects type names of that shape, see `types.ts`);
+ *  - a name starting with `_` is «quoted» with that `_` written `\u005f` (Lean reads the text
+ *    of a quoted name verbatim): Lean gives `_`-names meanings (`_hyg` marks a hygienic name,
+ *    `_cstage…`, `_spec_…`, `_elambda…` are compiler auxiliaries, even primed);
+ *  - names TypeScript allows but Lean does not parse (`$`, non-ASCII) are «quoted»;
+ *  - binder names the translator invents carry a subscript (`h₁`, `idx₀`), which
+ *    TypeScript identifiers cannot contain either.
+ * The token and root-name lists are generated from Lean (`lean/scripts/GenNames.lean`).
+ */
+const TOKENS = new Set(LEAN_TOKENS);
+const ROOT_NAMES = new Set(LEAN_ROOT_NAMES);
+/** Names Lean generates inside a structure/inductive namespace (`rec`, `mk`, `casesOn`, …). */
+const TYPE_AUX = new Set(LEAN_TYPE_AUX);
+/**
+ * Further names Lean reserves in a type's namespace that the sample types of `GenNames.lean` do
+ * not show: the auxiliary recursors and structural-recursion helpers of nested and recursive
+ * types (`rec_1`: a constructor of that name crashes Lean 4.35), numbered or not.
+ */
+const TYPE_AUX_FAMILY = /^(?:rec|recOn|casesOn|below|brecOn|binductionOn|ibelow|noConfusion|noConfusionType|ctorIdx|ctorElim|ctorElimType|mk)(?:_\d+)?$/;
+/** Fixed (non-fresh) names of the generated Lean. */
+const GENERATED = new Set(["E", "σ", "τ", "κ", "hpre", "hinv", "props", "ev", "acc", "VTS", "Proofs", "VReact"]);
+/** Generated name shapes: `h_pre…`, and the instances Lean's `deriving` handlers and anonymous
+ * `instance`s declare in the module namespace (`instReprP`, `instDecidableEqP`, `instToJSK`, …).
+ */
+const GENERATED_RE = /^h_pre\d*$|^inst[A-Z]/;
+/** The instance-name shape (see above): such user names get `''`. */
+export const INSTANCE_NAME_RE = /^inst[A-Z]/;
+const PLAIN_IDENT = /^[A-Za-z_][A-Za-z0-9_']*$/;
+/** ASCII identifiers without `'` (the names `leanField` leaves unquoted). */
+const STRICT_IDENT = /^[A-Za-z_][A-Za-z0-9_]*$/;
+
+/** Whether a TypeScript identifier needs renaming in Lean (see above). */
+export function clashesWithLean(name: string): boolean {
+  return TOKENS.has(name) || ROOT_NAMES.has(name) || GENERATED.has(name) || GENERATED_RE.test(name);
+}
+
+/** A Lean identifier for a TypeScript identifier (locals, params, functions, constants, types). */
+export function leanIdent(name: string): string {
+  if (name.length > 1 && name.startsWith("_")) return "«\\u005f" + quotedText(name.slice(1)) + "»";
+  const base = INSTANCE_NAME_RE.test(name) ? name + "''" : clashesWithLean(name) ? name + "'" : name;
+  return PLAIN_IDENT.test(base) ? base : "«" + quotedText(base) + "»";
+}
+
+/**
+ * A Lean identifier for a structure field / constructor / enum member (any JS string: enum
+ * members and discriminants are string literals).  Injective, so that distinct members get
+ * distinct constructors:
+ *  - an ASCII identifier is itself (`«quoted»` if a Lean token), primed if it is one of the
+ *    names Lean generates in a type's namespace (`rec'`, `mk'`, `rec_1'`);
+ *  - anything else is `«quoted»`, with `\`, `'`, `«`, `»`, `⟦`, control characters and lone
+ *    surrogates written `\uXXXX` (`\\` for `\`, `\e` for the empty string): so it never
+ *    contains a `'` (no clash with a primed name), the source stays valid UTF-8, and distinct
+ *    strings stay distinct;
+ *  - a leading `_` is written `\u005f` (quoted): Lean's `_`-names (`_hyg`, `_cstage1`, …) mean
+ *    something to it (see above).
+ */
+export function leanField(name: string): string {
+  if (name.startsWith("_")) return "«\\u005f" + quotedText(name.slice(1), true) + "»";
+  if (STRICT_IDENT.test(name)) {
+    if (TYPE_AUX.has(name) || TYPE_AUX_FAMILY.test(name)) return name + "'";
+    return TOKENS.has(name) ? "«" + name + "»" : name;
+  }
+  return "«" + (name === "" ? "\\e" : quotedText(name, true)) + "»";
+}
+
+/**
+ * The name of a generated accessor in a union type's namespace (the discriminant `U.kind'`, a
+ * field shared by all variants `U.id'`): `leanField` primed, never a constructor's name (a
+ * constructor named after any string literal, e.g. `"kind"`, is `leanField` of it, primed only
+ * for Lean's own names and never otherwise containing `'`).
+ */
+export function leanAccessor(name: string): string {
+  const f = leanField(name);
+  return f.endsWith("»") ? f.slice(0, -1) + "'»" : f + "'";
+}
+
+/** The text of a `«quoted»` Lean identifier for `s` (see `leanField`; `all`: also escape `'` and `\`). */
+function quotedText(s: string, all = false): string {
+  let out = "";
+  for (let i = 0; i < s.length; i++) {
+    const c = s.charCodeAt(i);
+    const u = (n: number) => "\\u" + n.toString(16).padStart(4, "0");
+    if (c >= 0xd800 && c <= 0xdbff && i + 1 < s.length && s.charCodeAt(i + 1) >= 0xdc00 && s.charCodeAt(i + 1) <= 0xdfff) {
+      out += s[i] + s[i + 1]; // a surrogate pair: one code point
+      i++;
+    } else if (c >= 0xd800 && c <= 0xdfff) out += u(c); // lone surrogate (not representable in UTF-8)
+    else if (c < 0x20 || (c >= 0x7f && c <= 0x9f) || c === 0x2028 || c === 0x2029 || c === 0xab || c === 0xbb || c === 0x27e6) out += u(c);
+    else if (all && c === 0x5c) out += "\\\\";
+    else if (all && c === 0x27) out += u(c);
+    else out += s[i];
+  }
+  return out;
+}
+
+/** `name` with a subscript number (translator-invented binder names; unreachable from TypeScript). */
+export function subscripted(base: string, n: number): string {
+  return base + String(n).replace(/[0-9]/g, (d) => "₀₁₂₃₄₅₆₇₈₉"[Number(d)]);
+}
+
+/** Whether a JS string contains an unpaired UTF-16 surrogate (not representable as a Lean `String`). */
+function hasLoneSurrogate(s: string): boolean {
+  for (let i = 0; i < s.length; i++) {
+    const c = s.charCodeAt(i);
+    if (c >= 0xd800 && c <= 0xdbff) {
+      const d = i + 1 < s.length ? s.charCodeAt(i + 1) : 0;
+      if (d >= 0xdc00 && d <= 0xdfff) i++;
+      else return true;
+    } else if (c >= 0xdc00 && c <= 0xdfff) return true;
+  }
+  return false;
+}
+
+/**
+ * A Lean string literal (for names, tags and well-formed text; JS string values use `jsStr`).
+ * `⟦` (the obligation marker `/-⟦obN⟧-/` begins with it) is escaped, so the text of a
+ * string never looks like a marker in the generated Lean.
+ */
+export function leanStr(s: string): string {
+  if (hasLoneSurrogate(s)) throw new Error("internal: lone surrogate in a Lean string literal");
+  let out = '"';
+  for (const ch of s) {
+    const c = ch.codePointAt(0)!;
+    if (ch === '"') out += '\\"';
+    else if (ch === "\\") out += "\\\\";
+    else if (ch === "\n") out += "\\n";
+    else if (ch === "\t") out += "\\t";
+    else if (ch === "\r") out += "\\r";
+    else if (c < 0x20 || c === 0x7f) out += "\\x" + c.toString(16).padStart(2, "0");
+    // (`⟦` starts the obligation markers `/-⟦obN⟧-/` the report scans the generated files for)
+    else if (c === 0x27e6) out += "\\u27e6";
+    else out += ch;
+  }
+  return out + '"';
+}
+
+/**
+ * A JavaScript string value (UTF-16 code units) for a source literal (the cooked
+ * value, e.g. `ts.StringLiteral.text`).  A Lean `String` holds only Unicode scalar
+ * values, so a literal with an unpaired surrogate is emitted as its code units
+ * (the normal form `JS.Str.ofString` literals are simplified to).
+ */
+export function jsStr(s: string): string {
+  if (hasLoneSurrogate(s)) {
+    const units: number[] = [];
+    for (let i = 0; i < s.length; i++) units.push(s.charCodeAt(i));
+    return `(VReact.JS.Str.mk [${units.join(", ")}])`;
+  }
+  return s === "" ? "(VReact.JS.Str.ofString \"\")" : `(VReact.JS.Str.ofString ${leanStr(s)})`;
+}
+
+/** Lean `Int` literal (always ascribed: a bare numeral would default to `Nat`). */
+export function leanInt(n: number | bigint): string {
+  return `(${n.toString()} : Int)`;
+}
+
+export function paren(s: string): string {
+  if (/^[A-Za-z0-9_'.«»]+$/.test(s) || /^\(.*\)$/s.test(s) && balanced(s.slice(1, -1))) return s;
+  if (/^"([^"\\]|\\.)*"$/.test(s)) return s;
+  return `(${s})`;
+}
+
+function balanced(s: string): boolean {
+  let d = 0;
+  let inStr = false;
+  for (let i = 0; i < s.length; i++) {
+    const c = s[i];
+    if (inStr) {
+      if (c === "\\") i++;
+      else if (c === '"') inStr = false;
+      continue;
+    }
+    if (c === '"') inStr = true;
+    else if (c === "(") d++;
+    else if (c === ")") {
+      d--;
+      if (d < 0) return false;
+    }
+  }
+  return d === 0;
+}
+
+/** Indent every line of `s` by `n` spaces. */
+export function indent(s: string, n = 2): string {
+  const pad = " ".repeat(n);
+  return s
+    .split("\n")
+    .map((l) => (l.length ? pad + l : l))
+    .join("\n");
+}
+
+export function capitalize(s: string): string {
+  return s.charAt(0).toUpperCase() + s.slice(1);
+}
+
+/**
+ * HTML's "ASCII lowercase": the case-insensitive match of attribute names and of the keywords of
+ * enumerated attributes (`type="CheckBox"` is a checkbox).  Not `toLowerCase()`, which also maps
+ * U+212A KELVIN SIGN to `k`: `type="chec&#8490;box"` is not a checkbox (an invalid type: a text input).
+ */
+export function asciiLower(s: string): string {
+  return s.replace(/[A-Z]/g, (c) => String.fromCharCode(c.charCodeAt(0) + 32));
+}
+
+/* ───────────────────── JSX text and attribute strings ───────────────────── */
+
+/** The HTML 4 character entities, as in the JSX transforms of TypeScript (5.6), Babel and esbuild. */
+const JSX_ENTITIES = new Map<string, number>(Object.entries({
+  quot: 34, amp: 38, apos: 39, lt: 60, gt: 62, nbsp: 160, iexcl: 161, cent: 162, pound: 163,
+  curren: 164, yen: 165, brvbar: 166, sect: 167, uml: 168, copy: 169, ordf: 170, laquo: 171,
+  not: 172, shy: 173, reg: 174, macr: 175, deg: 176, plusmn: 177, sup2: 178, sup3: 179, acute: 180,
+  micro: 181, para: 182, middot: 183, cedil: 184, sup1: 185, ordm: 186, raquo: 187, frac14: 188,
+  frac12: 189, frac34: 190, iquest: 191, Agrave: 192, Aacute: 193, Acirc: 194, Atilde: 195,
+  Auml: 196, Aring: 197, AElig: 198, Ccedil: 199, Egrave: 200, Eacute: 201, Ecirc: 202, Euml: 203,
+  Igrave: 204, Iacute: 205, Icirc: 206, Iuml: 207, ETH: 208, Ntilde: 209, Ograve: 210, Oacute: 211,
+  Ocirc: 212, Otilde: 213, Ouml: 214, times: 215, Oslash: 216, Ugrave: 217, Uacute: 218,
+  Ucirc: 219, Uuml: 220, Yacute: 221, THORN: 222, szlig: 223, agrave: 224, aacute: 225, acirc: 226,
+  atilde: 227, auml: 228, aring: 229, aelig: 230, ccedil: 231, egrave: 232, eacute: 233,
+  ecirc: 234, euml: 235, igrave: 236, iacute: 237, icirc: 238, iuml: 239, eth: 240, ntilde: 241,
+  ograve: 242, oacute: 243, ocirc: 244, otilde: 245, ouml: 246, divide: 247, oslash: 248,
+  ugrave: 249, uacute: 250, ucirc: 251, uuml: 252, yacute: 253, thorn: 254, yuml: 255, OElig: 338,
+  oelig: 339, Scaron: 352, scaron: 353, Yuml: 376, fnof: 402, circ: 710, tilde: 732, Alpha: 913,
+  Beta: 914, Gamma: 915, Delta: 916, Epsilon: 917, Zeta: 918, Eta: 919, Theta: 920, Iota: 921,
+  Kappa: 922, Lambda: 923, Mu: 924, Nu: 925, Xi: 926, Omicron: 927, Pi: 928, Rho: 929, Sigma: 931,
+  Tau: 932, Upsilon: 933, Phi: 934, Chi: 935, Psi: 936, Omega: 937, alpha: 945, beta: 946,
+  gamma: 947, delta: 948, epsilon: 949, zeta: 950, eta: 951, theta: 952, iota: 953, kappa: 954,
+  lambda: 955, mu: 956, nu: 957, xi: 958, omicron: 959, pi: 960, rho: 961, sigmaf: 962, sigma: 963,
+  tau: 964, upsilon: 965, phi: 966, chi: 967, psi: 968, omega: 969, thetasym: 977, upsih: 978,
+  piv: 982, ensp: 8194, emsp: 8195, thinsp: 8201, zwnj: 8204, zwj: 8205, lrm: 8206, rlm: 8207,
+  ndash: 8211, mdash: 8212, lsquo: 8216, rsquo: 8217, sbquo: 8218, ldquo: 8220, rdquo: 8221,
+  bdquo: 8222, dagger: 8224, Dagger: 8225, bull: 8226, hellip: 8230, permil: 8240, prime: 8242,
+  Prime: 8243, lsaquo: 8249, rsaquo: 8250, oline: 8254, frasl: 8260, euro: 8364, image: 8465,
+  weierp: 8472, real: 8476, trade: 8482, alefsym: 8501, larr: 8592, uarr: 8593, rarr: 8594,
+  darr: 8595, harr: 8596, crarr: 8629, lArr: 8656, uArr: 8657, rArr: 8658, dArr: 8659, hArr: 8660,
+  forall: 8704, part: 8706, exist: 8707, empty: 8709, nabla: 8711, isin: 8712, notin: 8713,
+  ni: 8715, prod: 8719, sum: 8721, minus: 8722, lowast: 8727, radic: 8730, prop: 8733, infin: 8734,
+  ang: 8736, and: 8743, or: 8744, cap: 8745, cup: 8746, int: 8747, there4: 8756, sim: 8764,
+  cong: 8773, asymp: 8776, ne: 8800, equiv: 8801, le: 8804, ge: 8805, sub: 8834, sup: 8835,
+  nsub: 8836, sube: 8838, supe: 8839, oplus: 8853, otimes: 8855, perp: 8869, sdot: 8901,
+  lceil: 8968, rceil: 8969, lfloor: 8970, rfloor: 8971, lang: 9001, rang: 9002, loz: 9674,
+  spades: 9824, clubs: 9827, hearts: 9829, diams: 9830,
+}));
+
+/**
+ * The JS value of the raw text of a JSX attribute string (`type="&#115;ubmit"`) or of a line
+ * of JSX text: TypeScript's JSX transform (`decodeEntities`) replaces the character
+ * references `&#DDD;`, `&#xHHH;` and `&name;` (an HTML 4 entity) by their characters and
+ * keeps every other `&` (`AT&T`, `&nbsp` without `;`).  Babel and esbuild decode exactly these
+ * references the same way, but other forms that look like one are compiler-specific
+ * (esbuild reads `&#+65;` as "A"; an entity outside this table; a code point above U+10FFFF,
+ * which TypeScript and Babel fail on): those are rejected, so the value does not depend on
+ * the compiler.  (The TypeScript AST holds the raw text: `type="&#115;ubmit"` is a submit
+ * input, which the event-layout checks must see.)
+ */
+export function decodeJsxEntities(raw: string, node: ts.Node): string {
+  if (!raw.includes("&")) return raw;
+  const bad = (ref: string, why: string): never =>
+    fail(node, `the character reference ${ref} ${why}: JSX compilers do not agree on its value (write the character itself, or a string expression {"…"})`);
+  let out = "";
+  for (let i = 0; i < raw.length; ) {
+    if (raw[i] !== "&") {
+      out += raw[i++];
+      continue;
+    }
+    const m = /^&(?:#(\d+)|#x([\da-fA-F]+)|(\w+));/.exec(raw.slice(i));
+    if (m) {
+      let cp: number | undefined;
+      if (m[3] !== undefined) {
+        cp = JSX_ENTITIES.get(m[3]);
+        if (cp === undefined) bad(m[0], "is not an HTML 4 entity");
+      } else {
+        cp = m[1] !== undefined ? parseInt(m[1], 10) : parseInt(m[2], 16);
+        if (!(cp <= 0x10ffff)) bad(m[0], "is not a Unicode code point");
+      }
+      out += String.fromCodePoint(cp!);
+      i += m[0].length;
+      continue;
+    }
+    if (raw[i + 1] === "#") bad(/^&#[^\s;&<]{0,12};?/.exec(raw.slice(i))![0], "is not of the form &#digits; or &#xhex;");
+    out += raw[i++];
+  }
+  return out;
+}
+
+/**
+ * The string JS gets for a JSX text child (the raw text between tags): TypeScript's
+ * `fixupWhitespaceAndDecodeEntities` — whitespace next to a line break is trimmed, lines
+ * that are only whitespace are dropped, the others are joined with a space, and character
+ * references are decoded.  "" for whitespace that renders no text node.  Babel's JSX
+ * transform differs on some text (it turns tabs into spaces, trims only spaces, splits only
+ * at \n and \r, and decodes references before trimming): such text is rejected, so the
+ * value does not depend on the compiler.
+ */
+export function jsxTextValue(text: string, node: ts.Node): string {
+  const mine = tsJsxText(text, node);
+  const babel = babelJsxText(text, node);
+  if (mine !== babel) fail(node, `JSX compilers do not agree on this text (${JSON.stringify(mine)} in TypeScript, ${JSON.stringify(babel)} in Babel: a tab, a whitespace character other than a space, or a character reference to whitespace, inside it or next to a line break); write it with spaces, or as a string expression {"…"}`);
+  return mine;
+}
+
+/** Babel's `cleanJSXElementLiteralChild` of the decoded text (Babel decodes while parsing). */
+function babelJsxText(raw: string, node: ts.Node): string {
+  const lines = decodeJsxEntities(raw, node).split(/\r\n|\n|\r/);
+  let lastNonEmpty = 0;
+  lines.forEach((l, i) => {
+    if (/[^ \t]/.test(l)) lastNonEmpty = i;
+  });
+  let str = "";
+  lines.forEach((line, i) => {
+    let t = line.replace(/\t/g, " ");
+    if (i !== 0) t = t.replace(/^[ ]+/, "");
+    if (i !== lines.length - 1) t = t.replace(/[ ]+$/, "");
+    if (t) str += i !== lastNonEmpty ? t + " " : t;
+  });
+  return str;
+}
+
+function tsJsxText(text: string, node: ts.Node): string {
+  let acc: string | undefined;
+  let first = 0;
+  let last = -1;
+  const add = (line: string) => {
+    const d = decodeJsxEntities(line, node);
+    acc = acc === undefined ? d : acc + " " + d;
+  };
+  for (let i = 0; i < text.length; i++) {
+    const c = text.charCodeAt(i);
+    if (ts.isLineBreak(c)) {
+      if (first !== -1 && last !== -1) add(text.substring(first, last + 1));
+      first = -1;
+    } else if (!ts.isWhiteSpaceSingleLine(c)) {
+      last = i;
+      if (first === -1) first = i;
+    }
+  }
+  if (first !== -1) add(text.substring(first));
+  return acc ?? "";
+}

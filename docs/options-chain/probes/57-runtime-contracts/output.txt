@@ -1,0 +1,5 @@
+
+  contracts.mjs  152.6kb
+
+⚡ Done in 22ms
+reachable steps: 18000 (chain), 18000 (feed); postconditions checked: 775792; failures: none

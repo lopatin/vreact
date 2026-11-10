@@ -1,0 +1,1350 @@
+translated 7 module(s), 150 proof obligation(s) → .vreact/ ; checking with Lean…
+
+Components
+  VERIFIED           PriceCell              src/StrikeRow.tsx:12
+  VERIFIED           StrikeRow              src/StrikeRow.tsx:39
+  VERIFIED           TermRow                src/TermRow.tsx:19
+  VERIFIED           OrderTicket            src/OrderTicket.tsx:19
+  VERIFIED           OptionsChain           src/OptionsChain.tsx:32
+  VERIFIED           App                    src/App.tsx:156
+Functions
+  VERIFIED           validChain
+  VERIFIED           legOf
+  VERIFIED           theoOf
+  VERIFIED           quotePrice
+  VERIFIED           withinSpread
+  VERIFIED           isMid
+  VERIFIED           midPrice
+  VERIFIED           inTheMoney
+  VERIFIED           dist
+  VERIFIED           nearest
+  VERIFIED           atmIndex
+  VERIFIED           inWindow
+  VERIFIED           strikeWindow
+  VERIFIED           filterLabel
+  VERIFIED           levelsOf
+  VERIFIED           edge
+  VERIFIED           heatOf
+  VERIFIED           legFor
+  VERIFIED           labelOf
+  VERIFIED           marketOf
+  VERIFIED           validQty
+  VERIFIED           validOrder
+  VERIFIED           openQty
+  VERIFIED           fmtPrice
+  VERIFIED           contractText
+  VERIFIED           quoteText
+  VERIFIED           crosses
+  VERIFIED           fmtVol
+  VERIFIED           wellFormed
+  VERIFIED           heldPrice
+  VERIFIED           sameView
+  VERIFIED           keepsHolds
+  VERIFIED           keepsAllHolds
+  VERIFIED           keepsOrders
+  VERIFIED           orderFor
+  VERIFIED           toggle
+  VERIFIED           setCollapsed
+  VERIFIED           setFilter
+  VERIFIED           holdAt
+  VERIFIED           follow
+  VERIFIED           jump
+  VERIFIED           setHeat
+  VERIFIED           accepts
+  VERIFIED           place
+  VERIFIED           cancel
+  VERIFIED           validAction
+  VERIFIED           chainReducer
+  VERIFIED           shiftQuote
+  VERIFIED           moveFutures
+  VERIFIED           nextSeed
+  VERIFIED           validFeed
+  VERIFIED           stepFeed
+  VERIFIED           sameFeed
+  INCOMPLETE         simReducer
+      ↳ an obligation of it failed
+App certificates (VReact.run_allInv instantiated)
+  VERIFIED           VTS.App.App.certificate  axioms: propext, Classical.choice, Quot.sound
+Obligations by file
+  ✓ src/model.ts                             22/22
+  ✓ src/reducer.ts                           25/25
+  ✓ src/StrikeRow.tsx                        22/22
+  ✓ src/TermRow.tsx                          12/12
+  ✓ src/OrderTicket.tsx                      12/12
+  ✓ src/OptionsChain.tsx                     37/37
+  ✗ src/App.tsx                              19/20
+
+Failed obligations
+✗ src/App.tsx:137:11  [postcondition] postcondition of simReducer: implies(a.kind === "rallyTick" && !s.rally, sameFeed(r.feed, s.feed))
+    │ `grind` failed
+    │ case grind.1.1.2.2
+    │ s : Sim
+    │ hcontract :
+    │   ((0 ≤
+    │         if 0 ≤ s.feed.seed * 75 + 74 then (s.feed.seed * 75 + 74) % ↑(Int.natAbs 65537)
+    │         else -(-(s.feed.seed * 75 + 74) % ↑(Int.natAbs 65537))) →
+    │       (0 ≤
+    │           if
+    │               0 ≤
+    │                 if 0 ≤ s.feed.seed * 75 + 74 then (s.feed.seed * 75 + 74) % ↑(Int.natAbs 65537)
+    │                 else -(-(s.feed.seed * 75 + 74) % ↑(Int.natAbs 65537)) then
+    │             (if 0 ≤ s.feed.seed * 75 + 74 then (s.feed.seed * 75 + 74) % ↑(Int.natAbs 65537)
+    │               else -(-(s.feed.seed * 75 + 74) % ↑(Int.natAbs 65537))) %
+    │               ↑(Int.natAbs 5)
+    │           else
+    │             -((-if 0 ≤ s.feed.seed * 75 + 74 then (s.feed.seed * 75 + 74) % ↑(Int.natAbs 65537)
+    │                   else -(-(s.feed.seed * 75 + 74) % ↑(Int.natAbs 65537))) %
+    │                 ↑(Int.natAbs 5))) ∧
+    │         (if
+    │               0 ≤
+    │                 if 0 ≤ s.feed.seed * 75 + 74 then (s.feed.seed * 75 + 74) % ↑(Int.natAbs 65537)
+    │                 else -(-(s.feed.seed * 75 + 74) % ↑(Int.natAbs 65537)) then
+    │             (if 0 ≤ s.feed.seed * 75 + 74 then (s.feed.seed * 75 + 74) % ↑(Int.natAbs 65537)
+    │               else -(-(s.feed.seed * 75 + 74) % ↑(Int.natAbs 65537))) %
+    │               ↑(Int.natAbs 5)
+    │           else
+    │             -((-if 0 ≤ s.feed.seed * 75 + 74 then (s.feed.seed * 75 + 74) % ↑(Int.natAbs 65537)
+    │                   else -(-(s.feed.seed * 75 + 74) % ↑(Int.natAbs 65537))) %
+    │                 ↑(Int.natAbs 5))) <
+    │           ↑(Int.natAbs 5)) ∧
+    │     ((if 0 ≤ s.feed.seed * 75 + 74 then (s.feed.seed * 75 + 74) % ↑(Int.natAbs 65537)
+    │         else -(-(s.feed.seed * 75 + 74) % ↑(Int.natAbs 65537))) <
+    │         0 →
+    │       (-↑(Int.natAbs 5) <
+    │           if
+    │               0 ≤
+    │                 if 0 ≤ s.feed.seed * 75 + 74 then (s.feed.seed * 75 + 74) % ↑(Int.natAbs 65537)
+    │                 else -(-(s.feed.seed * 75 + 74) % ↑(Int.natAbs 65537)) then
+    │             (if 0 ≤ s.feed.seed * 75 + 74 then (s.feed.seed * 75 + 74) % ↑(Int.natAbs 65537)
+    │               else -(-(s.feed.seed * 75 + 74) % ↑(Int.natAbs 65537))) %
+    │               ↑(Int.natAbs 5)
+    │           else
+    │             -((-if 0 ≤ s.feed.seed * 75 + 74 then (s.feed.seed * 75 + 74) % ↑(Int.natAbs 65537)
+    │                   else -(-(s.feed.seed * 75 + 74) % ↑(Int.natAbs 65537))) %
+    │                 ↑(Int.natAbs 5))) ∧
+    │         (if
+    │               0 ≤
+    │                 if 0 ≤ s.feed.seed * 75 + 74 then (s.feed.seed * 75 + 74) % ↑(Int.natAbs 65537)
+    │                 else -(-(s.feed.seed * 75 + 74) % ↑(Int.natAbs 65537)) then
+    │             (if 0 ≤ s.feed.seed * 75 + 74 then (s.feed.seed * 75 + 74) % ↑(Int.natAbs 65537)
+    │               else -(-(s.feed.seed * 75 + 74) % ↑(Int.natAbs 65537))) %
+    │               ↑(Int.natAbs 5)
+    │           else
+    │             -((-if 0 ≤ s.feed.seed * 75 + 74 then (s.feed.seed * 75 + 74) % ↑(Int.natAbs 65537)
+    │                   else -(-(s.feed.seed * 75 + 74) % ↑(Int.natAbs 65537))) %
+    │                 ↑(Int.natAbs 5))) ≤
+    │           0)
+    │ hcontract_1 :
+    │   ((0 ≤
+    │         if 0 ≤ s.feed.seed * 75 + 74 then (s.feed.seed * 75 + 74) % ↑(Int.natAbs 65537)
+    │         else -(-(s.feed.seed * 75 + 74) % ↑(Int.natAbs 65537))) →
+    │       (if 0 ≤ s.feed.seed * 75 + 74 then (s.feed.seed * 75 + 74) % ↑(Int.natAbs 65537)
+    │           else -(-(s.feed.seed * 75 + 74) % ↑(Int.natAbs 65537))) <
+    │           ↑(Int.natAbs 5) →
+    │         (if
+    │               0 ≤
+    │                 if 0 ≤ s.feed.seed * 75 + 74 then (s.feed.seed * 75 + 74) % ↑(Int.natAbs 65537)
+    │                 else -(-(s.feed.seed * 75 + 74) % ↑(Int.natAbs 65537)) then
+    │             (if 0 ≤ s.feed.seed * 75 + 74 then (s.feed.seed * 75 + 74) % ↑(Int.natAbs 65537)
+    │               else -(-(s.feed.seed * 75 + 74) % ↑(Int.natAbs 65537))) %
+    │               ↑(Int.natAbs 5)
+    │           else
+    │             -((-if 0 ≤ s.feed.seed * 75 + 74 then (s.feed.seed * 75 + 74) % ↑(Int.natAbs 65537)
+    │                   else -(-(s.feed.seed * 75 + 74) % ↑(Int.natAbs 65537))) %
+    │                 ↑(Int.natAbs 5))) =
+    │           if 0 ≤ s.feed.seed * 75 + 74 then (s.feed.seed * 75 + 74) % ↑(Int.natAbs 65537)
+    │           else -(-(s.feed.seed * 75 + 74) % ↑(Int.natAbs 65537))) ∧
+    │     ((-↑(Int.natAbs 5) <
+    │           if 0 ≤ s.feed.seed * 75 + 74 then (s.feed.seed * 75 + 74) % ↑(Int.natAbs 65537)
+    │           else -(-(s.feed.seed * 75 + 74) % ↑(Int.natAbs 65537))) →
+    │         (if 0 ≤ s.feed.seed * 75 + 74 then (s.feed.seed * 75 + 74) % ↑(Int.natAbs 65537)
+    │             else -(-(s.feed.seed * 75 + 74) % ↑(Int.natAbs 65537))) ≤
+    │             0 →
+    │           (if
+    │                 0 ≤
+    │                   if 0 ≤ s.feed.seed * 75 + 74 then (s.feed.seed * 75 + 74) % ↑(Int.natAbs 65537)
+    │                   else -(-(s.feed.seed * 75 + 74) % ↑(Int.natAbs 65537)) then
+    │               (if 0 ≤ s.feed.seed * 75 + 74 then (s.feed.seed * 75 + 74) % ↑(Int.natAbs 65537)
+    │                 else -(-(s.feed.seed * 75 + 74) % ↑(Int.natAbs 65537))) %
+    │                 ↑(Int.natAbs 5)
+    │             else
+    │               -((-if 0 ≤ s.feed.seed * 75 + 74 then (s.feed.seed * 75 + 74) % ↑(Int.natAbs 65537)
+    │                     else -(-(s.feed.seed * 75 + 74) % ↑(Int.natAbs 65537))) %
+    │                   ↑(Int.natAbs 5))) =
+    │             if 0 ≤ s.feed.seed * 75 + 74 then (s.feed.seed * 75 + 74) % ↑(Int.natAbs 65537)
+    │             else -(-(s.feed.seed * 75 + 74) % ↑(Int.natAbs 65537))) ∧
+    │       ((if 0 ≤ s.feed.seed * 75 + 74 then (s.feed.seed * 75 + 74) % ↑(Int.natAbs 65537)
+    │             else -(-(s.feed.seed * 75 + 74) % ↑(Int.natAbs 65537))) =
+    │             5 ∨
+    │           (if 0 ≤ s.feed.seed * 75 + 74 then (s.feed.seed * 75 + 74) % ↑(Int.natAbs 65537)
+    │             else -(-(s.feed.seed * 75 + 74) % ↑(Int.natAbs 65537))) =
+    │             -5 →
+    │         (if
+    │               0 ≤
+    │                 if 0 ≤ s.feed.seed * 75 + 74 then (s.feed.seed * 75 + 74) % ↑(Int.natAbs 65537)
+    │                 else -(-(s.feed.seed * 75 + 74) % ↑(Int.natAbs 65537)) then
+    │             (if 0 ≤ s.feed.seed * 75 + 74 then (s.feed.seed * 75 + 74) % ↑(Int.natAbs 65537)
+    │               else -(-(s.feed.seed * 75 + 74) % ↑(Int.natAbs 65537))) %
+    │               ↑(Int.natAbs 5)
+    │           else
+    │             -((-if 0 ≤ s.feed.seed * 75 + 74 then (s.feed.seed * 75 + 74) % ↑(Int.natAbs 65537)
+    │                   else -(-(s.feed.seed * 75 + 74) % ↑(Int.natAbs 65537))) %
+    │                 ↑(Int.natAbs 5))) =
+    │           0)
+    │ h₁₆ : ¬s.rally = true
+    │ h : ¬s.paused = true
+    │ h_1 : ¬40 ≤ s.feed.offset
+    │ hcontract_2 :
+    │   ((-40 ≤ s.feed.offset ∧ s.feed.offset ≤ 40) ∧ 0 ≤ s.feed.seed) ∧ s.feed.seed < 65537 →
+    │     (((-40 ≤
+    │             if s.paused = true then s.feed.offset
+    │             else if 40 ≤ s.feed.offset then s.feed.offset else s.feed.offset + 1) ∧
+    │           (if s.paused = true then s.feed.offset else if 40 ≤ s.feed.offset then s.feed.offset else s.feed.offset + 1) ≤
+    │             40) ∧
+    │         0 ≤ s.feed.seed) ∧
+    │       s.feed.seed < 65537
+    │ hcontract_3 :
+    │   s.paused = true →
+    │     (if s.paused = true then s.feed.offset else if 40 ≤ s.feed.offset then s.feed.offset else s.feed.offset + 1) =
+    │       s.feed.offset
+    │ hcontract_4 : True
+    │ left : -1 * s.feed.offset + -40 ≤ 0
+    │ left_1 : s.feed.offset + -40 ≤ 0
+    │ left_2 : -1 * s.feed.seed ≤ 0
+    │ right_2 : s.feed.seed + -65536 ≤ 0
+    │ h_4 :
+    │   (if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537 else -1 * ((-75 * s.feed.seed + -74) % 65537)) + -4 ≤ 0
+    │ h_5 :
+    │   ¬((if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537 else -1 * ((-75 * s.feed.seed + -74) % 65537)) = 5 ∨
+    │       (if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537 else -1 * ((-75 * s.feed.seed + -74) % 65537)) = -5)
+    │ h_6 : ¬s.feed.seed + -872 ≤ 0
+    │ ⊢ False
+    │ [grind] Goal diagnostics
+    │   [facts] Asserted facts
+    │     [prop] ((-1 *
+    │                 if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537
+    │                 else -1 * ((-75 * s.feed.seed + -74) % 65537)) ≤
+    │               0 →
+    │             (-1 *
+    │                 if
+    │                     (-1 *
+    │                         if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537
+    │                         else -1 * ((-75 * s.feed.seed + -74) % 65537)) ≤
+    │                       0 then
+    │                   (if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537
+    │                     else -1 * ((-75 * s.feed.seed + -74) % 65537)) %
+    │                     5
+    │                 else
+    │                   -1 *
+    │                     ((-1 *
+    │                         if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537
+    │                         else -1 * ((-75 * s.feed.seed + -74) % 65537)) %
+    │                       5)) ≤
+    │               0) ∧
+    │           ((-1 *
+    │                   if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537
+    │                   else -1 * ((-75 * s.feed.seed + -74) % 65537)) ≤
+    │                 0 →
+    │               (if
+    │                       (-1 *
+    │                           if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537
+    │                           else -1 * ((-75 * s.feed.seed + -74) % 65537)) ≤
+    │                         0 then
+    │                     (if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537
+    │                       else -1 * ((-75 * s.feed.seed + -74) % 65537)) %
+    │                       5
+    │                   else
+    │                     -1 *
+    │                       ((-1 *
+    │                           if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537
+    │                           else -1 * ((-75 * s.feed.seed + -74) % 65537)) %
+    │                         5)) +
+    │                   -4 ≤
+    │                 0) ∧
+    │             ((if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537
+    │                     else -1 * ((-75 * s.feed.seed + -74) % 65537)) +
+    │                     1 ≤
+    │                   0 →
+    │                 (-1 *
+    │                       if
+    │                           (-1 *
+    │                               if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537
+    │                               else -1 * ((-75 * s.feed.seed + -74) % 65537)) ≤
+    │                             0 then
+    │                         (if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537
+    │                           else -1 * ((-75 * s.feed.seed + -74) % 65537)) %
+    │                           5
+    │                       else
+    │                         -1 *
+    │                           ((-1 *
+    │                               if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537
+    │                               else -1 * ((-75 * s.feed.seed + -74) % 65537)) %
+    │                             5)) +
+    │                     -4 ≤
+    │                   0) ∧
+    │               ((if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537
+    │                     else -1 * ((-75 * s.feed.seed + -74) % 65537)) +
+    │                     1 ≤
+    │                   0 →
+    │                 (if
+    │                       (-1 *
+    │                           if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537
+    │                           else -1 * ((-75 * s.feed.seed + -74) % 65537)) ≤
+    │                         0 then
+    │                     (if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537
+    │                       else -1 * ((-75 * s.feed.seed + -74) % 65537)) %
+    │                       5
+    │                   else
+    │                     -1 *
+    │                       ((-1 *
+    │                           if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537
+    │                           else -1 * ((-75 * s.feed.seed + -74) % 65537)) %
+    │                         5)) ≤
+    │                   0)
+    │     [prop] ((-1 *
+    │                 if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537
+    │                 else -1 * ((-75 * s.feed.seed + -74) % 65537)) ≤
+    │               0 →
+    │             (if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537
+    │                   else -1 * ((-75 * s.feed.seed + -74) % 65537)) +
+    │                   -4 ≤
+    │                 0 →
+    │               (if
+    │                     (-1 *
+    │                         if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537
+    │                         else -1 * ((-75 * s.feed.seed + -74) % 65537)) ≤
+    │                       0 then
+    │                   (if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537
+    │                     else -1 * ((-75 * s.feed.seed + -74) % 65537)) %
+    │                     5
+    │                 else
+    │                   -1 *
+    │                     ((-1 *
+    │                         if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537
+    │                         else -1 * ((-75 * s.feed.seed + -74) % 65537)) %
+    │                       5)) =
+    │                 if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537
+    │                 else -1 * ((-75 * s.feed.seed + -74) % 65537)) ∧
+    │           ((-1 *
+    │                     if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537
+    │                     else -1 * ((-75 * s.feed.seed + -74) % 65537)) +
+    │                   -4 ≤
+    │                 0 →
+    │               (if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537
+    │                   else -1 * ((-75 * s.feed.seed + -74) % 65537)) ≤
+    │                   0 →
+    │                 (if
+    │                       (-1 *
+    │                           if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537
+    │                           else -1 * ((-75 * s.feed.seed + -74) % 65537)) ≤
+    │                         0 then
+    │                     (if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537
+    │                       else -1 * ((-75 * s.feed.seed + -74) % 65537)) %
+    │                       5
+    │                   else
+    │                     -1 *
+    │                       ((-1 *
+    │                           if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537
+    │                           else -1 * ((-75 * s.feed.seed + -74) % 65537)) %
+    │                         5)) =
+    │                   if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537
+    │                   else -1 * ((-75 * s.feed.seed + -74) % 65537)) ∧
+    │             ((if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537
+    │                   else -1 * ((-75 * s.feed.seed + -74) % 65537)) =
+    │                   5 ∨
+    │                 (if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537
+    │                   else -1 * ((-75 * s.feed.seed + -74) % 65537)) =
+    │                   -5 →
+    │               (if
+    │                     (-1 *
+    │                         if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537
+    │                         else -1 * ((-75 * s.feed.seed + -74) % 65537)) ≤
+    │                       0 then
+    │                   (if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537
+    │                     else -1 * ((-75 * s.feed.seed + -74) % 65537)) %
+    │                     5
+    │                 else
+    │                   -1 *
+    │                     ((-1 *
+    │                         if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537
+    │                         else -1 * ((-75 * s.feed.seed + -74) % 65537)) %
+    │                       5)) =
+    │                 0)
+    │     [prop] s.rally = false
+    │     [prop] s.paused = false
+    │     [prop] s.feed.offset + -39 ≤ 0
+    │     [prop] (-1 * s.feed.offset + -40 ≤ 0 ∧ s.feed.offset + -40 ≤ 0 ∧ -1 * s.feed.seed ≤ 0 ∧ s.feed.seed + -65536 ≤ 0 →
+    │             (-1 *
+    │                   if s.paused = true then s.feed.offset
+    │                   else if -1 * s.feed.offset + 40 ≤ 0 then s.feed.offset else s.feed.offset + 1) +
+    │                 -40 ≤
+    │               0) ∧
+    │           (-1 * s.feed.offset + -40 ≤ 0 ∧ s.feed.offset + -40 ≤ 0 ∧ -1 * s.feed.seed ≤ 0 ∧ s.feed.seed + -65536 ≤ 0 →
+    │               (if s.paused = true then s.feed.offset
+    │                   else if -1 * s.feed.offset + 40 ≤ 0 then s.feed.offset else s.feed.offset + 1) +
+    │                   -40 ≤
+    │                 0) ∧
+    │             (-1 * s.feed.offset + -40 ≤ 0 ∧ s.feed.offset + -40 ≤ 0 ∧ -1 * s.feed.seed ≤ 0 ∧ s.feed.seed + -65536 ≤ 0 →
+    │                 -1 * s.feed.seed ≤ 0) ∧
+    │               (-1 * s.feed.offset + -40 ≤ 0 ∧
+    │                   s.feed.offset + -40 ≤ 0 ∧ -1 * s.feed.seed ≤ 0 ∧ s.feed.seed + -65536 ≤ 0 →
+    │                 s.feed.seed + -65536 ≤ 0)
+    │     [prop] s.paused = true →
+    │           (if s.paused = true then s.feed.offset
+    │             else if -1 * s.feed.offset + 40 ≤ 0 then s.feed.offset else s.feed.offset + 1) =
+    │             s.feed.offset
+    │     [prop] -1 * s.feed.offset + -40 ≤ 0
+    │     [prop] s.feed.offset + -40 ≤ 0
+    │     [prop] -1 * s.feed.seed ≤ 0
+    │     [prop] (75 * s.feed.seed + 74) % 65537 + -65536 ≤ 0
+    │     [prop] -1 * ((75 * s.feed.seed + 74) % 65537) ≤ 0
+    │     [prop] (if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537
+    │               else -1 * ((-75 * s.feed.seed + -74) % 65537)) %
+    │               5 +
+    │             -4 ≤
+    │           0
+    │     [prop] -1 *
+    │             ((if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537
+    │               else -1 * ((-75 * s.feed.seed + -74) % 65537)) %
+    │               5) ≤
+    │           0
+    │     [prop] (-1 *
+    │                 if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537
+    │                 else -1 * ((-75 * s.feed.seed + -74) % 65537)) +
+    │               5 *
+    │                 ((if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537
+    │                   else -1 * ((-75 * s.feed.seed + -74) % 65537)) /
+    │                   5) +
+    │             (if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537
+    │               else -1 * ((-75 * s.feed.seed + -74) % 65537)) %
+    │               5 =
+    │           0
+    │     [prop] -75 * s.feed.seed + 65537 * ((75 * s.feed.seed + 74) / 65537) + (75 * s.feed.seed + 74) % 65537 + -74 = 0
+    │     [prop] s.feed.seed + -65536 ≤ 0
+    │     [prop] (-1 *
+    │               if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537
+    │               else -1 * ((-75 * s.feed.seed + -74) % 65537)) ≤
+    │             0 →
+    │           (if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537 else -1 * ((-75 * s.feed.seed + -74) % 65537)) +
+    │                 -4 ≤
+    │               0 →
+    │             (if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537
+    │                 else -1 * ((-75 * s.feed.seed + -74) % 65537)) %
+    │                 5 =
+    │               if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537 else -1 * ((-75 * s.feed.seed + -74) % 65537)
+    │     [prop] -1 * s.feed.seed ≤ 0 → s.feed.seed + -872 ≤ 0 → -75 * s.feed.seed + (75 * s.feed.seed + 74) % 65537 + -74 = 0
+    │     [prop] (if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537
+    │               else -1 * ((-75 * s.feed.seed + -74) % 65537)) %
+    │               5 +
+    │             -4 ≤
+    │           0
+    │     [prop] (75 * s.feed.seed + 74) % 65537 + -65536 ≤ 0
+    │     [prop] -1 *
+    │             ((if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537
+    │               else -1 * ((-75 * s.feed.seed + -74) % 65537)) %
+    │               5) ≤
+    │           0
+    │     [prop] -1 * ((75 * s.feed.seed + 74) % 65537) ≤ 0
+    │     [prop] (if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537
+    │             else -1 * ((-75 * s.feed.seed + -74) % 65537)) +
+    │             -4 ≤
+    │           0
+    │     [prop] ¬((if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537
+    │               else -1 * ((-75 * s.feed.seed + -74) % 65537)) =
+    │               5 ∨
+    │             (if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537
+    │               else -1 * ((-75 * s.feed.seed + -74) % 65537)) =
+    │               -5)
+    │     [prop] ¬s.feed.seed + -872 ≤ 0
+    │   [eqc] True propositions
+    │     [prop] s.feed.offset + -40 ≤ 0 ∧ -1 * s.feed.seed ≤ 0 ∧ s.feed.seed + -65536 ≤ 0
+    │     [prop] -1 * s.feed.offset + -40 ≤ 0 ∧ s.feed.offset + -40 ≤ 0 ∧ -1 * s.feed.seed ≤ 0 ∧ s.feed.seed + -65536 ≤ 0
+    │     [prop] -1 * s.feed.seed ≤ 0 ∧ s.feed.seed + -65536 ≤ 0
+    │     [prop] (-1 * s.feed.offset + -40 ≤ 0 ∧ s.feed.offset + -40 ≤ 0 ∧ -1 * s.feed.seed ≤ 0 ∧ s.feed.seed + -65536 ≤ 0 →
+    │             (if s.paused = true then s.feed.offset
+    │                 else if -1 * s.feed.offset + 40 ≤ 0 then s.feed.offset else s.feed.offset + 1) +
+    │                 -40 ≤
+    │               0) ∧
+    │           (-1 * s.feed.offset + -40 ≤ 0 ∧ s.feed.offset + -40 ≤ 0 ∧ -1 * s.feed.seed ≤ 0 ∧ s.feed.seed + -65536 ≤ 0 →
+    │               -1 * s.feed.seed ≤ 0) ∧
+    │             (-1 * s.feed.offset + -40 ≤ 0 ∧ s.feed.offset + -40 ≤ 0 ∧ -1 * s.feed.seed ≤ 0 ∧ s.feed.seed + -65536 ≤ 0 →
+    │               s.feed.seed + -65536 ≤ 0)
+    │     [prop] (-1 * s.feed.offset + -40 ≤ 0 ∧ s.feed.offset + -40 ≤ 0 ∧ -1 * s.feed.seed ≤ 0 ∧ s.feed.seed + -65536 ≤ 0 →
+    │             (-1 *
+    │                   if s.paused = true then s.feed.offset
+    │                   else if -1 * s.feed.offset + 40 ≤ 0 then s.feed.offset else s.feed.offset + 1) +
+    │                 -40 ≤
+    │               0) ∧
+    │           (-1 * s.feed.offset + -40 ≤ 0 ∧ s.feed.offset + -40 ≤ 0 ∧ -1 * s.feed.seed ≤ 0 ∧ s.feed.seed + -65536 ≤ 0 →
+    │               (if s.paused = true then s.feed.offset
+    │                   else if -1 * s.feed.offset + 40 ≤ 0 then s.feed.offset else s.feed.offset + 1) +
+    │                   -40 ≤
+    │                 0) ∧
+    │             (-1 * s.feed.offset + -40 ≤ 0 ∧ s.feed.offset + -40 ≤ 0 ∧ -1 * s.feed.seed ≤ 0 ∧ s.feed.seed + -65536 ≤ 0 →
+    │                 -1 * s.feed.seed ≤ 0) ∧
+    │               (-1 * s.feed.offset + -40 ≤ 0 ∧
+    │                   s.feed.offset + -40 ≤ 0 ∧ -1 * s.feed.seed ≤ 0 ∧ s.feed.seed + -65536 ≤ 0 →
+    │                 s.feed.seed + -65536 ≤ 0)
+    │     [prop] (-1 * s.feed.offset + -40 ≤ 0 ∧ s.feed.offset + -40 ≤ 0 ∧ -1 * s.feed.seed ≤ 0 ∧ s.feed.seed + -65536 ≤ 0 →
+    │             -1 * s.feed.seed ≤ 0) ∧
+    │           (-1 * s.feed.offset + -40 ≤ 0 ∧ s.feed.offset + -40 ≤ 0 ∧ -1 * s.feed.seed ≤ 0 ∧ s.feed.seed + -65536 ≤ 0 →
+    │             s.feed.seed + -65536 ≤ 0)
+    │     [prop] ((if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537
+    │                 else -1 * ((-75 * s.feed.seed + -74) % 65537)) +
+    │                 1 ≤
+    │               0 →
+    │             (-1 *
+    │                   if
+    │                       (-1 *
+    │                           if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537
+    │                           else -1 * ((-75 * s.feed.seed + -74) % 65537)) ≤
+    │                         0 then
+    │                     (if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537
+    │                       else -1 * ((-75 * s.feed.seed + -74) % 65537)) %
+    │                       5
+    │                   else
+    │                     -1 *
+    │                       ((-1 *
+    │                           if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537
+    │                           else -1 * ((-75 * s.feed.seed + -74) % 65537)) %
+    │                         5)) +
+    │                 -4 ≤
+    │               0) ∧
+    │           ((if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537
+    │                 else -1 * ((-75 * s.feed.seed + -74) % 65537)) +
+    │                 1 ≤
+    │               0 →
+    │             (if
+    │                   (-1 *
+    │                       if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537
+    │                       else -1 * ((-75 * s.feed.seed + -74) % 65537)) ≤
+    │                     0 then
+    │                 (if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537
+    │                   else -1 * ((-75 * s.feed.seed + -74) % 65537)) %
+    │                   5
+    │               else
+    │                 -1 *
+    │                   ((-1 *
+    │                       if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537
+    │                       else -1 * ((-75 * s.feed.seed + -74) % 65537)) %
+    │                     5)) ≤
+    │               0)
+    │     [prop] ((-1 *
+    │                   if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537
+    │                   else -1 * ((-75 * s.feed.seed + -74) % 65537)) +
+    │                 -4 ≤
+    │               0 →
+    │             (if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537
+    │                 else -1 * ((-75 * s.feed.seed + -74) % 65537)) ≤
+    │                 0 →
+    │               (if
+    │                     (-1 *
+    │                         if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537
+    │                         else -1 * ((-75 * s.feed.seed + -74) % 65537)) ≤
+    │                       0 then
+    │                   (if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537
+    │                     else -1 * ((-75 * s.feed.seed + -74) % 65537)) %
+    │                     5
+    │                 else
+    │                   -1 *
+    │                     ((-1 *
+    │                         if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537
+    │                         else -1 * ((-75 * s.feed.seed + -74) % 65537)) %
+    │                       5)) =
+    │                 if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537
+    │                 else -1 * ((-75 * s.feed.seed + -74) % 65537)) ∧
+    │           ((if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537
+    │                 else -1 * ((-75 * s.feed.seed + -74) % 65537)) =
+    │                 5 ∨
+    │               (if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537
+    │                 else -1 * ((-75 * s.feed.seed + -74) % 65537)) =
+    │                 -5 →
+    │             (if
+    │                   (-1 *
+    │                       if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537
+    │                       else -1 * ((-75 * s.feed.seed + -74) % 65537)) ≤
+    │                     0 then
+    │                 (if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537
+    │                   else -1 * ((-75 * s.feed.seed + -74) % 65537)) %
+    │                   5
+    │               else
+    │                 -1 *
+    │                   ((-1 *
+    │                       if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537
+    │                       else -1 * ((-75 * s.feed.seed + -74) % 65537)) %
+    │                     5)) =
+    │               0)
+    │     [prop] ((-1 *
+    │                 if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537
+    │                 else -1 * ((-75 * s.feed.seed + -74) % 65537)) ≤
+    │               0 →
+    │             (if
+    │                     (-1 *
+    │                         if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537
+    │                         else -1 * ((-75 * s.feed.seed + -74) % 65537)) ≤
+    │                       0 then
+    │                   (if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537
+    │                     else -1 * ((-75 * s.feed.seed + -74) % 65537)) %
+    │                     5
+    │                 else
+    │                   -1 *
+    │                     ((-1 *
+    │                         if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537
+    │                         else -1 * ((-75 * s.feed.seed + -74) % 65537)) %
+    │                       5)) +
+    │                 -4 ≤
+    │               0) ∧
+    │           ((if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537
+    │                   else -1 * ((-75 * s.feed.seed + -74) % 65537)) +
+    │                   1 ≤
+    │                 0 →
+    │               (-1 *
+    │                     if
+    │                         (-1 *
+    │                             if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537
+    │                             else -1 * ((-75 * s.feed.seed + -74) % 65537)) ≤
+    │                           0 then
+    │                       (if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537
+    │                         else -1 * ((-75 * s.feed.seed + -74) % 65537)) %
+    │                         5
+    │                     else
+    │                       -1 *
+    │                         ((-1 *
+    │                             if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537
+    │                             else -1 * ((-75 * s.feed.seed + -74) % 65537)) %
+    │                           5)) +
+    │                   -4 ≤
+    │                 0) ∧
+    │             ((if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537
+    │                   else -1 * ((-75 * s.feed.seed + -74) % 65537)) +
+    │                   1 ≤
+    │                 0 →
+    │               (if
+    │                     (-1 *
+    │                         if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537
+    │                         else -1 * ((-75 * s.feed.seed + -74) % 65537)) ≤
+    │                       0 then
+    │                   (if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537
+    │                     else -1 * ((-75 * s.feed.seed + -74) % 65537)) %
+    │                     5
+    │                 else
+    │                   -1 *
+    │                     ((-1 *
+    │                         if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537
+    │                         else -1 * ((-75 * s.feed.seed + -74) % 65537)) %
+    │                       5)) ≤
+    │                 0)
+    │     [prop] ((-1 *
+    │                 if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537
+    │                 else -1 * ((-75 * s.feed.seed + -74) % 65537)) ≤
+    │               0 →
+    │             (-1 *
+    │                 if
+    │                     (-1 *
+    │                         if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537
+    │                         else -1 * ((-75 * s.feed.seed + -74) % 65537)) ≤
+    │                       0 then
+    │                   (if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537
+    │                     else -1 * ((-75 * s.feed.seed + -74) % 65537)) %
+    │                     5
+    │                 else
+    │                   -1 *
+    │                     ((-1 *
+    │                         if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537
+    │                         else -1 * ((-75 * s.feed.seed + -74) % 65537)) %
+    │                       5)) ≤
+    │               0) ∧
+    │           ((-1 *
+    │                   if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537
+    │                   else -1 * ((-75 * s.feed.seed + -74) % 65537)) ≤
+    │                 0 →
+    │               (if
+    │                       (-1 *
+    │                           if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537
+    │                           else -1 * ((-75 * s.feed.seed + -74) % 65537)) ≤
+    │                         0 then
+    │                     (if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537
+    │                       else -1 * ((-75 * s.feed.seed + -74) % 65537)) %
+    │                       5
+    │                   else
+    │                     -1 *
+    │                       ((-1 *
+    │                           if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537
+    │                           else -1 * ((-75 * s.feed.seed + -74) % 65537)) %
+    │                         5)) +
+    │                   -4 ≤
+    │                 0) ∧
+    │             ((if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537
+    │                     else -1 * ((-75 * s.feed.seed + -74) % 65537)) +
+    │                     1 ≤
+    │                   0 →
+    │                 (-1 *
+    │                       if
+    │                           (-1 *
+    │                               if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537
+    │                               else -1 * ((-75 * s.feed.seed + -74) % 65537)) ≤
+    │                             0 then
+    │                         (if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537
+    │                           else -1 * ((-75 * s.feed.seed + -74) % 65537)) %
+    │                           5
+    │                       else
+    │                         -1 *
+    │                           ((-1 *
+    │                               if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537
+    │                               else -1 * ((-75 * s.feed.seed + -74) % 65537)) %
+    │                             5)) +
+    │                     -4 ≤
+    │                   0) ∧
+    │               ((if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537
+    │                     else -1 * ((-75 * s.feed.seed + -74) % 65537)) +
+    │                     1 ≤
+    │                   0 →
+    │                 (if
+    │                       (-1 *
+    │                           if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537
+    │                           else -1 * ((-75 * s.feed.seed + -74) % 65537)) ≤
+    │                         0 then
+    │                     (if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537
+    │                       else -1 * ((-75 * s.feed.seed + -74) % 65537)) %
+    │                       5
+    │                   else
+    │                     -1 *
+    │                       ((-1 *
+    │                           if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537
+    │                           else -1 * ((-75 * s.feed.seed + -74) % 65537)) %
+    │                         5)) ≤
+    │                   0)
+    │     [prop] ((-1 *
+    │                 if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537
+    │                 else -1 * ((-75 * s.feed.seed + -74) % 65537)) ≤
+    │               0 →
+    │             (if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537
+    │                   else -1 * ((-75 * s.feed.seed + -74) % 65537)) +
+    │                   -4 ≤
+    │                 0 →
+    │               (if
+    │                     (-1 *
+    │                         if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537
+    │                         else -1 * ((-75 * s.feed.seed + -74) % 65537)) ≤
+    │                       0 then
+    │                   (if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537
+    │                     else -1 * ((-75 * s.feed.seed + -74) % 65537)) %
+    │                     5
+    │                 else
+    │                   -1 *
+    │                     ((-1 *
+    │                         if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537
+    │                         else -1 * ((-75 * s.feed.seed + -74) % 65537)) %
+    │                       5)) =
+    │                 if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537
+    │                 else -1 * ((-75 * s.feed.seed + -74) % 65537)) ∧
+    │           ((-1 *
+    │                     if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537
+    │                     else -1 * ((-75 * s.feed.seed + -74) % 65537)) +
+    │                   -4 ≤
+    │                 0 →
+    │               (if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537
+    │                   else -1 * ((-75 * s.feed.seed + -74) % 65537)) ≤
+    │                   0 →
+    │                 (if
+    │                       (-1 *
+    │                           if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537
+    │                           else -1 * ((-75 * s.feed.seed + -74) % 65537)) ≤
+    │                         0 then
+    │                     (if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537
+    │                       else -1 * ((-75 * s.feed.seed + -74) % 65537)) %
+    │                       5
+    │                   else
+    │                     -1 *
+    │                       ((-1 *
+    │                           if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537
+    │                           else -1 * ((-75 * s.feed.seed + -74) % 65537)) %
+    │                         5)) =
+    │                   if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537
+    │                   else -1 * ((-75 * s.feed.seed + -74) % 65537)) ∧
+    │             ((if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537
+    │                   else -1 * ((-75 * s.feed.seed + -74) % 65537)) =
+    │                   5 ∨
+    │                 (if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537
+    │                   else -1 * ((-75 * s.feed.seed + -74) % 65537)) =
+    │                   -5 →
+    │               (if
+    │                     (-1 *
+    │                         if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537
+    │                         else -1 * ((-75 * s.feed.seed + -74) % 65537)) ≤
+    │                       0 then
+    │                   (if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537
+    │                     else -1 * ((-75 * s.feed.seed + -74) % 65537)) %
+    │                     5
+    │                 else
+    │                   -1 *
+    │                     ((-1 *
+    │                         if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537
+    │                         else -1 * ((-75 * s.feed.seed + -74) % 65537)) %
+    │                       5)) =
+    │                 0)
+    │     [prop] (if
+    │               (-1 *
+    │                   if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537
+    │                   else -1 * ((-75 * s.feed.seed + -74) % 65537)) ≤
+    │                 0 then
+    │             (if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537
+    │               else -1 * ((-75 * s.feed.seed + -74) % 65537)) %
+    │               5
+    │           else
+    │             -1 *
+    │               ((-1 *
+    │                   if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537
+    │                   else -1 * ((-75 * s.feed.seed + -74) % 65537)) %
+    │                 5)) =
+    │           if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537 else -1 * ((-75 * s.feed.seed + -74) % 65537)
+    │     [prop] s.feed.offset + -39 ≤ 0
+    │     [prop] s.feed.offset + -40 ≤ 0
+    │     [prop] s.feed.seed + -65536 ≤ 0
+    │     [prop] (if s.paused = true then s.feed.offset
+    │             else if -1 * s.feed.offset + 40 ≤ 0 then s.feed.offset else s.feed.offset + 1) +
+    │             -40 ≤
+    │           0
+    │     [prop] (if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537
+    │             else -1 * ((-75 * s.feed.seed + -74) % 65537)) +
+    │             -4 ≤
+    │           0
+    │     [prop] (if
+    │                 (-1 *
+    │                     if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537
+    │                     else -1 * ((-75 * s.feed.seed + -74) % 65537)) ≤
+    │                   0 then
+    │               (if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537
+    │                 else -1 * ((-75 * s.feed.seed + -74) % 65537)) %
+    │                 5
+    │             else
+    │               -1 *
+    │                 ((-1 *
+    │                     if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537
+    │                     else -1 * ((-75 * s.feed.seed + -74) % 65537)) %
+    │                   5)) +
+    │             -4 ≤
+    │           0
+    │     [prop] (if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537
+    │               else -1 * ((-75 * s.feed.seed + -74) % 65537)) %
+    │               5 +
+    │             -4 ≤
+    │           0
+    │     [prop] (75 * s.feed.seed + 74) % 65537 + -65536 ≤ 0
+    │     [prop] -1 * s.feed.offset + -40 ≤ 0
+    │     [prop] (-1 *
+    │               if s.paused = true then s.feed.offset
+    │               else if -1 * s.feed.offset + 40 ≤ 0 then s.feed.offset else s.feed.offset + 1) +
+    │             -40 ≤
+    │           0
+    │     [prop] (-1 *
+    │               if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537
+    │               else -1 * ((-75 * s.feed.seed + -74) % 65537)) +
+    │             -4 ≤
+    │           0
+    │     [prop] (-1 *
+    │               if
+    │                   (-1 *
+    │                       if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537
+    │                       else -1 * ((-75 * s.feed.seed + -74) % 65537)) ≤
+    │                     0 then
+    │                 (if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537
+    │                   else -1 * ((-75 * s.feed.seed + -74) % 65537)) %
+    │                   5
+    │               else
+    │                 -1 *
+    │                   ((-1 *
+    │                       if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537
+    │                       else -1 * ((-75 * s.feed.seed + -74) % 65537)) %
+    │                     5)) +
+    │             -4 ≤
+    │           0
+    │     [prop] -1 * s.feed.seed ≤ 0
+    │     [prop] (-1 *
+    │             if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537
+    │             else -1 * ((-75 * s.feed.seed + -74) % 65537)) ≤
+    │           0
+    │     [prop] (-1 *
+    │             if
+    │                 (-1 *
+    │                     if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537
+    │                     else -1 * ((-75 * s.feed.seed + -74) % 65537)) ≤
+    │                   0 then
+    │               (if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537
+    │                 else -1 * ((-75 * s.feed.seed + -74) % 65537)) %
+    │                 5
+    │             else
+    │               -1 *
+    │                 ((-1 *
+    │                     if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537
+    │                     else -1 * ((-75 * s.feed.seed + -74) % 65537)) %
+    │                   5)) ≤
+    │           0
+    │     [prop] -1 *
+    │             ((if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537
+    │               else -1 * ((-75 * s.feed.seed + -74) % 65537)) %
+    │               5) ≤
+    │           0
+    │     [prop] -1 * ((75 * s.feed.seed + 74) % 65537) ≤ 0
+    │     [prop] -1 * s.feed.offset + -40 ≤ 0 ∧ s.feed.offset + -40 ≤ 0 ∧ -1 * s.feed.seed ≤ 0 ∧ s.feed.seed + -65536 ≤ 0 →
+    │           s.feed.seed + -65536 ≤ 0
+    │     [prop] -1 * s.feed.offset + -40 ≤ 0 ∧ s.feed.offset + -40 ≤ 0 ∧ -1 * s.feed.seed ≤ 0 ∧ s.feed.seed + -65536 ≤ 0 →
+    │           (if s.paused = true then s.feed.offset
+    │               else if -1 * s.feed.offset + 40 ≤ 0 then s.feed.offset else s.feed.offset + 1) +
+    │               -40 ≤
+    │             0
+    │     [prop] -1 * s.feed.offset + -40 ≤ 0 ∧ s.feed.offset + -40 ≤ 0 ∧ -1 * s.feed.seed ≤ 0 ∧ s.feed.seed + -65536 ≤ 0 →
+    │           (-1 *
+    │                 if s.paused = true then s.feed.offset
+    │                 else if -1 * s.feed.offset + 40 ≤ 0 then s.feed.offset else s.feed.offset + 1) +
+    │               -40 ≤
+    │             0
+    │     [prop] -1 * s.feed.offset + -40 ≤ 0 ∧ s.feed.offset + -40 ≤ 0 ∧ -1 * s.feed.seed ≤ 0 ∧ s.feed.seed + -65536 ≤ 0 →
+    │           -1 * s.feed.seed ≤ 0
+    │     [prop] (if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537
+    │               else -1 * ((-75 * s.feed.seed + -74) % 65537)) =
+    │               5 ∨
+    │             (if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537
+    │               else -1 * ((-75 * s.feed.seed + -74) % 65537)) =
+    │               -5 →
+    │           (if
+    │                 (-1 *
+    │                     if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537
+    │                     else -1 * ((-75 * s.feed.seed + -74) % 65537)) ≤
+    │                   0 then
+    │               (if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537
+    │                 else -1 * ((-75 * s.feed.seed + -74) % 65537)) %
+    │                 5
+    │             else
+    │               -1 *
+    │                 ((-1 *
+    │                     if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537
+    │                     else -1 * ((-75 * s.feed.seed + -74) % 65537)) %
+    │                   5)) =
+    │             0
+    │     [prop] s.paused = true →
+    │           (if s.paused = true then s.feed.offset
+    │             else if -1 * s.feed.offset + 40 ≤ 0 then s.feed.offset else s.feed.offset + 1) =
+    │             s.feed.offset
+    │     [prop] (if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537
+    │             else -1 * ((-75 * s.feed.seed + -74) % 65537)) ≤
+    │             0 →
+    │           (if
+    │                 (-1 *
+    │                     if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537
+    │                     else -1 * ((-75 * s.feed.seed + -74) % 65537)) ≤
+    │                   0 then
+    │               (if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537
+    │                 else -1 * ((-75 * s.feed.seed + -74) % 65537)) %
+    │                 5
+    │             else
+    │               -1 *
+    │                 ((-1 *
+    │                     if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537
+    │                     else -1 * ((-75 * s.feed.seed + -74) % 65537)) %
+    │                   5)) =
+    │             if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537 else -1 * ((-75 * s.feed.seed + -74) % 65537)
+    │     [prop] (if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537
+    │               else -1 * ((-75 * s.feed.seed + -74) % 65537)) +
+    │               -4 ≤
+    │             0 →
+    │           (if
+    │                 (-1 *
+    │                     if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537
+    │                     else -1 * ((-75 * s.feed.seed + -74) % 65537)) ≤
+    │                   0 then
+    │               (if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537
+    │                 else -1 * ((-75 * s.feed.seed + -74) % 65537)) %
+    │                 5
+    │             else
+    │               -1 *
+    │                 ((-1 *
+    │                     if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537
+    │                     else -1 * ((-75 * s.feed.seed + -74) % 65537)) %
+    │                   5)) =
+    │             if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537 else -1 * ((-75 * s.feed.seed + -74) % 65537)
+    │     [prop] (if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537
+    │               else -1 * ((-75 * s.feed.seed + -74) % 65537)) +
+    │               1 ≤
+    │             0 →
+    │           (if
+    │                 (-1 *
+    │                     if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537
+    │                     else -1 * ((-75 * s.feed.seed + -74) % 65537)) ≤
+    │                   0 then
+    │               (if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537
+    │                 else -1 * ((-75 * s.feed.seed + -74) % 65537)) %
+    │                 5
+    │             else
+    │               -1 *
+    │                 ((-1 *
+    │                     if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537
+    │                     else -1 * ((-75 * s.feed.seed + -74) % 65537)) %
+    │                   5)) ≤
+    │             0
+    │     [prop] (if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537
+    │               else -1 * ((-75 * s.feed.seed + -74) % 65537)) +
+    │               1 ≤
+    │             0 →
+    │           (-1 *
+    │                 if
+    │                     (-1 *
+    │                         if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537
+    │                         else -1 * ((-75 * s.feed.seed + -74) % 65537)) ≤
+    │                       0 then
+    │                   (if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537
+    │                     else -1 * ((-75 * s.feed.seed + -74) % 65537)) %
+    │                     5
+    │                 else
+    │                   -1 *
+    │                     ((-1 *
+    │                         if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537
+    │                         else -1 * ((-75 * s.feed.seed + -74) % 65537)) %
+    │                       5)) +
+    │               -4 ≤
+    │             0
+    │     [prop] (-1 *
+    │                 if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537
+    │                 else -1 * ((-75 * s.feed.seed + -74) % 65537)) +
+    │               -4 ≤
+    │             0 →
+    │           (if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537 else -1 * ((-75 * s.feed.seed + -74) % 65537)) ≤
+    │               0 →
+    │             (if
+    │                   (-1 *
+    │                       if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537
+    │                       else -1 * ((-75 * s.feed.seed + -74) % 65537)) ≤
+    │                     0 then
+    │                 (if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537
+    │                   else -1 * ((-75 * s.feed.seed + -74) % 65537)) %
+    │                   5
+    │               else
+    │                 -1 *
+    │                   ((-1 *
+    │                       if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537
+    │                       else -1 * ((-75 * s.feed.seed + -74) % 65537)) %
+    │                     5)) =
+    │               if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537 else -1 * ((-75 * s.feed.seed + -74) % 65537)
+    │     [prop] (-1 *
+    │               if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537
+    │               else -1 * ((-75 * s.feed.seed + -74) % 65537)) ≤
+    │             0 →
+    │           (if
+    │                   (-1 *
+    │                       if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537
+    │                       else -1 * ((-75 * s.feed.seed + -74) % 65537)) ≤
+    │                     0 then
+    │                 (if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537
+    │                   else -1 * ((-75 * s.feed.seed + -74) % 65537)) %
+    │                   5
+    │               else
+    │                 -1 *
+    │                   ((-1 *
+    │                       if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537
+    │                       else -1 * ((-75 * s.feed.seed + -74) % 65537)) %
+    │                     5)) +
+    │               -4 ≤
+    │             0
+    │     [prop] (-1 *
+    │               if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537
+    │               else -1 * ((-75 * s.feed.seed + -74) % 65537)) ≤
+    │             0 →
+    │           (-1 *
+    │               if
+    │                   (-1 *
+    │                       if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537
+    │                       else -1 * ((-75 * s.feed.seed + -74) % 65537)) ≤
+    │                     0 then
+    │                 (if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537
+    │                   else -1 * ((-75 * s.feed.seed + -74) % 65537)) %
+    │                   5
+    │               else
+    │                 -1 *
+    │                   ((-1 *
+    │                       if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537
+    │                       else -1 * ((-75 * s.feed.seed + -74) % 65537)) %
+    │                     5)) ≤
+    │             0
+    │     [prop] (-1 *
+    │               if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537
+    │               else -1 * ((-75 * s.feed.seed + -74) % 65537)) ≤
+    │             0 →
+    │           (if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537 else -1 * ((-75 * s.feed.seed + -74) % 65537)) +
+    │                 -4 ≤
+    │               0 →
+    │             (if
+    │                   (-1 *
+    │                       if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537
+    │                       else -1 * ((-75 * s.feed.seed + -74) % 65537)) ≤
+    │                     0 then
+    │                 (if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537
+    │                   else -1 * ((-75 * s.feed.seed + -74) % 65537)) %
+    │                   5
+    │               else
+    │                 -1 *
+    │                   ((-1 *
+    │                       if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537
+    │                       else -1 * ((-75 * s.feed.seed + -74) % 65537)) %
+    │                     5)) =
+    │               if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537 else -1 * ((-75 * s.feed.seed + -74) % 65537)
+    │     [prop] (if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537
+    │             else -1 * ((-75 * s.feed.seed + -74) % 65537)) %
+    │             5 =
+    │           if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537 else -1 * ((-75 * s.feed.seed + -74) % 65537)
+    │     [prop] s.feed.seed + -872 ≤ 0 → -75 * s.feed.seed + (75 * s.feed.seed + 74) % 65537 + -74 = 0
+    │     [prop] (if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537
+    │               else -1 * ((-75 * s.feed.seed + -74) % 65537)) +
+    │               -4 ≤
+    │             0 →
+    │           (if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537 else -1 * ((-75 * s.feed.seed + -74) % 65537)) %
+    │               5 =
+    │             if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537 else -1 * ((-75 * s.feed.seed + -74) % 65537)
+    │     [prop] -1 * s.feed.seed ≤ 0 → s.feed.seed + -872 ≤ 0 → -75 * s.feed.seed + (75 * s.feed.seed + 74) % 65537 + -74 = 0
+    │     [prop] (-1 *
+    │               if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537
+    │               else -1 * ((-75 * s.feed.seed + -74) % 65537)) ≤
+    │             0 →
+    │           (if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537 else -1 * ((-75 * s.feed.seed + -74) % 65537)) +
+    │                 -4 ≤
+    │               0 →
+    │             (if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537
+    │                 else -1 * ((-75 * s.feed.seed + -74) % 65537)) %
+    │                 5 =
+    │               if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537 else -1 * ((-75 * s.feed.seed + -74) % 65537)
+    │   [eqc] False propositions
+    │     [prop] (if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537
+    │             else -1 * ((-75 * s.feed.seed + -74) % 65537)) =
+    │             5 ∨
+    │           (if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537 else -1 * ((-75 * s.feed.seed + -74) % 65537)) =
+    │             -5
+    │     [prop] s.paused = true
+    │     [prop] (if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537
+    │           else -1 * ((-75 * s.feed.seed + -74) % 65537)) =
+    │           -5
+    │     [prop] (if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537
+    │           else -1 * ((-75 * s.feed.seed + -74) % 65537)) =
+    │           5
+    │     [prop] (if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537
+    │             else -1 * ((-75 * s.feed.seed + -74) % 65537)) +
+    │             1 ≤
+    │           0
+    │     [prop] -1 * s.feed.offset + 40 ≤ 0
+    │     [prop] s.feed.seed + -872 ≤ 0
+    │   [eqc] Equivalence classes
+    │     [eqc] {false, s.paused, s.rally}
+    │     [eqc] {0,
+    │         -75 * s.feed.seed + 65537 * ((75 * s.feed.seed + 74) / 65537) + (75 * s.feed.seed + 74) % 65537 + -74,
+    │         (-1 *
+    │               if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537
+    │               else -1 * ((-75 * s.feed.seed + -74) % 65537)) +
+    │             5 *
+    │               ((if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537
+    │                 else -1 * ((-75 * s.feed.seed + -74) % 65537)) /
+    │                 5) +
+    │           (if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537 else -1 * ((-75 * s.feed.seed + -74) % 65537)) %
+    │             5,
+    │         (if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537 else -1 * ((-75 * s.feed.seed + -74) % 65537)) /
+    │           5}
+    │     [eqc] {(if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537
+    │           else -1 * ((-75 * s.feed.seed + -74) % 65537)) ≤
+    │           0,
+    │         (if
+    │               (-1 *
+    │                   if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537
+    │                   else -1 * ((-75 * s.feed.seed + -74) % 65537)) ≤
+    │                 0 then
+    │             (if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537
+    │               else -1 * ((-75 * s.feed.seed + -74) % 65537)) %
+    │               5
+    │           else
+    │             -1 *
+    │               ((-1 *
+    │                   if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537
+    │                   else -1 * ((-75 * s.feed.seed + -74) % 65537)) %
+    │                 5)) ≤
+    │           0}
+    │     [eqc] {(if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537
+    │           else -1 * ((-75 * s.feed.seed + -74) % 65537)) %
+    │           5,
+    │         (75 * s.feed.seed + 74) % 65537}
+    │       [eqc] {if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537 else -1 * ((-75 * s.feed.seed + -74) % 65537),
+    │           if
+    │               (-1 *
+    │                   if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537
+    │                   else -1 * ((-75 * s.feed.seed + -74) % 65537)) ≤
+    │                 0 then
+    │             (if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537
+    │               else -1 * ((-75 * s.feed.seed + -74) % 65537)) %
+    │               5
+    │           else
+    │             -1 *
+    │               ((-1 *
+    │                   if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537
+    │                   else -1 * ((-75 * s.feed.seed + -74) % 65537)) %
+    │                 5)}
+    │     [eqc] {(if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537
+    │           else -1 * ((-75 * s.feed.seed + -74) % 65537)) +
+    │           -4,
+    │         (if
+    │               (-1 *
+    │                   if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537
+    │                   else -1 * ((-75 * s.feed.seed + -74) % 65537)) ≤
+    │                 0 then
+    │             (if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537
+    │               else -1 * ((-75 * s.feed.seed + -74) % 65537)) %
+    │               5
+    │           else
+    │             -1 *
+    │               ((-1 *
+    │                   if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537
+    │                   else -1 * ((-75 * s.feed.seed + -74) % 65537)) %
+    │                 5)) +
+    │           -4,
+    │         (if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537 else -1 * ((-75 * s.feed.seed + -74) % 65537)) %
+    │             5 +
+    │           -4}
+    │     [eqc] {(-1 *
+    │             if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537
+    │             else -1 * ((-75 * s.feed.seed + -74) % 65537)) +
+    │           -4,
+    │         (-1 *
+    │             if
+    │                 (-1 *
+    │                     if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537
+    │                     else -1 * ((-75 * s.feed.seed + -74) % 65537)) ≤
+    │                   0 then
+    │               (if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537
+    │                 else -1 * ((-75 * s.feed.seed + -74) % 65537)) %
+    │                 5
+    │             else
+    │               -1 *
+    │                 ((-1 *
+    │                     if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537
+    │                     else -1 * ((-75 * s.feed.seed + -74) % 65537)) %
+    │                   5)) +
+    │           -4}
+    │     [eqc] {-1 *
+    │           if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537 else -1 * ((-75 * s.feed.seed + -74) % 65537),
+    │         -1 *
+    │           if
+    │               (-1 *
+    │                   if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537
+    │                   else -1 * ((-75 * s.feed.seed + -74) % 65537)) ≤
+    │                 0 then
+    │             (if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537
+    │               else -1 * ((-75 * s.feed.seed + -74) % 65537)) %
+    │               5
+    │           else
+    │             -1 *
+    │               ((-1 *
+    │                   if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537
+    │                   else -1 * ((-75 * s.feed.seed + -74) % 65537)) %
+    │                 5),
+    │         -1 *
+    │           ((if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537
+    │             else -1 * ((-75 * s.feed.seed + -74) % 65537)) %
+    │             5),
+    │         -1 * ((75 * s.feed.seed + 74) % 65537)}
+    │     [eqc] others
+    │       [eqc] {if s.paused = true then s.feed.offset
+    │           else if -1 * s.feed.offset + 40 ≤ 0 then s.feed.offset else s.feed.offset + 1,
+    │           if -1 * s.feed.offset + 40 ≤ 0 then s.feed.offset else s.feed.offset + 1,
+    │           s.feed.offset + 1}
+    │   [cases] Case analyses
+    │     [cases] [1/2]: -1 * s.feed.offset + -40 ≤ 0 ∧
+    │           s.feed.offset + -40 ≤ 0 ∧ -1 * s.feed.seed ≤ 0 ∧ s.feed.seed + -65536 ≤ 0
+    │       [cases] source: Initial goal
+    │     [cases] [1/2]: (if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537
+    │             else -1 * ((-75 * s.feed.seed + -74) % 65537)) +
+    │             -4 ≤
+    │           0
+    │       [cases] source: E-matching `JS.emod_eq_self_of_lt`
+    │     [cases] [2/2]: (if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537
+    │             else -1 * ((-75 * s.feed.seed + -74) % 65537)) =
+    │             5 ∨
+    │           (if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537 else -1 * ((-75 * s.feed.seed + -74) % 65537)) =
+    │             -5
+    │       [cases] source: Initial goal
+    │     [cases] [2/2]: s.feed.seed + -872 ≤ 0
+    │       [cases] source: E-matching `JS.emod_eq_self_of_lt`
+    │   [ematch] E-matching patterns
+    │     [thm] JS.emod_eq_self_of_lt: [@HMod.hMod `[Int] `[Int] `[Int] `[instHMod] #3 #2]
+    │     [thm] JS.emod_lt_of_pos: [@HMod.hMod `[Int] `[Int] `[Int] `[instHMod] #2 #1]
+    │     [thm] JS.emod_nonneg_of_ne: [@HMod.hMod `[Int] `[Int] `[Int] `[instHMod] #2 #1]
+    │   [cutsat] Assignment satisfying linear constraints
+    │     [assign] s.feed.offset := -40
+    │     [assign] s.feed.seed := 45438
+    │   [ring] Ring `Int`
+    │     [basis] Basis
+    │       [_] 75 * s.feed.seed +
+    │                     -1 *
+    │                       ((if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537
+    │                         else -1 * ((-75 * s.feed.seed + -74) % 65537)) %
+    │                         5) +
+    │                   -5 *
+    │                     ((if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537
+    │                       else -1 * ((-75 * s.feed.seed + -74) % 65537)) /
+    │                       5) +
+    │                 -65537 * ((75 * s.feed.seed + 74) / 65537) +
+    │               74 =
+    │             0
+    │       [_] (if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537 else -1 * ((-75 * s.feed.seed + -74) % 65537)) +
+    │               -1 * ((75 * s.feed.seed + 74) % 65537) =
+    │             0
+    │       [_] (if
+    │                   (-1 *
+    │                       if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537
+    │                       else -1 * ((-75 * s.feed.seed + -74) % 65537)) ≤
+    │                     0 then
+    │                 (if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537
+    │                   else -1 * ((-75 * s.feed.seed + -74) % 65537)) %
+    │                   5
+    │               else
+    │                 -1 *
+    │                   ((-1 *
+    │                       if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537
+    │                       else -1 * ((-75 * s.feed.seed + -74) % 65537)) %
+    │                     5)) +
+    │               -1 *
+    │                 ((if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537
+    │                   else -1 * ((-75 * s.feed.seed + -74) % 65537)) %
+    │                   5) =
+    │             0
+    │       [_] (s.feed.offset +
+    │                 -1 *
+    │                   if s.paused = true then s.feed.offset
+    │                   else if -1 * s.feed.offset + 40 ≤ 0 then s.feed.offset else s.feed.offset + 1) +
+    │               1 =
+    │             0
+    │       [_] (75 * s.feed.seed + 74) % 65537 +
+    │                 -1 *
+    │                   ((if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537
+    │                     else -1 * ((-75 * s.feed.seed + -74) % 65537)) %
+    │                     5) +
+    │               -5 *
+    │                 ((if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537
+    │                   else -1 * ((-75 * s.feed.seed + -74) % 65537)) /
+    │                   5) =
+    │             0
+    │       [_] (if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537 else -1 * ((-75 * s.feed.seed + -74) % 65537)) /
+    │               5 =
+    │             0
+    │     [diseqs] Disequalities
+    │       [_] ¬(if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537
+    │                   else -1 * ((-75 * s.feed.seed + -74) % 65537)) %
+    │                   5 +
+    │                 5 =
+    │               0
+    │       [_] ¬(if -1 * s.feed.seed ≤ 0 then (75 * s.feed.seed + 74) % 65537
+    │                   else -1 * ((-75 * s.feed.seed + -74) % 65537)) %
+    │                   5 +
+    │                 -5 =
+    │               0
+    │ [grind] Diagnostics
+    │   [ematch] E-matching Diagnostics
+    │     [thm] Theorem Instance Count
+    │       [thm] JS.emod_eq_self_of_lt ↦ 2
+    │       [thm] JS.emod_lt_of_pos ↦ 2
+    │       [thm] JS.emod_nonneg_of_ne ↦ 2
+
+✗ NOT VERIFIED  149/150 obligations proved, 1 failed; components: 6/6 verified  (30.7s)

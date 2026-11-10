@@ -1,0 +1,16 @@
+hole in addCard: Board   scope: b, b.todo, b.doing, b.done, b.nextId, b.wipLimit, title, points
+  candidate passes 400 random tests: b
+  1 candidates tested in 0.0s
+  ✔ proved by Lean: b
+hole in deleteCard: Board   scope: b, b.todo, b.doing, b.done, b.nextId, b.wipLimit, id
+  candidate passes 400 random tests: b
+  1 candidates tested in 0.0s
+  ✔ proved by Lean: b
+hole in moveCard: Board   scope: b, b.todo, b.doing, b.done, b.nextId, b.wipLimit, id, to
+  candidate passes 400 random tests: b
+  1 candidates tested in 0.0s
+  ✔ proved by Lean: b
+hole in setWipLimit: Board   scope: b, b.todo, b.doing, b.done, b.nextId, b.wipLimit, limit
+  candidate passes 400 random tests: b
+  1 candidates tested in 0.0s
+  ✔ proved by Lean: b

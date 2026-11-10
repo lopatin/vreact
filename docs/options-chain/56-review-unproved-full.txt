@@ -1,0 +1,274 @@
+translated 8 module(s), 211 proof obligation(s) → .vreact/ ; checking with Lean…
+
+Components
+  VERIFIED           PriceCell              src/StrikeRow.tsx:12
+  VERIFIED           StrikeRow              src/StrikeRow.tsx:41
+  VERIFIED           TermRow                src/TermRow.tsx:19
+  VERIFIED           OrderTicket            src/OrderTicket.tsx:19
+  VERIFIED           OptionsChain           src/OptionsChain.tsx:34
+  VERIFIED           App                    src/App.tsx:172
+Functions
+  VERIFIED           sameMembers
+  VERIFIED           sameMembersExcept
+  VERIFIED           toggleIn
+  VERIFIED           sameEntries
+  VERIFIED           agreeExcept
+  VERIFIED           sameList
+  VERIFIED           byId
+  VERIFIED           validChain
+  VERIFIED           legOf
+  VERIFIED           theoOf
+  VERIFIED           quotePrice
+  VERIFIED           withinSpread
+  VERIFIED           isMid
+  VERIFIED           midPrice
+  VERIFIED           inTheMoney
+  VERIFIED           dist
+  VERIFIED           nearest
+  VERIFIED           atmIndex
+  VERIFIED           inWindow
+  VERIFIED           strikeWindow
+  VERIFIED           shownRows
+  VERIFIED           filterLabel
+  INCOMPLETE         levelsOf
+      ↳ an obligation of it failed
+  VERIFIED           edge
+  VERIFIED           heatOf
+  VERIFIED           legFor
+  VERIFIED           labelOf
+  VERIFIED           marketOf
+  VERIFIED           validQty
+  VERIFIED           validOrder
+  VERIFIED           openQty
+  VERIFIED           fmtPrice
+  VERIFIED           contractText
+  VERIFIED           quoteText
+  VERIFIED           crosses
+  VERIFIED           fmtVol
+  VERIFIED           wellFormed
+  VERIFIED           sameView
+  VERIFIED           sameOrder
+  VERIFIED           keepsOrders
+  VERIFIED           keepsOrdersExcept
+  VERIFIED           sameOrders
+  VERIFIED           orderFor
+  VERIFIED           toggle
+  VERIFIED           setCollapsed
+  VERIFIED           setFilter
+  VERIFIED           watchStrike
+  VERIFIED           holdAt
+  VERIFIED           follow
+  VERIFIED           jump
+  VERIFIED           setHeat
+  VERIFIED           accepts
+  VERIFIED           withOrder
+  VERIFIED           place
+  VERIFIED           repriced
+  VERIFIED           amend
+  VERIFIED           cancel
+  VERIFIED           validAction
+  INCOMPLETE         chainReducer
+      ↳ an obligation of it failed
+  VERIFIED           shiftQuote
+  VERIFIED           shifted
+  VERIFIED           moveFutures
+  VERIFIED           nextSeed
+  VERIFIED           validFeed
+  VERIFIED           stepFeed
+  VERIFIED           sameFeed
+  VERIFIED           simReducer
+App certificates (VReact.run_allInv instantiated)
+  VERIFIED           VTS.App.App.certificate  axioms: propext, Classical.choice, Quot.sound
+Obligations by file
+  ✓ src/collections.ts                       6/6
+  ✗ src/model.ts                             26/27
+  ✗ src/reducer.ts                           51/52
+  ✓ src/StrikeRow.tsx                        24/24
+  ✓ src/TermRow.tsx                          12/12
+  ✓ src/OrderTicket.tsx                      12/12
+  ✓ src/OptionsChain.tsx                     46/46
+  ✓ src/App.tsx                              32/32
+
+Failed obligations
+✗ src/model.ts:184:11  [postcondition] postcondition of levelsOf: filterLabel(f) === (r === null ? "All" : `${r}`)
+    │ `grind` failed
+    │ case grind
+    │ r : Int
+    │ hcontract : 3 ≥ 1
+    │ heq : some 3 = some r
+    │ h : ¬{ units := [51] } = JS.str r
+    │ ⊢ False
+    │ [grind] Goal diagnostics
+    │   [facts] Asserted facts
+    │     [prop] some 3 = some r
+    │     [prop] ¬{ units := [51] } = JS.str r
+    │   [eqc] False propositions
+    │     [prop] { units := [51] } = JS.str r
+    │   [eqc] Equivalence classes
+    │     [eqc] {r, 3}
+    │     [eqc] {some r, some 3}
+    │   [cutsat] Assignment satisfying linear constraints
+    │     [assign] r := 3
+✗ src/reducer.ts:330:11  [postcondition] postcondition of chainReducer: [...r.orders].every(([k]) => u.orders.has(k) || (u.nextId <= k && k < r.nextId))
+    │ (deterministic) timeout: the automation did not finish within this obligation's budget of 1000000 heartbeats (set "heartbeats" in vreact.json to change it)
+    │ u : ChainUi
+    │ a : Action
+    │ h_pre : validAction a = true
+    │ ⊢ ∀ (tup : Int × model.Order),
+    │     tup ∈ (chainReducer u a h_pre).orders.entries →
+    │       tup.fst ∈ u.orders.keys ∨ u.nextId ≤ tup.fst ∧ tup.fst < (chainReducer u a h_pre).nextId
+    │ The goal splits into 11 cases. A case's name lists the branches that lead to it, outermost first: `isTrue`/`isFalse` are the two branches of an `if` (a `switch` on a number or a string is a chain of `if`s, one per body), `h_k` is the k-th alternative of a `match` (a `switch` on a union or an enum has one per `case` label, in the order written, then one for the rest: `default`, wherever it is written); conditions in the translation (such as the sign test of `%`) split the same way. Each case alone, smallest first, with up to 100000 heartbeats: 10 proved, 1 did not finish. The first that did not finish, case h_9:
+    │ case h_9
+    │ u : ChainUi
+    │ tup✝ : Int × model.Order
+    │ hcontract✝¹¹ : u.orders.keys.Nodup
+    │ hcontract✝¹⁰ : (List.map Prod.fst u.orders.entries).Nodup
+    │ ticket✝ : model.Ticket
+    │ qty✝ price✝ : Int
+    │ h_pre✝¹ : validAction (Action.place ticket✝ qty✝ price✝) = true
+    │ a✝ : tup✝ ∈ (place u ticket✝ qty✝ price✝ ⋯).orders.entries
+    │ hcontract✝⁹ : (place u ticket✝ qty✝ price✝ ⋯).nextId ≥ u.nextId
+    │ hcontract✝⁸ : (List.map Prod.fst (place u ticket✝ qty✝ price✝ ⋯).orders.entries).Nodup
+    │ hcontract✝⁷ :
+    │   ((1 ≤ u.heat ∧ u.heat ≤ 5) ∧
+    │         ∀ (x : Int × model.Order),
+    │           x ∈ u.orders.entries → ((1 ≤ x.snd.qty ∧ x.snd.qty ≤ 500) ∧ 0 < x.snd.price) ∧ x.fst < u.nextId) ∧
+    │       model.openQty u.orders.values ≤ 1000 →
+    │     ((1 ≤ (place u ticket✝ qty✝ price✝ ⋯).heat ∧ (place u ticket✝ qty✝ price✝ ⋯).heat ≤ 5) ∧
+    │         ∀ (x : Int × model.Order),
+    │           x ∈ (place u ticket✝ qty✝ price✝ ⋯).orders.entries →
+    │             ((1 ≤ x.snd.qty ∧ x.snd.qty ≤ 500) ∧ 0 < x.snd.price) ∧ x.fst < (place u ticket✝ qty✝ price✝ ⋯).nextId) ∧
+    │       model.openQty (place u ticket✝ qty✝ price✝ ⋯).orders.values ≤ 1000
+    │ h_pre✝ h_pre : 1 ≤ qty✝ ∧ qty✝ ≤ 500
+    │ hcontract✝⁶ :
+    │   ((1 ≤ u.heat ∧ u.heat ≤ 5) ∧
+    │         ∀ (x : Int × model.Order),
+    │           x ∈ u.orders.entries → ((1 ≤ x.snd.qty ∧ x.snd.qty ≤ 500) ∧ 0 < x.snd.price) ∧ x.fst < u.nextId) ∧
+    │       model.openQty u.orders.values ≤ 1000 →
+    │     ((1 ≤ (place u ticket✝ qty✝ price✝ ⋯).heat ∧ (place u ticket✝ qty✝ price✝ ⋯).heat ≤ 5) ∧
+    │         ∀ (x : Int × model.Order),
+    │           x ∈ (place u ticket✝ qty✝ price✝ ⋯).orders.entries →
+    │             ((1 ≤ x.snd.qty ∧ x.snd.qty ≤ 500) ∧ 0 < x.snd.price) ∧ x.fst < (place u ticket✝ qty✝ price✝ ⋯).nextId) ∧
+    │       model.openQty (place u ticket✝ qty✝ price✝ ⋯).orders.values ≤ 1000
+    │ hcontract✝⁵ :
+    │   ((1 ≤ qty✝ ∧ qty✝ ≤ 500) ∧ 0 < price✝) ∧ model.openQty u.orders.values + qty✝ ≤ 1000 →
+    │     (match h₁ : (place u ticket✝ qty✝ price✝ ⋯).orders.get u.nextId with
+    │       | some o_1 =>
+    │         if o_1.expiry = ticket✝.expiry then
+    │           if o_1.leg = ticket✝.leg then
+    │             if o_1.strike = ticket✝.strike then
+    │               if o_1.buy = JS.eq ticket✝.side model.Side.ask then
+    │                 if o_1.qty = qty✝ then JS.eq o_1.price price✝ else false
+    │               else false
+    │             else false
+    │           else false
+    │         else false
+    │       | none => false) =
+    │       true
+    │ hcontract✝⁴ :
+    │   (((1 ≤ u.heat ∧ u.heat ≤ 5) ∧
+    │           ∀ (x : Int × model.Order),
+    │             x ∈ u.orders.entries → ((1 ≤ x.snd.qty ∧ x.snd.qty ≤ 500) ∧ 0 < x.snd.price) ∧ x.fst < u.nextId) ∧
+    │         model.openQty u.orders.values ≤ 1000) ∧
+    │       ((1 ≤ qty✝ ∧ qty✝ ≤ 500) ∧ 0 < price✝) ∧ model.openQty u.orders.values + qty✝ ≤ 1000 →
+    │     JS.indexOf (place u ticket✝ qty✝ price✝ ⋯).orders.keys u.nextId = u.orders.size ∧
+    │       ∀ (x : Int × model.Order),
+    │         x ∈ u.orders.entries →
+    │           (match h₁ : (place u ticket✝ qty✝ price✝ ⋯).orders.get x.fst with
+    │             | some p_1 =>
+    │               if p_1.expiry = x.snd.expiry then
+    │                 if p_1.leg = x.snd.leg then
+    │                   if p_1.strike = x.snd.strike then
+    │                     if p_1.buy = x.snd.buy then if p_1.qty = x.snd.qty then JS.eq p_1.price x.snd.price else false
+    │                     else false
+    │                   else false
+    │                 else false
+    │               else false
+    │             | none => false) =
+    │             true
+    │ hcontract✝³ :
+    │   (place u ticket✝ qty✝ price✝ ⋯).nextId =
+    │     if ((1 ≤ qty✝ ∧ qty✝ ≤ 500) ∧ 0 < price✝) ∧ model.openQty u.orders.values + qty✝ ≤ 1000 then u.nextId + 1
+    │     else u.nextId
+    │ hcontract✝² :
+    │   ((1 ≤ qty✝ ∧ qty✝ ≤ 500) ∧ 0 < price✝) ∧ model.openQty u.orders.values + qty✝ ≤ 1000 →
+    │     (∀ (x : Int × model.Order),
+    │         x ∈ u.orders.entries →
+    │           x.fst = u.nextId ∨
+    │             (match h₁ : (place u ticket✝ qty✝ price✝ ⋯).orders.get x.fst with
+    │               | some p_1 =>
+    │                 if p_1.expiry = x.snd.expiry then
+    │                   if p_1.leg = x.snd.leg then
+    │                     if p_1.strike = x.snd.strike then
+    │                       if p_1.buy = x.snd.buy then if p_1.qty = x.snd.qty then JS.eq p_1.price x.snd.price else false
+    │                       else false
+    │                     else false
+    │                   else false
+    │                 else false
+    │               | none => false) =
+    │               true) ∧
+    │       ∀ (x : Int × model.Order),
+    │         x ∈ (place u ticket✝ qty✝ price✝ ⋯).orders.entries →
+    │           x.fst = u.nextId ∨
+    │             (match h₁ : u.orders.get x.fst with
+    │               | some p_1 =>
+    │                 if p_1.expiry = x.snd.expiry then
+    │                   if p_1.leg = x.snd.leg then
+    │                     if p_1.strike = x.snd.strike then
+    │                       if p_1.buy = x.snd.buy then if p_1.qty = x.snd.qty then JS.eq p_1.price x.snd.price else false
+    │                       else false
+    │                     else false
+    │                   else false
+    │                 else false
+    │               | none => false) =
+    │               true
+    │ hcontract✝¹ :
+    │   ¬(((1 ≤ qty✝ ∧ qty✝ ≤ 500) ∧ 0 < price✝) ∧ model.openQty u.orders.values + qty✝ ≤ 1000) →
+    │     ((place u ticket✝ qty✝ price✝ ⋯).nextId = u.nextId ∧
+    │         (if h : ↑(place u ticket✝ qty✝ price✝ ⋯).orders.keys.length = ↑u.orders.keys.length then
+    │             (JS.rangeFrom 0 ↑(place u ticket✝ qty✝ price✝ ⋯).orders.keys.length).attach.all fun p₃ =>
+    │               JS.eq (place u ticket✝ qty✝ price✝ ⋯).orders.keys[p₃.val.toNat] u.orders.keys[p₃.val.toNat]
+    │           else false) =
+    │           true) ∧
+    │       ∀ (x : Int × model.Order),
+    │         x ∈ u.orders.entries →
+    │           (match h₁ : (place u ticket✝ qty✝ price✝ ⋯).orders.get x.fst with
+    │             | some p_1 =>
+    │               if p_1.expiry = x.snd.expiry then
+    │                 if p_1.leg = x.snd.leg then
+    │                   if p_1.strike = x.snd.strike then
+    │                     if p_1.buy = x.snd.buy then if p_1.qty = x.snd.qty then JS.eq p_1.price x.snd.price else false
+    │                     else false
+    │                   else false
+    │                 else false
+    │               else false
+    │             | none => false) =
+    │             true
+    │ hcontract✝ :
+    │   (((1 ≤ u.heat ∧ u.heat ≤ 5) ∧
+    │           ∀ (x : Int × model.Order),
+    │             x ∈ u.orders.entries → ((1 ≤ x.snd.qty ∧ x.snd.qty ≤ 500) ∧ 0 < x.snd.price) ∧ x.fst < u.nextId) ∧
+    │         model.openQty u.orders.values ≤ 1000) ∧
+    │       ¬(((1 ≤ qty✝ ∧ qty✝ ≤ 500) ∧ 0 < price✝) ∧ model.openQty u.orders.values + qty✝ ≤ 1000) →
+    │     ¬(((1 ≤ u.heat ∧ u.heat ≤ 5) ∧
+    │           (((1 ≤ qty✝ ∧ qty✝ ≤ 500) ∧ 0 < price✝) ∧ u.nextId < u.nextId + 1) ∧
+    │             ∀ (a : Int × model.Order),
+    │               a ∈ u.orders.entries ∧ ¬a.fst = u.nextId →
+    │                 ((1 ≤ a.snd.qty ∧ a.snd.qty ≤ 500) ∧ 0 < a.snd.price) ∧ a.fst < u.nextId + 1) ∧
+    │         model.openQty
+    │             (u.orders.set u.nextId
+    │                 { expiry := ticket✝.expiry, leg := ticket✝.leg, strike := ticket✝.strike,
+    │                   buy := JS.eq ticket✝.side model.Side.ask, qty := qty✝, price := price✝ }).values ≤
+    │           1000)
+    │ hpart✝⁸ : (place u ticket✝ qty✝ price✝ ⋯).filter = u.filter
+    │ hpart✝⁷ : (place u ticket✝ qty✝ price✝ ⋯).focus = u.focus
+    │ hpart✝⁶ : (place u ticket✝ qty✝ price✝ ⋯).heat = u.heat
+    │ hpart✝⁵ : ∀ (x : Int), x ∈ u.collapsed.elems → x ∈ (place u ticket✝ qty✝ price✝ ⋯).collapsed.elems
+    │ hpart✝⁴ : ∀ (x : Int), x ∈ (place u ticket✝ qty✝ price✝ ⋯).collapsed.elems → x ∈ u.collapsed.elems
+    │ hpart✝³ : ∀ (x : Int), x ∈ u.watch.elems → x ∈ (place u ticket✝ qty✝ price✝ ⋯).watch.elems
+    │ hpart✝² : ∀ (x : Int), x ∈ (place u ticket✝ qty✝ price✝ ⋯).watch.elems → x ∈ u.watch.elems
+    │ hpart✝¹ : ∀ (x : Int × Int), x ∈ u.held.entries → (place u ticket✝ qty✝ price✝ ⋯).held.get x.fst = some x.snd
+    │ hpart✝ : ∀ (x : Int × Int), x ∈ (place u ticket✝ qty✝ price✝ ⋯).held.entries → u.held.get x.fst = some x.snd
+    │ ⊢ tup✝.fst ∈ u.orders.keys ∨ u.nextId ≤ tup✝.fst ∧ tup✝.fst < (place u ticket✝ qty✝ price✝ ⋯).nextId
+
+✗ NOT VERIFIED  209/211 obligations proved, 2 failed; components: 6/6 verified  (116.4s)

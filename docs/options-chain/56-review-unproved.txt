@@ -1,0 +1,121 @@
+translated 8 module(s), 211 proof obligation(s) → .vreact/ ; checking with Lean…
+
+Components
+  VERIFIED           PriceCell              src/StrikeRow.tsx:12
+  VERIFIED           StrikeRow              src/StrikeRow.tsx:41
+  VERIFIED           TermRow                src/TermRow.tsx:19
+  VERIFIED           OrderTicket            src/OrderTicket.tsx:19
+  VERIFIED           OptionsChain           src/OptionsChain.tsx:34
+  VERIFIED           App                    src/App.tsx:172
+Functions
+  VERIFIED           sameMembers
+  VERIFIED           sameMembersExcept
+  VERIFIED           toggleIn
+  VERIFIED           sameEntries
+  VERIFIED           agreeExcept
+  VERIFIED           sameList
+  VERIFIED           byId
+  VERIFIED           validChain
+  VERIFIED           legOf
+  VERIFIED           theoOf
+  VERIFIED           quotePrice
+  VERIFIED           withinSpread
+  VERIFIED           isMid
+  VERIFIED           midPrice
+  VERIFIED           inTheMoney
+  VERIFIED           dist
+  VERIFIED           nearest
+  VERIFIED           atmIndex
+  VERIFIED           inWindow
+  VERIFIED           strikeWindow
+  VERIFIED           shownRows
+  VERIFIED           filterLabel
+  INCOMPLETE         levelsOf
+      ↳ an obligation of it failed
+  VERIFIED           edge
+  VERIFIED           heatOf
+  VERIFIED           legFor
+  VERIFIED           labelOf
+  VERIFIED           marketOf
+  VERIFIED           validQty
+  VERIFIED           validOrder
+  VERIFIED           openQty
+  VERIFIED           fmtPrice
+  VERIFIED           contractText
+  VERIFIED           quoteText
+  VERIFIED           crosses
+  VERIFIED           fmtVol
+  VERIFIED           wellFormed
+  VERIFIED           sameView
+  VERIFIED           sameOrder
+  VERIFIED           keepsOrders
+  VERIFIED           keepsOrdersExcept
+  VERIFIED           sameOrders
+  VERIFIED           orderFor
+  VERIFIED           toggle
+  VERIFIED           setCollapsed
+  VERIFIED           setFilter
+  VERIFIED           watchStrike
+  VERIFIED           holdAt
+  VERIFIED           follow
+  VERIFIED           jump
+  VERIFIED           setHeat
+  VERIFIED           accepts
+  VERIFIED           withOrder
+  VERIFIED           place
+  VERIFIED           repriced
+  VERIFIED           amend
+  VERIFIED           cancel
+  VERIFIED           validAction
+  INCOMPLETE         chainReducer
+      ↳ an obligation of it failed
+  VERIFIED           shiftQuote
+  VERIFIED           shifted
+  VERIFIED           moveFutures
+  VERIFIED           nextSeed
+  VERIFIED           validFeed
+  VERIFIED           stepFeed
+  VERIFIED           sameFeed
+  VERIFIED           simReducer
+App certificates (VReact.run_allInv instantiated)
+  VERIFIED           VTS.App.App.certificate  axioms: propext, Classical.choice, Quot.sound
+Obligations by file
+  ✓ src/collections.ts                       6/6
+  ✗ src/model.ts                             26/27
+  ✗ src/reducer.ts                           51/52
+  ✓ src/StrikeRow.tsx                        24/24
+  ✓ src/TermRow.tsx                          12/12
+  ✓ src/OrderTicket.tsx                      12/12
+  ✓ src/OptionsChain.tsx                     46/46
+  ✓ src/App.tsx                              32/32
+
+Failed obligations
+✗ src/model.ts:184:11  [postcondition] postcondition of levelsOf: filterLabel(f) === (r === null ? "All" : `${r}`)
+    │ `grind` failed
+    │ case grind
+    │ r : Int
+    │ hcontract : 3 ≥ 1
+    │ heq : some 3 = some r
+    │ h : ¬{ units := [51] } = JS.str r
+    │ ⊢ False
+✗ src/reducer.ts:330:11  [postcondition] postcondition of chainReducer: [...r.orders].every(([k]) => u.orders.has(k) || (u.nextId <= k && k < r.nextId))
+    │ (deterministic) timeout: the automation did not finish within this obligation's budget of 1000000 heartbeats (set "heartbeats" in vreact.json to change it)
+    │   … (the goal as stated: --full shows it)
+    │ The goal splits into 11 cases. A case's name lists the branches that lead to it, outermost first: `isTrue`/`isFalse` are the two branches of an `if` (a `switch` on a number or a string is a chain of `if`s, one per body), `h_k` is the k-th alternative of a `match` (a `switch` on a union or an enum has one per `case` label, in the order written, then one for the rest: `default`, wherever it is written); conditions in the translation (such as the sign test of `%`) split the same way. Each case alone, smallest first, with up to 100000 heartbeats: 10 proved, 1 did not finish. The first that did not finish, case h_9:
+    │ case h_9
+    │   … (10 earlier hypotheses: u, tup✝, hcontract✝¹¹, hcontract✝¹⁰, ticket✝, qty✝, price✝, h_pre✝¹, …: --full shows them)
+    │ hcontract✝⁸ : (List.map Prod.fst (place u ticket✝ qty✝ price✝ ⋯).orders.entries).Nodup
+    │ hcontract✝⁷, hcontract✝⁶, hcontract✝⁵, hcontract✝⁴, hcontract✝³, hcontract✝², hcontract✝¹, hcontract✝ : …  (8 contract instances, 130 lines: --full shows them)
+    │ h_pre✝ h_pre : 1 ≤ qty✝ ∧ qty✝ ≤ 500
+    │ hpart✝⁸ : (place u ticket✝ qty✝ price✝ ⋯).filter = u.filter
+    │ hpart✝⁷ : (place u ticket✝ qty✝ price✝ ⋯).focus = u.focus
+    │ hpart✝⁶ : (place u ticket✝ qty✝ price✝ ⋯).heat = u.heat
+    │ hpart✝⁵ : ∀ (x : Int), x ∈ u.collapsed.elems → x ∈ (place u ticket✝ qty✝ price✝ ⋯).collapsed.elems
+    │ hpart✝⁴ : ∀ (x : Int), x ∈ (place u ticket✝ qty✝ price✝ ⋯).collapsed.elems → x ∈ u.collapsed.elems
+    │ hpart✝³ : ∀ (x : Int), x ∈ u.watch.elems → x ∈ (place u ticket✝ qty✝ price✝ ⋯).watch.elems
+    │ hpart✝² : ∀ (x : Int), x ∈ (place u ticket✝ qty✝ price✝ ⋯).watch.elems → x ∈ u.watch.elems
+    │ hpart✝¹ : ∀ (x : Int × Int), x ∈ u.held.entries → (place u ticket✝ qty✝ price✝ ⋯).held.get x.fst = some x.snd
+    │ hpart✝ : ∀ (x : Int × Int), x ∈ (place u ticket✝ qty✝ price✝ ⋯).held.entries → u.held.get x.fst = some x.snd
+    │ ⊢ tup✝.fst ∈ u.orders.keys ∨ u.nextId ≤ tup✝.fst ∧ tup✝.fst < (place u ticket✝ qty✝ price✝ ⋯).nextId
+
+✗ NOT VERIFIED  209/211 obligations proved, 2 failed; components: 6/6 verified  (112.5s)

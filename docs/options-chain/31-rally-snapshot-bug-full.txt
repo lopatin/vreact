@@ -1,0 +1,369 @@
+translated 7 module(s), 145 proof obligation(s) → .vreact/ ; checking with Lean…
+
+Components
+  VERIFIED           PriceCell              src/StrikeRow.tsx:12
+  VERIFIED           StrikeRow              src/StrikeRow.tsx:39
+  VERIFIED           TermRow                src/TermRow.tsx:19
+  VERIFIED           OrderTicket            src/OrderTicket.tsx:19
+  VERIFIED           OptionsChain           src/OptionsChain.tsx:32
+  INCOMPLETE         App                    src/App.tsx:115
+      ↳ an obligation of it failed
+Functions
+  VERIFIED           validChain
+  VERIFIED           legOf
+  VERIFIED           theoOf
+  VERIFIED           quotePrice
+  VERIFIED           withinSpread
+  VERIFIED           isMid
+  VERIFIED           midPrice
+  VERIFIED           inTheMoney
+  VERIFIED           dist
+  VERIFIED           nearest
+  VERIFIED           atmIndex
+  VERIFIED           inWindow
+  VERIFIED           strikeWindow
+  VERIFIED           filterLabel
+  VERIFIED           levelsOf
+  VERIFIED           edge
+  VERIFIED           heatOf
+  VERIFIED           legFor
+  VERIFIED           labelOf
+  VERIFIED           marketOf
+  VERIFIED           validQty
+  VERIFIED           validOrder
+  VERIFIED           openQty
+  VERIFIED           fmtPrice
+  VERIFIED           contractText
+  VERIFIED           quoteText
+  VERIFIED           crosses
+  VERIFIED           fmtVol
+  VERIFIED           wellFormed
+  VERIFIED           heldPrice
+  VERIFIED           sameView
+  VERIFIED           keepsHolds
+  VERIFIED           keepsAllHolds
+  VERIFIED           keepsOrders
+  VERIFIED           orderFor
+  VERIFIED           toggle
+  VERIFIED           setCollapsed
+  VERIFIED           setFilter
+  VERIFIED           holdAt
+  VERIFIED           follow
+  VERIFIED           jump
+  VERIFIED           setHeat
+  VERIFIED           accepts
+  VERIFIED           place
+  VERIFIED           cancel
+  VERIFIED           validAction
+  VERIFIED           chainReducer
+  VERIFIED           shiftQuote
+  VERIFIED           moveFutures
+  VERIFIED           nextSeed
+  VERIFIED           validFeed
+  VERIFIED           stepFeed
+App certificates (VReact.run_allInv instantiated)
+  INCOMPLETE         VTS.App.App.certificate  axioms: propext, sorryAx, Classical.choice, Quot.sound
+      ↳ it uses App, which is not verified: an obligation of it failed
+Obligations by file
+  ✓ src/model.ts                             22/22
+  ✓ src/reducer.ts                           25/25
+  ✓ src/StrikeRow.tsx                        22/22
+  ✓ src/TermRow.tsx                          12/12
+  ✓ src/OrderTicket.tsx                      12/12
+  ✓ src/OptionsChain.tsx                     37/37
+  ✗ src/App.tsx                              14/15
+
+Failed obligations
+✗ src/App.tsx:129:3  [effect-robust] timer callbacks of the effect preserve the invariant of App from any state
+    │ `grind` failed
+    │ case grind.2.1.1.2
+    │ E : Type
+    │ props : Props
+    │ κ : Cb props E
+    │ σ : State
+    │ hpre : True
+    │ feed : Feed := σ.feed
+    │ paused : Bool := σ.paused
+    │ rally : Bool := σ.rally
+    │ offset : Int := feed.offset
+    │ expiries : List model.Expiry := moveFutures EXPIRIES offset
+    │ t : DomEvent → Outcome State E
+    │ e : DomEvent
+    │ hinv : ((-40 ≤ σ.feed.offset ∧ σ.feed.offset ≤ 40) ∧ 0 ≤ σ.feed.seed) ∧ σ.feed.seed < 65537
+    │ h :
+    │   t = fun x =>
+    │     if σ.rally = true then
+    │       if 40 ≤ σ.feed.offset then { }
+    │       else
+    │         {
+    │           updates :=
+    │             [fun τ =>
+    │               { feed := { offset := τ.feed.offset + 1, seed := τ.feed.seed }, paused := τ.paused, rally := τ.rally }] }
+    │     else { }
+    │ s : State
+    │ left : -1 * s.feed.offset + -40 ≤ 0
+    │ left_1 : s.feed.offset + -40 ≤ 0
+    │ left_2 : -1 * s.feed.seed ≤ 0
+    │ right_2 : s.feed.seed + -65536 ≤ 0
+    │ h_4 : -1 * (List.foldl (fun s u => u s) s (t e).updates).feed.offset + 41 ≤ 0
+    │ h_5 : σ.rally = true
+    │ h_6 : ¬-1 * σ.feed.offset + 40 ≤ 0
+    │ ⊢ False
+    │ [grind] Goal diagnostics
+    │   [facts] Asserted facts
+    │     [prop] -1 * σ.feed.offset + -40 ≤ 0 ∧ σ.feed.offset + -40 ≤ 0 ∧ -1 * σ.feed.seed ≤ 0 ∧ σ.feed.seed + -65536 ≤ 0
+    │     [prop] t = fun x =>
+    │           if σ.rally = true then
+    │             if -1 * σ.feed.offset + 40 ≤ 0 then { }
+    │             else
+    │               {
+    │                 updates :=
+    │                   [fun τ =>
+    │                     { feed := { offset := τ.feed.offset + 1, seed := τ.feed.seed }, paused := τ.paused,
+    │                       rally := τ.rally }] }
+    │           else { }
+    │     [prop] -1 * s.feed.offset + -40 ≤ 0
+    │     [prop] s.feed.offset + -40 ≤ 0
+    │     [prop] -1 * s.feed.seed ≤ 0
+    │     [prop] s.feed.seed + -65536 ≤ 0
+    │     [prop] (List.foldl (fun s u => u s) s (t e).updates).feed.offset + 41 ≤ 0 ∨
+    │           -1 * (List.foldl (fun s u => u s) s (t e).updates).feed.offset + 41 ≤ 0 ∨
+    │             (List.foldl (fun s u => u s) s (t e).updates).feed.seed + 1 ≤ 0 ∨
+    │               -1 * (List.foldl (fun s u => u s) s (t e).updates).feed.seed + 65537 ≤ 0
+    │     [prop] t e =
+    │           if σ.rally = true then
+    │             if -1 * σ.feed.offset + 40 ≤ 0 then { }
+    │             else
+    │               {
+    │                 updates :=
+    │                   [fun τ =>
+    │                     { feed := { offset := τ.feed.offset + 1, seed := τ.feed.seed }, paused := τ.paused,
+    │                       rally := τ.rally }] }
+    │           else { }
+    │     [prop] -1 * (List.foldl (fun s u => u s) s (t e).updates).feed.offset + 41 ≤ 0 ∨
+    │           (List.foldl (fun s u => u s) s (t e).updates).feed.seed + 1 ≤ 0 ∨
+    │             -1 * (List.foldl (fun s u => u s) s (t e).updates).feed.seed + 65537 ≤ 0
+    │     [prop] -1 * (List.foldl (fun s u => u s) s (t e).updates).feed.offset + 41 ≤ 0
+    │     [prop] σ.rally = true
+    │     [prop] ¬-1 * σ.feed.offset + 40 ≤ 0
+    │     [prop] List.foldl (fun s u => u s) s
+    │             [fun τ =>
+    │               { feed := { offset := τ.feed.offset + 1, seed := τ.feed.seed }, paused := τ.paused, rally := τ.rally }] =
+    │           List.foldl (fun s u => u s)
+    │             { feed := { offset := s.feed.offset + 1, seed := s.feed.seed }, paused := s.paused, rally := s.rally } []
+    │     [prop] List.foldl (fun s u => u s)
+    │             { feed := { offset := s.feed.offset + 1, seed := s.feed.seed }, paused := s.paused, rally := s.rally } [] =
+    │           { feed := { offset := s.feed.offset + 1, seed := s.feed.seed }, paused := s.paused, rally := s.rally }
+    │     [prop] List.foldl (fun s u => u s)
+    │             { feed := { offset := s.feed.offset + 1, seed := s.feed.seed }, paused := s.paused, rally := s.rally }
+    │             ([] ++ []) =
+    │           List.foldl (fun s u => u s)
+    │             (List.foldl (fun s u => u s)
+    │               { feed := { offset := s.feed.offset + 1, seed := s.feed.seed }, paused := s.paused, rally := s.rally } [])
+    │             []
+    │     [prop] List.foldl (fun s u => u s) s ((t e).updates ++ []) =
+    │           List.foldl (fun s u => u s) (List.foldl (fun s u => u s) s (t e).updates) []
+    │     [prop] [] ++ [] = []
+    │     [prop] [fun τ =>
+    │               { feed := { offset := τ.feed.offset + 1, seed := τ.feed.seed }, paused := τ.paused, rally := τ.rally }] ++
+    │             [] =
+    │           (fun τ =>
+    │               { feed := { offset := τ.feed.offset + 1, seed := τ.feed.seed }, paused := τ.paused, rally := τ.rally }) ::
+    │             ([] ++ [])
+    │     [prop] (t e).updates ++ [] = (t e).updates
+    │     [prop] [] ++ [] = []
+    │   [eqc] True propositions
+    │     [prop] σ.feed.offset + -40 ≤ 0 ∧ -1 * σ.feed.seed ≤ 0 ∧ σ.feed.seed + -65536 ≤ 0
+    │     [prop] -1 * σ.feed.offset + -40 ≤ 0 ∧ σ.feed.offset + -40 ≤ 0 ∧ -1 * σ.feed.seed ≤ 0 ∧ σ.feed.seed + -65536 ≤ 0
+    │     [prop] -1 * σ.feed.seed ≤ 0 ∧ σ.feed.seed + -65536 ≤ 0
+    │     [prop] (List.foldl (fun s u => u s) s (t e).updates).feed.offset + 41 ≤ 0 ∨
+    │           -1 * (List.foldl (fun s u => u s) s (t e).updates).feed.offset + 41 ≤ 0 ∨
+    │             (List.foldl (fun s u => u s) s (t e).updates).feed.seed + 1 ≤ 0 ∨
+    │               -1 * (List.foldl (fun s u => u s) s (t e).updates).feed.seed + 65537 ≤ 0
+    │     [prop] -1 * (List.foldl (fun s u => u s) s (t e).updates).feed.offset + 41 ≤ 0 ∨
+    │           (List.foldl (fun s u => u s) s (t e).updates).feed.seed + 1 ≤ 0 ∨
+    │             -1 * (List.foldl (fun s u => u s) s (t e).updates).feed.seed + 65537 ≤ 0
+    │     [prop] σ.feed.offset + -40 ≤ 0
+    │     [prop] s.feed.offset + -40 ≤ 0
+    │     [prop] σ.feed.seed + -65536 ≤ 0
+    │     [prop] s.feed.seed + -65536 ≤ 0
+    │     [prop] -1 * σ.feed.offset + -40 ≤ 0
+    │     [prop] -1 * s.feed.offset + -40 ≤ 0
+    │     [prop] -1 * (List.foldl (fun s u => u s) s (t e).updates).feed.offset + 41 ≤ 0
+    │     [prop] -1 * σ.feed.seed ≤ 0
+    │     [prop] -1 * s.feed.seed ≤ 0
+    │     [prop] σ.rally = true
+    │   [eqc] False propositions
+    │     [prop] (List.foldl (fun s u => u s) s (t e).updates).feed.seed + 1 ≤ 0 ∨
+    │           -1 * (List.foldl (fun s u => u s) s (t e).updates).feed.seed + 65537 ≤ 0
+    │     [prop] (List.foldl (fun s u => u s) s (t e).updates).feed.offset + 41 ≤ 0
+    │     [prop] (List.foldl (fun s u => u s) s (t e).updates).feed.seed + 1 ≤ 0
+    │     [prop] -1 * (List.foldl (fun s u => u s) s (t e).updates).feed.seed + 65537 ≤ 0
+    │     [prop] -1 * σ.feed.offset + 40 ≤ 0
+    │   [eqc] Equivalence classes
+    │     [eqc] {props, { }}
+    │     [eqc] {κ, { }}
+    │     [eqc] {t,
+    │         fun x =>
+    │           if σ.rally = true then
+    │             if -1 * σ.feed.offset + 40 ≤ 0 then { }
+    │             else
+    │               {
+    │                 updates :=
+    │                   [fun τ =>
+    │                     { feed := { offset := τ.feed.offset + 1, seed := τ.feed.seed }, paused := τ.paused,
+    │                       rally := τ.rally }] }
+    │           else { }}
+    │     [eqc] {true, σ.rally}
+    │     [eqc] {t e,
+    │         {
+    │           updates :=
+    │             [fun τ =>
+    │               { feed := { offset := τ.feed.offset + 1, seed := τ.feed.seed }, paused := τ.paused, rally := τ.rally }] }}
+    │       [eqc] {if σ.rally = true then
+    │             if -1 * σ.feed.offset + 40 ≤ 0 then { }
+    │             else
+    │               {
+    │                 updates :=
+    │                   [fun τ =>
+    │                     { feed := { offset := τ.feed.offset + 1, seed := τ.feed.seed }, paused := τ.paused,
+    │                       rally := τ.rally }] }
+    │           else { },
+    │           if -1 * σ.feed.offset + 40 ≤ 0 then { }
+    │           else
+    │             {
+    │               updates :=
+    │                 [fun τ =>
+    │                   { feed := { offset := τ.feed.offset + 1, seed := τ.feed.seed }, paused := τ.paused,
+    │                     rally := τ.rally }] }}
+    │     [eqc] {(List.foldl (fun s u => u s) s (t e).updates).feed, { offset := s.feed.offset + 1, seed := s.feed.seed }}
+    │       [eqc] {{ feed := { offset := s.feed.offset + 1, seed := s.feed.seed }, paused := s.paused,
+    │               rally := s.rally }.feed}
+    │     [eqc] {(List.foldl (fun s u => u s) s (t e).updates).feed.offset, s.feed.offset + 1}
+    │       [eqc] {{ offset := s.feed.offset + 1, seed := s.feed.seed }.offset}
+    │     [eqc] {s.feed.seed, (List.foldl (fun s u => u s) s (t e).updates).feed.seed}
+    │       [eqc] {{ offset := s.feed.offset + 1, seed := s.feed.seed }.seed}
+    │     [eqc] {(t e).updates,
+    │         [fun τ =>
+    │           { feed := { offset := τ.feed.offset + 1, seed := τ.feed.seed }, paused := τ.paused, rally := τ.rally }],
+    │         (t e).updates ++ [],
+    │         (fun τ =>
+    │             { feed := { offset := τ.feed.offset + 1, seed := τ.feed.seed }, paused := τ.paused, rally := τ.rally }) ::
+    │           ([] ++ []),
+    │         [fun τ =>
+    │             { feed := { offset := τ.feed.offset + 1, seed := τ.feed.seed }, paused := τ.paused, rally := τ.rally }] ++
+    │           []}
+    │       [eqc] {{
+    │               updates :=
+    │                 [fun τ =>
+    │                   { feed := { offset := τ.feed.offset + 1, seed := τ.feed.seed }, paused := τ.paused,
+    │                     rally := τ.rally }] }.updates}
+    │     [eqc] {List.foldl (fun s u => u s) s (t e).updates,
+    │         { feed := { offset := s.feed.offset + 1, seed := s.feed.seed }, paused := s.paused, rally := s.rally },
+    │         List.foldl (fun s u => u s) s
+    │           [fun τ =>
+    │             { feed := { offset := τ.feed.offset + 1, seed := τ.feed.seed }, paused := τ.paused, rally := τ.rally }],
+    │         List.foldl (fun s u => u s)
+    │           { feed := { offset := s.feed.offset + 1, seed := s.feed.seed }, paused := s.paused, rally := s.rally } [],
+    │         List.foldl (fun s u => u s) s ((t e).updates ++ []),
+    │         List.foldl (fun s u => u s)
+    │           { feed := { offset := s.feed.offset + 1, seed := s.feed.seed }, paused := s.paused, rally := s.rally }
+    │           ([] ++ []),
+    │         List.foldl (fun s u => u s) (List.foldl (fun s u => u s) s (t e).updates) [],
+    │         List.foldl (fun s u => u s)
+    │           (List.foldl (fun s u => u s)
+    │             { feed := { offset := s.feed.offset + 1, seed := s.feed.seed }, paused := s.paused, rally := s.rally } [])
+    │           []}
+    │     [eqc] {-1 * s.feed.seed, -1 * (List.foldl (fun s u => u s) s (t e).updates).feed.seed}
+    │     [eqc] {[], [] ++ []}
+    │   [cases] Case analyses
+    │     [cases] [2/2]: (List.foldl (fun s u => u s) s (t e).updates).feed.offset + 41 ≤ 0 ∨
+    │           -1 * (List.foldl (fun s u => u s) s (t e).updates).feed.offset + 41 ≤ 0 ∨
+    │             (List.foldl (fun s u => u s) s (t e).updates).feed.seed + 1 ≤ 0 ∨
+    │               -1 * (List.foldl (fun s u => u s) s (t e).updates).feed.seed + 65537 ≤ 0
+    │       [cases] source: Initial goal
+    │     [cases] [1/2]: -1 * (List.foldl (fun s u => u s) s (t e).updates).feed.offset + 41 ≤ 0 ∨
+    │           (List.foldl (fun s u => u s) s (t e).updates).feed.seed + 1 ≤ 0 ∨
+    │             -1 * (List.foldl (fun s u => u s) s (t e).updates).feed.seed + 65537 ≤ 0
+    │       [cases] source: Initial goal
+    │     [cases] [1/2]: if σ.rally = true then
+    │           if -1 * σ.feed.offset + 40 ≤ 0 then { }
+    │           else
+    │             {
+    │               updates :=
+    │                 [fun τ =>
+    │                   { feed := { offset := τ.feed.offset + 1, seed := τ.feed.seed }, paused := τ.paused,
+    │                     rally := τ.rally }] }
+    │         else { }
+    │       [cases] source: Beta-reduction of
+    │             fun x =>
+    │               if σ.rally = true then
+    │                 if -1 * σ.feed.offset + 40 ≤ 0 then { }
+    │                 else
+    │                   {
+    │                     updates :=
+    │                       [fun τ =>
+    │                         { feed := { offset := τ.feed.offset + 1, seed := τ.feed.seed }, paused := τ.paused,
+    │                           rally := τ.rally }] }
+    │               else { }
+    │     [cases] [2/2]: if -1 * σ.feed.offset + 40 ≤ 0 then { }
+    │         else
+    │           {
+    │             updates :=
+    │               [fun τ =>
+    │                 { feed := { offset := τ.feed.offset + 1, seed := τ.feed.seed }, paused := τ.paused,
+    │                   rally := τ.rally }] }
+    │       [cases] source: Beta-reduction of
+    │             fun x =>
+    │               if σ.rally = true then
+    │                 if -1 * σ.feed.offset + 40 ≤ 0 then { }
+    │                 else
+    │                   {
+    │                     updates :=
+    │                       [fun τ =>
+    │                         { feed := { offset := τ.feed.offset + 1, seed := τ.feed.seed }, paused := τ.paused,
+    │                           rally := τ.rally }] }
+    │               else { }
+    │   [ematch] E-matching patterns
+    │     [thm] List.foldl_append: [@List.foldl #4 #5 #3 (@List.foldl _ _ #3 #2 #1) #0]
+    │     [thm] List.foldl_cons: [@List.foldl #4 #5 #1 #0 (@List.cons _ #3 #2)]
+    │     [thm] List.foldl_nil: [@List.foldl #3 #2 #1 #0 (@List.nil _)]
+    │     [thm] List.nil_append: [@HAppend.hAppend (List #1) (List _) (List _) _ (@List.nil _) #0]
+    │     [thm] List.cons_append: [@HAppend.hAppend (List #3) (List _) (List _) _ (@List.cons _ #2 #1) #0]
+    │     [thm] List.append_nil: [@HAppend.hAppend (List #1) (List _) (List _) _ #0 (@List.nil _)]
+    │     [thm] List.append_assoc: [@HAppend.hAppend (List #3) (List _) (List _) _ (@HAppend.hAppend (List _) (List _) (List _) _ #2 #1) #0]
+    │     [thm] List.append_assoc: [@HAppend.hAppend (List #3) (List _) (List _) _ #2 (@HAppend.hAppend (List _) (List _) (List _) _ #1 #0)]
+    │     [thm] List.foldl_append: [@List.foldl #4 #5 #3 #2 (@HAppend.hAppend (List _) (List _) (List _) _ #1 #0)]
+    │     [thm] List.cons_append: [@List.cons #3 #2 (@HAppend.hAppend (List _) (List _) (List _) _ #1 #0)]
+    │   [cutsat] Assignment satisfying linear constraints
+    │     [assign] offset := 2
+    │     [assign] σ.feed.offset := -40
+    │     [assign] s.feed.offset := 40
+    │     [assign] (List.foldl (fun s u => u s) s (t e).updates).feed.offset := 41
+    │     [assign] { offset := s.feed.offset + 1, seed := s.feed.seed }.offset := 41
+    │     [assign] σ.feed.seed := 0
+    │     [assign] s.feed.seed := 0
+    │     [assign] (List.foldl (fun s u => u s) s (t e).updates).feed.seed := 0
+    │     [assign] { offset := s.feed.offset + 1, seed := s.feed.seed }.seed := 0
+    │   [ring] Ring `Int`
+    │     [basis] Basis
+    │       [_] s.feed.offset + -1 * (List.foldl (fun s u => u s) s (t e).updates).feed.offset + 1 = 0
+    │       [_] s.feed.seed + -1 * (List.foldl (fun s u => u s) s (t e).updates).feed.seed = 0
+    │   [assoc] Operator `HAppend.hAppend`
+    │     [basis] Basis
+    │       [_] [fun τ =>
+    │               { feed := { offset := τ.feed.offset + 1, seed := τ.feed.seed }, paused := τ.paused, rally := τ.rally }] =
+    │             (t e).updates
+    │     [properties] Properties
+    │       [_] identity: `[]`
+    │ [grind] Diagnostics
+    │   [ematch] E-matching Diagnostics
+    │     [thm] Theorem Instance Count
+    │       [thm] List.foldl_nil ↦ 5
+    │       [thm] List.append_nil ↦ 2
+    │       [thm] List.foldl_append ↦ 2
+    │       [thm] List.foldl_cons ↦ 2
+    │       [thm] List.cons_append ↦ 1
+    │       [thm] List.nil_append ↦ 1
+
+✗ NOT VERIFIED  144/145 obligations proved, 1 failed; components: 5/6 verified  (27.6s)

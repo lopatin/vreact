@@ -1,0 +1,17 @@
+hole in holdAt: ChainUi   scope: u, u.collapsed, u.filter, u.held, u.focus, u.heat, u.orders, u.nextId, id, price
+  22217 candidates tested in 60.0s, up to size 6; stopped: the 60s time limit was reached at size 6
+  no verified solution for hole in holdAt: no candidate passed the tests
+  most common failure (22217×): u: postcondition fails on [{"collapsed":[1],"filter":"s11","held":[],"focus":7,"heat":7,"orders":[],"nextId":-1},-2,-10] ↦ {"collapsed":[1],"filter":"s11","held":[],"focus":7,"heat":7,"orders":[],"nextId":-1}
+  write this one by hand (synth builds straight-line expressions; guarded updates need an `if`), or check that the spec is satisfiable
+hole in follow: ChainUi   scope: u, u.collapsed, u.filter, u.held, u.focus, u.heat, u.orders, u.nextId, id
+  candidate passes 400 random tests: { ...u, held: u.held.filter((x) => x.expiry !== id) }   (9690 candidate(s) tested in 26.0s)
+  ✔ proved by Lean: { ...u, held: u.held.filter((x) => x.expiry !== id) }
+hole in place: ChainUi   scope: u, u.collapsed, u.filter, u.held, u.focus, u.heat, u.orders, u.nextId, t, t.expiry, t.leg, t.strike, t.side, t.price, qty, price
+  22092 candidates tested in 60.0s, up to size 6; stopped: the 60s time limit was reached at size 6
+  no verified solution for hole in place: no candidate passed the tests
+  most common failure (22092×): u: postcondition fails on [{"collapsed":[0,5],"filter":"s3","held":[{"expiry":10,"price":7},{"expiry":-10,"price":-10},{"expiry":5,"price":2}],"focus":null,"heat":1,"orders":[],"nextId":0},{"expiry":-2,"leg":"call","strike":0,"side":"bid","price":0},2,5] ↦ {"collapsed":[0,5],"filter":"s3","held":[{"expiry":10,"price":7},{"expiry":-10,"price":-10},{"expiry":5,"price":2}],"focus":null,"heat":1,"orders":[],"nextId":0}
+  write this one by hand (synth builds straight-line expressions; guarded updates need an `if`), or check that the spec is satisfiable
+hole in cancel: ChainUi   scope: u, u.collapsed, u.filter, u.held, u.focus, u.heat, u.orders, u.nextId, id
+  candidate passes 400 random tests: { ...u, orders: u.orders.filter((x) => x.id !== id) }   (12887 candidate(s) tested in 34.7s)
+  ✔ proved by Lean: { ...u, orders: u.orders.filter((x) => x.id !== id) }
+wrote src/reducer.ts

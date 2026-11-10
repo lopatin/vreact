@@ -1,0 +1,110 @@
+translated 8 module(s), 210 proof obligation(s) → .vreact/ ; checking with Lean…
+
+Components
+  VERIFIED           PriceCell              src/StrikeRow.tsx:12
+  VERIFIED           StrikeRow              src/StrikeRow.tsx:41
+  VERIFIED           TermRow                src/TermRow.tsx:19
+  VERIFIED           OrderTicket            src/OrderTicket.tsx:19
+  VERIFIED           OptionsChain           src/OptionsChain.tsx:34
+  VERIFIED           App                    src/App.tsx:172
+Functions
+  VERIFIED           sameMembers
+  VERIFIED           sameMembersExcept
+  VERIFIED           toggleIn
+  VERIFIED           sameEntries
+  VERIFIED           agreeExcept
+  VERIFIED           sameList
+  VERIFIED           byId
+  VERIFIED           validChain
+  VERIFIED           legOf
+  VERIFIED           theoOf
+  VERIFIED           quotePrice
+  VERIFIED           withinSpread
+  VERIFIED           isMid
+  VERIFIED           midPrice
+  VERIFIED           inTheMoney
+  VERIFIED           dist
+  VERIFIED           nearest
+  VERIFIED           atmIndex
+  VERIFIED           inWindow
+  VERIFIED           strikeWindow
+  VERIFIED           shownRows
+  VERIFIED           levelsOf
+  VERIFIED           filterLabel
+  VERIFIED           edge
+  VERIFIED           heatOf
+  VERIFIED           legFor
+  VERIFIED           labelOf
+  VERIFIED           marketOf
+  VERIFIED           validQty
+  VERIFIED           validOrder
+  VERIFIED           openQty
+  VERIFIED           fmtPrice
+  VERIFIED           contractText
+  VERIFIED           quoteText
+  VERIFIED           crosses
+  VERIFIED           fmtVol
+  VERIFIED           wellFormed
+  VERIFIED           sameView
+  VERIFIED           sameOrder
+  VERIFIED           keepsOrders
+  VERIFIED           keepsOrdersExcept
+  VERIFIED           freshIds
+  VERIFIED           sameOrders
+  VERIFIED           orderFor
+  VERIFIED           toggle
+  VERIFIED           setCollapsed
+  VERIFIED           setFilter
+  VERIFIED           watchStrike
+  VERIFIED           holdAt
+  VERIFIED           follow
+  VERIFIED           jump
+  VERIFIED           setHeat
+  VERIFIED           accepts
+  VERIFIED           withOrder
+  INCOMPLETE         place
+      ↳ an obligation of it failed
+  VERIFIED           repriced
+  VERIFIED           amend
+  VERIFIED           cancel
+  VERIFIED           validAction
+  INCOMPLETE         chainReducer
+      ↳ it uses place, which is not verified: an obligation of it failed
+  VERIFIED           shiftQuote
+  VERIFIED           shifted
+  VERIFIED           moveFutures
+  VERIFIED           nextSeed
+  VERIFIED           validFeed
+  VERIFIED           stepFeed
+  VERIFIED           sameFeed
+  VERIFIED           simReducer
+App certificates (VReact.run_allInv instantiated)
+  VERIFIED           VTS.App.App.certificate  axioms: propext, Classical.choice, Quot.sound
+Obligations by file
+  ✓ src/collections.ts                       6/6
+  ✓ src/model.ts                             26/26
+  ✗ src/reducer.ts                           51/52
+  ✓ src/StrikeRow.tsx                        24/24
+  ✓ src/TermRow.tsx                          12/12
+  ✓ src/OrderTicket.tsx                      12/12
+  ✓ src/OptionsChain.tsx                     46/46
+  ✓ src/App.tsx                              32/32
+
+Failed obligations
+✗ src/reducer.ts:247:11  [postcondition] postcondition of place: freshIds(u, r)
+    │ `grind` failed
+    │ case grind
+    │ u : ChainUi
+    │ t : model.Ticket
+    │ qty price : Int
+    │ h_pre : 1 ≤ qty ∧ qty ≤ 500
+    │ h : ((1 ≤ qty ∧ qty ≤ 500) ∧ 0 < price) ∧ model.openQty u.orders.values + qty ≤ 1000
+    │ h_1 : 1 < u.nextId
+    │ h_2 : ¬u.nextId - 1 ∈ u.orders.keys
+    │ h_3 : model.openQty u.orders.values + qty + qty ≤ 1000
+    │ hcontract : u.orders.keys.Nodup
+    │ hcontract_1 : (List.map Prod.fst u.orders.entries).Nodup
+    │ h_4 : ¬u.nextId + -1 ∈ u.orders.keys
+    │ ⊢ False
+
+✗ NOT VERIFIED  209/210 obligations proved, 1 failed; components: 6/6 verified  (71.9s)

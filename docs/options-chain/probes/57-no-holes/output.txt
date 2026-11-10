@@ -1,0 +1,2 @@
+no hole<T>() in src/model.ts
+no hole<T>() in src/reducer.ts

@@ -1,0 +1,135 @@
+translated 8 module(s), 210 proof obligation(s) → .vreact/ ; checking with Lean…
+
+Components
+  VERIFIED           PriceCell              src/StrikeRow.tsx:12
+  VERIFIED           StrikeRow              src/StrikeRow.tsx:41
+  VERIFIED           TermRow                src/TermRow.tsx:19
+  VERIFIED           OrderTicket            src/OrderTicket.tsx:19
+  INCOMPLETE         OptionsChain           src/OptionsChain.tsx:34
+      ↳ an obligation of it failed
+  INCOMPLETE         App                    src/App.tsx:172
+      ↳ it uses OptionsChain (src/OptionsChain.tsx), which is not verified: an obligation of it failed
+Functions
+  VERIFIED           sameMembers
+  VERIFIED           sameMembersExcept
+  VERIFIED           toggleIn
+  VERIFIED           sameEntries
+  VERIFIED           agreeExcept
+  VERIFIED           sameList
+  VERIFIED           byId
+  VERIFIED           validChain
+  VERIFIED           legOf
+  VERIFIED           theoOf
+  VERIFIED           quotePrice
+  VERIFIED           withinSpread
+  VERIFIED           isMid
+  VERIFIED           midPrice
+  VERIFIED           inTheMoney
+  VERIFIED           dist
+  VERIFIED           nearest
+  VERIFIED           atmIndex
+  VERIFIED           inWindow
+  VERIFIED           strikeWindow
+  INCOMPLETE         shownRows
+      ↳ an obligation of it failed
+  VERIFIED           levelsOf
+  VERIFIED           filterLabel
+  VERIFIED           edge
+  VERIFIED           heatOf
+  VERIFIED           legFor
+  VERIFIED           labelOf
+  VERIFIED           marketOf
+  VERIFIED           validQty
+  VERIFIED           validOrder
+  VERIFIED           openQty
+  VERIFIED           fmtPrice
+  VERIFIED           contractText
+  VERIFIED           quoteText
+  VERIFIED           crosses
+  VERIFIED           fmtVol
+  VERIFIED           wellFormed
+  VERIFIED           sameView
+  VERIFIED           sameOrder
+  VERIFIED           keepsOrders
+  VERIFIED           keepsOrdersExcept
+  VERIFIED           freshIds
+  VERIFIED           sameOrders
+  VERIFIED           orderFor
+  VERIFIED           toggle
+  VERIFIED           setCollapsed
+  VERIFIED           setFilter
+  VERIFIED           watchStrike
+  VERIFIED           holdAt
+  VERIFIED           follow
+  VERIFIED           jump
+  VERIFIED           setHeat
+  VERIFIED           accepts
+  VERIFIED           withOrder
+  VERIFIED           place
+  VERIFIED           repriced
+  VERIFIED           amend
+  VERIFIED           cancel
+  VERIFIED           validAction
+  VERIFIED           chainReducer
+  VERIFIED           shiftQuote
+  VERIFIED           shifted
+  VERIFIED           moveFutures
+  VERIFIED           nextSeed
+  VERIFIED           validFeed
+  VERIFIED           stepFeed
+  VERIFIED           sameFeed
+  VERIFIED           simReducer
+App certificates (VReact.run_allInv instantiated)
+  INCOMPLETE         VTS.App.App.certificate  axioms: propext, sorryAx, Classical.choice, Quot.sound
+      ↳ it uses OptionsChain (src/OptionsChain.tsx), which is not verified: an obligation of it failed
+Obligations by file
+  ✓ src/collections.ts                       6/6
+  ✗ src/model.ts                             25/26
+  ✓ src/reducer.ts                           52/52
+  ✓ src/StrikeRow.tsx                        24/24
+  ✓ src/TermRow.tsx                          12/12
+  ✓ src/OrderTicket.tsx                      12/12
+  ✗ src/OptionsChain.tsx                     45/46
+  ✓ src/App.tsx                              32/32
+
+Failed obligations
+✗ src/model.ts:158:11  [postcondition] postcondition of shownRows: implies(distinct(ks, (s) => s.strike), distinct(r, (s) => s.strike))
+    │ `grind` failed
+    │ case grind.1.1.1.1.1.1.1.1.1.1.1.1.1.1.1.1.1.1.1.1.1.1.1.1.1.1.1.1
+    │   … (82 earlier hypotheses: ks, span, watch, h₂₂, hcontract_3, hsub, hsub_1, a, …: --full shows them)
+    │ hcontract, hcontract_1, hcontract_2 : …  (3 contract instances, 13 lines: --full shows them)
+    │ h_9, h_11, h_22, h_24, h_25 : …  (5 long hypotheses, 20 lines: --full shows them)
+    │ w_26 : Strike
+    │ right_23 : w_26.strike = w_24.strike
+    │ w_27 : Strike
+    │ right_24 : w_27.strike = w_25.strike
+    │ w_28 : Strike
+    │ right_25 : w_28.strike = w_22.strike
+    │ w_29 : Strike
+    │ right_26 : w_29.strike = w_23.strike
+    │ h_59 : w_29 ∈ JS.slice ks span.lo (some span.hi)
+    │ h_60 : w_26 ∈ JS.slice ks span.lo (some span.hi)
+    │ h_61 : w_27 ∈ JS.slice ks span.lo (some span.hi)
+    │ h_62 : w_28 ∈ JS.slice ks span.lo (some span.hi)
+    │ ⊢ False
+✗ src/OptionsChain.tsx:142:21  [unique-keys] keys s.strike are distinct across rows
+    │ `grind` failed
+    │ case grind.1.1.1.1.1
+    │   … (30 earlier hypotheses: E, props, κ, σ, ui, ticket, levels, allOpen, …: --full shows them)
+    │ tExp, center, atm, span, liveAtm := …  (5 definitions, 22 lines: --full shows them)
+    │ hpre, hinv, left, h_5, h₁₂_1, h_7 : …  (6 long hypotheses, 184 lines: --full shows them)
+    │ held_1 : Int
+    │ h₁₂ h_6 : σ.ui.held.get e.id = some held_1
+    │ held_2 : Int
+    │ ticket_1 : model.Ticket
+    │ h_8 : σ.ticket = some ticket_1
+    │ w_2 : Int
+    │ h_9 : (e.id, w_2) ∈ σ.ui.held.entries
+    │ w_3 : Int
+    │ h_10 : (w_3, held_1) ∈ σ.ui.held.entries
+    │ h_11 : (fun s => model.nearest e.strikes s held_2) = fun s => model.nearest e.strikes s held_1
+    │ w_4 : Int
+    │ h_12 : (w_3, w_4) ∈ σ.ui.held.entries
+    │ ⊢ False
+
+✗ NOT VERIFIED  208/210 obligations proved, 2 failed; components: 4/6 verified  (83.9s)

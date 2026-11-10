@@ -1,0 +1,14 @@
+▲ [WARNING] Import "shownRows" will always be undefined because there is no matching export in "src/model.ts" [import-is-undefined]
+
+    contracts.ts:154:23:
+      154 │ for (let i = 0; i < (M.shownRows === undefined ? 0 : 20000); i++) {
+          ╵                        ~~~~~~~~~
+
+1 warning
+
+  contracts.mjs  150.9kb
+
+⚡ Done in 8ms
+FAIL amend post 4 [{"collapsed":{"Set":[1,2]},"filter":"s3","watch":{"Set":[]},"held":{"Map":[]},"focus":3,"heat":1,"orders":{"Map":[[2,{"expiry":1,"leg":"future","strike":0,"buy":false,"qty":415,"price":27}],[3,{"expiry":1,"leg":"call","strike":2160,"buy":true,"qty":137,"price":52}]]},"nextId":4},2,22]
+FAIL amend post 4 [{"collapsed":{"Set":[4]},"filter":"s3","watch":{"Set":[2000]},"held":{"Map":[]},"focus":1,"heat":1,"orders":{"Map":[[1,{"expiry":1,"leg":"call","strike":2040,"buy":false,"qty":116,"price":65}],[2,{"expiry":1,"leg":"call","strike":2120,"buy":true,"qty":253,"price":118}],[3,{"expiry":3,"leg":"future","strike":0,"buy":true,"qty":350,"price":186}]]},"nextId":4},1,110]
+reachable steps: 18000 (chain), 18000 (feed); postconditions checked: 460393; failures: [["amend post 4",769],["orders out of placement order",2554]]

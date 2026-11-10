@@ -1,0 +1,11 @@
+hole in follow: ChainUi   scope: u, u.collapsed, u.filter, u.held, u.focus, u.heat, u.orders, id
+  candidate passes 400 random tests: { ...jump(u, id), collapsed: u.collapsed, focus: u.focus }   (11503 candidate(s) tested in 47.1s)
+  ✗ Lean rejects { ...jump(u, id), collapsed: u.collapsed, focus: u.focus }: postcondition of follow: sameView(u, r) && keepsHolds(u, r, id) (src/reducer.ts:145:11)
+  14612 candidates tested in 60.0s, up to size 7; stopped: the 60s time limit was reached at size 7
+  no verified solution for hole in follow: 1 candidate(s) passed the tests, none was proved
+  the random tests accept candidates that Lean rejects: write this one by hand
+hole in cancel: ChainUi   scope: u, u.collapsed, u.filter, u.held, u.focus, u.heat, u.orders, id
+  14661 candidates tested in 60.0s, up to size 7; stopped: the 60s time limit was reached at size 7
+  no verified solution for hole in cancel: no candidate passed the tests
+  most common failure (14661×): u: postcondition fails on [{"collapsed":{"Set":[1,0,3]},"filter":"s3","held":{"Map":[]},"focus":2,"heat":3,"orders":{"Map":[[0,{"expiry":1,"leg":"call","strike":-5,"buy":false,"qty":3,"price":1}],[5,{"expiry":0,"leg":"put","strike":-10,"buy":true,"qty":4,"price":2}]]}},5] ↦ {"collapsed":{"Set":[1,0,3]},"filter":"s3","held":{"Map":[]},"focus":2,"heat":3,"orders":{"Map":[[0,{"expiry":1,"leg":"call","strike":-5,"buy":false,"qty":3,"price":1}],[5,{"expiry":0,"leg":"put","strike":-10,"buy":true,"qty":4,"price":2}]]}}
+  write this one by hand (synth builds straight-line expressions; guarded updates need an `if`; it only adds to a Map or Set, by new Map(m).set(k, v) or new Set(s).add(x): deleting is not in its grammar), or check that the spec is satisfiable

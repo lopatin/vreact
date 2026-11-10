@@ -1,0 +1,46 @@
+translated 1 module(s), 22 proof obligation(s) → .vreact/ ; checking with Lean…
+
+Components
+Functions
+  VERIFIED           validChain
+  VERIFIED           legOf
+  VERIFIED           theoOf
+  VERIFIED           quotePrice
+  VERIFIED           withinSpread
+  VERIFIED           isMid
+  VERIFIED           midPrice
+  VERIFIED           inTheMoney
+  VERIFIED           dist
+  VERIFIED           nearest
+  INCOMPLETE         atmIndex
+      ↳ an obligation of it failed
+  VERIFIED           inWindow
+  VERIFIED           strikeWindow
+  VERIFIED           levelsOf
+  VERIFIED           edge
+  VERIFIED           heatOf
+  VERIFIED           validQty
+  VERIFIED           validOrder
+  VERIFIED           fmtPrice
+  VERIFIED           fmtVol
+Obligations by file
+  ✗ src/model.ts                             21/22
+
+Failed obligations
+✗ src/model.ts:121:11  [postcondition] postcondition of atmIndex: implies(ks.length > 0, r >= 0)
+    │ `grind` failed
+    │ case grind
+    │ ks : List Strike
+    │ price : Int
+    │ h₂₁ : ↑ks.length > 0
+    │ hcontract :
+    │   (-1 ≤ JS.findIndex ks fun s => nearest ks s price) ∧ (JS.findIndex ks fun s => nearest ks s price) < ↑ks.length
+    │ hcontract_1 :
+    │   (JS.findIndex ks fun s => nearest ks s price) < 0 ∨
+    │     ∃ h, nearest ks ks[(JS.findIndex ks fun s => nearest ks s price).toNat] price = true
+    │ hcontract_2 hcontract_3 :
+    │   (-1 ≤ JS.findIndex ks fun s => nearest ks s price) ∧ (JS.findIndex ks fun s => nearest ks s price) < ↑ks.length
+    │ h : (JS.findIndex ks fun s => nearest ks s price) + 1 ≤ 0
+    │ ⊢ False
+
+✗ NOT VERIFIED  21/22 obligations proved, 1 failed; components: 0/0 verified  (5.9s)

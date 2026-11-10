@@ -1,0 +1,28 @@
+translated 1 module(s), 22 proof obligation(s) → .vreact/ ; checking with Lean…
+
+Components
+Functions
+  VERIFIED           validChain
+  VERIFIED           legOf
+  VERIFIED           theoOf
+  VERIFIED           quotePrice
+  VERIFIED           withinSpread
+  VERIFIED           isMid
+  VERIFIED           midPrice
+  VERIFIED           inTheMoney
+  VERIFIED           dist
+  VERIFIED           nearest
+  VERIFIED           atmIndex
+  VERIFIED           inWindow
+  VERIFIED           strikeWindow
+  VERIFIED           levelsOf
+  VERIFIED           edge
+  VERIFIED           heatOf
+  VERIFIED           validQty
+  VERIFIED           validOrder
+  VERIFIED           fmtPrice
+  VERIFIED           fmtVol
+Obligations by file
+  ✓ src/model.ts                             22/22
+
+✔ VERIFIED  22/22 obligations proved; components: 0/0 verified  (5.9s)

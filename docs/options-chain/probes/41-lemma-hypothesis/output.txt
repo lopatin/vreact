@@ -1,0 +1,317 @@
+translated 7 module(s), 150 proof obligation(s) → .vreact/ ; checking with Lean…
+
+Components
+  VERIFIED           PriceCell              src/StrikeRow.tsx:12
+  VERIFIED           StrikeRow              src/StrikeRow.tsx:39
+  VERIFIED           TermRow                src/TermRow.tsx:19
+  VERIFIED           OrderTicket            src/OrderTicket.tsx:19
+  INCOMPLETE         OptionsChain           src/OptionsChain.tsx:32
+      ↳ it uses place (src/reducer.ts), which is not verified: an obligation of it failed
+  INCOMPLETE         App                    src/App.tsx:156
+      ↳ it uses place (src/reducer.ts), which is not verified: an obligation of it failed
+Functions
+  VERIFIED           validChain
+  VERIFIED           legOf
+  VERIFIED           theoOf
+  VERIFIED           quotePrice
+  VERIFIED           withinSpread
+  VERIFIED           isMid
+  VERIFIED           midPrice
+  VERIFIED           inTheMoney
+  VERIFIED           dist
+  VERIFIED           nearest
+  VERIFIED           atmIndex
+  VERIFIED           inWindow
+  VERIFIED           strikeWindow
+  VERIFIED           filterLabel
+  VERIFIED           levelsOf
+  VERIFIED           edge
+  VERIFIED           heatOf
+  VERIFIED           legFor
+  VERIFIED           labelOf
+  VERIFIED           marketOf
+  VERIFIED           validQty
+  VERIFIED           validOrder
+  VERIFIED           openQty
+  VERIFIED           fmtPrice
+  VERIFIED           contractText
+  VERIFIED           quoteText
+  VERIFIED           crosses
+  VERIFIED           fmtVol
+  VERIFIED           wellFormed
+  VERIFIED           sameView
+  VERIFIED           keepsHolds
+  VERIFIED           keepsAllHolds
+  VERIFIED           sameOrder
+  VERIFIED           keepsOrders
+  VERIFIED           keepsOrdersExcept
+  VERIFIED           orderFor
+  VERIFIED           toggle
+  VERIFIED           setCollapsed
+  VERIFIED           setFilter
+  VERIFIED           holdAt
+  VERIFIED           follow
+  VERIFIED           jump
+  VERIFIED           setHeat
+  VERIFIED           accepts
+  INCOMPLETE         place
+      ↳ an obligation of it failed
+  VERIFIED           cancel
+  VERIFIED           validAction
+  INCOMPLETE         chainReducer
+      ↳ it uses place, which is not verified: an obligation of it failed
+  VERIFIED           shiftQuote
+  VERIFIED           moveFutures
+  VERIFIED           nextSeed
+  VERIFIED           validFeed
+  VERIFIED           stepFeed
+  VERIFIED           sameFeed
+  VERIFIED           simReducer
+App certificates (VReact.run_allInv instantiated)
+  INCOMPLETE         VTS.App.App.certificate  axioms: propext, sorryAx, Classical.choice, Quot.sound
+      ↳ it uses place (src/reducer.ts), which is not verified: an obligation of it failed
+Obligations by file
+  ✓ src/model.ts                             22/22
+  ✗ src/reducer.ts                           24/25
+  ✓ src/StrikeRow.tsx                        22/22
+  ✓ src/TermRow.tsx                          12/12
+  ✓ src/OrderTicket.tsx                      12/12
+  ✓ src/OptionsChain.tsx                     37/37
+  ✓ src/App.tsx                              20/20
+
+Failed obligations
+✗ src/reducer.ts:197:11  [postcondition] postcondition of place: implies(wellFormed(u), wellFormed(r))
+    │ `grind` failed
+    │ case grind.1
+    │ u : ChainUi
+    │ t : model.Ticket
+    │ qty price : Int
+    │ h_pre : 1 ≤ qty ∧ qty ≤ 500
+    │ h₂₇ :
+    │   ((1 ≤ u.heat ∧ u.heat ≤ 5) ∧
+    │       ∀ (x : Int × model.Order),
+    │         x ∈ u.orders.entries → ((1 ≤ x.snd.qty ∧ x.snd.qty ≤ 500) ∧ 0 < x.snd.price) ∧ x.fst < u.nextId) ∧
+    │     model.openQty u.orders.values ≤ 1000
+    │ h : ((1 ≤ qty ∧ qty ≤ 500) ∧ 0 < price) ∧ model.openQty u.orders.values + qty ≤ 1000
+    │ hcontract : (List.map Prod.fst u.orders.entries).Nodup
+    │ h_1 :
+    │   -1 *
+    │         model.openQty
+    │           (u.orders.set u.nextId
+    │               { expiry := t.expiry, leg := t.leg, strike := t.strike, buy := JS.eq t.side model.Side.ask, qty := qty,
+    │                 price := price }).values +
+    │       1001 ≤
+    │     0
+    │ left : JS.eq t.side model.Side.ask = true
+    │ right : t.side = model.Side.ask
+    │ ⊢ False
+    │ [grind] Goal diagnostics
+    │   [facts] Asserted facts
+    │     [prop] -1 * qty + 1 ≤ 0 ∧ qty + -500 ≤ 0
+    │     [prop] -1 * u.heat + 1 ≤ 0 ∧
+    │           u.heat + -5 ≤ 0 ∧
+    │             (∀ (x : Int × model.Order), x ∈ u.orders.entries → -1 * x.snd.qty + 1 ≤ 0) ∧
+    │               (∀ (x : Int × model.Order), x ∈ u.orders.entries → x.snd.qty + -500 ≤ 0) ∧
+    │                 (∀ (x : Int × model.Order), x ∈ u.orders.entries → -1 * x.snd.price + 1 ≤ 0) ∧
+    │                   (∀ (x : Int × model.Order), x ∈ u.orders.entries → -1 * u.nextId + x.fst + 1 ≤ 0) ∧
+    │                     model.openQty u.orders.values + -1000 ≤ 0
+    │     [prop] -1 * qty + 1 ≤ 0 ∧ qty + -500 ≤ 0 ∧ -1 * price + 1 ≤ 0 ∧ qty + model.openQty u.orders.values + -1000 ≤ 0
+    │     [prop] (List.map Prod.fst u.orders.entries).Nodup
+    │     [prop] -1 *
+    │               model.openQty
+    │                 (u.orders.set u.nextId
+    │                     { expiry := t.expiry, leg := t.leg, strike := t.strike, buy := JS.eq t.side model.Side.ask,
+    │                       qty := qty, price := price }).values +
+    │             1001 ≤
+    │           0
+    │     [prop] (List.map (fun p => p.fst) u.orders.entries).Nodup
+    │     [prop] (List.map Prod.fst u.orders.entries).Nodup =
+    │           ∀ (a : Int), List.count a (List.map Prod.fst u.orders.entries) ≤ 1
+    │     [prop] (List.map Prod.fst u.orders.entries).Nodup =
+    │           List.Pairwise (fun x1 x2 => ¬x1 = x2) (List.map Prod.fst u.orders.entries)
+    │     [prop] ¬u.nextId ∈ u.orders.keys →
+    │           -1 * qty + -1 * model.openQty u.orders.values +
+    │               model.openQty
+    │                 (u.orders.set u.nextId
+    │                     { expiry := t.expiry, leg := t.leg, strike := t.strike, buy := JS.eq t.side model.Side.ask,
+    │                       qty := qty, price := price }).values =
+    │             0
+    │     [prop] (JS.eq t.side model.Side.ask = false) = ¬t.side = model.Side.ask
+    │     [prop] (JS.eq t.side model.Side.ask = true) = (t.side = model.Side.ask)
+    │     [prop] List.Pairwise (fun x1 x2 => ¬x1 = x2) (List.map Prod.fst u.orders.entries) =
+    │           List.Pairwise (fun a b => ¬a.fst = b.fst) u.orders.entries
+    │     [prop] u.nextId ∈ u.orders.keys → ∃ v, (u.nextId, v) ∈ u.orders.entries
+    │     [prop] u.orders.keys.Nodup
+    │     [prop] u.orders.keys.Nodup = ∀ (a : Int), List.count a u.orders.keys ≤ 1
+    │     [prop] u.orders.keys.Nodup = List.Pairwise (fun x1 x2 => ¬x1 = x2) u.orders.keys
+    │     [prop] (∀ (a b : Int × model.Order), True) →
+    │           List.Pairwise (fun a b => ¬a.fst = b.fst) u.orders.entries →
+    │             List.Pairwise (fun x1 x2 => ¬x1 = x2) (List.map Prod.fst u.orders.entries)
+    │     [prop] JS.eq t.side model.Side.ask = true
+    │     [prop] t.side = model.Side.ask
+    │   [eqc] True propositions
+    │     [prop] qty + -500 ≤ 0 ∧ -1 * price + 1 ≤ 0 ∧ qty + model.openQty u.orders.values + -1000 ≤ 0
+    │     [prop] u.heat + -5 ≤ 0 ∧
+    │           (∀ (x : Int × model.Order), x ∈ u.orders.entries → -1 * x.snd.qty + 1 ≤ 0) ∧
+    │             (∀ (x : Int × model.Order), x ∈ u.orders.entries → x.snd.qty + -500 ≤ 0) ∧
+    │               (∀ (x : Int × model.Order), x ∈ u.orders.entries → -1 * x.snd.price + 1 ≤ 0) ∧
+    │                 (∀ (x : Int × model.Order), x ∈ u.orders.entries → -1 * u.nextId + x.fst + 1 ≤ 0) ∧
+    │                   model.openQty u.orders.values + -1000 ≤ 0
+    │     [prop] -1 * qty + 1 ≤ 0 ∧ qty + -500 ≤ 0 ∧ -1 * price + 1 ≤ 0 ∧ qty + model.openQty u.orders.values + -1000 ≤ 0
+    │     [prop] -1 * qty + 1 ≤ 0 ∧ qty + -500 ≤ 0
+    │     [prop] -1 * price + 1 ≤ 0 ∧ qty + model.openQty u.orders.values + -1000 ≤ 0
+    │     [prop] -1 * u.heat + 1 ≤ 0 ∧
+    │           u.heat + -5 ≤ 0 ∧
+    │             (∀ (x : Int × model.Order), x ∈ u.orders.entries → -1 * x.snd.qty + 1 ≤ 0) ∧
+    │               (∀ (x : Int × model.Order), x ∈ u.orders.entries → x.snd.qty + -500 ≤ 0) ∧
+    │                 (∀ (x : Int × model.Order), x ∈ u.orders.entries → -1 * x.snd.price + 1 ≤ 0) ∧
+    │                   (∀ (x : Int × model.Order), x ∈ u.orders.entries → -1 * u.nextId + x.fst + 1 ≤ 0) ∧
+    │                     model.openQty u.orders.values + -1000 ≤ 0
+    │     [prop] (∀ (x : Int × model.Order), x ∈ u.orders.entries → x.snd.qty + -500 ≤ 0) ∧
+    │           (∀ (x : Int × model.Order), x ∈ u.orders.entries → -1 * x.snd.price + 1 ≤ 0) ∧
+    │             (∀ (x : Int × model.Order), x ∈ u.orders.entries → -1 * u.nextId + x.fst + 1 ≤ 0) ∧
+    │               model.openQty u.orders.values + -1000 ≤ 0
+    │     [prop] (∀ (x : Int × model.Order), x ∈ u.orders.entries → -1 * u.nextId + x.fst + 1 ≤ 0) ∧
+    │           model.openQty u.orders.values + -1000 ≤ 0
+    │     [prop] (∀ (x : Int × model.Order), x ∈ u.orders.entries → -1 * x.snd.price + 1 ≤ 0) ∧
+    │           (∀ (x : Int × model.Order), x ∈ u.orders.entries → -1 * u.nextId + x.fst + 1 ≤ 0) ∧
+    │             model.openQty u.orders.values + -1000 ≤ 0
+    │     [prop] (∀ (x : Int × model.Order), x ∈ u.orders.entries → -1 * x.snd.qty + 1 ≤ 0) ∧
+    │           (∀ (x : Int × model.Order), x ∈ u.orders.entries → x.snd.qty + -500 ≤ 0) ∧
+    │             (∀ (x : Int × model.Order), x ∈ u.orders.entries → -1 * x.snd.price + 1 ≤ 0) ∧
+    │               (∀ (x : Int × model.Order), x ∈ u.orders.entries → -1 * u.nextId + x.fst + 1 ≤ 0) ∧
+    │                 model.openQty u.orders.values + -1000 ≤ 0
+    │     [prop] (List.map Prod.fst u.orders.entries).Nodup
+    │     [prop] qty + -500 ≤ 0
+    │     [prop] model.openQty u.orders.values + -1000 ≤ 0
+    │     [prop] u.heat + -5 ≤ 0
+    │     [prop] qty + model.openQty u.orders.values + -1000 ≤ 0
+    │     [prop] -1 * qty + 1 ≤ 0
+    │     [prop] -1 * price + 1 ≤ 0
+    │     [prop] -1 *
+    │               model.openQty
+    │                 (u.orders.set u.nextId
+    │                     { expiry := t.expiry, leg := t.leg, strike := t.strike, buy := JS.eq t.side model.Side.ask,
+    │                       qty := qty, price := price }).values +
+    │             1001 ≤
+    │           0
+    │     [prop] -1 * u.heat + 1 ≤ 0
+    │     [prop] ∀ (x : Int × model.Order), x ∈ u.orders.entries → x.snd.qty + -500 ≤ 0
+    │     [prop] ∀ (x : Int × model.Order), x ∈ u.orders.entries → -1 * u.nextId + x.fst + 1 ≤ 0
+    │     [prop] ∀ (x : Int × model.Order), x ∈ u.orders.entries → -1 * x.snd.price + 1 ≤ 0
+    │     [prop] ∀ (x : Int × model.Order), x ∈ u.orders.entries → -1 * x.snd.qty + 1 ≤ 0
+    │     [prop] (List.map (fun p => p.fst) u.orders.entries).Nodup
+    │     [prop] (List.map Prod.fst u.orders.entries).Nodup =
+    │           List.Pairwise (fun x1 x2 => ¬x1 = x2) (List.map Prod.fst u.orders.entries)
+    │     [prop] (List.map Prod.fst u.orders.entries).Nodup =
+    │           ∀ (a : Int), List.count a (List.map Prod.fst u.orders.entries) ≤ 1
+    │     [prop] (JS.eq t.side model.Side.ask = false) = ¬t.side = model.Side.ask
+    │     [prop] (JS.eq t.side model.Side.ask = true) = (t.side = model.Side.ask)
+    │     [prop] JS.eq t.side model.Side.ask = true
+    │     [prop] t.side = model.Side.ask
+    │     [prop] List.Pairwise (fun x1 x2 => ¬x1 = x2) (List.map Prod.fst u.orders.entries)
+    │     [prop] ∀ (a : Int), List.count a (List.map Prod.fst u.orders.entries) ≤ 1
+    │     [prop] ¬u.nextId ∈ u.orders.keys →
+    │           -1 * qty + -1 * model.openQty u.orders.values +
+    │               model.openQty
+    │                 (u.orders.set u.nextId
+    │                     { expiry := t.expiry, leg := t.leg, strike := t.strike, buy := JS.eq t.side model.Side.ask,
+    │                       qty := qty, price := price }).values =
+    │             0
+    │     [prop] u.orders.keys.Nodup
+    │     [prop] List.Pairwise (fun x1 x2 => ¬x1 = x2) (List.map Prod.fst u.orders.entries) =
+    │           List.Pairwise (fun a b => ¬a.fst = b.fst) u.orders.entries
+    │     [prop] List.Pairwise (fun a b => ¬a.fst = b.fst) u.orders.entries
+    │     [prop] u.nextId ∈ u.orders.keys → ∃ v, (u.nextId, v) ∈ u.orders.entries
+    │     [prop] u.orders.keys.Nodup = List.Pairwise (fun x1 x2 => ¬x1 = x2) u.orders.keys
+    │     [prop] u.orders.keys.Nodup = ∀ (a : Int), List.count a u.orders.keys ≤ 1
+    │     [prop] List.Pairwise (fun x1 x2 => ¬x1 = x2) u.orders.keys
+    │     [prop] ∀ (a : Int), List.count a u.orders.keys ≤ 1
+    │     [prop] List.Pairwise (fun a b => ¬a.fst = b.fst) u.orders.entries →
+    │           List.Pairwise (fun x1 x2 => ¬x1 = x2) (List.map Prod.fst u.orders.entries)
+    │     [prop] (∀ (a b : Int × model.Order), True) →
+    │           List.Pairwise (fun a b => ¬a.fst = b.fst) u.orders.entries →
+    │             List.Pairwise (fun x1 x2 => ¬x1 = x2) (List.map Prod.fst u.orders.entries)
+    │   [eqc] False propositions
+    │     [prop] ¬t.side = model.Side.ask
+    │     [prop] JS.eq t.side model.Side.ask = false
+    │   [eqc] Equivalence classes
+    │     [eqc] {true, JS.eq t.side model.Side.ask}
+    │     [eqc] {model.Side.ask, t.side}
+    │     [eqc] {Prod.fst, fun p => p.fst}
+    │     [eqc] {List.map Prod.fst u.orders.entries, List.map (fun p => p.fst) u.orders.entries}
+    │   [cases] Case analyses
+    │     [cases] [1/2]: (JS.eq t.side model.Side.ask = true) = (t.side = model.Side.ask)
+    │       [cases] source: E-matching `JS.eq_iff`
+    │   [ematch] E-matching patterns
+    │     [thm] JS.JSMap.nodup_entries_fst: [@JS.JSMap.entries #2 #1 #0]
+    │     [thm] local_0: [@Membership.mem `[Int ×
+    │            model.Order] `[List (Int × model.Order)] `[List.instMembership] `[u.orders.entries] #1]
+    │     [thm] local_0: [@LE.le `[Int] `[Int.instLEInt] (@HAdd.hAdd `[Int] `[Int] `[Int] `[instHAdd] (@HAdd.hAdd `[Int] `[Int] `[Int] `[instHAdd] `[-1 *
+    │              u.nextId] (@Prod.fst `[Int] `[model.Order] #1)) `[1]) `[0]]
+    │     [thm] local_0: [@Prod.fst `[Int] `[model.Order] #1]
+    │     [thm] local_1: [@Membership.mem `[Int ×
+    │            model.Order] `[List (Int × model.Order)] `[List.instMembership] `[u.orders.entries] #1]
+    │     [thm] local_1: [@LE.le `[Int] `[Int.instLEInt] (@HAdd.hAdd `[Int] `[Int] `[Int] `[instHAdd] (@HMul.hMul `[Int] `[Int] `[Int] `[instHMul] `[-1] (model.Order.price (@Prod.snd `[Int] `[model.Order] #1))) `[1]) `[0]]
+    │     [thm] local_1: [model.Order.price (@Prod.snd `[Int] `[model.Order] #1)]
+    │     [thm] local_1: [@Prod.snd `[Int] `[model.Order] #1]
+    │     [thm] local_2: [@Membership.mem `[Int ×
+    │            model.Order] `[List (Int × model.Order)] `[List.instMembership] `[u.orders.entries] #1]
+    │     [thm] local_2: [@LE.le `[Int] `[Int.instLEInt] (@HAdd.hAdd `[Int] `[Int] `[Int] `[instHAdd] (model.Order.qty (@Prod.snd `[Int] `[model.Order] #1)) `[-500]) `[0]]
+    │     [thm] local_2: [model.Order.qty (@Prod.snd `[Int] `[model.Order] #1)]
+    │     [thm] local_2: [@Prod.snd `[Int] `[model.Order] #1]
+    │     [thm] local_3: [@Membership.mem `[Int ×
+    │            model.Order] `[List (Int × model.Order)] `[List.instMembership] `[u.orders.entries] #1]
+    │     [thm] local_3: [@LE.le `[Int] `[Int.instLEInt] (@HAdd.hAdd `[Int] `[Int] `[Int] `[instHAdd] (@HMul.hMul `[Int] `[Int] `[Int] `[instHMul] `[-1] (model.Order.qty (@Prod.snd `[Int] `[model.Order] #1))) `[1]) `[0]]
+    │     [thm] local_3: [model.Order.qty (@Prod.snd `[Int] `[model.Order] #1)]
+    │     [thm] local_3: [@Prod.snd `[Int] `[model.Order] #1]
+    │     [thm] List.nodup_iff_count: [@List.Nodup #3 #0]
+    │     [thm] List.nodup_iff_pairwise_ne: [@List.Nodup #1 #0]
+    │     [thm] JS.JSMap.nodup_map_values_of_key: [@List.Nodup #4 (@List.map #3 _ #1 (@JS.JSMap.values _ _ #2))]
+    │     [thm] List.map_map: [@List.map #5 #4 #2 (@List.map #3 _ #1 #0)]
+    │     [thm] OrdersMap.openQty_set: [model.openQty (@JS.JSMap.values `[Int] `[model.Order] (@JS.JSMap.set `[Int] `[model.Order] `[Int.instDecidableEq] #3 #2 #1))]
+    │     [thm] JS.eq_false: [@JS.eq #3 #2 #1 #0, false]
+    │     [thm] JS.eq_iff: [@JS.eq #3 #2 #1 #0, true]
+    │     [thm] local_4: [@LE.le `[Nat] `[instLENat] (@List.count `[Int] `[Int.instLinearOrderPackage.toBEq] #0 `[List.map
+    │             Prod.fst u.orders.entries]) `[1]]
+    │     [thm] local_4: [@List.count `[Int] `[Int.instLinearOrderPackage.toBEq] #0 `[List.map Prod.fst u.orders.entries]]
+    │     [thm] List.Pairwise.map: [@List.Pairwise #7 #3 (@List.map #6 _ #2 #4), @List.Pairwise _ #5 #4]
+    │     [thm] List.pairwise_map: [@List.Pairwise #3 #1 (@List.map #4 _ #2 #0)]
+    │     [thm] JS.JSMap.mem_keys_of_mem_entries: [@Membership.mem (Prod #4 #3) (List (Prod _ _)) _ (@JS.JSMap.entries _ _ #2) #1]
+    │     [thm] JS.JSMap.entry_of_mem_values: [@Membership.mem #3 (List _) _ (@JS.JSMap.values #4 _ #2) #1]
+    │     [thm] JS.JSMap.mem_entries_set: [@Membership.mem (Prod #6 #5) (List (Prod _ _)) _ (@JS.JSMap.entries _ _ (@JS.JSMap.set _ _ #4 #3 #2 #1)) #0]
+    │     [thm] JS.JSMap.mem_values_set: [@Membership.mem #5 (List _) _ (@JS.JSMap.values #6 _ (@JS.JSMap.set _ _ #4 #3 #2 #1)) #0]
+    │     [thm] List.mem_map: [@Membership.mem #3 (List _) _ (@List.map #4 _ #1 #0) #2]
+    │     [thm] JS.JSMap.mem_keys_set: [@Membership.mem #6 (List _) _ (@JS.JSMap.keys _ #5 (@JS.JSMap.set _ _ #4 #3 #2 #0)) #1]
+    │     [thm] JS.JSMap.entry_of_mem_keys: [@Membership.mem #4 (List _) _ (@JS.JSMap.keys _ #3 #2) #1]
+    │     [thm] JS.JSMap.keys_nodup: [@JS.JSMap.keys #2 #1 #0]
+    │     [thm] JS.JSMap.keys_set: [@JS.JSMap.keys #5 #4 (@JS.JSMap.set _ _ #3 #2 #1 #0)]
+    │     [thm] local_5: [@LE.le `[Nat] `[instLENat] (@List.count `[Int] `[Int.instLinearOrderPackage.toBEq] #0 `[u.orders.keys]) `[1]]
+    │     [thm] local_5: [@List.count `[Int] `[Int.instLinearOrderPackage.toBEq] #0 `[u.orders.keys]]
+    │   [cutsat] Assignment satisfying linear constraints
+    │     [assign] qty := 1
+    │     [assign] price := 1
+    │     [assign] t.expiry := 15
+    │     [assign] t.strike := 16
+    │     [assign] model.openQty u.orders.values := 999
+    │     [assign] model.openQty
+    │           (u.orders.set u.nextId
+    │               { expiry := t.expiry, leg := t.leg, strike := t.strike, buy := JS.eq t.side model.Side.ask, qty := qty,
+    │                 price := price }).values := 1001
+    │     [assign] u.heat := 1
+    │     [assign] u.nextId := 0
+    │ [grind] Diagnostics
+    │   [ematch] E-matching Diagnostics
+    │     [thm] Theorem Instance Count
+    │       [thm] List.nodup_iff_count ↦ 2
+    │       [thm] List.nodup_iff_pairwise_ne ↦ 2
+    │       [thm] List.pairwise_map ↦ 1
+    │       [thm] OrdersMap.openQty_set ↦ 1
+    │       [thm] List.Pairwise.map ↦ 1
+    │       [thm] JS.eq_false ↦ 1
+    │       [thm] JS.eq_iff ↦ 1
+    │       [thm] JS.JSMap.entry_of_mem_keys ↦ 1
+    │       [thm] JS.JSMap.keys_nodup ↦ 1
+    │       [thm] JS.JSMap.nodup_entries_fst ↦ 1
+
+✗ NOT VERIFIED  149/150 obligations proved, 1 failed; components: 4/6 verified  (34.8s)

@@ -1,0 +1,62 @@
+translated 7 module(s), 98 proof obligation(s) → .vreact/ ; checking with Lean…
+
+Components
+  TRUSTED            TermRow                src/TermRow.tsx:19
+  VERIFIED           PriceCell              src/StrikeRow.tsx:12
+  VERIFIED           StrikeRow              src/StrikeRow.tsx:37
+  TRUSTED            OrderTicket            src/OrderTicket.tsx:16
+  VERIFIED*          OptionsChain           src/OptionsChain.tsx:32
+  VERIFIED*          App                    src/App.tsx:79
+Functions
+  VERIFIED           validChain
+  VERIFIED           legOf
+  VERIFIED           theoOf
+  VERIFIED           quotePrice
+  VERIFIED           withinSpread
+  VERIFIED           isMid
+  VERIFIED           midPrice
+  VERIFIED           inTheMoney
+  VERIFIED           dist
+  VERIFIED           nearest
+  VERIFIED           atmIndex
+  VERIFIED           inWindow
+  VERIFIED           strikeWindow
+  VERIFIED           filterLabel
+  VERIFIED           levelsOf
+  VERIFIED           edge
+  VERIFIED           heatOf
+  VERIFIED           legFor
+  VERIFIED           labelOf
+  VERIFIED           marketOf
+  VERIFIED           validQty
+  VERIFIED           validOrder
+  VERIFIED           fmtPrice
+  VERIFIED           contractText
+  VERIFIED           fmtVol
+  VERIFIED           wellFormed
+  VERIFIED           heldPrice
+  VERIFIED           sameView
+  VERIFIED           keepsHolds
+  VERIFIED           toggle
+  VERIFIED           setCollapsed
+  VERIFIED           setFilter
+  VERIFIED           holdAt
+  VERIFIED           follow
+  VERIFIED           jump
+  VERIFIED           setHeat
+  VERIFIED           place
+  VERIFIED           cancel
+  VERIFIED           chainReducer
+App certificates (VReact.run_allInv instantiated)
+  VERIFIED*          VTS.App.App.certificate  axioms: propext, Classical.choice, Quot.sound, VTS.OrderTicket.OrderTicket.init_inv, VTS.OrderTicket.OrderTicket.renderTrusted, VTS.OrderTicket.OrderTicket.stable, VTS.TermRow.TermRow.init_inv, VTS.TermRow.TermRow.renderTrusted, VTS.TermRow.TermRow.stable
+Obligations by file
+  ✓ src/model.ts                             22/22
+  ✓ src/reducer.ts                           22/22
+  ✓ src/StrikeRow.tsx                        22/22
+  ✓ src/OptionsChain.tsx                     27/27
+  ✓ src/App.tsx                              5/5
+
+trusted (not verified, contracts assumed): TermRow, OrderTicket
+VERIFIED* = all own obligations proved; relies on the contracts of the trusted declarations above
+
+✔ VERIFIED modulo @trusted declarations  98/98 obligations proved; components: 2/6 verified  (21.0s)

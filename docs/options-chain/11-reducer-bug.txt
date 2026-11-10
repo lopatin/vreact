@@ -1,0 +1,66 @@
+translated 2 module(s), 44 proof obligation(s) → .vreact/ ; checking with Lean…
+
+Components
+Functions
+  VERIFIED           validChain
+  VERIFIED           legOf
+  VERIFIED           theoOf
+  VERIFIED           quotePrice
+  VERIFIED           withinSpread
+  VERIFIED           isMid
+  VERIFIED           midPrice
+  VERIFIED           inTheMoney
+  VERIFIED           dist
+  VERIFIED           nearest
+  VERIFIED           atmIndex
+  VERIFIED           inWindow
+  VERIFIED           strikeWindow
+  VERIFIED           levelsOf
+  VERIFIED           edge
+  VERIFIED           heatOf
+  VERIFIED           validQty
+  VERIFIED           validOrder
+  VERIFIED           fmtPrice
+  VERIFIED           fmtVol
+  VERIFIED           wellFormed
+  VERIFIED           heldPrice
+  VERIFIED           sameView
+  VERIFIED           keepsHolds
+  VERIFIED           toggle
+  VERIFIED           setCollapsed
+  VERIFIED           setFilter
+  VERIFIED           holdAt
+  VERIFIED           follow
+  VERIFIED           jump
+  VERIFIED           setHeat
+  INCOMPLETE         place
+      ↳ an obligation of it failed
+  VERIFIED           cancel
+  INCOMPLETE         chainReducer
+      ↳ it uses place, which is not verified: an obligation of it failed
+Obligations by file
+  ✓ src/model.ts                             22/22
+  ✗ src/reducer.ts                           21/22
+
+Failed obligations
+✗ src/reducer.ts:136:11  [postcondition] postcondition of place: implies(wellFormed(u), wellFormed(r))
+    │ `grind` failed
+    │ case grind.2.2.2.1
+    │ u : ChainUi
+    │ t : model.Ticket
+    │ qty price : Int
+    │ h₁₅ : …  (a long hypothesis, 3 lines: --full shows it)
+    │ h : 1 ≤ qty ∧ qty ≤ 500
+    │ h_1 : ¬price ≤ 0
+    │ x : model.Order
+    │ h_2 :
+    │   x ∈ u.orders ∨
+    │     x =
+    │       { id := u.nextId, expiry := t.expiry, leg := t.leg, strike := t.strike, buy := JS.eq t.side model.Side.ask,
+    │         qty := qty, price := price }
+    │ h_6 : -1 * x.id + u.nextId ≤ 0
+    │ left : JS.eq t.side model.Side.ask = false
+    │ right : ¬t.side = model.Side.ask
+    │ ⊢ False
+
+✗ NOT VERIFIED  43/44 obligations proved, 1 failed; components: 0/0 verified  (10.3s)

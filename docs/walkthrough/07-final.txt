@@ -1,0 +1,38 @@
+translated 9 module(s), 79 proof obligation(s) → .vreact/ ; checking with Lean…
+
+Components
+  VERIFIED           CardView               src/components/CardView.tsx:14
+  VERIFIED           ColumnView             src/components/ColumnView.tsx:17
+  VERIFIED           AddCardForm            src/components/AddCardForm.tsx:8
+  VERIFIED           Stats                  src/components/Stats.tsx:6
+  VERIFIED           WipControl             src/components/WipControl.tsx:6
+  VERIFIED           Details                src/components/Details.tsx:5
+  VERIFIED           App                    src/App.tsx:13
+Functions
+  VERIFIED           validTitle
+  VERIFIED           validPoints
+  VERIFIED           allCards
+  VERIFIED           wellFormed
+  VERIFIED           cardsIn
+  VERIFIED           findCard
+  VERIFIED           keepsCards
+  VERIFIED           removeEverywhere
+  VERIFIED           addCard
+  VERIFIED           deleteCard
+  VERIFIED           moveCard
+  VERIFIED           setWipLimit
+  VERIFIED           boardReducer
+App certificates (VReact.run_allInv instantiated)
+  VERIFIED           VTS.App.App.certificate  axioms: propext, Classical.choice, Quot.sound
+Obligations by file
+  ✓ src/model.ts                             12/12
+  ✓ src/reducer.ts                           2/2
+  ✓ src/components/CardView.tsx              10/10
+  ✓ src/components/ColumnView.tsx            10/10
+  ✓ src/components/AddCardForm.tsx           7/7
+  ✓ src/components/Stats.tsx                 3/3
+  ✓ src/components/WipControl.tsx            6/6
+  ✓ src/components/Details.tsx               4/4
+  ✓ src/App.tsx                              25/25
+
+✔ VERIFIED  79/79 obligations proved; components: 7/7 verified  (19.3s)

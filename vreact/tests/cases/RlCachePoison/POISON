@@ -1,0 +1,1 @@
+the build logs are doctored after the first verify (see tests/run.ts, poisonTraces)

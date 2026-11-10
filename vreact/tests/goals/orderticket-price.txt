@@ -1,0 +1,22 @@
+`grind` failed
+case grind
+E : Type
+props : Props
+κ : Cb props E
+σ : State
+hpre : props.ticket.price > 0
+qty : Int := σ.qty
+price : Int := σ.price
+buy : Bool := JS.eq props.ticket.side model.Side.ask
+m : Option model.Quote := props.market
+marketable : Bool :=
+  match h₁ : m with
+  | some m_1 => model.crosses buy price m_1
+  | none => false
+e : DomEvent
+hinv : (1 ≤ σ.qty ∧ σ.qty ≤ 500) ∧ σ.price > 0
+h : σ.price + -1 ≤ 0
+⊢ False
+[grind] Goal diagnostics
+  [facts] Asserted facts
+    [prop] -1 * props.ticket.price + 1 ≤ 0

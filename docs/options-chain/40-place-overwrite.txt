@@ -1,0 +1,150 @@
+translated 7 module(s), 150 proof obligation(s) → .vreact/ ; checking with Lean…
+
+Components
+  VERIFIED           PriceCell              src/StrikeRow.tsx:12
+  VERIFIED           StrikeRow              src/StrikeRow.tsx:39
+  VERIFIED           TermRow                src/TermRow.tsx:19
+  VERIFIED           OrderTicket            src/OrderTicket.tsx:19
+  INCOMPLETE         OptionsChain           src/OptionsChain.tsx:32
+      ↳ it uses place (src/reducer.ts), which is not verified: 3 obligations of it failed
+  INCOMPLETE         App                    src/App.tsx:156
+      ↳ it uses place (src/reducer.ts), which is not verified: 3 obligations of it failed
+Functions
+  VERIFIED           validChain
+  VERIFIED           legOf
+  VERIFIED           theoOf
+  VERIFIED           quotePrice
+  VERIFIED           withinSpread
+  VERIFIED           isMid
+  VERIFIED           midPrice
+  VERIFIED           inTheMoney
+  VERIFIED           dist
+  VERIFIED           nearest
+  VERIFIED           atmIndex
+  VERIFIED           inWindow
+  VERIFIED           strikeWindow
+  VERIFIED           filterLabel
+  VERIFIED           levelsOf
+  VERIFIED           edge
+  VERIFIED           heatOf
+  VERIFIED           legFor
+  VERIFIED           labelOf
+  VERIFIED           marketOf
+  VERIFIED           validQty
+  VERIFIED           validOrder
+  VERIFIED           openQty
+  VERIFIED           fmtPrice
+  VERIFIED           contractText
+  VERIFIED           quoteText
+  VERIFIED           crosses
+  VERIFIED           fmtVol
+  VERIFIED           wellFormed
+  VERIFIED           sameView
+  VERIFIED           keepsHolds
+  VERIFIED           keepsAllHolds
+  VERIFIED           sameOrder
+  VERIFIED           keepsOrders
+  VERIFIED           keepsOrdersExcept
+  VERIFIED           orderFor
+  VERIFIED           toggle
+  VERIFIED           setCollapsed
+  VERIFIED           setFilter
+  VERIFIED           holdAt
+  VERIFIED           follow
+  VERIFIED           jump
+  VERIFIED           setHeat
+  VERIFIED           accepts
+  INCOMPLETE         place
+      ↳ 3 obligations of it failed
+  INCOMPLETE         cancel
+      ↳ an obligation of it failed
+  VERIFIED           validAction
+  INCOMPLETE         chainReducer
+      ↳ it uses place, which is not verified: 3 obligations of it failed
+  VERIFIED           shiftQuote
+  VERIFIED           moveFutures
+  VERIFIED           nextSeed
+  VERIFIED           validFeed
+  VERIFIED           stepFeed
+  VERIFIED           sameFeed
+  VERIFIED           simReducer
+App certificates (VReact.run_allInv instantiated)
+  INCOMPLETE         VTS.App.App.certificate  axioms: propext, sorryAx, Classical.choice, Quot.sound
+      ↳ it uses place (src/reducer.ts), which is not verified: 3 obligations of it failed
+Obligations by file
+  ✓ src/model.ts                             22/22
+  ✗ src/reducer.ts                           21/25
+  ✓ src/StrikeRow.tsx                        22/22
+  ✓ src/TermRow.tsx                          12/12
+  ✓ src/OrderTicket.tsx                      12/12
+  ✓ src/OptionsChain.tsx                     37/37
+  ✓ src/App.tsx                              20/20
+
+Failed obligations
+✗ src/reducer.ts:188:11  [postcondition] postcondition of place: implies(wellFormed(u), wellFormed(r))
+    │ `grind` failed
+    │ case grind.1
+    │   … (2 earlier hypotheses: u, t: --full shows them)
+    │ qty price : Int
+    │ h_pre : 1 ≤ qty ∧ qty ≤ 500
+    │ h₂₇ : …  (a long hypothesis, 3 lines: --full shows it)
+    │ h : ((1 ≤ qty ∧ qty ≤ 500) ∧ 0 < price) ∧ model.openQty u.orders.values + qty ≤ 1000
+    │ h_1 :
+    │   -1 *
+    │         model.openQty
+    │           (u.orders.set (u.orders.size + 1)
+    │               { expiry := t.expiry, leg := t.leg, strike := t.strike, buy := JS.eq t.side model.Side.ask, qty := qty,
+    │                 price := price }).values +
+    │       1001 ≤
+    │     0
+    │ left : JS.eq t.side model.Side.ask = true
+    │ right : t.side = model.Side.ask
+    │ ⊢ False
+✗ src/reducer.ts:192:11  [postcondition] postcondition of place: r.orders.size === (accepts(u, qty, price) ? u.orders.size + 1 : u.orders.size)
+    │ `grind` failed
+    │ case grind
+    │ u : ChainUi
+    │ t : model.Ticket
+    │ qty price : Int
+    │ h_pre : 1 ≤ qty ∧ qty ≤ 500
+    │ h : ((1 ≤ qty ∧ qty ≤ 500) ∧ 0 < price) ∧ model.openQty u.orders.values + qty ≤ 1000
+    │ hcontract : u.orders.keys.Nodup
+    │ h_1 : u.orders.size + 1 ∈ u.orders.keys
+    │ w : model.Order
+    │ h_3 : (u.orders.size + 1, w) ∈ u.orders.entries
+    │ w_1 : Int
+    │ h_4 : (w_1, w) ∈ u.orders.entries
+    │ w_2 : model.Order
+    │ h_5 : (w_1, w_2) ∈ u.orders.entries
+    │ ⊢ False
+✗ src/reducer.ts:193:11  [postcondition] postcondition of place: keepsOrders(u, r) && keepsAllHolds(u, r) && sameView(u, r)
+    │ `grind` failed
+    │ case grind.1.1.1.2.1.1.2.1.2.1.1.1.1.1.1.2.1.1
+    │   … (56 earlier hypotheses: u, t, qty, price, h_pre, h, hcontract, hcontract_1, …: --full shows them)
+    │ h_2, h₁, h_3, h_6, left_1, left_2, left_3, right_3, h_12, h_14, h_15, h_16, h_22, snd_eq, h_26, snd_eq_1, h_28, h_32, h_34, h_39, h_41, h_44 : …  (22 long hypotheses, 114 lines: --full shows them)
+    │ w_20 : model.Order
+    │ h_36 : (w_5, w_20) ∈ (u.orders.delete (u.orders.size + 1)).entries
+    │ h_37 : p_1.buy = snd.buy
+    │ w_21 : model.Order
+    │ h_38 : (w_18, w_21) ∈ u.orders.entries
+    │ w_22 : model.Order
+    │ w_23 : model.Order
+    │ h_40 : (w_19, w_23) ∈ u.orders.entries
+    │ w_24 : model.Order
+    │ h_42 : qty = snd.qty
+    │ left_5 : (w_9, w_17) ∈ u.orders.entries
+    │ right_5 : ¬w_9 + -1 * u.orders.size + -1 = 0
+    │ h_45 : w_5 = w_9
+    │ ⊢ False
+✗ src/reducer.ts:206:11  [postcondition] postcondition of cancel: implies(wellFormed(u), wellFormed(r))
+    │ `grind` failed
+    │ case grind
+    │ u : ChainUi
+    │ id' : Int
+    │ h₃₀ :
+    │   ((1 ≤ u.heat ∧ u.heat ≤ 5) ∧ ∀ (x : model.Order), x ∈ u.orders.values → (1 ≤ x.qty ∧ x.qty ≤ 500) ∧ 0 < x.price) ∧
+    │     model.openQty u.orders.values ≤ 1000
+    │ h : -1 * model.openQty (u.orders.delete id').values + 1001 ≤ 0
+    │ ⊢ False
+
+✗ NOT VERIFIED  146/150 obligations proved, 4 failed; components: 4/6 verified  (49.7s)

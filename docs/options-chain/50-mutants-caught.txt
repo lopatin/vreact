@@ -1,0 +1,169 @@
+translated 8 module(s), 192 proof obligation(s) → .vreact/ ; checking with Lean…
+
+Components
+  VERIFIED           PriceCell              src/StrikeRow.tsx:12
+  VERIFIED           StrikeRow              src/StrikeRow.tsx:41
+  VERIFIED           TermRow                src/TermRow.tsx:19
+  VERIFIED           OrderTicket            src/OrderTicket.tsx:19
+  INCOMPLETE         OptionsChain           src/OptionsChain.tsx:33
+      ↳ it uses toggle (src/reducer.ts), which is not verified: an obligation of it failed
+  INCOMPLETE         App                    src/App.tsx:156
+      ↳ it uses toggle (src/reducer.ts), which is not verified: an obligation of it failed
+Functions
+  VERIFIED           sameMembers
+  VERIFIED           sameMembersExcept
+  VERIFIED           toggleIn
+  VERIFIED           sameEntries
+  VERIFIED           agreeExcept
+  VERIFIED           sameList
+  VERIFIED           byId
+  VERIFIED           validChain
+  VERIFIED           legOf
+  VERIFIED           theoOf
+  VERIFIED           quotePrice
+  VERIFIED           withinSpread
+  VERIFIED           isMid
+  VERIFIED           midPrice
+  VERIFIED           inTheMoney
+  VERIFIED           dist
+  VERIFIED           nearest
+  VERIFIED           atmIndex
+  VERIFIED           inWindow
+  VERIFIED           strikeWindow
+  VERIFIED           filterLabel
+  VERIFIED           levelsOf
+  VERIFIED           edge
+  VERIFIED           heatOf
+  VERIFIED           legFor
+  VERIFIED           labelOf
+  VERIFIED           marketOf
+  VERIFIED           validQty
+  VERIFIED           validOrder
+  VERIFIED           openQty
+  VERIFIED           fmtPrice
+  VERIFIED           contractText
+  VERIFIED           quoteText
+  VERIFIED           crosses
+  VERIFIED           fmtVol
+  VERIFIED           wellFormed
+  VERIFIED           sameView
+  VERIFIED           sameOrder
+  VERIFIED           keepsOrders
+  VERIFIED           keepsOrdersExcept
+  VERIFIED           sameOrders
+  VERIFIED           orderFor
+  INCOMPLETE         toggle
+      ↳ an obligation of it failed
+  VERIFIED           setCollapsed
+  VERIFIED           setFilter
+  VERIFIED           watchStrike
+  INCOMPLETE         holdAt
+      ↳ an obligation of it failed
+  VERIFIED           follow
+  VERIFIED           jump
+  VERIFIED           setHeat
+  VERIFIED           accepts
+  VERIFIED           place
+  VERIFIED           repriced
+  VERIFIED           amend
+  INCOMPLETE         cancel
+      ↳ 2 obligations of it failed
+  VERIFIED           validAction
+  INCOMPLETE         chainReducer
+      ↳ it uses toggle, which is not verified: an obligation of it failed
+  VERIFIED           shiftQuote
+  VERIFIED           moveFutures
+  VERIFIED           nextSeed
+  VERIFIED           validFeed
+  VERIFIED           stepFeed
+  VERIFIED           sameFeed
+  VERIFIED           simReducer
+App certificates (VReact.run_allInv instantiated)
+  INCOMPLETE         VTS.App.App.certificate  axioms: propext, sorryAx, Classical.choice, Quot.sound
+      ↳ it uses toggle (src/reducer.ts), which is not verified: an obligation of it failed
+Obligations by file
+  ✓ src/collections.ts                       6/6
+  ✓ src/model.ts                             22/22
+  ✗ src/reducer.ts                           46/50
+  ✓ src/StrikeRow.tsx                        24/24
+  ✓ src/TermRow.tsx                          12/12
+  ✓ src/OrderTicket.tsx                      12/12
+  ✓ src/OptionsChain.tsx                     46/46
+  ✓ src/App.tsx                              20/20
+
+Failed obligations
+✗ src/reducer.ts:113:11  [postcondition] postcondition of toggle: r.filter === u.filter && r.focus === u.focus && r.heat === u.heat
+    │ `grind` failed
+    │ case grind.1
+    │ u : ChainUi
+    │ id' : Int
+    │ hcontract : decide (id' ∈ (collections.toggleIn u.collapsed id').elems) = !decide (id' ∈ u.collapsed.elems)
+    │ hcontract_1 : (collections.toggleIn u.collapsed id').elems.Nodup
+    │ hcontract_2 : decide (id' ∈ (collections.toggleIn u.collapsed id').elems) = !decide (id' ∈ u.collapsed.elems)
+    │ hcontract_3 : u.collapsed.elems.Nodup
+    │ hcontract_4 : decide (id' ∈ (collections.toggleIn u.collapsed id').elems) = !decide (id' ∈ u.collapsed.elems)
+    │ hpart : ∀ (x : Int), x ∈ u.collapsed.elems → x = id' ∨ x ∈ (collections.toggleIn u.collapsed id').elems
+    │ hpart_1 : ∀ (x : Int), x ∈ (collections.toggleIn u.collapsed id').elems → x = id' ∨ x ∈ u.collapsed.elems
+    │ h : ¬none = u.focus
+    │ left : id' ∈ (collections.toggleIn u.collapsed id').elems
+    │ right : ¬id' ∈ u.collapsed.elems
+    │ ⊢ False
+✗ src/reducer.ts:160:11  [postcondition] postcondition of holdAt: sameView(u, r) && agreeExcept(u.held, r.held, id) && sameOrders(u, r)
+    │ `grind` failed
+    │ case grind.1
+    │   … (8 earlier hypotheses: u, id', price, focus, heq, hcontract, hcontract_1, hcontract_2: --full shows them)
+    │ hcontract_3 hcontract_4 : u.orders.keys.Nodup
+    │ hcontract_5 : (List.map Prod.fst u.orders.entries).Nodup
+    │ h : True
+    │ fst snd : Int
+    │ h_1 : (fst, snd) ∈ u.held.entries
+    │ left : ¬fst = id'
+    │ right : ¬(if fst = focus then some price else if fst = id' then some price else u.held.get fst) = some snd
+    │ h_3 : fst = focus
+    │ w : Int
+    │ h_4 : (fst, w) ∈ u.held.entries
+    │ w_1 : Int
+    │ h_5 : (w_1, snd) ∈ u.held.entries
+    │ w_2 : Int
+    │ h_6 : (w_1, w_2) ∈ u.held.entries
+    │ ⊢ False
+✗ src/reducer.ts:277:11  [postcondition] postcondition of cancel: implies(wellFormed(u), wellFormed(r))
+    │ `grind` failed
+    │ case grind.2.1.1
+    │   … (2 earlier hypotheses: u, id': --full shows them)
+    │ hcontract : (List.map Prod.fst u.orders.entries).Nodup
+    │ h₄₆ : …  (a long hypothesis, 5 lines: --full shows it)
+    │ hcontract_1 : …  (a contract instance, 5 lines: --full shows it)
+    │ h :
+    │   -1 *
+    │         model.openQty
+    │           (JS.JSMap.empty.setAll
+    │               (JS.toSorted (List.filter (fun tup => !JS.eq tup.fst id') u.orders.entries) fun tup tup_1 =>
+    │                 tup.snd.expiry + -1 * tup_1.snd.expiry)).values +
+    │       1001 ≤
+    │     0
+    │ h_1 : u.orders.entries.length ≤ (List.filter (fun tup => !JS.eq tup.fst id') u.orders.entries).length + 1
+    │ h_2 : (fun a => JS.eq a.fst id') = fun tup => !JS.eq tup.fst id'
+    │ h_3 : (fun x y => (!JS.eq x.fst id') = true → (!JS.eq y.fst id') = true → ¬x.fst = y.fst) = fun a b => ¬a.fst = b.fst
+    │ ⊢ False
+✗ src/reducer.ts:281:11  [postcondition] postcondition of cancel: sameList([...r.orders.keys()], [...u.orders.keys()].filter((k) => k !== id))
+    │ `grind` failed
+    │ case grind.1.1.1.1.2.1.1.1.1.1.1.1.1.1
+    │   … (44 earlier hypotheses: u, id', hcontract_1, hcontract_2, val, h_4, h_5, h_6, …: --full shows them)
+    │ hcontract, hcontract_3, hcontract_4 : …  (3 contract instances, 8 lines: --full shows them)
+    │ hkey, h, h_1, property, h_3, h_7, right, h_13, h_16, left_2, right_2, h_19, h_21, h_23, left_3, left_4, right_4, h_26, left_5, h_31, h_32, left_7, h_35 : …  (23 long hypotheses, 154 lines: --full shows them)
+    │ w_18 : model.Order
+    │ fst_2 : Int
+    │ snd_2 : model.Order
+    │ right_7 : snd_2 = w_4
+    │ w_20 : model.Order
+    │ h_34 : (w_8, w_20) ∈ u.orders.entries
+    │ w_21 : model.Order
+    │ w_22 : model.Order
+    │ h_36 : (w_10, w_22) ∈ u.orders.entries
+    │ left_8 : JS.eq w_8 id' = true
+    │ right_8 : w_8 = id'
+    │ h_38 : (fun x y => (!JS.eq x.fst id') = true → (!JS.eq y.fst id') = true → ¬x.fst = y.fst) = fun a b => ¬a.fst = b.fst
+    │ ⊢ False
+
+✗ NOT VERIFIED  188/192 obligations proved, 4 failed; components: 4/6 verified  (54.1s)

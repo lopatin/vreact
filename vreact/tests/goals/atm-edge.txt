@@ -1,0 +1,82 @@
+`grind` failed
+case grind.1.1.1.1.1
+E : Type
+props : Props
+κ : Cb props E
+σ : State
+ui : reducer.ChainUi := σ.ui
+ticket : Option model.Ticket := σ.ticket
+levels : Option Int := model.levelsOf ui.filter
+allOpen : Bool := props.expiries.all fun e => !ui.collapsed.contains e.id
+ids : List Int := List.map (fun e => e.id) props.expiries
+e : model.Expiry
+live : Option Int := model.midPrice e.future
+held : Option Int := reducer.heldPrice ui.held e.id
+center : Option Int :=
+  match h₈ : held with
+  | some held_1 => some held_1
+  | none => live
+n : Int := ↑e.strikes.length
+atm : Int :=
+  match h₈ : center with
+  | some center_1 => model.atmIndex e.strikes center_1
+  | none => -1
+levels_1 : Int
+h₁₀ :
+  (match h₂₂ : σ.ui.filter with
+    | model.StrikeFilter.s3 => some 3
+    | model.StrikeFilter.s7 => some 7
+    | model.StrikeFilter.s11 => some 11
+    | model.StrikeFilter.s99 => some 99
+    | model.StrikeFilter.all => none) =
+    some levels_1
+hpre :
+  (List.map (fun e => e.id) props.expiries).Nodup ∧
+    ∀ (x : model.Expiry), x ∈ props.expiries → (List.map (fun s => s.strike) x.strikes).Nodup
+hinv :
+  (((1 ≤ σ.ui.heat ∧ σ.ui.heat ≤ 5) ∧ (List.map (fun o => o.id) σ.ui.orders).Nodup) ∧
+      ∀ (x : model.Order), x ∈ σ.ui.orders → ((1 ≤ x.qty ∧ x.qty ≤ 500) ∧ 0 < x.price) ∧ x.id < σ.ui.nextId) ∧
+    match σ.ticket with
+    | some ticket => ticket.price > 0
+    | none => True
+held_1 : Int
+heq :
+  (match h₈ :
+      match h₁ : List.find? (fun x => JS.eq x.expiry e.id) σ.ui.held with
+      | some h_1 => some h_1.price
+      | none => none with
+    | some held_1 => some held_1
+    | none =>
+      match h₈ : e.future.bid with
+      | some b_1 =>
+        match h₈ : e.future.ask with
+        | some a_1 => some (if 0 < 2 then (b_1 + a_1) / 2 else -(b_1 + a_1) / -2)
+        | none => some b_1
+      | none =>
+        match h₁₅ : e.future.bid, h₈ with
+        | some b_1, h₁₃ => some b_1
+        | none, h₁₃ => e.future.ask) =
+    some held_1
+hcontract :
+  (-1 ≤ JS.findIndex e.strikes fun s => model.nearest e.strikes s held_1) ∧
+    (JS.findIndex e.strikes fun s => model.nearest e.strikes s held_1) < ↑e.strikes.length
+h : (JS.findIndex e.strikes fun s => model.nearest e.strikes s held_1) + 1 ≤ 0
+h_1 : reducer.Hold
+h₁ h_2 : List.find? (fun x => JS.eq x.expiry e.id) σ.ui.held = some h_1
+w : reducer.Hold
+h_4 : ¬(w ∈ σ.ui.held → JS.eq w.expiry e.id = false)
+held_2 : Int
+h₈ h_5 :
+  (match h₁ : List.find? (fun x => JS.eq x.expiry e.id) σ.ui.held with
+    | some h_1 => some h_1.price
+    | none => none) =
+    some held_2
+ticket_1 : model.Ticket
+h_6 : σ.ticket = some ticket_1
+h₂₂ h_7 : σ.ui.filter = model.StrikeFilter.s3
+left : (List.map (fun s => s.strike) e.strikes).Nodup
+right : List.Pairwise (fun x1 x2 => ¬x1 = x2) (List.map (fun s => s.strike) e.strikes)
+⊢ False
+[grind] Goal diagnostics
+  [facts] Asserted facts
+    [prop] (match h₂₂ : σ.ui.filter with

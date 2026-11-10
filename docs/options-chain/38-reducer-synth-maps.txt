@@ -1,0 +1,7 @@
+hole in follow: ChainUi   scope: u, u.collapsed, u.filter, u.held, u.focus, u.heat, u.orders, id
+  candidate passes 400 random tests: { ...u, held: new Map() }   (27 candidate(s) tested in 0.2s)
+  ✔ proved by Lean: { ...u, held: new Map() }
+hole in cancel: ChainUi   scope: u, u.collapsed, u.filter, u.held, u.focus, u.heat, u.orders, id
+  candidate passes 400 random tests: { ...u, orders: new Map() }   (36 candidate(s) tested in 0.2s)
+  ✔ proved by Lean: { ...u, orders: new Map() }
+(src/reducer.ts not modified: rerun with --write to keep the proved fill(s))

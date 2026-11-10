@@ -1,0 +1,136 @@
+translated 8 module(s), 210 proof obligation(s) → .vreact/ ; checking with Lean…
+
+Components
+  VERIFIED           PriceCell              src/StrikeRow.tsx:12
+  VERIFIED           StrikeRow              src/StrikeRow.tsx:41
+  VERIFIED           TermRow                src/TermRow.tsx:19
+  VERIFIED           OrderTicket            src/OrderTicket.tsx:19
+  INCOMPLETE         OptionsChain           src/OptionsChain.tsx:34
+      ↳ it uses amend (src/reducer.ts), which is not verified: 2 obligations of it failed
+  INCOMPLETE         App                    src/App.tsx:172
+      ↳ it uses amend (src/reducer.ts), which is not verified: 2 obligations of it failed
+Functions
+  VERIFIED           sameMembers
+  VERIFIED           sameMembersExcept
+  VERIFIED           toggleIn
+  VERIFIED           sameEntries
+  VERIFIED           agreeExcept
+  VERIFIED           sameList
+  VERIFIED           byId
+  VERIFIED           validChain
+  VERIFIED           legOf
+  VERIFIED           theoOf
+  VERIFIED           quotePrice
+  VERIFIED           withinSpread
+  VERIFIED           isMid
+  VERIFIED           midPrice
+  VERIFIED           inTheMoney
+  VERIFIED           dist
+  VERIFIED           nearest
+  VERIFIED           atmIndex
+  VERIFIED           inWindow
+  VERIFIED           strikeWindow
+  VERIFIED           shownRows
+  VERIFIED           levelsOf
+  VERIFIED           filterLabel
+  VERIFIED           edge
+  VERIFIED           heatOf
+  VERIFIED           legFor
+  VERIFIED           labelOf
+  VERIFIED           marketOf
+  VERIFIED           validQty
+  VERIFIED           validOrder
+  VERIFIED           openQty
+  VERIFIED           fmtPrice
+  VERIFIED           contractText
+  VERIFIED           quoteText
+  VERIFIED           crosses
+  VERIFIED           fmtVol
+  VERIFIED           wellFormed
+  VERIFIED           sameView
+  VERIFIED           sameOrder
+  VERIFIED           keepsOrders
+  VERIFIED           keepsOrdersExcept
+  VERIFIED           freshIds
+  VERIFIED           sameOrders
+  VERIFIED           orderFor
+  VERIFIED           toggle
+  VERIFIED           setCollapsed
+  VERIFIED           setFilter
+  VERIFIED           watchStrike
+  VERIFIED           holdAt
+  VERIFIED           follow
+  VERIFIED           jump
+  VERIFIED           setHeat
+  VERIFIED           accepts
+  VERIFIED           withOrder
+  VERIFIED           place
+  VERIFIED           repriced
+  INCOMPLETE         amend
+      ↳ 2 obligations of it failed
+  VERIFIED           cancel
+  VERIFIED           validAction
+  INCOMPLETE         chainReducer
+      ↳ it uses amend, which is not verified: 2 obligations of it failed
+  VERIFIED           shiftQuote
+  VERIFIED           shifted
+  VERIFIED           moveFutures
+  VERIFIED           nextSeed
+  VERIFIED           validFeed
+  VERIFIED           stepFeed
+  VERIFIED           sameFeed
+  VERIFIED           simReducer
+App certificates (VReact.run_allInv instantiated)
+  INCOMPLETE         VTS.App.App.certificate  axioms: propext, sorryAx, Classical.choice, Quot.sound
+      ↳ it uses amend (src/reducer.ts), which is not verified: 2 obligations of it failed
+Obligations by file
+  ✓ src/collections.ts                       6/6
+  ✓ src/model.ts                             26/26
+  ✗ src/reducer.ts                           50/52
+  ✓ src/StrikeRow.tsx                        24/24
+  ✓ src/TermRow.tsx                          12/12
+  ✓ src/OrderTicket.tsx                      12/12
+  ✓ src/OptionsChain.tsx                     46/46
+  ✓ src/App.tsx                              32/32
+
+Failed obligations
+✗ src/reducer.ts:280:11  [postcondition] postcondition of amend: implies(wellFormed(u), wellFormed(r))
+    │ `grind` failed
+    │ case grind.2.1.1.1
+    │   … (9 earlier hypotheses: u, id', price, p_1, heq, h, hcontract, w, …: --full shows them)
+    │ h₄₄, h_1 : …  (2 long hypotheses, 13 lines: --full shows them)
+    │ w_1 : Int
+    │ h_3 : (w_1, p_1) ∈ u.orders.entries
+    │ h_4 : -1 * model.openQty u.orders.values + model.openQty (u.orders.delete id').values ≤ 0
+    │ w_2 : Int
+    │ h_5 : ¬(w_2 ∈ u.orders.keys → w_2 ∈ (u.orders.delete id').keys)
+    │ w_3 : model.Order
+    │ h_6 : (w_1, w_3) ∈ u.orders.entries
+    │ h_7 : (fun a => JS.eq a id') = fun x => !JS.eq x id'
+    │ w_4 : model.Order
+    │ h_8 : (w_2, w_4) ∈ u.orders.entries
+    │ left : JS.eq w_1 id' = true
+    │ right : w_1 = id'
+    │ h_10 : (fun x y => (!JS.eq x id') = true → (!JS.eq y id') = true → ¬x = y) = fun x1 x2 => ¬x1 = x2
+    │ ⊢ False
+✗ src/reducer.ts:285:11  [postcondition] postcondition of amend: sameList([...r.orders.keys()], [...u.orders.keys()])
+    │ (deterministic) timeout: the automation did not finish within this obligation's budget of 1000000 heartbeats (set "heartbeats" in vreact.json to change it)
+    │   … (the goal as stated: --full shows it)
+    │ The goal splits into 3 cases. A case's name lists the branches that lead to it, outermost first: `isTrue`/`isFalse` are the two branches of an `if` (a `switch` on a number or a string is a chain of `if`s, one per body), `h_k` is the k-th alternative of a `match` (a `switch` on a union or an enum has one per `case` label, in the order written, then one for the rest: `default`, wherever it is written); conditions in the translation (such as the sign test of `%`) split the same way. Each case alone, smallest first, with up to 100000 heartbeats: 2 proved, 1 did not finish. The first that did not finish, case h_1.isFalse.isTrue:
+    │ case h_1.isFalse.isTrue
+    │   … (6 earlier hypotheses: u, id', price, hcontract✝⁴, p_1✝, heq✝: --full shows them)
+    │ h✝² : ¬price ≤ 0
+    │ hcontract✝³, hcontract✝² : …  (2 contract instances, 17 lines: --full shows them)
+    │ hcontract✝¹ : (List.filter (fun x => !JS.eq x id') u.orders.keys).Nodup
+    │ h✝¹ : ¬False
+    │ h✝ : ↑((List.filter (fun x => !JS.eq x id') u.orders.keys).length + 1) = ↑u.orders.keys.length
+    │ hcontract✝ : (List.filter (fun x => !JS.eq x id') u.orders.keys).Nodup
+    │ hkey✝ :
+    │   (List.filter (fun y => !JS.eq y id') u.orders.keys).length + List.count id' (List.map (fun x => x) u.orders.keys) =
+    │     u.orders.keys.length
+    │ ⊢ ∀
+    │     (x :
+    │       { x //
+    │   …
+
+✗ NOT VERIFIED  208/210 obligations proved, 2 failed; components: 4/6 verified  (104.4s)
