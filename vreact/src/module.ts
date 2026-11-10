@@ -21,15 +21,17 @@ import { Program, ModCtx, SPEC_MODULE, moduleFile, isErasedType, type Obligation
 import { T, type VType, typeOfNode, typeOfDecl, emitTypeDecl, leanType, nonValuePart, checkValueType, registerTypeParams, showType } from "./types.ts";
 import { VtsError, fail, leanIdent, leanField, leanStr, paren, capitalize, nodeText, exprText, clashesWithLean } from "./util.ts";
 import { LEAN_TYPE_AUX, LEAN_ROOT_NAMES } from "./leanNames.ts";
-import { expr, prop, propAll, valueBlock, specFn, symbolOf, bindParam, typeOf, checkParamAnnotation, checkNotThisParam } from "./translate.ts";
-import { translateComponent, compSignature, baseEnv } from "./component.ts";
-import { leanDecls, checkProofFiles } from "./lean.ts";
+import { expr, prop, propAll, valueBlock, specFn, symbolOf, bindParam, typeOf, checkParamAnnotation, checkNotThisParam, numericLiteralType, checkClosures } from "./translate.ts";
+import { translateComponent, compSignature, baseEnv, selfRenderMsg } from "./component.ts";
+import { leanDecls, checkProofFiles, headerImports, type ProofImport } from "./lean.ts";
 import { manifestMatches } from "./ide.ts";
 
 export interface Config {
   root: string;
   srcDir: string;
   files: string[];
+  /** symbolic links found in the source directory (to a directory or a source file): rejected */
+  links?: string[];
   outDir: string;
   proofsDir: string;
   leanLib: string;
@@ -72,6 +74,13 @@ export interface ModuleResult {
   functions: { name: string; qname: string; trusted: boolean; posts: string[]; obs: number[]; refs: string[] }[];
   /** module constants; `facts`: Lean names of their module-level assert(…) theorems */
   constants: { name: string; qname: string; facts: string[]; obs: number[]; refs: string[] }[];
+  /**
+   * the Lean names the module's generated files declare (`GeneratedNames.names`); no other
+   * module declares any of them (`nameClashes`), so they tell which module a declaration
+   * belongs to — a name prefix does not: a module `src/ui/Board.ts` (namespace `VTS.ui.Board`)
+   * declares its names inside the namespace of a component `Board` of `src/ui.tsx`
+   */
+  declNames: string[];
 }
 
 export interface TranslateResult {
@@ -80,6 +89,193 @@ export interface TranslateResult {
   errors: VtsError[];
   modules: ModuleResult[];
   obligations: Obligation[];
+}
+
+/**
+ * The files of the source directory vreact verifies (when vreact.json has no "include"): `.ts` and
+ * `.tsx` files, except declaration files and tests — a name containing `.test.` or `.spec.` (and
+ * files in `node_modules` or in a directory whose name starts with `.`, or listed in "exclude").
+ */
+export function isSourceName(f: string): boolean {
+  return /\.(ts|tsx)$/.test(f) && !/\.d\.ts$/.test(f) && !TEST_NAME.test(f);
+}
+const TEST_NAME = /\.test\.|\.spec\./;
+
+/**
+ * Why a project file in the TypeScript program is not one of the verified sources, when it is
+ * in the source directory but was skipped (null otherwise).
+ */
+function skippedReason(cfg: Config, f: string): string | null {
+  const rel = path.relative(cfg.srcDir, path.resolve(f));
+  if (rel.startsWith("..") || path.isAbsolute(rel) || !/\.(ts|tsx)$/.test(f) || /\.d\.ts$/.test(f)) return null;
+  const parts = rel.split(path.sep);
+  const dir = parts.slice(0, -1).find((p) => p === "node_modules" || p.startsWith("."));
+  if (dir) return `it is in the directory ${dir}/, and vreact skips node_modules/ and directories whose names start with "." in "src"; move it`;
+  if (TEST_NAME.test(parts[parts.length - 1])) return `its name contains ".test." or ".spec.", and vreact skips such files in "src" (as tests); rename it`;
+  return `it is listed in "exclude" in vreact.json (or, with "include", not listed there)`;
+}
+
+/** The nearest tsconfig.json above the directory `dir`, as Vite looks for it (tsconfck's `find`: none in node_modules). */
+function viteTsconfig(dir: string): string | null {
+  if (/[\\/]node_modules[\\/]/.test(dir + path.sep)) return null;
+  for (let d = dir; ; d = path.dirname(d)) {
+    const f = path.join(d, "tsconfig.json");
+    try {
+      const st = fs.statSync(f);
+      if (st.isFile() || st.isFIFO()) return f;
+    } catch {
+      // none here
+    }
+    if (path.dirname(d) === d) return null;
+  }
+}
+
+/**
+ * The nearest `package.json` from the directory `dir` up to the root of the file system that has
+ * an object "browser" field; null when none has. Vite maps the imports of a module through the
+ * "browser" field of the package.json `findNearestPackageData` finds for it: the nearest one that
+ * `loadPackageData` reads without an error — it skips one that is not JSON (also one starting
+ * with a byte order mark), is `null`, or has a "sideEffects" list it cannot read, and takes the
+ * next one up. Which one that is depends on such details of Vite's version, so every package.json
+ * on the way is looked at (a superset: a byte order mark is skipped here, and one vreact cannot
+ * parse is one Vite cannot parse either).
+ */
+function browserFieldPackage(dir: string): string | null {
+  for (let d = dir; ; d = path.dirname(d)) {
+    const f = path.join(d, "package.json");
+    if (isFile(f)) {
+      let data: unknown = null;
+      try {
+        data = JSON.parse(fs.readFileSync(f, "utf8").replace(/^\uFEFF/, ""));
+      } catch {
+        data = null;
+      }
+      const browser = typeof data === "object" && data !== null ? (data as Record<string, unknown>).browser : undefined;
+      if (Object.prototype.toString.call(browser) === "[object Object]") return f;
+    }
+    if (path.dirname(d) === d) return null;
+  }
+}
+
+/**
+ * Characters of a path that the bundler does not read as part of the file name: Vite reads
+ * everything from the first `?` or `#` as a URL query or hash (also in `vite build`); its dev
+ * server serves a module at the URL of its path, which the browser and the server change — the
+ * server percent-decodes it (`limits%61.ts` is served as `limitsa.ts`), and the browser's URL
+ * parser turns `\` into `/` and drops tabs and line breaks. Null when `p` has none of them.
+ */
+function urlUnsafeChar(p: string): string | null {
+  const m = /[?#%\\\t\n\r]/.exec(p);
+  return m ? m[0] : null;
+}
+
+/** Why the character `c` (from `urlUnsafeChar`) of a path makes the bundler load another file. */
+function urlUnsafeWhy(c: string): string {
+  if (c === "?" || c === "#") return `the bundler (Vite) reads everything from the first "?" or "#" of a path as a URL query or hash, not as part of the file name`;
+  if (c === "%") return `the bundler's dev server (vite) serves a module at the URL of its path and percent-decodes the URL it is asked for ("%61" is "a"), not reading "%" as part of the file name`;
+  return `the bundler's dev server (vite) serves a module at the URL of its path, and the browser's URL parser ${c === "\\" ? "turns \"\\\" into \"/\"" : "drops tabs and line breaks"} in it`;
+}
+
+/** `c` (from `urlUnsafeChar`) as shown in a message. */
+const showChar = (c: string) => (c === "\t" ? "a tab" : c === "\n" || c === "\r" ? "a line break" : `"${c}"`);
+
+/**
+ * The bundler must load and compile the files TypeScript checked, the way VTS checked them. Vite
+ * (default configuration) gives every module the id of its real path, and from there resolves its
+ * relative imports and finds the tsconfig.json it compiles it with; it reads some characters of a
+ * path as URL syntax (`urlUnsafeChar`). So the sources must be inside the project directory,
+ * without a symbolic link on the way from it (a link's target is compiled and resolved from where
+ * it really is) and without those characters in their real path; the tsconfig.json nearest to
+ * each (looked for from its directory up to the root of the file system, as Vite does) must be
+ * the project's — none at all when the project has none, which vreact then checks with its
+ * defaults; and no package.json above it may have an object "browser" field (Vite maps the
+ * imports of the package's files through it: `browserFieldPackage`).
+ */
+function sourcePathErrors(cfg: Config): VtsError[] {
+  const errs: VtsError[] = [];
+  const at = (f: string, msg: string) => {
+    const e = new VtsError(undefined, msg);
+    e.file = f;
+    e.line = 1;
+    e.col = 1;
+    errs.push(e);
+  };
+  const root = path.resolve(cfg.root);
+  let realRoot = root;
+  try {
+    realRoot = fs.realpathSync(root);
+  } catch {
+    // (the project directory exists: loadConfig)
+  }
+  const rel = (f: string) => path.relative(root, f) || ".";
+  const linkWhy = "the bundler (Vite) loads a module from its real path, and resolves its relative imports and finds the tsconfig.json it compiles it with from there, while TypeScript reads it at the link's path (another file may run, compiled with other settings)";
+  for (const l of cfg.links ?? []) {
+    let to = "";
+    try {
+      to = fs.readlinkSync(l);
+    } catch {
+      to = "?";
+    }
+    at(l, `${rel(l)} is a symbolic link (to ${to}): symbolic links in the source directory are not supported: ${linkWhy}; replace the link by the file or directory itself`);
+  }
+  const rootCfg = path.join(realRoot, "tsconfig.json");
+  let hasRootCfg = false;
+  try {
+    const st = fs.statSync(rootCfg);
+    hasRootCfg = st.isFile() || st.isFIFO();
+  } catch {
+    hasRootCfg = false;
+  }
+  for (const f0 of cfg.files) {
+    const f = path.resolve(f0);
+    const r = rel(f);
+    if (r.startsWith("..") || path.isAbsolute(r)) {
+      at(f, `${r} is outside the project directory ${root}: the sources ("src", "include" in vreact.json) must be inside it (the bundler compiles each file with the tsconfig.json nearest to it, and VTS checks every source with the project's)`);
+      continue;
+    }
+    // (a file that does not exist is TypeScript's error)
+    if (!fs.existsSync(f)) continue;
+    let link: string | null = null;
+    for (let d = f; d !== root && path.dirname(d) !== d; d = path.dirname(d)) {
+      try {
+        if (fs.lstatSync(d).isSymbolicLink()) link = d;
+      } catch {
+        // checked by TypeScript
+      }
+    }
+    if (link) {
+      at(f, `${r}: ${rel(link)} is a symbolic link (to ${fs.readlinkSync(link)}): symbolic links on the path of a source are not supported: ${linkWhy}; replace the link by the file or directory itself`);
+      continue;
+    }
+    const real = fs.realpathSync(f);
+    const bad = urlUnsafeChar(real);
+    if (bad) {
+      at(f, `${r}: its path ${JSON.stringify(real).slice(1, -1)} contains ${showChar(bad)}, which is not supported: ${urlUnsafeWhy(bad)} (it would load another file, or none); rename the file or directory`);
+      continue;
+    }
+    // the bundler compiles a file with the settings of the tsconfig.json nearest to it (Vite's
+    // esbuild reads its jsx, jsxImportSource, verbatimModuleSyntax, …); VTS checks every source
+    // with the project's: a tsconfig.json in a source directory could make JSX another library's,
+    // or keep an import of a type
+    const nearest = viteTsconfig(path.dirname(real));
+    if (nearest !== (hasRootCfg ? rootCfg : null)) {
+      const shown = nearest === null ? "" : path.relative(realRoot, nearest);
+      if (nearest !== null && !shown.startsWith("..") && !path.isAbsolute(shown)) {
+        at(f, `${r}: ${shown} is not supported: the bundler compiles ${r} with the settings of the tsconfig.json nearest to it, but VTS checks it with ${hasRootCfg ? "the project's tsconfig.json; put the settings in the project's tsconfig.json" : "vreact's default options (the project has no tsconfig.json); put the settings in a tsconfig.json in the project directory"} and remove ${shown}`);
+      } else if (nearest !== null) {
+        at(f, `${r}: the project has no tsconfig.json, so VTS checks ${r} with vreact's default options, but the bundler compiles it with the settings of ${nearest} (the tsconfig.json nearest to it, above the project directory); add a tsconfig.json to the project directory`);
+      } else {
+        at(f, `${r}: the bundler compiles ${r} without a tsconfig.json (Vite looks for none inside node_modules), but VTS checks it with the project's tsconfig.json; move the project out of node_modules`);
+      }
+      continue;
+    }
+    const pkg = browserFieldPackage(path.dirname(real));
+    if (pkg) {
+      const shown = path.relative(realRoot, pkg);
+      at(f, `${r}: the "browser" field of ${shown.startsWith("..") || path.isAbsolute(shown) ? pkg : shown} is not supported: the bundler (Vite) maps the imports of a module (relative ones and "react") through the object "browser" field of the package.json nearest to it (to another file, or to an empty module), which TypeScript does not — and it skips a package.json it cannot load (not JSON, \`null\`, a byte order mark, an unreadable "sideEffects"), so every package.json above a source counts; remove the field (or make it a string)`);
+    }
+  }
+  return errs;
 }
 
 function loadProgram(cfg: Config): { program: ts.Program; diags: string[] } {
@@ -108,6 +304,20 @@ function loadProgram(cfg: Config): { program: ts.Program; diags: string[] } {
     for (const d of [...(raw.error ? [raw.error] : []), ...parsed.errors]) {
       if (d.category === ts.DiagnosticCategory.Error && d.code !== 18003 && d.code !== 5023) diags.push(ts.formatDiagnostic(d, host).trim());
     }
+    // a solution-style tsconfig (Vite's react-ts template: "files": [] and "references" to
+    // tsconfig.app.json, …): Vite compiles a file the tsconfig.json does not include with the
+    // settings of the referenced tsconfig that does (tsconfck), which VTS does not read
+    const refs = (raw.config as { references?: unknown } | undefined)?.references;
+    if (refs !== undefined && !(Array.isArray(refs) && refs.length === 0)) {
+      diags.push(`tsconfig: "references" (a solution-style tsconfig.json, as in Vite's react-ts template) is not supported: the bundler compiles a file that tsconfig.json does not include with the settings of the referenced tsconfig that does (e.g. tsconfig.app.json: its jsx, jsxImportSource, …), but VTS checks every source with tsconfig.json's; put the compiler options of the sources in tsconfig.json itself and remove "references"`);
+    }
+    let realRoot = cfg.root;
+    try {
+      realRoot = fs.realpathSync(cfg.root);
+    } catch {
+      // (the project directory exists: loadConfig)
+    }
+    diags.push(...extendsProblems(cfgPath, realRoot));
   }
   // A bundler compiles each file on its own (Vite: esbuild, file by file), not knowing what the
   // names a file imports are: `import { Item } from "./types"; export { Item };` of a type keeps the
@@ -155,6 +365,94 @@ function loadProgram(cfg: Config): { program: ts.Program; diags: string[] } {
     }
   }
   return { program, diags };
+}
+
+/**
+ * The tsconfig files the bundler reads through "extends" must be the ones TypeScript read: Vite
+ * compiles each file with the options of the tsconfig.json nearest to it merged with those it
+ * extends (its jsx, jsxImportSource, verbatimModuleSyntax, …). TypeScript resolves an "extends"
+ * path as the file itself, else with ".json" added; Vite's tsconfig loader (tsconfck) as Node's
+ * `require.resolve` from the extending file: the file itself, then with ".js", ".json" (and
+ * ".node") added, then a directory — so with a base.js next to base.json, `"extends": "./base"`
+ * is base.json to TypeScript and base.js (read as JSON) to Vite. Each "extends" path is resolved
+ * both ways, each tool from the extending file as it names it (Vite: in the project's real
+ * directory; then the file Node returns, at its real path or — with --preserve-symlinks — at the
+ * path itself), and must lead to the same file at every step. A package name, which TypeScript
+ * and Node look for in node_modules by different algorithms (conditions, a `tsconfig.json`
+ * inside the package), is rejected. Returns the problems found (TypeScript's own errors — a file
+ * not found, a cycle — are left to TypeScript).
+ */
+function extendsProblems(cfgPath: string, realRoot: string): string[] {
+  const out: string[] = [];
+  const fileId = (f: string) => {
+    try {
+      const s = fs.statSync(f);
+      return `${s.dev}:${s.ino}`;
+    } catch {
+      return null;
+    }
+  };
+  const real = (f: string) => {
+    try {
+      return fs.realpathSync(f);
+    } catch {
+      return path.resolve(f);
+    }
+  };
+  const shown = (f: string) => {
+    const r = path.relative(realRoot, real(f));
+    return r === "" || r.startsWith("..") || path.isAbsolute(r) ? f : r;
+  };
+  const walk = (tsFile: string, nodeFiles: string[], stack: string[]) => {
+    const raw = ts.readConfigFile(tsFile, ts.sys.readFile);
+    if (raw.error) return;
+    const ext = (raw.config as { extends?: unknown } | undefined)?.extends;
+    for (const e of typeof ext === "string" ? [ext] : Array.isArray(ext) ? ext : []) {
+      if (typeof e !== "string") continue;
+      const where = `tsconfig: "extends": ${JSON.stringify(e)} (in ${shown(tsFile)})`;
+      const n = e.replace(/\\/g, "/");
+      if (!(n.startsWith("/") || n.startsWith("./") || n.startsWith("../"))) {
+        out.push(`${where} is not supported: TypeScript looks for a package's tsconfig in node_modules by its own resolution, the bundler (Vite's tsconfig loader, tsconfck) by Node's require.resolve, and they can find different files; copy its compiler options into tsconfig.json, or extend a file of the project by its relative path ("./tsconfig.base.json")`);
+        continue;
+      }
+      // TypeScript (getExtendsConfigPath): the path, else the path with ".json" added
+      const p = path.resolve(path.dirname(tsFile), n);
+      const tsTarget = ts.sys.fileExists(p) || p.endsWith(".json") ? p : ts.sys.fileExists(p + ".json") ? p + ".json" : null;
+      const tsId = tsTarget && fileId(tsTarget);
+      if (!tsTarget || !tsId) continue;
+      const nodeTargets = nodeFiles.map((from) => nodeRequireFile(e, from));
+      const wrong = nodeTargets.find((t) => t === null || fileId(t) !== tsId);
+      if (wrong !== undefined) {
+        out.push(`${where} is not supported: TypeScript reads ${shown(tsTarget)}, but the bundler (Vite's tsconfig loader, tsconfck, which resolves it as Node's require.resolve does: the path, then with ".js", ".json", ".node" added, then a directory) reads ${wrong === null ? "another file" : shown(wrong)}, and compiles the sources with its options; name the file by its full name, ending in .json (with no file of that name plus ".js" next to it), and not through a symbolic link`);
+        continue;
+      }
+      const key = real(tsTarget);
+      if (stack.includes(key)) continue;
+      walk(tsTarget, [...new Set(nodeTargets.flatMap((t) => (t === null ? [] : [t, real(t)])))], [...stack, key]);
+    }
+  };
+  walk(cfgPath, [path.join(realRoot, "tsconfig.json")], [real(cfgPath)]);
+  return out;
+}
+
+/**
+ * The file Node's `createRequire(from).resolve(spec)` returns for a relative or absolute `spec`
+ * when it is a file (the path, then with ".js", then ".json" added: anything but a directory, as
+ * Node's module stat tells), before taking its real path; null otherwise — also for a path
+ * Node reads as a directory (ending in "/", "/." or "/..") or not as a path (a backslash).
+ */
+function nodeRequireFile(spec: string, from: string): string | null {
+  if (!(spec.startsWith("./") || spec.startsWith("../") || spec.startsWith("/"))) return null;
+  if (/\/(\.\.?)?$/.test(spec)) return null;
+  const p = path.resolve(path.dirname(from), spec);
+  for (const c of [p, p + ".js", p + ".json"]) {
+    try {
+      if (!fs.statSync(c).isDirectory()) return c;
+    } catch {
+      // next
+    }
+  }
+  return null;
 }
 
 /** TypeScript's strict checks besides strictNullChecks and noImplicitAny (each defaults to "strict"). */
@@ -293,8 +591,26 @@ function vtsImportProblem(spec: string, sf: ts.SourceFile, target: ts.SourceFile
   if (!/^\.\.?(\/|$)/.test(spec)) {
     return `VTS modules are imported by their path relative to the importing file ("./model", "../model.ts"): "${spec}" resolves to ${rel(target.fileName)} only through TypeScript's settings (tsconfig "paths"/"baseUrl", package "imports"), which the bundler does not share`;
   }
-  const runtime = bundlerResolve(path.dirname(sf.fileName), spec);
-  if (runtime && path.resolve(runtime) === path.resolve(target.fileName)) return null;
+  // (Vite: everything from the first ? or # is a URL query or hash — `./m?raw` is the text of
+  // ./m, `./limits#v2` is ./limits —, not part of the file name TypeScript looks for; and the
+  // dev server's URLs are percent-decoded, `\` is `/` in a URL, tabs and line breaks are dropped.
+  // TypeScript also reads `\` as `/`.)
+  const bad = urlUnsafeChar(spec);
+  if (bad) return `${showChar(bad)} in an import path is not supported: TypeScript resolves it to ${rel(target.fileName)}, but ${urlUnsafeWhy(bad)} (it may load another file, or the file's text); import the file by a path without ${bad === "?" || bad === "#" ? "them" : "it"}`;
+  // (Vite resolves from the importer's real path, and gives the module the real path of the file
+  // it finds; the sources have no symbolic link below the project directory: sourcePathErrors)
+  const real = (f: string) => {
+    try {
+      return fs.realpathSync(f);
+    } catch {
+      return path.resolve(f);
+    }
+  };
+  const realDir = real(path.dirname(sf.fileName));
+  const found = bundlerResolve(realDir, spec);
+  if (found && real(found) === real(target.fileName)) return null;
+  // (shown relative to the importing file's directory as TypeScript names it)
+  const runtime = found && path.join(path.dirname(sf.fileName), path.relative(realDir, found));
   let full = path.relative(path.dirname(sf.fileName), target.fileName).split(path.sep).join("/");
   if (!full.startsWith("../")) full = "./" + full;
   const own = /\.tsx?$/.test(spec) ? full : full.replace(/\.tsx?$/, "");
@@ -404,16 +720,26 @@ function jsxRuntimeProblem(sf: ts.SourceFile, program: ts.Program, root: string)
 /** The Lean namespace of the module of source file `f` (also used by `vreact synth`, whose type names must match). */
 export function moduleNs(srcDir: string, f: string): string {
   const rel = path.relative(srcDir, f).replace(/\.(tsx?|jsx?)$/, "");
-  return "VTS." + rel.split(path.sep).map(sanitizeSeg).join(".");
+  const segs = rel.split(path.sep);
+  return "VTS." + segs.map((s) => sanitizeSeg(s, segs.length === 1)).join(".");
 }
 
-/** A module path segment as a Lean namespace / module name component (also a directory name). */
-function sanitizeSeg(s: string): string {
+/**
+ * A module path segment as a Lean namespace / module name component (also a directory name, and,
+ * after `Proofs.`, the name of the module's lemma file). `only`: the module's path has this one
+ * segment (a file directly in src/).
+ */
+function sanitizeSeg(s: string, only: boolean): string {
   const t0 = s.replace(/[^A-Za-z0-9_]/g, "_");
-  const t = /^[A-Za-z_]/.test(t0) ? t0 : "M" + t0;
+  // a component must start with a letter: not a digit, and not `_`, since Lean gives `_`-names
+  // meanings (a name ending in the component `_hyg` is a macro-scoped name: declarations in
+  // the namespace VTS._hyg are lost; `_private`, `_root_`, …)
+  const t = /^[A-Za-z]/.test(t0) ? t0 : "M" + t0;
   // a Lean token (`end`, `at`, `Type`) does not parse as a name component, and a Lean or
-  // generated name (`List`, `VReact`) would capture references (`List.map` inside VTS.List)
-  return clashesWithLean(t) ? t + "_" : t;
+  // generated name (`List`, `VReact`) would capture references (`List.map` inside VTS.List);
+  // the lemma file of a top-level module `Base` would be proofs/Base.lean, which is the global
+  // lemma file every Defs imports (in any letter case: one file on a case-insensitive disk)
+  return clashesWithLean(t) || (only && t.toLowerCase() === "base") ? t + "_" : t;
 }
 
 /** Is the type annotation React's node type (`JSX.Element`, `ReactNode`, `ReactElement`, also `… | null`), by its declaration? */
@@ -459,6 +785,9 @@ export function translate(cfg: Config): TranslateResult {
 }
 
 function translateAll(cfg: Config): TranslateResult {
+  // (where the sources are decides what the bundler loads and how it compiles them: checked first)
+  const pathErrors = sourcePathErrors(cfg);
+  if (pathErrors.length) return { ok: false, tsDiagnostics: [], errors: pathErrors, modules: [], obligations: [] };
   const { program, diags } = loadProgram(cfg);
   const res: TranslateResult = { ok: false, tsDiagnostics: diags, errors: [], modules: [], obligations: [] };
   if (diags.length) return res;
@@ -477,7 +806,10 @@ function translateAll(cfg: Config): TranslateResult {
   // on, without being checked ----
   for (const f of program.getSourceFiles()) {
     if (prog.isLibraryFile(f) || fileSet.has(path.resolve(f.fileName))) continue;
-    res.errors.push(new VtsError(f, `${path.relative(cfg.root, f.fileName)} is part of the TypeScript program (through a \`/// <reference>\`, an import or the tsconfig) but is not a VTS source: declarations outside the verified program (\`declare global\`, ambient declarations, interfaces merged with library types) could change what library code means, unchecked; remove it from the program`));
+    const skipped = skippedReason(cfg, f.fileName);
+    res.errors.push(new VtsError(f, skipped
+      ? `${path.relative(cfg.root, f.fileName)} is part of the TypeScript program (through an import or a \`/// <reference>\`) but is not one of the verified sources: ${skipped}`
+      : `${path.relative(cfg.root, f.fileName)} is part of the TypeScript program (through a \`/// <reference>\`, an import or the tsconfig) but is not a VTS source: declarations outside the verified program (\`declare global\`, ambient declarations, interfaces merged with library types) could change what library code means, unchecked; remove it from the program`));
   }
   for (const sf of sfs) {
     const rel = path.relative(cfg.root, sf.fileName);
@@ -485,14 +817,7 @@ function translateAll(cfg: Config): TranslateResult {
       res.errors.push(new VtsError(sf, `${rel} is not a module (it has no import or export): TypeScript makes the declarations of such a file global, and merges its interfaces with the libraries' (\`interface Math { … }\`); add an import or an export`));
     }
     res.errors.push(...commentDirectiveErrors(sf, rel));
-    // the bundler compiles a file with the settings of the tsconfig.json nearest to it (Vite's
-    // esbuild reads its jsx, jsxImportSource, verbatimModuleSyntax, …); VTS checks every source
-    // with the project's: a tsconfig.json in a source directory could make JSX another library's,
-    // or keep an import of a type
-    const nearest = ts.findConfigFile(path.dirname(sf.fileName), ts.sys.fileExists, "tsconfig.json");
-    if (nearest && path.dirname(path.resolve(nearest)) !== path.resolve(cfg.root) && !path.relative(cfg.root, nearest).startsWith("..")) {
-      res.errors.push(new VtsError(sf, `${rel}: ${path.relative(cfg.root, nearest)} is not supported: the bundler compiles ${rel} with the settings of the tsconfig.json nearest to it, but VTS checks it with the project's tsconfig.json; put the settings in the project's tsconfig.json and remove ${path.relative(cfg.root, nearest)}`));
-    }
+    // (the tsconfig.json the bundler compiles each source with: sourcePathErrors)
 
     // (`/// <reference path>` to anything but a VTS source is rejected above; `lib` and `types`
     // references add TypeScript's and installed libraries)
@@ -518,7 +843,7 @@ function translateAll(cfg: Config): TranslateResult {
     const a = path.relative(cfg.root, other.fileName), b = path.relative(cfg.root, sf.fileName);
     const otherNs = nsOfFile(other.fileName);
     const same = otherNs === ns ? `the same Lean module ${ns}` : `Lean modules ${otherNs} and ${ns}, whose files differ only in letter case`;
-    res.errors.push(new VtsError(sf, `module name clash: ${a} and ${b} translate to ${same} (a module is named after its path without the .ts/.tsx extension, other characters than letters, digits and _ become _, and a segment that is a Lean keyword or Lean name gets a trailing _); rename one of the files`));
+    res.errors.push(new VtsError(sf, `module name clash: ${a} and ${b} translate to ${same} (a module is named after its path without the .ts/.tsx extension, other characters than letters, digits and _ become _, a segment that starts with a digit or _ gets a leading M, and a segment that is a Lean keyword or Lean name, or a module src/Base.ts in any letter case, gets a trailing _); rename one of the files`));
   }
   if (res.errors.length) return res;
   // ---- a module's generated files go to the directory VTS/<segments>/: two modules whose
@@ -649,25 +974,58 @@ function translateAll(cfg: Config): TranslateResult {
   }
   // user proofs are imported by the generated files, so what they declare takes effect while
   // the translation is checked: only lemma-like commands may pass (lean/ProofCheck.lean)
-  const proofIssues = checkProofFiles(
-    cfg.leanLib,
-    leanFiles.map((f) => ({ name: path.relative("Proofs", f.rel).split(path.sep).join("/"), text: f.text })),
-  );
-  for (const i of proofIssues) {
-    const e = new VtsError(undefined, i.msg);
-    e.file = path.join(cfg.proofsDir, ...i.file.split("/"));
-    e.line = i.line;
-    e.col = i.col;
+  const proofFiles = leanFiles.map((f) => ({ name: path.relative("Proofs", f.rel).split(path.sep).join("/"), text: f.text }));
+  const proofCheck = checkProofFiles(cfg.leanLib, proofFiles);
+  const proofError = (file: string, line: number, col: number, msg: string) => {
+    const e = new VtsError(undefined, msg);
+    e.file = path.join(cfg.proofsDir, ...file.split("/"));
+    e.line = line;
+    e.col = col;
     res.errors.push(e);
+  };
+  for (const i of proofCheck.issues) proofError(i.file, i.line, i.col, i.msg);
+  if (res.errors.length) return res;
+  // vreact follows the header imports of the proof files — to tell which files Lean builds
+  // (`unimportedProofs`), which build results are current and in which order the kernel re-check
+  // replays them (`runLake`) — with its own reading (`headerImports`), which must be Lean's: the
+  // check reports how Lean's parser reads each header, and a file read otherwise is rejected
+  for (const f of proofFiles) {
+    const lean = proofCheck.imports.get(f.name)?.map((i) => i.name);
+    const ours = headerImports(f.text);
+    if (lean && lean.length === ours.length && lean.every((m, k) => m === ours[k])) continue;
+    const list = (ms: string[] | undefined) => (ms === undefined ? "(not reported)" : ms.length ? ms.join(", ") : "none");
+    proofError(f.name, 1, 1, `the header of this proof file imports ${list(lean)} as Lean reads it, but ${list(ours)} as vreact reads it (vreact follows the imports to know which files Lean builds and checks): write each \`import <Module>\` on a line of its own, outside comments`);
   }
   if (res.errors.length) return res;
+  // each proof module's imports, as Lean's parser reads them (never from the text: an escaped
+  // name `«VTS».m.Defs`, a `/-` inside a line comment, a name on the line after `import`)
+  const proofImports = new Map(leanFiles.map((f) => {
+    const name = path.relative("Proofs", f.rel).split(path.sep).join("/");
+    return ["Proofs." + f.rel.replace(/\.lean$/, "").split(path.sep).slice(1).join("."), proofCheck.imports.get(name) ?? []] as const;
+  }));
+  // every Defs.lean imports proofs/Base.lean: what it imports (also through other proof files)
+  // cannot be generated code, which would close an import cycle (lake: "build cycle detected")
+  const baseCycle = baseProofCycle(proofImports);
+  if (baseCycle) {
+    const fileOf = (p: string) => path.join(path.relative(cfg.root, cfg.proofsDir), ...p.split(".").slice(1)) + ".lean";
+    const via = baseCycle.chain.length > 1 ? ` (through ${baseCycle.chain.slice(1).map(fileOf).join(" → ")})` : "";
+    // (a module src/Base.ts is VTS.Base_: its lemma file is proofs/Base_.lean)
+    const baseMod = sfs.find((sf) => path.dirname(path.resolve(sf.fileName)) === path.resolve(cfg.srcDir) && /^base\.tsx?$/i.test(path.basename(sf.fileName)));
+    const hint = baseMod ? `; the lemmas about ${path.relative(cfg.root, baseMod.fileName)} (the Lean module ${nsOfFile(baseMod.fileName)}) go in ${fileOf("Proofs." + nsOfFile(baseMod.fileName).slice(4))}, importing ${nsOfFile(baseMod.fileName)}.Defs` : "";
+    const e = new VtsError(undefined, `${fileOf("Proofs.Base")} is the global lemma file, imported by every generated Defs.lean, so it cannot import generated code: it imports ${baseCycle.target}${via}, which would make an import cycle; state its lemmas without the generated modules, and put lemmas about a module src/<path>.ts in proofs/<path>.lean${hint}`);
+    e.file = path.join(cfg.proofsDir, ...baseCycle.file.split(".").slice(1)) + ".lean";
+    e.line = baseCycle.line;
+    e.col = baseCycle.col;
+    res.errors.push(e);
+    return res;
+  }
   /** the Lean names each module generates, for `nameClashes` */
   const declared = new Map<ts.SourceFile, GeneratedNames>();
   // the user lemmas about a module's functions (proofs/<Up>.lean) are imported into the Defs of
   // every module importing it, so they help those modules' function bodies and contracts too
   const upProofs = upstreamProofs(
     order.map((sf) => ({ ns: nsOfFile(sf.fileName), deps: (importsOf.get(sf) ?? []).map((d) => nsOfFile(d.fileName)) })),
-    new Map(leanFiles.map((f) => ["Proofs." + f.rel.replace(/\.lean$/, "").split(path.sep).slice(1).join("."), f.text])),
+    new Map([...proofImports].map(([p, is]) => [p, is.map((i) => i.name)])),
   );
   // A module with a `proofs/<Mod>.lean` puts the postconditions of the functions that nothing
   // else in its Defs uses into Posts.lean, after those lemmas (which import Defs), so that the
@@ -684,7 +1042,7 @@ function translateAll(cfg: Config): TranslateResult {
   for (const sf of order) {
     const m = mods.get(sf)!;
     const ns = m.ns;
-    const modRes: ModuleResult = { tsFile: sf.fileName, ns, defsModule: `${ns}.Defs`, viewModule: `${ns}.View`, imports: (importsOf.get(sf) ?? []).map((d) => nsOfFile(d.fileName)), components: [], functions: [], certificates: [], constants: [] };
+    const modRes: ModuleResult = { tsFile: sf.fileName, ns, defsModule: `${ns}.Defs`, viewModule: `${ns}.View`, imports: (importsOf.get(sf) ?? []).map((d) => nsOfFile(d.fileName)), components: [], functions: [], certificates: [], constants: [], declNames: [] };
     // ids of the obligations generated by `f()`
     const obsOf = <R>(f: () => R): { r: R; obs: number[] } => {
       const from = counter.n;
@@ -774,7 +1132,7 @@ function translateAll(cfg: Config): TranslateResult {
         const rootOb = obsOf(() => m.ob(c, "root-precondition", `<${info.name}/> can be mounted as the application root`));
         view += `theorem ${L}.root_pre : ${N}.pre ${N}.Props.mk :=\n  ${rootOb.r}\n\n`;
         view += `noncomputable def ${L}.element : VReact.CompNode Empty :=\n  ⟨${N}.spec, ${N}.Props.mk, ${N}.Cb.mk, ${N}.root_pre,\n   fun s h => ${N}.component.render ${N}.Props.mk ${N}.Cb.mk s ${N}.root_pre h⟩\n\n`;
-        view += `/-- **Certificate.** In every run of the application rooted at \`<${info.name}/>\` — any sequence of\nuser events, effect flushes and timer callbacks — every mounted component instance satisfies\nits invariant (instantiation of \`VReact.run_allInv\`). -/\n`;
+        view += `/-- **Certificate.** In every run of the application rooted at \`<${info.name}/>\` — any sequence of\nuser events, effect flushes (StrictMode's second run at mount included), remounts and timer\ncallbacks — every mounted component instance satisfies its invariant (instantiation of\n\`VReact.run_allInv\`). -/\n`;
         view += `theorem ${L}.certificate (fuel : Nat) (acts : List VReact.Action) :\n    (VReact.run fuel ${N}.element acts).AllInv :=\n  VReact.run_allInv fuel ${N}.element acts\n\n`;
         const compObs = modRes.components.find((x) => x.ns === N)?.obs ?? [];
         modRes.certificates.push({ name: info.name, qname: `${N}.certificate`, obs: [...compObs, ...rootOb.obs], refs: [N] });
@@ -817,7 +1175,9 @@ function translateAll(cfg: Config): TranslateResult {
     leanFiles.push({ rel: path.join(rel, "Defs.lean"), text: withBudget(defs, cfg.heartbeats) });
     if (posts) leanFiles.push({ rel: path.join(rel, "Posts.lean"), text: withBudget(posts, cfg.heartbeats) });
     leanFiles.push({ rel: path.join(rel, "View.lean"), text: withBudget(view, cfg.heartbeats) });
-    declared.set(sf, generatedNames(defs + "\n" + posts + "\n" + view));
+    const names = generatedNames(defs + "\n" + posts + "\n" + view);
+    declared.set(sf, names);
+    modRes.declNames = names.names;
     res.modules.push(modRes);
   }
   if (res.errors.length) return res;
@@ -826,6 +1186,26 @@ function translateAll(cfg: Config): TranslateResult {
   // root module and lake project
   const rootImports = res.modules.map((mr) => `import ${mr.viewModule}`).join("\n");
   leanFiles.push({ rel: "VTS.lean", text: rootImports + "\n" });
+  // Lake builds the root module `VTS` and what it imports, nothing else: a proof file that the
+  // generated modules do not import, directly or through other proof files (a misspelt
+  // `proofs/model.lean` next to `src/Model.ts`, a stray copy, a file of theorems nothing
+  // imports), would never be elaborated, its errors and `sorry`s never reported — rejected
+  const proofOfMod = new Map(res.modules.map((mr) => [proofOfNs(mr.ns).toLowerCase(), mr]));
+  for (const p of unimportedProofs(leanFiles)) {
+    const pmod = "Proofs." + p.replace(/\.lean$/, "").split("/").join(".");
+    const near = proofOfMod.get(pmod.toLowerCase());
+    const pdir = path.relative(cfg.root, cfg.proofsDir).split(path.sep).join("/") || ".";
+    const sdir = path.relative(cfg.root, cfg.srcDir).split(path.sep).join("/") || ".";
+    const hint = near
+      ? ` The lemmas of the module ${path.relative(cfg.root, near.tsFile)} go in ${pdir}/${proofOfNs(near.ns).split(".").slice(1).join("/")}.lean: the name must match in letter case.`
+      : pmod.toLowerCase() === "proofs.base" ? ` The file every module imports is ${pdir}/Base.lean: the name must match in letter case.` : "";
+    const e = new VtsError(undefined, `no generated module imports the proof file ${pdir}/${p} (Lean module ${pmod}), so Lean would never check it: ${pdir}/<path>.lean is imported for the module ${sdir}/<path>.ts(x), ${pdir}/Base.lean by every module, and another proof file only when one of these imports it (\`import ${pmod}\`).${hint} Rename the file, import it from one of those, or move it out of ${pdir}/`);
+    e.file = path.join(cfg.proofsDir, ...p.split("/"));
+    e.line = 1;
+    e.col = 1;
+    res.errors.push(e);
+  }
+  if (res.errors.length) return res;
   const libs = [`[[lean_lib]]\nname = "VTS"\n`];
   if (proofModules.size) libs.push(`[[lean_lib]]\nname = "Proofs"\n`);
   // (no shared artifact cache: every module is built here, by a Lean run vreact starts — see
@@ -841,7 +1221,19 @@ function translateAll(cfg: Config): TranslateResult {
     paths.set(f.rel.toLowerCase(), f.rel);
   }
   if (res.errors.length) return res;
-  // write, removing stale generated files
+  // write, removing stale generated files — only generated ones: "out" is a directory of its own
+  // (loadConfig), and what is removed holds nothing but Lean files (never a user's file, whatever
+  // "out" is)
+  for (const d of ["VTS", "Proofs"]) {
+    const foreign = notGenerated(path.join(cfg.outDir, d));
+    if (foreign) {
+      const shown = (f: string) => path.relative(cfg.root, f) || ".";
+      const e = new VtsError(undefined, `${shown(foreign)} is not a file vreact generated: vreact replaces ${shown(path.join(cfg.outDir, d))}${path.sep} with the generated Lean project, and removes nothing but generated files (Lean files); set "out" in vreact.json to a directory of its own (such as ".vreact"), or move the file`);
+      e.file = foreign;
+      res.errors.push(e);
+    }
+  }
+  if (res.errors.length) return res;
   fs.rmSync(path.join(cfg.outDir, "VTS"), { recursive: true, force: true });
   fs.rmSync(path.join(cfg.outDir, "Proofs"), { recursive: true, force: true });
   for (const f of leanFiles) {
@@ -856,6 +1248,30 @@ function translateAll(cfg: Config): TranslateResult {
   if (fs.existsSync(manifest) && !manifestMatches(manifest, { VReact: cfg.leanLib })) fs.rmSync(manifest, { force: true });
   res.ok = true;
   return res;
+}
+
+/**
+ * A file or link under `dir` (a directory of generated Lean files: `<out>/VTS`, `<out>/Proofs`)
+ * that vreact did not write — anything but directories, `.lean` files and macOS's `.DS_Store` —,
+ * or `dir` itself when it is not a directory; null when there is none.
+ */
+function notGenerated(dir: string): string | null {
+  let st: fs.Stats;
+  try {
+    st = fs.lstatSync(dir);
+  } catch {
+    return null;
+  }
+  if (!st.isDirectory()) return dir;
+  for (const f of fs.readdirSync(dir)) {
+    const p = path.join(dir, f);
+    const s = fs.lstatSync(p);
+    if (s.isDirectory()) {
+      const inner = notGenerated(p);
+      if (inner) return inner;
+    } else if (!(s.isFile() && (f.endsWith(".lean") || f === ".DS_Store"))) return p;
+  }
+  return null;
 }
 
 /**
@@ -1000,9 +1416,11 @@ function withBudget(text: string, perOb = OB_HEARTBEATS): string {
     const body = lines.slice(d.start - 1, d.end).join("\n");
     most = Math.max(most, (body.match(/\/-⟦ob\d+⟧-\//g) ?? []).length);
   }
-  // 0 = no limit (for obligations, hence also for their declarations)
-  const outer = perOb === 0 ? 0 : DECL_HEARTBEATS + 2 * perOb * most;
-  return text.replace(BUDGET_SLOT, `set_option maxHeartbeats ${outer}\nset_option vreact.heartbeats ${perOb}`);
+  // 0 = no limit (for obligations, hence also for their declarations); as decimal numerals (a
+  // BigInt: a large Number would be written in exponent notation, which Lean does not parse)
+  const n = BigInt(perOb);
+  const outer = n === 0n ? 0n : BigInt(DECL_HEARTBEATS) + 2n * n * BigInt(most);
+  return text.replace(BUDGET_SLOT, `set_option maxHeartbeats ${outer}\nset_option vreact.heartbeats ${n}`);
 }
 
 function header(imports: string[]): string {
@@ -1020,12 +1438,53 @@ function header(imports: string[]): string {
   ].join("\n");
 }
 
-/** The modules a Lean file imports (over-approximated: every `import` line, comments removed). */
-function leanImports(text: string): string[] {
-  const code = text.replace(/\/-[\s\S]*?-\//g, " ").replace(/--.*$/gm, "");
-  const out: string[] = [];
-  for (const m of code.matchAll(/^[ \t]*(?:(?:public|private|meta)\s+)*import\s+(?:all\s+)?([^\n]*)$/gm)) out.push(...m[1].trim().split(/\s+/).filter(Boolean));
-  return out;
+/**
+ * The proof files (`Proofs/…` of the generated project, named relative to the proofs directory
+ * with `/`) that the root module `VTS` — the only target lake builds — does not reach through
+ * the header imports of the generated files and the proof files: Lean would never elaborate
+ * them. (Header imports only, as Lean reads them: an `import` line below the header does not
+ * count. Proof files have plain header imports, `ProofCheck.lean`.)
+ */
+function unimportedProofs(files: { rel: string; text: string }[]): string[] {
+  const modOf = (rel: string) => rel.replace(/\.lean$/, "").split(path.sep).join(".");
+  const imports = new Map<string, string[]>();
+  for (const f of files) if (f.rel.endsWith(".lean")) imports.set(modOf(f.rel), headerImports(f.text));
+  const seen = new Set<string>();
+  const todo = ["VTS"];
+  while (todo.length) {
+    const m = todo.pop()!;
+    if (seen.has(m)) continue;
+    seen.add(m);
+    todo.push(...(imports.get(m) ?? []));
+  }
+  return files
+    .filter((f) => f.rel.startsWith("Proofs" + path.sep) && f.rel.endsWith(".lean") && !seen.has(modOf(f.rel)))
+    .map((f) => f.rel.split(path.sep).slice(1).join("/"))
+    .sort();
+}
+
+/**
+ * The first import of a generated module (`VTS`, `VTS.…`) that `Proofs.Base` reaches through its
+ * imports and those of the proof files it imports (`proofs`: proof module → its imports, as
+ * Lean's parser reads them): `file` is the proof module with that import (`line`/`col` locate its
+ * module name, 1-based), `chain` the proof modules from `Proofs.Base` to it. Every Defs.lean
+ * imports `Proofs.Base`, so such an import closes a cycle.
+ */
+function baseProofCycle(proofs: Map<string, readonly ProofImport[]>): { file: string; line: number; col: number; chain: string[]; target: string } | null {
+  if (!proofs.has("Proofs.Base")) return null;
+  const seen = new Set<string>();
+  const queue: string[][] = [["Proofs.Base"]];
+  while (queue.length) {
+    const chain = queue.shift()!;
+    const p = chain[chain.length - 1];
+    if (seen.has(p)) continue;
+    seen.add(p);
+    for (const i of proofs.get(p)!) {
+      if (i.parts[0] === "VTS") return { file: p, line: i.line, col: i.col, chain, target: i.name };
+      if (proofs.has(i.name)) queue.push([...chain, i.name]);
+    }
+  }
+  return null;
 }
 
 /**
@@ -1035,11 +1494,11 @@ function leanImports(text: string): string[] {
  * module) is left out: those lemmas then help only the views, as for the module itself
  * (`Proofs.<Mod>` imports `VTS.<Mod>.Defs`, so it can never be imported by that Defs).
  */
-function upstreamProofs(mods: { ns: string; deps: string[] }[], proofs: Map<string, string>): Map<string, string[]> {
+function upstreamProofs(mods: { ns: string; deps: string[] }[], proofs: Map<string, string[]>): Map<string, string[]> {
   const proofOf = (ns: string) => "Proofs." + ns.split(".").slice(1).join(".");
   const edges = new Map<string, string[]>();
   const add = (from: string, to: string) => edges.set(from, [...(edges.get(from) ?? []), to]);
-  for (const [p, text] of proofs) for (const i of leanImports(text)) add(p, i);
+  for (const [p, imports] of proofs) for (const i of imports) add(p, i);
   for (const { ns, deps } of mods) {
     for (const d of deps) add(`${ns}.Defs`, `${d}.Defs`), add(`${ns}.View`, `${d}.View`);
     if (proofs.has("Proofs.Base")) add(`${ns}.Defs`, "Proofs.Base");
@@ -1083,6 +1542,7 @@ function collect(st: ts.Statement, m: ModCtx, ns: string, res: TranslateResult) 
     const trusted = isTrusted(st);
     if (!trusted && st.body) rejectAsyncFunctions(st.body);
     if (isComponentDecl(st, prog)) {
+      checkValueNameFree(st.name, "component", m);
       if (st.typeParameters?.length) fail(st.typeParameters[0], `generic components are not supported in VTS (${st.name.text}<${st.typeParameters.map((t) => t.name.text).join(", ")}>): give the props concrete types, and move generic code into a generic top-level function`);
       const info = compSignature(st, ns, ns, m, trusted);
       prog.globals.set(st, { k: "comp", info });
@@ -1129,8 +1589,10 @@ function collect(st: ts.Statement, m: ModCtx, ns: string, res: TranslateResult) 
       if (t) checkValueType(d.type!, t, prog.reg, `constant ${d.name.text}`);
       if (!t) {
         const init = d.initializer;
-        if (ts.isNumericLiteral(init)) t = /[.eE]/.test(init.text) ? T.num : T.int;
-        else if (ts.isPrefixUnaryExpression(init) && ts.isNumericLiteral(init.operand)) t = T.int;
+        // (a numeric literal by its value: `2.5`, `-2.5` and `1e400`, which TypeScript reads as
+        // Infinity, are numbers)
+        if (ts.isNumericLiteral(init)) t = numericLiteralType(init.text);
+        else if (ts.isPrefixUnaryExpression(init) && (init.operator === ts.SyntaxKind.MinusToken || init.operator === ts.SyntaxKind.PlusToken) && ts.isNumericLiteral(init.operand)) t = numericLiteralType(init.operand.text);
         else if (ts.isStringLiteralLike(init)) t = T.str;
         else if (init.kind === ts.SyntaxKind.TrueKeyword || init.kind === ts.SyntaxKind.FalseKeyword) t = T.bool;
         else fail(d, "annotate the type of this constant");
@@ -1189,9 +1651,10 @@ function collect(st: ts.Statement, m: ModCtx, ns: string, res: TranslateResult) 
 }
 
 /**
- * A function or constant must not share its name with a type of the module: TypeScript keeps
- * types and values apart (`type Limits = …; const Limits: Limits = …`), but both would be the
- * Lean declaration `VTS.<module>.Limits`.
+ * A function, component or constant must not share its name with a type of the module:
+ * TypeScript keeps types and values apart (`type Limits = …; const Limits: Limits = …`), but
+ * both would be the Lean declaration `VTS.<module>.Limits` (a component: the namespace of its
+ * Props, State, init, …, which the type's fields and constructors would share).
  */
 function checkValueNameFree(name: ts.Identifier, what: string, m: ModCtx) {
   const t = m.sf.statements.find((x) => (ts.isTypeAliasDeclaration(x) || ts.isInterfaceDeclaration(x)) && x.name.text === name.text);
@@ -1363,7 +1826,31 @@ function usedByOthers(decls: ts.Node[], m: ModCtx): Set<ts.Node> {
 
 function sortComponents(sf: ts.SourceFile, m: ModCtx): ts.Node[] {
   const comps = sf.statements.filter((st) => ts.isFunctionDeclaration(st) && m.prog.globals.get(st)?.k === "comp");
+  for (const c of comps) rejectSelfReference(c as ts.FunctionDeclaration, m);
   return topo(comps, m, (g) => g.k === "comp");
+}
+
+/**
+ * A component that refers to itself in its own body — `<Tree …/>` inside Tree, also in a JSX
+ * constant, a map callback, a branch, a closure or as a value — is recursion, which VTS does
+ * not support (the cycle check of `topo` sees references between components, not this one;
+ * the Lean `render` of a component is defined before its `component`).  Any such reference is
+ * rejected before the translation, wherever it is (types are erased: nothing in them runs).  A
+ * `@trusted` component's body is not translated (its render is assumed), so it is not scanned.
+ */
+function rejectSelfReference(c: ts.FunctionDeclaration, m: ModCtx) {
+  const g = m.prog.globals.get(c);
+  if (g?.k !== "comp" || g.info.trusted) return;
+  const visit = (n: ts.Node) => {
+    if (isErasedType(n)) return;
+    if (ts.isIdentifier(n) && n !== c.name && m.prog.refDecl(n) === c) {
+      const p = n.parent;
+      const tag = (ts.isJsxOpeningElement(p) || ts.isJsxSelfClosingElement(p) || ts.isJsxClosingElement(p)) && p.tagName === n;
+      fail(n, selfRenderMsg(g.info.name, tag ? `<${n.text}>` : `\`${n.text}\``));
+    }
+    ts.forEachChild(n, visit);
+  };
+  ts.forEachChild(c, visit);
 }
 
 function topo(decls: ts.Node[], m: ModCtx, rel: (g: Global) => boolean): ts.Node[] {
@@ -1428,22 +1915,73 @@ function docText(node: ts.Node, max: number): string {
 
 function translateConst(d: ts.VariableDeclaration, info: ConstInfo, m: ModCtx): string {
   const env = baseEnv(m);
+  // closures in the initialiser (`[1].every((x) => { let y = 1; const g = () => y; y = 2; … })`)
+  // must agree with JS, as in a function body
+  checkClosures(d.initializer!, env);
   const v = expr(d.initializer!, env, info.type);
   const short = leanIdent((d.name as ts.Identifier).text);
   // transparent constants are unfolded by automation; @opaque ones only through their facts
   return `${info.opaque ? "" : "@[vreact_simp, reducible] "}def ${short} : ${leanType(info.type)} :=\n  ${v.code}\n`;
 }
 
-/** The theorem of the `k`-th module-level assert(…) about the constant `d` (emitted once what it mentions is declared). */
+/**
+ * The theorem of the `k`-th module-level assert(…) about the constant `d` (emitted once what it
+ * mentions is declared).  A fact is checked by evaluation: every `@opaque` constant it mentions
+ * (`d`, the owner the theorem is named after, and any other, also of an imported module) is
+ * unfolded to its value — in the proof of the fact, and in the obligations inside its statement
+ * (an index `A[0]`, a divisor, a precondition), which Lean elaborates with the statement, before
+ * the proof runs: they unfold the constants themselves (`ModCtx.obTactic`).
+ */
 function translateFact(d: ts.VariableDeclaration, info: ConstInfo, k: number, m: ModCtx): string {
   const env = baseEnv(m);
   const short = leanIdent((d.name as ts.Identifier).text);
   const f = info.facts[k];
   const name = k === 0 ? `${short}.post` : `${short}.post${k + 1}`;
-  const stmt = prop(f, env);
-  // (`unfold` fails where the statement does not mention the constant)
-  const unfold = stmt.includes(info.qname) ? `\n  unfold ${short}` : "";
+  checkClosures(f, env);
+  const consts = opaqueConstsOf(f, m);
+  // (by their full names: a binder of the fact may have a constant's short name; `try`: an
+  // obligation's goal and hypotheses need not mention every constant, and `unfold … at *`
+  // fails where none does)
+  const unfoldOb = consts.map((q) => `(try unfold ${q} at *); `).join("") + "vreact_auto";
+  const saved = m.obTactic;
+  m.obTactic = unfoldOb;
+  let stmt: string;
+  try {
+    stmt = prop(f, env);
+  } finally {
+    m.obTactic = saved;
+  }
+  // (`unfold` fails where the statement does not mention the constant: the statement without
+  // its obligations' tactics, which name every constant)
+  const bare = stmt.split(unfoldOb).join("vreact_auto");
+  const unfold = consts.filter((q) => mentionsConst(bare, q)).map((q) => `\n  unfold ${q}`).join("");
   return `/-- fact: ${docText(f, 80)} -/\ntheorem ${name} : ${stmt} := by${unfold}\n  exact ${m.ob(f, "fact", `fact about ${short}: ${exprText(f)}`)}\n`;
+}
+
+/** The Lean names of the `@opaque` constants (of any module) that the expression `f` mentions, in order of first mention. */
+function opaqueConstsOf(f: ts.Expression, m: ModCtx): string[] {
+  const out: string[] = [];
+  const visit = (n: ts.Node) => {
+    if (isErasedType(n)) return;
+    if (ts.isIdentifier(n)) {
+      const dd = m.prog.refDecl(n);
+      const g = dd ? m.prog.globals.get(dd) : undefined;
+      if (g?.k === "const" && g.info.opaque && !out.includes(g.info.qname)) out.push(g.info.qname);
+    }
+    ts.forEachChild(n, visit);
+  };
+  visit(f);
+  return out;
+}
+
+/** Lean code `code` mentions the constant `qname` (not only a longer name it is a prefix of: `VTS.M.A` in `VTS.M.AB`). */
+function mentionsConst(code: string, qname: string): boolean {
+  for (let i = code.indexOf(qname); i >= 0; i = code.indexOf(qname, i + 1)) {
+    const before = i > 0 ? code[i - 1] : " ";
+    const after = code[i + qname.length] ?? " ";
+    if (!/[\p{L}\p{N}_'.»!?]/u.test(before) && !/[\p{L}\p{N}_'»!?]/u.test(after)) return true;
+  }
+  return false;
 }
 
 /**
@@ -1514,6 +2052,7 @@ function translateFunction(fn: ts.FunctionDeclaration, info: FnInfo, m: ModCtx):
   const hypNames: string[] = [];
   const reqs: ts.Expression[] = [];
   const posts: { lam: ts.ArrowFunction | ts.FunctionExpression }[] = [];
+  const contractStmts: ts.Statement[] = [];
   while (stmts.length && ts.isExpressionStatement(stmts[0]) && ts.isCallExpression(stmts[0].expression)) {
     const c = stmts[0].expression;
     const sf = specFn(env, c.expression);
@@ -1527,8 +2066,23 @@ function translateFunction(fn: ts.FunctionDeclaration, info: FnInfo, m: ModCtx):
     } else if (sf === "decreases") {
       fail(c, "recursion is not supported yet");
     } else break;
-    stmts.shift();
+    contractStmts.push(stmts.shift()!);
   }
+  // self-recursion check (by the declaration the callee resolves to: a local helper spelled like
+  // the function is not it): in the `requires` — JS evaluates its argument on every call, so a
+  // call of the function there runs it again, and the Lean signature would mention the function
+  // it declares — also of a @trusted function (its contract is translated); in the body below.
+  // (An `ensures` lambda may call it: JS never calls it, and its theorem comes after the definition.)
+  const selfCall = (n: ts.Node): ts.CallExpression | undefined =>
+    ts.isCallExpression(n) && ts.isIdentifier(n.expression) && m.prog.refDecl(n.expression) === fn ? n : ts.forEachChild(n, selfCall);
+  for (const r of reqs) {
+    const c = selfCall(r);
+    if (c) fail(c, `recursion is not supported yet: the requires(…) of ${info.name} calls ${info.name} (JS evaluates its argument on every call); state the precondition without calling the function`);
+  }
+  // the contracts of a @trusted function are translated although its body is not: closures in
+  // them (a block-bodied every/some callback, read as code) must agree with JS, as in a verified
+  // body (whose check, in valueBlock, covers its contracts too)
+  if (info.trusted && fn.body) checkClosures(fn.body, env, contractStmts);
   // all requires form one precondition (each guarded by the earlier ones): call sites pass one proof
   if (reqs.length) {
     hyps.push(`(h_pre : ${propAll(reqs, env)})`);
@@ -1540,15 +2094,8 @@ function translateFunction(fn: ts.FunctionDeclaration, info: FnInfo, m: ModCtx):
   if (info.trusted) {
     def = `/-- @trusted: body not verified, contract assumed. -/\naxiom ${sig}\n`;
   } else {
-    // self-recursion check
-    let rec = false;
-    const visit = (n: ts.Node) => {
-      // (by the declaration the callee resolves to: a local helper spelled like the function is not it)
-      if (ts.isCallExpression(n) && ts.isIdentifier(n.expression) && m.prog.refDecl(n.expression) === fn) rec = true;
-      ts.forEachChild(n, visit);
-    };
-    stmts.forEach(visit);
-    if (rec) fail(fn, "recursion is not supported yet: use array methods or for…of");
+    // self-recursion check of the body (see `selfCall` above)
+    if (stmts.some((s) => selfCall(s))) fail(fn, "recursion is not supported yet: use array methods or for…of");
     const body = valueBlock(stmts, env, info.ret, fn);
     def = `${info.opaque ? "" : "@[vreact_simp, reducible] "}def ${sig} :=\n  ${body.code}\n`;
 
@@ -1567,7 +2114,8 @@ function translateFunction(fn: ts.FunctionDeclaration, info: FnInfo, m: ModCtx):
       // must be exactly the declared return type (the null/undefined checks read it)
       const retTs = m.checker.getTypeFromTypeNode(fn.type!);
       checkParamAnnotation(p, info.ret, retTs, env);
-      const e2 = { ...env, vars: new Map(env.vars) };
+      // (JS never calls an ensures lambda: `implies(a, b)` in it reads b under a, `Env.ghost`)
+      const e2 = { ...env, vars: new Map(env.vars), ghost: true };
       e2.vars.set(symbolOf(env, p.name)!, { k: "val", code: call, type: info.ret, ts: retTs });
       const body = lam.body;
       if (ts.isBlock(body)) fail(body, "ensures body must be an expression");

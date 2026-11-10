@@ -5,9 +5,9 @@ import VReact.Core
 This file gives an operational semantics to a running React application built
 from `VReact.Component`s and proves the soundness theorem:
 
-> **Theorem (`reachable_allInv`).** For every sequence of user events, async
-> timer firings, effect flushes and prop changes, every mounted component
-> instance satisfies its invariant.
+> **Theorem (`run_allInv`).** For every sequence of user events, async
+> timer firings, effect flushes, remounts and prop changes, every mounted
+> component instance satisfies its invariant.
 
 ## The runtime state
 
@@ -32,15 +32,27 @@ parent's snapshot is current).
 * `dispatch` — a discrete DOM event runs one handler of the latest render; its
   queued updates are processed (`Outcome.apply`), its parent callback (if any)
   is propagated to the parent, and every affected instance re-renders.
-* `flushEffects` — after commit, effects whose dependencies changed run; their
-  updates are robust, so it is sound to run them in any order and any number of
-  times (as React does in StrictMode).
+* `flushEffects` — after commit, the effects whose dependencies changed since the
+  previous render run (React compares each dependency with `Object.is`; where the
+  model's values do not decide it — objects, `number`s, an int zero that may be
+  `-0` — the run chooses, `Action.flush`); at the first flush after mounting the
+  run may choose to run every effect a second time, as React's StrictMode does in
+  development (`flushRuns`).  Their updates are robust, so it is sound to run them
+  in any order and any number of times.
+* `Inst.remount` — React unmounts an instance and mounts its element afresh when
+  its `key` outside a list, or the type of an enclosing host element, changes;
+  the model's paths contain neither, so a run may remount any instance at any
+  time (`Action.remount`): initial state, every effect runs at the next flush.
 * `fireTask` — an async callback (setInterval/setTimeout) registered by an
   effect fires; it closes over an *old* snapshot, hence robust updates.
 
-Recursion through component trees is bounded by a `fuel` argument (React's own
-maximum update depth); with insufficient fuel a subtree is not mounted, which is
-safe for invariants (nothing unverified ever runs).
+Recursion through component trees is bounded by a `fuel` argument, a bound on the
+depth of the mount/reconcile walk; with insufficient fuel a subtree is not mounted,
+which is safe for invariants (nothing unverified ever runs). It is not React's
+nested-update limit ("Maximum update depth exceeded", which React throws from a setter
+after 50 nested synchronous commits): the model's setters never throw, and VTS rejects
+what makes such chains (a focus handler that updates state on or around an
+`autoFocus` element, SEMANTICS §2.2).
 
 The semantics is `noncomputable`: reconciliation decides component identity with
 classical equality on specifications (React compares element types by identity).
@@ -267,13 +279,51 @@ def runRobust {S E : Type} {inv : S → Prop} : List (Effect S E inv) → { s : 
 def Effect.toTasks {S E : Type} {inv : S → Prop} (eff : Effect S E inv) : List (Task S inv) :=
   eff.tasks.attach.map (fun ⟨t, ht⟩ => ⟨fun e s => (t e).apply s, fun e s hs => (eff.tasks_ok t ht e).1 s hs⟩)
 
-/-- After a commit: run the effects whose dependencies changed (all of them the
-first time), replace the registered timers (cleanup + setup), re-render. -/
-noncomputable def flushEffects (fuel : Nat) : {E : Type} → Inst E → Inst E
-  | _, i@(.mk c s hinv deps tasks kids) =>
+/-- An effect registers one task per timer. -/
+@[simp] theorem Effect.toTasks_length {S E : Type} {inv : S → Prop} (eff : Effect S E inv) :
+    eff.toTasks.length = eff.tasks.length :=
+  (List.length_map _).trans List.length_attach
+
+/-- The dependency array that the previous render gave effect number `k` of an
+instance whose recorded dependencies are `deps` (`none`: the first commit after
+mounting — React keeps one effect per hook, so a missing entry is one too). -/
+def prevDeps (deps : Option (List (Option (List DepVal)))) (k : Nat) : Option (Option (List DepVal)) :=
+  deps.bind (·[k]?)
+
+/-- The effects of a render that run after its commit, numbered from `k`: each one is
+compared with the dependency array the *previous* render gave the effect at the same
+position (`prevDeps`; React 18 `updateEffectImpl` compares with the deps stored in the
+current hook).  `rerun k` decides effect `k` when the model's values leave `Object.is`
+open (`Effect.fires`, `depsChanged`). -/
+def firingFrom {S E : Type} {inv : S → Prop} (deps : Option (List (Option (List DepVal))))
+    (rerun : Nat → Bool) : Nat → List (Effect S E inv) → List (Effect S E inv)
+  | _, [] => []
+  | k, eff :: rest =>
+      if eff.fires (prevDeps deps k) (rerun k) then eff :: firingFrom deps rerun (k + 1) rest
+      else firingFrom deps rerun (k + 1) rest
+
+/-- The effects a flush runs, in order: those `firingFrom` selects and, at the first
+flush after mounting (`deps = none`, where every effect is selected: `firingFrom_none`)
+when the run chooses `strict`, every effect a second time.  That is React 18's
+StrictMode in development: after the commit that mounted a component,
+`commitDoubleInvokeEffectsInDEV` runs the cleanup and then the setup of each of its
+effects again, in the same flush and with the same render's closures, so the updates
+of the second setups queue after those of the first. -/
+def flushRuns {S E : Type} {inv : S → Prop} (deps : Option (List (Option (List DepVal))))
+    (rerun : Nat → Bool) (strict : Bool) (effs : List (Effect S E inv)) : List (Effect S E inv) :=
+  firingFrom deps rerun 0 effs ++ (if strict && deps.isNone then effs else [])
+
+/-- After a commit: run the effects whose dependencies changed since the previous
+render (all of them the first time, twice when the run chooses StrictMode's double
+invocation: `flushRuns`), register their timers, record this render's dependencies
+(React stores them whether or not the effect ran), and re-render when an effect
+ran.  The model has no cleanup step: the timers of earlier runs stay registered, so
+a run may still fire a timer React cleared (more runs, not fewer). -/
+noncomputable def flushEffects (fuel : Nat) (rerun : Nat → Bool) (strict : Bool) : {E : Type} → Inst E → Inst E
+  | _, .mk c s hinv deps tasks kids =>
       let effs := (c.render s hinv).effectsOf
-      let firing := effs.filter (fun eff => eff.fires (deps.map (fun _ => eff.deps)))
-      if firing.isEmpty ∧ deps.isSome then i
+      let firing := flushRuns deps rerun strict effs
+      if firing.isEmpty then .mk c s hinv (some (effs.map (·.deps))) tasks kids
       else
         let r := runRobust firing ⟨s, hinv⟩
         let tasks' := firing.flatMap Effect.toTasks ++ tasks
@@ -289,6 +339,17 @@ noncomputable def fireTask (fuel : Nat) (k : Nat) (e : DomEvent) : {E : Type} �
           let s' := t.1 e s
           .mk c s' (t.2 e s hinv) deps tasks (reconcile fuel kids.anyList ((c.render s' (t.2 e s hinv)).comps []))
 
+/-- A remount: React unmounts the instance (its timers can no longer change any state:
+a setter of an unmounted component does nothing) and mounts its element afresh —
+initial state (`init_inv`), no recorded dependencies (so the next flush runs every
+effect), no timers, children mounted afresh.  React does it when the element's `key`
+outside a list changes, or the type of an enclosing host element (`<div>` →
+`<section>`, a Fragment ↔ an element); the model's paths contain neither, so
+`reconcile` keeps the instance there, and a run may remount any instance at any time
+instead (`Action.remount`: more runs, not fewer). -/
+noncomputable def Inst.remount (fuel : Nat) : {E : Type} → Inst E → Inst E
+  | _, .mk c _ _ _ _ _ => mount fuel c none
+
 /-- Apply `f` to the instance at an instance path. -/
 noncomputable def Inst.modifyAt (f : {E : Type} → Inst E → Inst E) : {E : Type} → Inst E → List Path → Inst E
   | _, i, [] => f i
@@ -303,14 +364,22 @@ noncomputable def Inst.modifyAt (f : {E : Type} → Inst E → Inst E) : {E : Ty
 inductive Action where
   /-- the user interacts with a host element -/
   | event (inst : List Path) (el : Path) (ev : String) (e : DomEvent)
-  /-- React flushes passive effects of an instance after a commit -/
-  | flush (inst : List Path)
+  /-- React flushes passive effects of an instance after a commit; `rerun k` is whether
+  React re-runs effect number `k` where the model's dependency values do not decide
+  `Object.is` (objects, `number`s, an int 0 that may be `-0`: `DepVal.same`); `strict`
+  is whether, at the first flush after mounting, every effect runs a second time
+  (StrictMode in development: `flushRuns`) -/
+  | flush (inst : List Path) (rerun : Nat → Bool) (strict : Bool)
+  /-- React remounts an instance (a changed `key` outside a list, a changed enclosing
+  host element type: `Inst.remount`) -/
+  | remount (inst : List Path)
   /-- an asynchronous callback registered by an effect fires -/
   | task (inst : List Path) (k : Nat) (e : DomEvent)
 
 noncomputable def step (fuel : Nat) {E : Type} (i : Inst E) : Action → Inst E
   | .event inst el ev e => (dispatch fuel i inst el ev e).1
-  | .flush inst => i.modifyAt (flushEffects fuel) inst
+  | .flush inst rerun strict => i.modifyAt (flushEffects fuel rerun strict) inst
+  | .remount inst => i.modifyAt (Inst.remount fuel) inst
   | .task inst k e => i.modifyAt (fireTask fuel k e) inst
 
 /-- The root element (e.g. `<App/>` passed to `createRoot(…).render`). -/
@@ -340,8 +409,9 @@ theorem Insts.allInv : {E : Type} → (k : Insts E) → k.AllInv
 end
 
 /-- **Soundness of verified components.**  However the user interacts with the
-application, whatever timers fire and whenever React flushes effects, every
-mounted component instance satisfies its invariant.
+application, whatever timers fire, whenever React flushes effects (StrictMode's
+second run at mount included) and whichever instances it remounts, every mounted
+component instance satisfies its invariant.
 
 The proof is by construction: `dispatch`, `flushEffects`, `fireTask` and
 `reconcile` can only be *defined* because each component supplies its proof
@@ -407,5 +477,180 @@ theorem mount_keeps_state (fuel : Nat) {E : Type} (c : CompNode E) (o : OldState
 theorem mount_fresh_state (fuel : Nat) {E : Type} (c : CompNode E) (o : OldState) (h : o.spec ≠ c.spec) :
     (mount fuel c (some o)).stateSigma = ⟨c.spec, c.spec.init c.d c.hpre⟩ := by
   cases fuel <;> simp [mount, h, Inst.stateSigma]
+
+/-! ## Facts about effect re-runs (React 18 `updateEffectImpl`, `areHookInputsEqual`) -/
+
+-- a dependency that changed value re-runs the effect, whatever the run chooses
+example : depsChanged [.int 1] [.int 2] false = true := by decide
+example : depsChanged [.bool true, .int 7] [.bool false, .int 7] false = true := by decide
+-- equal values do not, whatever the run chooses
+example : depsChanged [.int 7, .bool true] [.int 7, .bool true] true = false := by decide
+example : depsChanged [] [] true = false := by decide
+-- `0` may have become `-0` (or not): the run decides
+example : depsChanged [.int 0] [.int 0] true = true := by decide
+example : depsChanged [.int 0] [.int 0] false = false := by decide
+-- an object's identity is not modelled: the run decides, unless another dependency changed
+example : depsChanged [.obj, .int 1] [.obj, .int 1] true = true := by decide
+example : depsChanged [.obj, .int 1] [.obj, .int 1] false = false := by decide
+example : depsChanged [.obj, .int 1] [.obj, .int 2] false = true := by decide
+
+/-- The stored dependency arrays of an instance. -/
+def Inst.depsOf {E : Type} : Inst E → Option (List (Option (List DepVal)))
+  | .mk _ _ _ deps _ _ => deps
+
+/-- The number of timers (tasks) an instance has registered. -/
+def Inst.timerCount {E : Type} : Inst E → Nat
+  | .mk _ _ _ _ tasks _ => tasks.length
+
+/-- A flush records the dependency arrays of the current render, as React stores
+each render's dependencies, whether or not the effect ran. -/
+theorem flushEffects_depsOf (fuel : Nat) (rerun : Nat → Bool) (strict : Bool) {E : Type} (c : CompNode E)
+    (s : c.spec.S) (hinv : c.spec.inv c.d s) (deps : Option (List (Option (List DepVal))))
+    (tasks : List (Task c.spec.S (c.spec.inv c.d))) (kids : Insts (Emit c.spec.S E (c.spec.inv c.d) s)) :
+    (flushEffects fuel rerun strict (.mk c s hinv deps tasks kids)).depsOf
+      = some ((c.render s hinv).effectsOf.map (·.deps)) := by
+  simp only [flushEffects]
+  split <;> rfl
+
+/-- Effect number `j` is compared with the dependency array recorded for effect number `j`
+(and decided by `rerun j`): a flush runs, in order, exactly the effects whose own
+dependencies changed. -/
+theorem firingFrom_eq {S E : Type} {inv : S → Prop} (deps : Option (List (Option (List DepVal))))
+    (rerun : Nat → Bool) : ∀ (k : Nat) (effs : List (Effect S E inv)),
+    firingFrom deps rerun k effs
+      = ((List.range' k effs.length).zip effs).filterMap
+          (fun p => if p.2.fires (prevDeps deps p.1) (rerun p.1) then some p.2 else none)
+  | _, [] => rfl
+  | k, eff :: rest => by
+      rw [firingFrom, List.length_cons, List.range'_succ, List.zip_cons_cons, List.filterMap_cons,
+        firingFrom_eq deps rerun (k + 1) rest]
+      split <;> simp_all
+
+/-- Two effects whose dependencies change independently: each is compared with its own
+recorded array (a flush that compared every effect with the first one's would run the
+second effect here too). -/
+theorem firingFrom_two {S E : Type} {inv : S → Prop} (rerun : Nat → Bool) (e₀ e₁ : Effect S E inv)
+    (old₀ old₁ new₀ new₁ : List DepVal) (h₀ : e₀.deps = some new₀) (h₁ : e₁.deps = some new₁) :
+    firingFrom (some [some old₀, some old₁]) rerun 0 [e₀, e₁]
+      = (if depsChanged old₀ new₀ (rerun 0) then [e₀] else [])
+          ++ (if depsChanged old₁ new₁ (rerun 1) then [e₁] else []) := by
+  simp only [firingFrom, prevDeps, Effect.fires, h₀, h₁, Option.bind_some]
+  simp only [List.getElem?_cons_zero, List.getElem?_cons_succ]
+  split <;> split <;> simp
+
+/-- At the first flush after mounting every effect is selected. -/
+theorem firingFrom_none {S E : Type} {inv : S → Prop} (rerun : Nat → Bool) :
+    ∀ (k : Nat) (effs : List (Effect S E inv)), firingFrom none rerun k effs = effs
+  | _, [] => rfl
+  | k, eff :: rest => by simp [firingFrom, prevDeps, Effect.fires, firingFrom_none rerun (k + 1) rest]
+
+/-- The first flush after mounting runs every effect — and every effect a second time
+when the run chooses StrictMode's double invocation (`strict`). -/
+theorem flushRuns_none {S E : Type} {inv : S → Prop} (rerun : Nat → Bool) (strict : Bool)
+    (effs : List (Effect S E inv)) :
+    flushRuns none rerun strict effs = if strict then effs ++ effs else effs := by
+  cases strict <;> simp [flushRuns, firingFrom_none]
+
+/-- After the first flush, `strict` changes nothing: React double-invokes effects only
+at mount. -/
+theorem flushRuns_some {S E : Type} {inv : S → Prop} (deps : List (Option (List DepVal)))
+    (rerun : Nat → Bool) (strict : Bool) (effs : List (Effect S E inv)) :
+    flushRuns (some deps) rerun strict effs = firingFrom (some deps) rerun 0 effs := by
+  simp [flushRuns]
+
+-- two concrete effects, deps `[a]` and `[b]`: `a` changed 1 → 2, `b` stayed 5; only the first runs
+private def depEff (d : List DepVal) : Effect Unit Empty (fun _ => True) :=
+  { deps := some d, setup := ⟨[], none⟩, setup_ok := fun _ _ => trivial, setup_noEmit := rfl,
+    tasks := [], tasks_ok := by simp }
+example : (firingFrom (some [some [.int 1], some [.int 5]]) (fun _ => true) 0
+    [depEff [.int 2], depEff [.int 5]]).map (·.deps) = [some [.int 2]] := by decide
+example : (firingFrom (some [some [.int 2], some [.int 4]]) (fun _ => true) 0
+    [depEff [.int 2], depEff [.int 5]]).map (·.deps) = [some [.int 5]] := by decide
+example : (firingFrom (some [some [.int 2], some [.int 5]]) (fun _ => true) 0
+    [depEff [.int 2], depEff [.int 5]]).length = 0 := by decide
+-- the undecided comparison of effect 1 is decided by `rerun 1`, not `rerun 0`
+example : (firingFrom (some [some [.int 2], some [.obj]]) (fun k => k == 1) 0
+    [depEff [.int 2], depEff [.obj]]).map (·.deps) = [some [.obj]] := by decide
+example : (firingFrom (some [some [.obj], some [.int 5]]) (fun k => k == 1) 0
+    [depEff [.obj], depEff [.int 5]]).length = 0 := by decide
+-- at mount every effect runs, twice under StrictMode
+example : (flushRuns none (fun _ => false) true [depEff [.int 2], depEff [.int 5]]).length = 4 := by decide
+example : (flushRuns (some [some [.int 2], some [.int 5]]) (fun _ => false) true
+    [depEff [.int 2], depEff [.int 5]]).length = 0 := by decide
+
+/-- An effect runs again when a dependency changed since the previous render
+(`depsChanged` against the array recorded at the last flush), and registers its
+timers: the effect of a one-effect component, here.  (Before, the model compared
+the effect's dependencies with themselves, so an effect with a dependency array
+never ran a second time.) -/
+theorem flushEffects_reruns (fuel : Nat) (rerun : Nat → Bool) (strict : Bool) {E : Type} (c : CompNode E)
+    (s : c.spec.S) (hinv : c.spec.inv c.d s) (old new : List DepVal)
+    (tasks : List (Task c.spec.S (c.spec.inv c.d))) (kids : Insts (Emit c.spec.S E (c.spec.inv c.d) s))
+    (eff : Effect c.spec.S E (c.spec.inv c.d)) (heffs : (c.render s hinv).effectsOf = [eff])
+    (hnew : eff.deps = some new) (hch : depsChanged old new (rerun 0) = true) :
+    (flushEffects fuel rerun strict (.mk c s hinv (some [some old]) tasks kids)).stateSigma
+        = ⟨c.spec, eff.setup.apply s⟩ ∧
+      (flushEffects fuel rerun strict (.mk c s hinv (some [some old]) tasks kids)).timerCount
+        = eff.tasks.length + tasks.length := by
+  simp [flushEffects, flushRuns, heffs, firingFrom, prevDeps, Effect.fires, hnew, hch, runRobust,
+    Inst.stateSigma, Inst.timerCount]
+
+/-- …and does not when no dependency changed: the instance keeps its state, timers
+and children. -/
+theorem flushEffects_keeps (fuel : Nat) (rerun : Nat → Bool) (strict : Bool) {E : Type} (c : CompNode E)
+    (s : c.spec.S) (hinv : c.spec.inv c.d s) (old new : List DepVal)
+    (tasks : List (Task c.spec.S (c.spec.inv c.d))) (kids : Insts (Emit c.spec.S E (c.spec.inv c.d) s))
+    (eff : Effect c.spec.S E (c.spec.inv c.d)) (heffs : (c.render s hinv).effectsOf = [eff])
+    (hnew : eff.deps = some new) (hch : depsChanged old new (rerun 0) = false) :
+    flushEffects fuel rerun strict (.mk c s hinv (some [some old]) tasks kids)
+      = .mk c s hinv (some [some new]) tasks kids := by
+  simp [flushEffects, flushRuns, heffs, firingFrom, prevDeps, Effect.fires, hnew, hch]
+
+/-- With two effects, a flush runs exactly those whose own dependency array changed:
+effect 0 alone when its dependencies changed and effect 1's did not. -/
+theorem flushEffects_first_of_two (fuel : Nat) (rerun : Nat → Bool) (strict : Bool) {E : Type}
+    (c : CompNode E) (s : c.spec.S) (hinv : c.spec.inv c.d s) (old₀ old₁ new₀ new₁ : List DepVal)
+    (tasks : List (Task c.spec.S (c.spec.inv c.d))) (kids : Insts (Emit c.spec.S E (c.spec.inv c.d) s))
+    (e₀ e₁ : Effect c.spec.S E (c.spec.inv c.d)) (heffs : (c.render s hinv).effectsOf = [e₀, e₁])
+    (h₀ : e₀.deps = some new₀) (h₁ : e₁.deps = some new₁)
+    (hch₀ : depsChanged old₀ new₀ (rerun 0) = true) (hch₁ : depsChanged old₁ new₁ (rerun 1) = false) :
+    (flushEffects fuel rerun strict (.mk c s hinv (some [some old₀, some old₁]) tasks kids)).stateSigma
+        = ⟨c.spec, e₀.setup.apply s⟩ ∧
+      (flushEffects fuel rerun strict (.mk c s hinv (some [some old₀, some old₁]) tasks kids)).timerCount
+        = e₀.tasks.length + tasks.length := by
+  simp [flushEffects, flushRuns, heffs, firingFrom_two rerun e₀ e₁ old₀ old₁ new₀ new₁ h₀ h₁, hch₀, hch₁,
+    runRobust, Inst.stateSigma, Inst.timerCount]
+
+/-- The first flush after mounting runs the effect of a one-effect component — twice when
+the run chooses StrictMode's double invocation, with the same closure (React 18:
+setup, cleanup, setup; the timers of the first setup stay registered in the model) —
+and records its dependencies. -/
+theorem flushEffects_mount (fuel : Nat) (rerun : Nat → Bool) (strict : Bool) {E : Type} (c : CompNode E)
+    (s : c.spec.S) (hinv : c.spec.inv c.d s)
+    (tasks : List (Task c.spec.S (c.spec.inv c.d))) (kids : Insts (Emit c.spec.S E (c.spec.inv c.d) s))
+    (eff : Effect c.spec.S E (c.spec.inv c.d)) (heffs : (c.render s hinv).effectsOf = [eff]) :
+    (flushEffects fuel rerun strict (.mk c s hinv none tasks kids)).stateSigma
+        = ⟨c.spec, if strict then eff.setup.apply (eff.setup.apply s) else eff.setup.apply s⟩ ∧
+      (flushEffects fuel rerun strict (.mk c s hinv none tasks kids)).timerCount
+        = (if strict then 2 else 1) * eff.tasks.length + tasks.length ∧
+      (flushEffects fuel rerun strict (.mk c s hinv none tasks kids)).depsOf = some [eff.deps] := by
+  cases strict <;>
+    simp [flushEffects, flushRuns, heffs, firingFrom, prevDeps, Effect.fires, runRobust, Inst.stateSigma,
+      Inst.timerCount, Inst.depsOf] <;> omega
+
+/-- Mounting an element afresh (at the start of a run, or where no instance of the same
+component was): its initial state, no recorded dependencies (so the first flush runs every
+effect: `flushEffects_mount`) and no timers. -/
+theorem mount_none (fuel : Nat) {E : Type} (c : CompNode E) :
+    ∃ kids, mount fuel c none = .mk c (c.spec.init c.d c.hpre) (c.spec.init_inv c.d c.hpre) none [] kids := by
+  cases fuel <;> (rw [mount]; exact ⟨_, rfl⟩)
+
+/-- A remount starts the instance afresh, from its current element. -/
+theorem remount_eq (fuel : Nat) {E : Type} (c : CompNode E) (s : c.spec.S) (hinv : c.spec.inv c.d s)
+    (deps : Option (List (Option (List DepVal)))) (tasks : List (Task c.spec.S (c.spec.inv c.d)))
+    (kids : Insts (Emit c.spec.S E (c.spec.inv c.d) s)) :
+    ∃ kids', Inst.remount fuel (.mk c s hinv deps tasks kids)
+      = .mk c (c.spec.init c.d c.hpre) (c.spec.init_inv c.d c.hpre) none [] kids' :=
+  mount_none fuel c
 
 end VReact

@@ -11,7 +11,7 @@
  * duplicate the continuation; `for…of` loops become folds.
  */
 import ts from "typescript";
-import { T, type VType, type TypeEnv, type Field, type Param, sameType, showType, leanType, sharedFields, type Variant, typeOfNode, kindsOfType, nullShape, checkValueType, propertyNameText, propertyName, isEqType, mentionsTVar, substType, type TField, type NamedType, collectionKind, collectionTypeArgs, isLibSymbol, mapType, setType, nonValuePart } from "./types.ts";
+import { T, type VType, type TypeEnv, type Field, type Param, type TParam, sameType, showType, leanType, sharedFields, type Variant, typeOfNode, kindsOfType, nullShape, checkValueType, propertyNameText, propertyName, isEqType, mentionsTVar, substType, type TField, type NamedType, collectionKind, collectionTypeArgs, isLibSymbol, mapType, setType, nonValuePart } from "./types.ts";
 import { type Env, type Val, ModCtx, type Binding, type StateVar, type CompCtx, type HandlerAcc, type FnInfo, type CompInfo, type Global, type Narrowed, type DomSite, bind, extend, freshLocal, refSymbol } from "./ctx.ts";
 import { VtsError, fail, leanField, leanAccessor, leanIdent, leanStr, jsStr, leanInt, paren, nodeText, argText, exprText, capitalize, relLoc, decodeJsxEntities } from "./util.ts";
 
@@ -75,11 +75,47 @@ export function isGlobal(env: Env, n: ts.Node, name: string): boolean {
   return env.m.prog.isGlobal(n, name);
 }
 
-function globalOf(env: Env, node: ts.Node): Global | undefined {
+/** The top-level declaration of the program (a function, constant or component; through import aliases) that `node` refers to, if any. */
+export function globalOf(env: Env, node: ts.Node): Global | undefined {
   const s = resolved(env, symbolOf(env, node));
   const d = s?.declarations?.[0];
   if (!d) return undefined;
   return env.m.prog.globals.get(d);
+}
+
+/**
+ * The verified module that `id` names as a module namespace object — an import binding
+ * (`import * as L from "./lib"`, or a name another VTS module re-exports with
+ * `export * as L from "./lib"`) that resolves to a module of the program — or null.  A
+ * namespace spelled like a global VTS gives a meaning (`import * as Math from "./m"`) is not
+ * one here: it is rejected where it is used (rename it, see `identifier`).
+ */
+function vtsNamespace(env: Env, id: ts.Expression): ts.SourceFile | null {
+  if (!ts.isIdentifier(id) || BUILTIN_NAMES.has(id.text)) return null;
+  const s = symbolOf(env, id);
+  if (!s || !(s.flags & ts.SymbolFlags.Alias) || env.vars.has(s)) return null;
+  const r = resolved(env, s);
+  const d = r?.valueDeclaration;
+  if (!r || !(r.flags & ts.SymbolFlags.ValueModule) || !d || !ts.isSourceFile(d) || env.m.prog.isLibraryFile(d)) return null;
+  return d;
+}
+
+/**
+ * `L.x` with `L` a namespace of a verified module (`vtsNamespace`): what the member `x` is, as
+ * the same name imported with `import { x } from "./lib"` (JS reads the module's export `x`,
+ * a live binding that is initialised before this module runs: imports are acyclic), or null.
+ * `g` is the verified declaration it resolves to (through re-exports), if any.
+ */
+export function nsMember(env: Env, pa: ts.Expression): { ns: ts.Identifier; g: Global | undefined } | null {
+  if (!ts.isPropertyAccessExpression(pa) || pa.questionDotToken || !ts.isIdentifier(pa.expression) || !vtsNamespace(env, pa.expression)) return null;
+  const d = env.m.prog.refDecl(pa.name);
+  return { ns: pa.expression, g: d ? env.m.prog.globals.get(d) : undefined };
+}
+
+/** The message for a member `L.x` of a verified module's namespace that is neither a verified function nor a constant. */
+function nsMemberMsg(pa: ts.PropertyAccessExpression, g: Global | undefined): string {
+  const what = g?.k === "comp" ? "a component: render it as a JSX element, imported by name" : "not a verified function or constant of that module";
+  return `\`${nodeText(pa, 40)}\` is ${what} (through a module namespace, only \`${pa.expression.getText()}.f(…)\` calls of verified functions and \`${pa.expression.getText()}.K\` reads of verified constants are supported)`;
 }
 
 /** Array methods that mutate the array (rejected everywhere: VTS data is immutable). */
@@ -188,9 +224,13 @@ function isImmediateFn(fn: ts.ArrowFunction | ts.FunctionExpression, env: Env): 
  * The two agree exactly when (a) no function that runs later reads a `let`
  * that may be reassigned after the function was created, and (b) no function
  * assigns a `let` declared outside it.  Both are checked here for one
- * top-level function or component body (a `let` is only visible inside it).
+ * top-level function or component body (a `let` is only visible inside it), or for
+ * whatever else is translated: a constant's initialiser, a module-level fact.  Of a
+ * `@trusted` declaration only some statements are translated (its contracts, a
+ * component's initial state): `only` lists them, the writes being collected in the
+ * whole `body` (and the Map/Set rules applied to each of them on its own).
  */
-export function checkClosures(body: ts.Node, env: Env) {
+export function checkClosures(body: ts.Node, env: Env, only?: readonly ts.Node[]) {
   const checker = env.m.checker;
   const writes = new Map<ts.Symbol, ts.Node[]>();
   const collectWrites = (n: ts.Node) => {
@@ -237,8 +277,8 @@ export function checkClosures(body: ts.Node, env: Env) {
     }
     ts.forEachChild(n, visit);
   };
-  visit(body);
-  checkCollectionMutation(body, env);
+  for (const n of only ?? [body]) visit(n);
+  for (const n of only ?? [body]) checkCollectionMutation(n, env);
 }
 
 /* ───────────────────── Map / Set: mutation and aliasing ───────────────────── */
@@ -251,6 +291,11 @@ const MUTATORS = new Set(["set", "add", "delete", "clear"]);
  * allowed: `mutateLocal` translates only those (as rebindings).
  */
 const freshMutable = new WeakSet<ts.Node>();
+
+/** Is `d` the declaration of a local Map / Set that its function mutates (`n.set(…);`)? */
+export function isMutatedLocal(d: ts.Node): boolean {
+  return freshMutable.has(d);
+}
 
 /** Whether an expression is a Map or a Set by its TypeScript type (also for an unannotated `ensures` parameter: see `tsTypeOf`). */
 function collKindOf(x: ts.Expression, env: Env): "map" | "set" | null {
@@ -528,6 +573,16 @@ export function isNullLit(e: ts.Expression, env: Env): boolean {
   return e.kind === ts.SyntaxKind.NullKeyword || isGlobal(env, e, "undefined");
 }
 
+/**
+ * Is the returned expression `e` the value undefined, with nothing to evaluate — the global
+ * `undefined` (not a binding spelled like it), or `void 0`?  Then `return e;` is `return;`.
+ */
+export function isUndefinedReturn(e: ts.Expression, env: Env): boolean {
+  const x = stripParens(e);
+  if (isGlobal(env, x, "undefined")) return true;
+  return ts.isVoidExpression(x) && ts.isNumericLiteral(stripParens(x.expression));
+}
+
 export function stripParens(e: ts.Expression): ts.Expression {
   while (ts.isParenthesizedExpression(e) || ts.isAsExpression(e) && e.type.getText() === "const") e = ts.isParenthesizedExpression(e) ? e.expression : (e as ts.AsExpression).expression;
   return e;
@@ -538,6 +593,90 @@ function hasNullLeaf(e: ts.Expression, env: Env): boolean {
   e = stripParens(e);
   if (isNullLit(e, env)) return true;
   return ts.isConditionalExpression(e) && (hasNullLeaf(e.whenTrue, env) || hasNullLeaf(e.whenFalse, env));
+}
+
+/**
+ * The type of a conditional `c ? a : b` that has no expected type, when its branches' own types
+ * (each typed in its narrowed environment, nothing emitted) widen to a type wider than the first
+ * branch's: an int and a number give a number (`c ? i : 0.5`), an enum member and a string a
+ * string (`c ? color : name`, `c ? color : "zzz"`), elementwise for arrays and options.
+ * undefined otherwise: the second branch is then read at the first one's type, as before
+ * (`c ? xs : []`, `c ? color : "red"`).  See `widerJoin`.
+ */
+function conditionalJoin(c: ts.ConditionalExpression, env: Env): VType | undefined {
+  const dry = { ...env, m: dryCtx(env.m) };
+  const own: VType[] = [];
+  const ctx: ts.Expression[] = [];
+  // (`first`: the type of the branch translated first, which the others were read at: the
+  // second one for a negated test, `u.kind !== "a" ? … : …`)
+  let first: VType | undefined;
+  let seenFirst = false;
+  let ok = true;
+  const visit = (x: ts.Expression, e1: Env): string => {
+    let t: VType | undefined;
+    try {
+      t = expr(x, e1).type;
+    } catch (err) {
+      if (!(err instanceof VtsError)) throw err;
+    }
+    if (!seenFirst) {
+      seenFirst = true;
+      first = t;
+    }
+    if (needsContext(x, e1)) ctx.push(x);
+    else if (t) own.push(t);
+    else ok = false;
+    return "_";
+  };
+  try {
+    branch(c.condition, dry, (e1) => visit(c.whenTrue, e1), (e2) => visit(c.whenFalse, e2));
+  } catch (err) {
+    if (!(err instanceof VtsError)) throw err;
+    return undefined;
+  }
+  return ok ? widerJoin(first, own, ctx, env) : undefined;
+}
+
+/**
+ * The type that the values of several expressions (a conditional's branches, an array literal's
+ * elements) all widen to, TypeScript's union of their types, when it is wider than `first`, the
+ * type of the first expression on its own (by which they were typed before), or when that has
+ * none (`[[], [1]]`): the join (`joinTypes`) of the types of the expressions in `own`, where a
+ * string literal in `ctx` (expressions typed by their context: literals, `null`, `[]`) that is not
+ * a member of an enum join makes it a string.  An int is widened to a number with `Num.ofInt`,
+ * an enum member to its string: the same JS values.
+ */
+function widerJoin(first: VType | undefined, own: VType[], ctx: ts.Expression[], env: Env): VType | undefined {
+  let j: VType | null = own[0] ?? null;
+  for (const t of own.slice(1)) j = j && joinTypes(j, t);
+  if (!j) return undefined;
+  const en = j.k === "enum" ? j : j.k === "opt" && j.elem.k === "enum" ? j.elem : null;
+  if (en) {
+    const lits = env.m.reg.enumLits(en);
+    if (ctx.some((x) => strLitLeaves(x).some((l) => !lits.includes(l)))) j = j.k === "opt" ? T.opt(T.str) : T.str;
+  }
+  const to = j;
+  if (!own.every((t) => widensTo(t, to))) return undefined;
+  if (!first) return j;
+  return !sameType(first, j) && widensTo(first, j) ? j : undefined;
+}
+
+/** Whether `widen` turns a value of type `t` into one of type `j` (the same JS value). */
+function widensTo(t: VType, j: VType): boolean {
+  if (sameType(t, j)) return true;
+  if (j.k === "num") return t.k === "int";
+  if (j.k === "str") return t.k === "enum";
+  if (j.k === "opt" && t.k !== "opt") return widensTo(t, j.elem);
+  if (j.k === "arr" && t.k === "arr") return widensTo(t.elem, j.elem);
+  return false;
+}
+
+/** The string literals among the leaves of an expression (through parentheses and conditionals). */
+function strLitLeaves(e: ts.Expression): string[] {
+  e = stripParens(e);
+  if (ts.isStringLiteralLike(e)) return [e.text];
+  if (ts.isConditionalExpression(e)) return [...strLitLeaves(e.whenTrue), ...strLitLeaves(e.whenFalse)];
+  return [];
 }
 
 /** The type of some non-null leaf of a conditional (typed in its narrowed environment, nothing emitted). */
@@ -701,7 +840,7 @@ function untypedFix(e: ts.Expression, env: Env, otherwise: string): string {
   return rt ? `annotate the result parameter with the return type, ensures((${root.text}: ${nodeText(rt, 50)}) => …)` : otherwise;
 }
 
-function nullishKinds(e: ts.Expression, env: Env): { null: boolean; undef: boolean } | null {
+export function nullishKinds(e: ts.Expression, env: Env): { null: boolean; undef: boolean } | null {
   const t = tsTypeOf(e, env);
   return t ? kindsOfType(t) : null;
 }
@@ -1083,7 +1222,7 @@ function expr0(e: ts.Expression, env: Env, expected?: VType): Val {
       // (TypeScript normalises a literal beyond the doubles, `1e400`, to "Infinity": that number
       // is what JS reads it as, the Lean literal 1e400 stands for it)
       if (!Number.isFinite(Number(text))) return { code: "(1e400 : VReact.JS.Num)", type: T.num };
-      if (expected?.k === "num" || /[.eE]/.test(text)) {
+      if (expected?.k === "num" || numericLiteralType(text).k === "num") {
         // an integer literal as a number is `Num.ofInt n`, the form of an int used as a number
         // (`x === 0` with `x : number` and a divisor's `x !== 0` obligation are then one term)
         if (/^\d+$/.test(text)) return { code: `(VReact.JS.Num.ofInt ${leanInt(BigInt(text))})`, type: T.num };
@@ -1130,6 +1269,9 @@ function expr0(e: ts.Expression, env: Env, expected?: VType): Val {
         const ot = nonNullLeafType(c, env);
         if (ot) ty = ot.k === "opt" ? ot : T.opt(ot);
       }
+      // `c ? i : 0.5` (an int and a number): both branches at the type that covers both, as
+      // TypeScript's type of the conditional does, not the second at the first one's type
+      if (!ty) ty = conditionalJoin(c, env);
       const code = branch(c.condition, env, (e1) => {
         const v = expr(c.whenTrue, e1, ty);
         ty = ty ?? v.type;
@@ -1146,7 +1288,7 @@ function expr0(e: ts.Expression, env: Env, expected?: VType): Val {
       const parts: string[] = [];
       if (te.head.text) parts.push(jsStr(te.head.text));
       for (const span of te.templateSpans) {
-        parts.push(toStr(expr(span.expression, env), span.expression));
+        parts.push(toStr(expr(span.expression, env), span.expression, env));
         if (span.literal.text) parts.push(jsStr(span.literal.text));
       }
       return { code: parts.length ? `(${parts.join(" ++ ")})` : jsStr(""), type: T.str };
@@ -1179,6 +1321,15 @@ function expr0(e: ts.Expression, env: Env, expected?: VType): Val {
     default:
       fail(e, `expression not supported in VTS: ${nodeText(e)}`);
   }
+}
+
+/**
+ * The type a numeric literal has of its own, from its value (TypeScript's text of it, normalised:
+ * `2.0` is "2", `1e3` "1000", `1e21` "1e+21", `1e400` "Infinity"): an integer is an int, any other
+ * value (`2.5`, `1e+21`, Infinity) a number.
+ */
+export function numericLiteralType(text: string): VType {
+  return /^\d+$/.test(text) ? T.int : T.num;
 }
 
 /**
@@ -1262,8 +1413,8 @@ function narrowAdvice(x: ts.Expression | undefined, env: Env): string {
     : `use ?. (${what}?.… ?? default), or name it and narrow: const v = ${what}; if (v ${test}) …`;
 }
 
-/** Conversion to string (template literals, JSX text, string concatenation). */
-function toStr(v: Val, node: ts.Node): string {
+/** Conversion to string (template literals, JSX text, string concatenation, `String(x)`) of the value `v` of `node`. */
+export function toStr(v: Val, node: ts.Expression, env: Env): string {
   switch (v.type.k) {
     case "str":
       return paren(v.code);
@@ -1275,7 +1426,9 @@ function toStr(v: Val, node: ts.Node): string {
     case "tvar":
       fail(node, abstractMsg(v.type, "converting to a string"));
     default:
-      fail(node, `cannot convert ${showType(v.type)} to a string`);
+      // (an optional type shown with the nullish value TypeScript gives it: `m.get(k)` is
+      // `int | undefined`)
+      fail(node, `cannot convert ${showWithKinds(v.type, tsTypeOf(node, env), env)} to a string`);
   }
 }
 
@@ -1309,7 +1462,77 @@ function identifier(id: ts.Identifier, env: Env, expected?: VType, symOverride?:
   if (BUILTIN_NAMES.has(id.text) && !isGlobal(env, id, id.text)) {
     fail(id, `\`${id.text}\` here is not JavaScript's global ${id.text}: it is ${s?.declarations?.length ? `declared at ${relLoc(s.declarations[0], env.m.prog.root)}` : "a binding of this program"} (a name is recognised by its declaration, not its spelling); rename it`);
   }
+  const local = s && unboundLocal(id, s, env);
+  if (local) fail(id, local);
+  if (vtsNamespace(env, id)) fail(id, `\`${id.text}\` is the namespace object of a verified module: it can only be used through its members (\`${id.text}.f(…)\` calls a verified function, \`${id.text}.K\` reads a verified constant)`);
   fail(id, `unknown or unsupported identifier \`${id.text}\` (only locals, props, state, and verified top-level declarations can be referenced)`);
+}
+
+/**
+ * Why `id`, which refers to the local variable `s` of a function or component (TypeScript
+ * resolved it), has no binding where VTS translates it, or null if `s` is not such a local.
+ * A function is translated with the locals declared before the point where it is created (a
+ * local arrow function, where it is called or attached as a handler, also with those declared
+ * after it that are initialised there: `closureEnv`); a contract or an initial value sees what
+ * `env.limits` says; a timer callback, the effect body's locals listed in `env.unavailable`.
+ */
+function unboundLocal(id: ts.Identifier, s: ts.Symbol, env: Env): string | null {
+  const why = env.unavailable?.get(s);
+  if (why) return why;
+  const d = s.valueDeclaration;
+  if (!d || !(ts.isVariableDeclaration(d) || ts.isBindingElement(d) || ts.isParameter(d)) || !fnOf(d)) return null;
+  const at = relLoc(d, env.m.prog.root);
+  if (within(id, d) && !ts.isParameter(d)) return `\`${id.text}\` is read inside its own declaration (${at}): VTS does not support a local that refers to itself (recursion, or a read in its temporal dead zone)`;
+  if (d.getStart() > id.getStart()) {
+    // declared after the code that reads it: the outermost function around `id` created
+    // before the declaration is the one that reads it
+    let f: ts.Node | undefined;
+    for (let a: ts.Node | undefined = id.parent; a; a = a.parent) {
+      if ((ts.isArrowFunction(a) || ts.isFunctionExpression(a)) && !within(d, a)) f = a;
+      if (within(d, a)) break;
+    }
+    if (!f) return `\`${id.text}\` is read before its declaration (${at}) has run: JS throws a ReferenceError (temporal dead zone); declare it first`;
+    let named: ts.Node = f;
+    while (ts.isParenthesizedExpression(named.parent)) named = named.parent;
+    const who = ts.isVariableDeclaration(named.parent) && ts.isIdentifier(named.parent.name) ? `\`${named.parent.name.text}\`` : "this function";
+    return `${who} reads \`${id.text}\`, which is declared after it (${at}) and not initialised yet where VTS translates it: VTS translates a function with the locals declared before it (a local arrow function also with those declared before the place where it is called or attached as a handler; an effect or useCallback function where it is created); declare \`${id.text}\` earlier`;
+  }
+  if (env.limits) return `\`${id.text}\` (declared at ${at}) cannot be used here: ${env.limits}`;
+  return `\`${id.text}\` is a local (declared at ${at}) that VTS does not bind where it translates this code`;
+}
+
+/**
+ * Why the callee `id`, which refers to the variable `s`, has no binding here: a recursive call
+ * of a local function being inlined around this point (`env.inlining`; the function is not in
+ * its own environment, nor, through another local function, in that one's), else `unboundLocal`.
+ */
+function unboundCallee(id: ts.Identifier, s: ts.Symbol, env: Env): string | null {
+  const f = localFnOf(s);
+  if (f && env.inlining?.has(f)) return recursiveCall(id.text);
+  return unboundLocal(id, s, env);
+}
+
+/** The function a local variable is initialised with (`const f = (…) => …`, also through `useCallback`), if any. */
+function localFnOf(s: ts.Symbol): ts.Node | undefined {
+  const d = s.valueDeclaration;
+  if (!d || !ts.isVariableDeclaration(d) || !d.initializer) return undefined;
+  let init = stripParens(d.initializer);
+  if (ts.isCallExpression(init) && init.arguments[0]) init = stripParens(init.arguments[0]);
+  return ts.isArrowFunction(init) || ts.isFunctionExpression(init) ? init : undefined;
+}
+
+/** Why a call of the local function `name` inside its own run is rejected. */
+function recursiveCall(name: string): string {
+  return `\`${name}\` is called again while it runs (a recursive call, directly or through other local functions): VTS translates a local function by inlining its body where it is called or attached as a handler, so it cannot be recursive; use \`for … of\` or an array method`;
+}
+
+/**
+ * `env` for the body of the local function `fn` inlined at a call or attachment in `outer`:
+ * `fn` is being inlined there, so a call of it inside is recursive (`unboundCallee`).
+ */
+function enterInline(fn: ts.Node, at: ts.Node, name: string, env: Env, outer: Env): Env {
+  if (outer.inlining?.has(fn)) fail(at, recursiveCall(name));
+  return { ...env, inlining: new Set([...(outer.inlining ?? []), fn]) };
 }
 
 function propertyAccess(pa: ts.PropertyAccessExpression, env: Env): Val {
@@ -1318,6 +1541,16 @@ function propertyAccess(pa: ts.PropertyAccessExpression, env: Env): Val {
   // event fields: e.target.value / e.currentTarget.value / e.target.checked / e.key
   const evVar = eventBase(pa, env);
   if (evVar) return evVar;
+  // L.K, L a verified module's namespace: the constant K, as `import { K }` gives it
+  const nm = nsMember(env, pa);
+  if (nm) {
+    if (nm.g?.k === "const") {
+      m.deps.add(nm.g.info.qname);
+      return { code: nm.g.info.qname, type: nm.g.info.type };
+    }
+    if (nm.g?.k === "fn") fail(pa, "functions are not first-class in VTS; call the function instead");
+    fail(pa, nsMemberMsg(pa, nm.g));
+  }
   // props.x
   if (ts.isIdentifier(pa.expression)) {
     const s = symbolOf(env, pa.expression);
@@ -1394,10 +1627,12 @@ const KEY_HANDLERS = ["onKeyDown", "onKeyUp", "onKeyPress"];
  * on a `<div>`, whose `value` is undefined, and `(e: KeyboardEvent<…>)` as an onChange, whose
  * event has no `key` (also for a handler passed by name).  `e.currentTarget` is the element
  * the handler is on; `e.target` is the element where the event happened, which is that element
- * only when nothing inside it can be an event target: an `<input>` (a void element), a
- * `<textarea>` (text only, and React reports a text node's event at its parent), and a
- * `<select>`'s onChange / onInput (`change` and `input` fire at the select; a click may be on
- * one of its options).
+ * only when nothing inside it can be the target: an `<input>` (a void element), a `<textarea>`
+ * (text only, and React reports a text node's event at its parent), and a `<select>`'s
+ * onChange — its content is `<option>`s and `<optgroup>`s (`CONTENT_RULES` in component.ts),
+ * which never make an onChange, so it runs for the select's own `change` event only.  Not its
+ * onInput: an `input` event dispatched at one of its options (by a script) bubbles to the select
+ * with the option as its target.
  */
 function checkEventSite(pa: ts.PropertyAccessExpression, site: DomSite, which: "target" | "currentTarget" | null, field: string) {
   const on = `${site.prop} on <${site.tag}>`;
@@ -1406,9 +1641,10 @@ function checkEventSite(pa: ts.PropertyAccessExpression, site: DomSite, which: "
     return;
   }
   if (!site.html) fail(pa, `\`${nodeText(pa)}\` in ${on}: this <${site.tag}> is inside an <svg> or <math> element, so React creates it as an SVG (MathML) element, which has no ${field}`);
-  const self = site.tag === "input" || site.tag === "textarea" || (site.tag === "select" && (site.prop === "onChange" || site.prop === "onInput"));
+  const self = site.tag === "input" || site.tag === "textarea" || (site.tag === "select" && site.prop === "onChange");
   if (which === "target" && !self) {
-    fail(pa, `\`${nodeText(pa)}\` in ${on}: e.target is the element where the event happened, which may be another element inside <${site.tag}> (with another ${field}, or none); put the handler on the control itself and read e.currentTarget.${field} there`);
+    const fix = site.tag === "select" ? `read e.currentTarget.${field} (the select's) instead` : `put the handler on the control itself and read e.currentTarget.${field} there`;
+    fail(pa, `\`${nodeText(pa)}\` in ${on}: e.target is the element where the event happened, which may be another element inside <${site.tag}> (with another ${field}, or none${site.tag !== "select" ? "" : site.prop === "onInput" ? ": an input event a script dispatches at one of its options reaches it" : ": one of its options"}); ${fix}`);
   }
   if (field === "value" && !STRING_VALUE_TAGS.includes(site.tag)) {
     fail(pa, `\`${nodeText(pa)}\` is not a string in ${on}: only ${STRING_VALUE_TAGS.map((t) => `<${t}>`).join(", ")} have a string value (it is undefined on a <${site.tag}>${["li", "meter", "progress"].includes(site.tag) ? ", or a number" : ""}; React's handler types are bivariant, so TypeScript accepts a handler typed for another element)`);
@@ -1519,6 +1755,18 @@ function elementAccess(ea: ts.ElementAccessExpression, env: Env): Val {
 function numericExpected(expected?: VType): VType | undefined {
   const t = expected?.k === "opt" ? expected.elem : expected;
   return t && isNumeric(t) ? t : undefined;
+}
+
+/**
+ * The expected type of the right operand of an ordering comparison or of `+ - *` from the type
+ * `lt` of the left operand (where the context expects no numeric type of the result): a number
+ * left operand reads an integer literal on the right as a number (`x < 1`: `Num.ofInt 1`), while
+ * an int one gives the right operand no expected type: JS widens the int where the other operand
+ * is a number (`i < xs.length / 2`, `i * 0.5`, `i - y`), and so does the operator (`Num.ofInt i`),
+ * where an expected int would reject the number.
+ */
+function rightOperandExpected(lt: VType): VType | undefined {
+  return lt.k === "int" ? undefined : lt;
 }
 
 /**
@@ -1650,7 +1898,7 @@ function binary(b: ts.BinaryExpression, env: Env, expected?: VType): Val {
   };
   if (cmp[op]) {
     let l = expr(b.left, env);
-    let r = expr(b.right, env, l.type);
+    let r = expr(b.right, env, rightOperandExpected(l.type));
     if (l.type.k === "int" && r.type.k === "num") l = coerce(l, T.num, b, env);
     if (l.type.k === "tvar") fail(b, abstractMsg(l.type, "an ordering comparison (<, <=, >, >=) on"));
     if (!isNumeric(l.type) && l.type.k !== "str") fail(b, "ordering comparison on non-numbers");
@@ -1674,18 +1922,20 @@ function binary(b: ts.BinaryExpression, env: Env, expected?: VType): Val {
     if (isStringTyped(b.left, env) || isStringTyped(b.right, env)) {
       const l = expr(b.left, env);
       const r = expr(b.right, env);
-      return { code: `(${concatPart(l, b.left, b)} ++ ${concatPart(r, b.right, b)})`, type: T.str };
+      return { code: `(${concatPart(l, b.left, b, env)} ++ ${concatPart(r, b.right, b, env)})`, type: T.str };
     }
-    const l = expr(b.left, env, operandExpected(b.left, env, numericExpected(expected)));
-    const r = expr(b.right, env, operandExpected(b.right, env, isNumeric(l.type) ? l.type : undefined));
+    const ne = numericExpected(expected);
+    const l = expr(b.left, env, operandExpected(b.left, env, ne));
+    const r = expr(b.right, env, operandExpected(b.right, env, !isNumeric(l.type) ? undefined : ne ? l.type : rightOperandExpected(l.type)));
     if (l.type.k === "str" || r.type.k === "str") {
-      return { code: `(${concatPart(l, b.left, b)} ++ ${concatPart(r, b.right, b)})`, type: T.str };
+      return { code: `(${concatPart(l, b.left, b, env)} ++ ${concatPart(r, b.right, b, env)})`, type: T.str };
     }
     return arith("+", l, r, b, env);
   }
   if (op === K.MinusToken || op === K.AsteriskToken) {
-    const l = expr(b.left, env, operandExpected(b.left, env, numericExpected(expected)));
-    const r = expr(b.right, env, operandExpected(b.right, env, isNumeric(l.type) ? l.type : undefined));
+    const ne = numericExpected(expected);
+    const l = expr(b.left, env, operandExpected(b.left, env, ne));
+    const r = expr(b.right, env, operandExpected(b.right, env, !isNumeric(l.type) ? undefined : ne ? l.type : rightOperandExpected(l.type)));
     return arith(op === K.MinusToken ? "-" : "*", l, r, b, env);
   }
   if (op === K.SlashToken) {
@@ -1818,13 +2068,13 @@ function isStringTyped(e: ts.Expression, env: Env): boolean {
 }
 
 /** An operand of a string concatenation `a + b`, as a string. */
-function concatPart(v: Val, e: ts.Expression, node: ts.Node): string {
+function concatPart(v: Val, e: ts.Expression, node: ts.Node, env: Env): string {
   if (v.type.k === "tvar") fail(node, abstractMsg(v.type, "`+` (string concatenation) on"));
   if (v.type.k === "num") {
     fail(node, `\`+\` converts the number \`${nodeText(e, 30)}\` to a string with JS's Number::toString (shortest round-trip form), which VTS models only as an opaque function: use an int, or a template literal \`\${…}\` (where the conversion is opaque too)`);
   }
   if (v.type.k === "opt") fail(node, `\`${nodeText(e, 30)}\` may be null or undefined, which \`+\` would turn into the text "null" / "undefined": narrow it first`);
-  return toStr(v, e);
+  return toStr(v, e, env);
 }
 
 /**
@@ -1947,6 +2197,10 @@ function arrayLiteral(a: ts.ArrayLiteralExpression, env: Env, expected?: VType):
     return { code: `(${a.elements.map((e, i) => expr(e, env, expected.elems[i]).code).join(", ")})`, type: expected };
   }
   let elemT: VType | undefined = expected?.k === "arr" ? expected.elem : expected?.k === "opt" && expected.elem.k === "arr" ? expected.elem.elem : undefined;
+  // `[i, 2.5]` (an int and a number), `[c, "zzz"]` (an enum member and a string outside it):
+  // every element at the type that covers all of them, TypeScript's element type, not the first
+  // element's type
+  if (!elemT) elemT = elementsJoin(a, env);
   const pieces: string[] = [];
   let group: string[] = [];
   const flush = () => {
@@ -1973,6 +2227,34 @@ function arrayLiteral(a: ts.ArrayLiteralExpression, env: Env, expected?: VType):
   const code = pieces.length === 0 ? "[]" : pieces.length === 1 ? pieces[0] : `(${pieces.join(" ++ ")})`;
   // ascribed, so that Lean never re-infers the element type (e.g. a fold over a literal)
   return { code: `(${code} : List ${leanType(elemT)})`, type: T.arr(elemT) };
+}
+
+/**
+ * The element type of an array literal without an expected type when its elements' own types
+ * (a spread's: its elements') widen to a type wider than the first element's (see `widerJoin`),
+ * undefined otherwise (each element is then read at the first one's type, as before).
+ */
+function elementsJoin(a: ts.ArrayLiteralExpression, env: Env): VType | undefined {
+  const dry = { ...env, m: dryCtx(env.m) };
+  const own: VType[] = [];
+  const ctx: ts.Expression[] = [];
+  let first: VType | undefined;
+  for (const [i, el] of a.elements.entries()) {
+    let t: VType | undefined;
+    try {
+      if (ts.isSpreadElement(el)) {
+        const v = iterated(el.expression, dry).v;
+        t = v.type.k === "arr" ? v.type.elem : undefined;
+      } else t = expr(el, dry).type;
+    } catch (err) {
+      if (!(err instanceof VtsError)) throw err;
+    }
+    if (i === 0) first = t;
+    if (!ts.isSpreadElement(el) && needsContext(el, env)) ctx.push(el);
+    else if (t) own.push(t);
+    else return undefined;
+  }
+  return widerJoin(first, own, ctx, env);
 }
 
 /* ───────────────────────────── Map / Set ───────────────────────────── */
@@ -2269,8 +2551,44 @@ export function lambda(
   paramTs?: readonly (ts.Type | null | undefined)[],
 ): { binders: string[]; typed: string[]; body: Val; obligations: boolean; env: Env } {
   if (!ts.isArrowFunction(fn) && !ts.isFunctionExpression(fn)) fail(fn, "expected an inline arrow function `(x) => …`");
-  // (Lean checks the callback for any value of its parameters: `generalized`)
-  let e2: Env = { ...env, generalized: "an array-method callback: Lean checks it for every value of its parameters, not only the array's elements (and the program's accumulators or indexes)" };
+  // (Lean checks the callback for any value of its parameters: `generalized`; inside a handler or
+  // effect, a state update in it is rejected for what it is: `valueCtx`)
+  const e1: Env = { ...env, generalized: "an array-method callback: Lean checks it for every value of its parameters, not only the array's elements (and the program's accumulators or indexes)", valueCtx: env.handler || env.valueCtx ? CALLBACK_UPDATE_MSG : undefined };
+  const { env: e2, binders, typed } = lambdaParams(fn, e1, paramTypes, paramTs);
+  const before = env.m.obCount();
+  // (a predicate's result is tested for truthiness by JS: `xs.filter((x) => x)`)
+  const body = ts.isBlock(fn.body) ? valueBlock(fn.body.statements, e2, expectedRet, fn) : expectedRet?.k === "bool" ? boolOperand(fn.body, e2) : expr(fn.body, e2, expectedRet);
+  return { binders, typed, body, obligations: env.m.obCount() > before, env: e2 };
+}
+
+/**
+ * A contract lambda `(x₁, …) => c` (`callbackRequires`): JS never calls it, it states that `c`
+ * holds (is truthy) for the arguments of every call of the callback.  An expression body is
+ * read as a contract proposition (`prop`: the consequent of `implies(a, b)`, the right operand
+ * of `&&`, … under their guards, as in `requires`); a block body is read as code, its
+ * obligations checked for every value of the parameters.
+ */
+export function contractLambda(
+  fn: ts.ArrowFunction | ts.FunctionExpression,
+  env: Env,
+  paramTypes: VType[],
+  paramTs?: readonly (ts.Type | null | undefined)[],
+): { binders: string[]; typed: string[]; prop: string } {
+  const { env: e2, binders, typed } = lambdaParams(fn, { ...env, generalized: "a callbackRequires contract: Lean checks it for every value of the callback's parameters" }, paramTypes, paramTs);
+  if (ts.isBlock(fn.body)) return { binders, typed, prop: `${paren(valueBlock(fn.body.statements, e2, T.bool, fn).code)} = true` };
+  // (JS never calls it — vreact/spec's callbackRequires ignores its predicate — so, as in an
+  // ensures lambda, `implies(a, b)` reads b under a: `Env.ghost`)
+  return { binders, typed, prop: prop(fn.body, { ...e2, ghost: true }) };
+}
+
+/** Bind the parameters of an inline function to fresh Lean variables (`_` for the arguments it ignores). */
+function lambdaParams(
+  fn: ts.ArrowFunction | ts.FunctionExpression,
+  env: Env,
+  paramTypes: VType[],
+  paramTs?: readonly (ts.Type | null | undefined)[],
+): { env: Env; binders: string[]; typed: string[] } {
+  let e2 = env;
   const binders: string[] = [];
   const typed: string[] = [];
   fn.parameters.forEach((p, i) => {
@@ -2288,10 +2606,7 @@ export function lambda(
     binders.push("_");
     typed.push(`(_ : ${leanType(paramTypes[i])})`);
   }
-  const before = env.m.obCount();
-  // (a predicate's result is tested for truthiness by JS: `xs.filter((x) => x)`)
-  const body = ts.isBlock(fn.body) ? valueBlock(fn.body.statements, e2, expectedRet, fn) : expectedRet?.k === "bool" ? boolOperand(fn.body, e2) : expr(fn.body, e2, expectedRet);
-  return { binders, typed, body, obligations: env.m.obCount() > before, env: e2 };
+  return { env: e2, binders, typed };
 }
 
 /**
@@ -2371,24 +2686,22 @@ function call(c: ts.CallExpression, env: Env, expected?: VType): Val {
     if (b?.k === "closure") return inlineClosure(b, c, env, expected);
     if (b && b.k !== "val") fail(c, `\`${callee.text}\` can only be called as a statement inside an event handler or effect`);
     const g = globalOf(env, callee);
-    if (g?.k === "fn") {
-      const info = g.info;
-      if (args.length !== info.params.length) fail(c, `${info.name} expects ${info.params.length} arguments`);
-      if (env.curState && info.hasPre) {
-        fail(c, `${info.name} has a precondition and cannot be called inside a functional update / reducer argument (its argument is the *current* state, about which nothing is known); make it total`);
-      }
-      if (info.tparams.length) return genericCall(info, c, env, expected);
-      const as = args.map((a, i) => paren(expr(a, env, info.params[i].type).code));
-      const ob = info.hasPre ? " " + m.ob(c, "precondition", `precondition of ${info.name}(${args.map((a) => argText(a)).join(", ")})`) : "";
-      m.deps.add(info.qname);
-      return { code: `(${info.qname}${as.map((a) => " " + a).join("")}${ob})`, type: info.ret };
-    }
-    if (isGlobal(env, callee, "String") && args.length === 1) return { code: toStr(expr(args[0], env), args[0]), type: T.str };
+    if (g?.k === "fn") return fnCall(g.info, c, env, expected);
+    if (isGlobal(env, callee, "String") && args.length === 1) return { code: toStr(expr(args[0], env), args[0], env), type: T.str };
+    // a local of the function (TypeScript resolved it) without a binding here: say why
+    const local = s && !b ? unboundCallee(callee, s, env) : null;
+    if (local) fail(c, local);
     fail(c, `call to \`${callee.text}\` is not supported (only verified top-level functions, local helper arrows, and modelled library methods)`);
   }
   if (ts.isPropertyAccessExpression(callee)) {
     const mname = callee.name.text;
     const objE = callee.expression;
+    // L.f(…), L a verified module's namespace: the function f, as `import { f }` gives it
+    const nm = nsMember(env, callee);
+    if (nm) {
+      if (nm.g?.k === "fn") return fnCall(nm.g.info, c, env, expected);
+      fail(c, nsMemberMsg(callee, nm.g));
+    }
     // Math.*
     if (isGlobal(env, objE, "Math")) return mathCall(mname, c, env, expected);
     // Array.from(it): an array of what `it` iterates (the library's Array, not a user binding)
@@ -2417,6 +2730,21 @@ function call(c: ts.CallExpression, env: Env, expected?: VType): Val {
     fail(c, `method ${mname} not supported on ${showType(obj.type)}`);
   }
   fail(c, `unsupported call ${nodeText(c)}`);
+}
+
+/** A call `c` of the verified top-level function `info` (named, or through a module namespace). */
+function fnCall(info: FnInfo, c: ts.CallExpression, env: Env, expected?: VType): Val {
+  const m = env.m;
+  const args = c.arguments;
+  if (args.length !== info.params.length) fail(c, `${info.name} expects ${info.params.length} arguments`);
+  if (env.curState && info.hasPre) {
+    fail(c, `${info.name} has a precondition and cannot be called inside a functional update / reducer argument (its argument is the *current* state, about which nothing is known); make it total`);
+  }
+  if (info.tparams.length) return genericCall(info, c, env, expected);
+  const as = args.map((a, i) => paren(expr(a, env, info.params[i].type).code));
+  const ob = info.hasPre ? " " + m.ob(c, "precondition", `precondition of ${info.name}(${args.map((a) => argText(a)).join(", ")})`) : "";
+  m.deps.add(info.qname);
+  return { code: `(${info.qname}${as.map((a) => " " + a).join("")}${ob})`, type: info.ret };
 }
 
 /**
@@ -2625,6 +2953,18 @@ function fieldTsTypeOf(t: VType, name: string, env: Env): ts.Type | null {
 }
 
 /**
+ * The field `f` of the constraint of `p` as the program writes it (`{ readonly note?: string }`),
+ * or else with the nullish value TypeScript gives it (`{ note: string | undefined }`).
+ */
+function constraintFieldText(p: TParam, f: TField, env: Env): string {
+  const c = p.decl.constraint;
+  const m = c && ts.isTypeLiteralNode(c) ? c.members.find((x) => ts.isPropertySignature(x) && propertyNameText(x.name) === f.name) : undefined;
+  if (m) return `{ ${nodeText(m, 60).replace(/[;,]\s*$/, "")} }`;
+  const want = p.fieldTs.get(f.name);
+  return `{ ${f.name}: ${showWithKinds(f.type, want ?? null, env)} }`;
+}
+
+/**
  * The instantiation must be a closed value type that is never null or undefined (JS has one
  * nullish value, where `T | null` with `T = X | null` would be `Option (Option X)` in Lean), a type
  * JS compares by value for an equality constraint (never `number`: TypeScript cannot tell it from
@@ -2659,9 +2999,11 @@ function checkInstantiation(info: FnInfo, σ: Map<number, VType>, c: ts.CallExpr
       const ft = fieldTypeOf(t, f.name, env);
       if (!ft) {
         const where = t.k === "union" ? ` (it must be a field of every variant)` : "";
-        fail(c, `${at}, which has no field ${f.name}${where}, but ${p.name} extends { ${f.name}: ${showType(f.type)} }`);
+        fail(c, `${at}, which has no field ${f.name}${where}, but ${p.name} extends ${constraintFieldText(p, f, env)}`);
       }
-      if (!sameType(ft, f.type)) fail(c, `${at}: its field ${f.name} has the type ${showType(ft)}, and the constraint of ${p.name} says ${showType(f.type)} (they must be the same type)`);
+      // (optional types shown with the nullish value TypeScript gives them: `note?: string` is
+      // `string | undefined`)
+      if (!sameType(ft, f.type)) fail(c, `${at}: its field ${f.name} has the type ${showWithKinds(ft, fieldTsTypeOf(t, f.name, env), env)}, and the constraint of ${p.name} says ${showWithKinds(f.type, p.fieldTs.get(f.name) ?? null, env)} (they must be the same type)`);
       if (hasOptPart(f.type)) {
         const want = p.fieldTs.get(f.name);
         const got = fieldTsTypeOf(t, f.name, env);
@@ -2786,13 +3128,60 @@ function accessorArg(t: VType, f: TField, c: ts.CallExpression, env: Env): strin
   return `(fun (${x} : ${leanType(t)}) => ${v.code})`;
 }
 
+/**
+ * The environment of a local function's body where it is called or attached as a handler, in
+ * `env`: that of its creation (`b.env`, which fixes the variables declared before it), plus the
+ * `const`s and `let`s declared after it that are initialised here.  JS reads those when the
+ * function runs, which is here or later (a handler runs after the render), and each has one
+ * value from its initialisation on: a `const`, or a `let` that nothing assigns (`checkClosures`
+ * rejects a function that reads a `let` assigned after the function is created, and every
+ * assignment of a `let` declared after it is).  Symbols identify the variables, so a name
+ * resolves as in JS.  Not for a `useCallback` function (`memo`): React may call one created in
+ * an earlier render, whose later locals had other values (and its dependency array cannot list
+ * them: `checkDeps`).
+ */
+export function closureEnv(b: Extract<Binding, { k: "closure" }>, env: Env): Env {
+  if (b.memo) return b.env;
+  let vars: Map<ts.Symbol, Binding> | null = null;
+  for (const [s, v] of env.vars) {
+    if (b.env.vars.has(s)) continue;
+    const d = s.valueDeclaration;
+    if (!d || d.getStart() < b.fn.end || !localVarDecl(d)) continue;
+    vars ??= new Map(b.env.vars);
+    vars.set(s, v);
+  }
+  return vars ? { ...b.env, vars } : b.env;
+}
+
+/** Is `d` the setter / dispatch of `const [value, setValue] = useState(…)` / `useReducer(…)` (a stable function)? */
+function isStateSetter(d: ts.Node, env: Env): boolean {
+  if (!ts.isBindingElement(d) || !ts.isArrayBindingPattern(d.parent) || d.parent.elements.indexOf(d) !== 1) return false;
+  const v = d.parent.parent;
+  if (!ts.isVariableDeclaration(v) || !v.initializer) return false;
+  const c = stripParens(v.initializer);
+  const h = ts.isCallExpression(c) ? hookName(env, c.expression) : null;
+  return h === "useState" || h === "useReducer";
+}
+
+/** The `const` / `let` declaration list a variable declaration or a binding element in one belongs to, if any. */
+function localVarDecl(d: ts.Node): ts.VariableDeclarationList | null {
+  let x: ts.Node = d;
+  while (ts.isBindingElement(x) || ts.isObjectBindingPattern(x) || ts.isArrayBindingPattern(x)) x = x.parent;
+  if (!ts.isVariableDeclaration(x) || !ts.isVariableDeclarationList(x.parent)) return null;
+  const l = x.parent;
+  return l.flags & (ts.NodeFlags.Const | ts.NodeFlags.Let) ? l : null;
+}
+
 function inlineClosure(b: Extract<Binding, { k: "closure" }>, c: ts.CallExpression, env: Env, expected?: VType): Val {
   const fn = b.fn;
   checkPlainParams(fn.parameters, `the local function ${nodeText(c.expression, 30)}`);
   if (fn.parameters.length !== c.arguments.length) fail(c, "arity mismatch");
   // Evaluate the arguments in the caller env, bind them in the closure's env.
   let lets = "";
-  let e2: Env = { ...b.env, scope: env.scope, narrow: b.env.narrow, curState: env.curState, generalized: env.generalized ?? b.env.generalized };
+  // (called for its value inside a handler or effect: a state update in it cannot run in order
+  // with the handler's, `valueCtx`)
+  const valueCtx = env.handler || env.valueCtx ? HELPER_VALUE_MSG(nodeText(c.expression, 30)) : undefined;
+  let e2: Env = enterInline(fn, c, nodeText(c.expression, 30), { ...closureEnv(b, env), scope: env.scope, narrow: b.env.narrow, curState: env.curState, generalized: env.generalized ?? b.env.generalized, valueCtx }, env);
   fn.parameters.forEach((p, i) => {
     if (!p.type) fail(p, "helper function parameters need type annotations");
     const t = helperValueType(p.type, env, "Arg", `parameter \`${p.name.getText()}\` of ${nodeText(c.expression, 30)}`);
@@ -3009,9 +3398,24 @@ function arrayMethod(name: string, xs: Val, c: ts.CallExpression, env: Env, expe
       return { code: `(${X}.reverse)`, type: xs.type };
     case "with": {
       arity(c, "with", 2, 2);
+      // a negative index counts from the end (ES2023: `xs.with(-1, v)` writes the last element,
+      // RangeError outside [-length, length)): one written `-k` is `withEnd xs k` (obligation
+      // 0 < k ≤ length); any other index must be non-negative (stronger than JS for a negative
+      // value: the obligation says so)
+      const a0 = stripParens(args[0]);
+      const negLit = ts.isPrefixUnaryExpression(a0) && a0.operator === ts.SyntaxKind.MinusToken;
+      const zeroLit = negLit && ts.isNumericLiteral(stripParens(a0.operand)) && Number((stripParens(a0.operand) as ts.NumericLiteral).text) === 0;
+      if (negLit && !zeroLit) {
+        const k = expr(a0.operand, env, T.int);
+        const v = expr(args[1], env, elem);
+        const ob = m.ob(c, "index", `index ${nodeText(args[0])} is within bounds for .with (counted from the end: -${nodeText((c.expression as ts.PropertyAccessExpression).expression, 30)}.length ≤ ${nodeText(args[0])} < 0)`);
+        return { code: `(VReact.JS.withEnd ${X} ${paren(k.code)} ${paren(v.code)} ${ob})`, type: xs.type };
+      }
       const i = expr(args[0], env, T.int);
       const v = expr(args[1], env, elem);
-      const ob = m.ob(c, "index", `index ${nodeText(args[0])} is within bounds for .with`);
+      // (a literal index is not negative: no note)
+      const note = ts.isNumericLiteral(a0) || zeroLit ? "" : ` (0 ≤ ${nodeText(args[0])} < length: VTS counts an index from the end only when it is written -k)`;
+      const ob = m.ob(c, "index", `index ${nodeText(args[0])} is within bounds for .with${note}`);
       return { code: `(VReact.JS.withAt ${X} ${paren(i.code)} ${paren(v.code)} ${ob})`, type: xs.type };
     }
     case "at": {
@@ -3114,7 +3518,7 @@ function specCall(name: string, c: ts.CallExpression, env: Env): Val {
       return { code: `(VReact.JS.nodupB ${paren(xs.code)})`, type: T.bool };
     }
     case "implies": {
-      // a function call: JS evaluates both arguments (in code; contracts read it as an implication)
+      // a function call: JS evaluates both arguments (in code, as in a contract that runs: `prop`)
       arity(c, "implies", 2, 2);
       const a = expr(args[0], env, T.bool);
       const b = expr(args[1], env, T.bool);
@@ -3349,10 +3753,15 @@ function narrowBranch(nt: NarrowTest, env: Env, onTrue: (e: Env) => string, onFa
  *
  * Guards are in scope where JS evaluates under them: the right operand of `&&`
  * (`||`) under a hypothesis that the left one holds (fails), the branches of
- * `?:` and the consequent of `implies(a, b)` under the condition, a quantifier
- * body under its bounds / membership.  When the guarded part has no proof
- * obligations the plain connective is emitted (`∧`, `∨`, `→`: same normal forms);
- * otherwise a named hypothesis binds the guard (`∃ (h : a), b`, `∀ (h : a), b`).
+ * `?:` under the condition, a quantifier body under its bounds / membership (JS
+ * calls it only there).  `implies(a, b)` is a function call: JS evaluates `b`
+ * whatever `a` is, so in a contract that runs (requires, invariant, assert,
+ * assume, a module-level assert) it is `a → b` with `b` unguarded; only in an
+ * `ensures` lambda or a `callbackRequires` lambda, which JS never calls (`env.ghost`), is `b`
+ * read under `a`.
+ * When the guarded part has no proof obligations the plain connective is emitted
+ * (`∧`, `∨`, `→`: same normal forms); otherwise a named hypothesis binds the
+ * guard (`∃ (h : a), b`, `∀ (h : a), b`).
  */
 export function prop(e0: ts.Expression, env: Env): string {
   const e = stripParens(e0);
@@ -3385,7 +3794,7 @@ export function prop(e0: ts.Expression, env: Env): string {
     const cmp: Record<number, string> = { [K.LessThanToken]: "<", [K.LessThanEqualsToken]: "≤", [K.GreaterThanToken]: ">", [K.GreaterThanEqualsToken]: "≥" };
     if (cmp[op]) {
       let l = expr(e.left, env);
-      let r = expr(e.right, env, l.type);
+      let r = expr(e.right, env, rightOperandExpected(l.type));
       if (l.type.k === "int" && r.type.k === "num") l = coerce(l, T.num, e, env);
       if (l.type.k === "tvar") fail(e, abstractMsg(l.type, "an ordering comparison (<, <=, >, >=) on"));
       if (!isNumeric(l.type)) fail(e, "ordering comparison on non-numbers");
@@ -3417,19 +3826,28 @@ export function prop(e0: ts.Expression, env: Env): string {
     const args = e.arguments;
     if (sf === "implies") {
       arity(e, "implies", 2, 2);
-      return propGuarded(args[0], env, "imp", (e1) => prop(args[1], e1));
+      // a function call: where the contract runs, JS evaluates b whatever a is (spec's
+      // `implies(a, b) { return !a || b }`), so b's obligations are proved without a, and b is
+      // not narrowed by a; only in an ensures lambda, which never runs, is b read under a
+      if (env.ghost) return propGuarded(args[0], env, "imp", (e1) => prop(args[1], e1));
+      // (Lean elaborates the codomain of `→` without the domain as a hypothesis)
+      const a = prop(args[0], env);
+      return `(${a} → ${prop(args[1], env)})`;
     }
-    if (sf === "forall" || sf === "exists") {
-      arity(e, sf, 3, 3);
+    // `forall(lo, hi, (i) => condition)` (an arrow with one parameter and an expression body) is a
+    // quantifier read as a contract, its body under the bounds.  Any other callback — a block body
+    // `(i) => { …; return c; }`, a `function (i) { … }`, no parameter — is left to the code reading
+    // (the calls JS makes, `rangeFrom lo hi`.all/any), as for every/some below; the bounds are not
+    // translated here first (their obligations would be registered twice)
+    const qfn = (sf === "forall" || sf === "exists") && args.length === 3 ? stripParens(args[2]) : undefined;
+    if ((sf === "forall" || sf === "exists") && qfn && ts.isArrowFunction(qfn) && qfn.parameters.length === 1 && !ts.isBlock(qfn.body)) {
       const lo = expr(args[0], env, T.int);
       const hi = expr(args[1], env, T.int);
-      const fn = args[2];
-      if (!fn || !(ts.isArrowFunction(fn) || ts.isFunctionExpression(fn)) || fn.parameters.length !== 1) fail(e, `${sf}(lo, hi, (i) => …)`);
+      const fn = qfn;
       const r = bindParam(fn.parameters[0].name, T.int, env, env.m.checker.getNumberType());
-      if (ts.isBlock(fn.body)) fail(fn.body, "quantifier body must be an expression");
       const i = r.binder;
       const before = env.m.obCount();
-      const body = prop(fn.body, r.env);
+      const body = prop(fn.body as ts.Expression, r.env);
       const guarded = env.m.obCount() > before;
       if (sf === "forall") {
         if (!guarded) return `(∀ ${i} : Int, ${paren(lo.code)} ≤ ${i} → ${i} < ${paren(hi.code)} → ${body})`;
@@ -3467,30 +3885,36 @@ export function prop(e0: ts.Expression, env: Env): string {
       }
     }
     if (ts.isPropertyAccessExpression(e.expression) && ["every", "some", "includes"].includes(e.expression.name.text)) {
-      const xs = expr(e.expression.expression, env);
-      if (xs.type.k === "arr") {
-        const mname = e.expression.name.text;
-        if (mname === "includes") {
-          arity(e, "includes", 1, 1, "a fromIndex is not supported: write xs.slice(k).includes(v)");
-          if (nullishSearch(e, e.expression.expression, xs.type.elem, args[0], "includes", env)) return `(none ∈ ${paren(xs.code)})`;
-          checkPrimitiveElems(e, e.expression.expression, xs.type.elem, "includes", env);
-          return `(${expr(args[0], env, xs.type.elem).code} ∈ ${paren(xs.code)})`;
+      const mname = e.expression.name.text;
+      // `xs.every((x) => condition)` (one argument: an arrow with one parameter and an expression
+      // body) is a quantifier read as a contract, its body under the membership.  Any other
+      // callback — a block body `(x) => { …; return c; }`, a `function (x) { … }`, no parameter,
+      // an index parameter, a thisArg — is left to the code reading below (as in a handler: the
+      // calls JS makes on the elements; `implies` in it evaluates both arguments), which also
+      // rejects what it does not model; the receiver is not translated here first (its
+      // obligations would be registered twice)
+      const fn = args.length === 1 ? stripParens(args[0]) : undefined;
+      const quantifier = !!fn && ts.isArrowFunction(fn) && fn.parameters.length === 1 && !ts.isBlock(fn.body);
+      if (mname === "includes" || quantifier) {
+        const xs = expr(e.expression.expression, env);
+        if (xs.type.k === "arr") {
+          if (mname === "includes") {
+            arity(e, "includes", 1, 1, "a fromIndex is not supported: write xs.slice(k).includes(v)");
+            if (nullishSearch(e, e.expression.expression, xs.type.elem, args[0], "includes", env)) return `(none ∈ ${paren(xs.code)})`;
+            checkPrimitiveElems(e, e.expression.expression, xs.type.elem, "includes", env);
+            return `(${expr(args[0], env, xs.type.elem).code} ∈ ${paren(xs.code)})`;
+          }
+          const f = fn as ts.ArrowFunction;
+          const r = bindParam(f.parameters[0].name, xs.type.elem, env, elemTsType(e.expression.expression, env) ?? undefined);
+          const before = env.m.obCount();
+          const body = prop(f.body as ts.Expression, r.env);
+          const x = r.binder;
+          if (env.m.obCount() === before) return mname === "every" ? `(∀ ${x} ∈ ${paren(xs.code)}, ${body})` : `(∃ ${x} ∈ ${paren(xs.code)}, ${body})`;
+          const hm = env.m.fresh("hmem");
+          return mname === "every"
+            ? `(∀ ${x}, ∀ (${hm} : ${x} ∈ ${paren(xs.code)}), ${body})`
+            : `(∃ ${x}, ∃ (${hm} : ${x} ∈ ${paren(xs.code)}), ${body})`;
         }
-        arity(e, mname, 1, 1, "a thisArg argument is not supported");
-        const fn = args[0];
-        noIndexParam(mname, fn);
-        if (!fn || !(ts.isArrowFunction(fn) || ts.isFunctionExpression(fn)) || fn.parameters.length !== 1 || ts.isBlock(fn.body)) {
-          fail(e, `${mname}((x) => condition) with an expression body`);
-        }
-        const r = bindParam(fn.parameters[0].name, xs.type.elem, env, elemTsType(e.expression.expression, env) ?? undefined);
-        const before = env.m.obCount();
-        const body = prop(fn.body as ts.Expression, r.env);
-        const x = r.binder;
-        if (env.m.obCount() === before) return mname === "every" ? `(∀ ${x} ∈ ${paren(xs.code)}, ${body})` : `(∃ ${x} ∈ ${paren(xs.code)}, ${body})`;
-        const hm = env.m.fresh("hmem");
-        return mname === "every"
-          ? `(∀ ${x}, ∀ (${hm} : ${x} ∈ ${paren(xs.code)}), ${body})`
-          : `(∃ ${x}, ∃ (${hm} : ${x} ∈ ${paren(xs.code)}), ${body})`;
       }
     }
   }
@@ -3615,12 +4039,21 @@ export interface BlockCtx {
   onReturn?: (e: ts.Expression | undefined, env: Env) => string;
   /** handler: produce the outcome term */
   onDone?: (env: Env) => string;
-  /** render: translate a JSX const at its declaration (`code`), of Lean type `type` */
-  jsxConst?: { code: (e: ts.Expression, env: Env) => string; type: string };
+  /**
+   * render: translate a JSX const at its declaration (`code`), of Lean type `type`; `key`, read
+   * right after `code`, is the translation of its element's `key={…}` (undefined for none, or a key
+   * written as a string)
+   */
+  jsxConst?: { code: (e: ts.Expression, env: Env) => string; type: string; key: (e: ts.Expression) => Val | undefined };
   /** an effect body: `return cleanup` (the cleanup's evaluation, then the outcome) */
   onCleanup?: (e: ts.Expression, env: Env) => string;
   /** an effect body: statements it translates itself (timer registrations), or null */
   onStmt?: (s: ts.Statement, env: Env, rest: (e: Env) => string) => string | null;
+  /**
+   * a local helper inlined into a handler or effect body (`inlineHandlerCall`): its `return`
+   * (with the returned expression, if any), which ends the helper and continues the caller
+   */
+  onValue?: (e: ts.Expression | undefined, env: Env) => string;
   fnNode: ts.Node;
 }
 
@@ -3674,8 +4107,13 @@ export function block(stmts: readonly ts.Statement[], i: number, env: Env, bc: B
       fail(stmts[i + 1], "unreachable code after return");
     }
     if (bc.kind === "handler") {
-      if (s.expression && bc.onCleanup) return bc.onCleanup(s.expression, env);
-      if (s.expression) fail(s, "event handlers return nothing");
+      if (bc.onValue) return bc.onValue(s.expression, env);
+      // `return undefined;` is `return;`: React calls an effect's result as its cleanup only
+      // when it is not undefined (react-dom 18.3.1 commitHookEffectListUnmount), and ignores
+      // what an event handler or timer callback returns
+      const x = s.expression && !isUndefinedReturn(s.expression, env) ? s.expression : undefined;
+      if (x && bc.onCleanup) return bc.onCleanup(x, env);
+      if (x) fail(s, "event handlers return nothing");
       return bc.onDone!(env);
     }
     return bc.onReturn!(s.expression, env);
@@ -3733,7 +4171,7 @@ function varDecls(decls: ts.NodeArray<ts.VariableDeclaration>, j: number, env: E
     if (!fn || !(ts.isArrowFunction(fn) || ts.isFunctionExpression(fn))) fail(init, "useCallback needs an inline function");
     checkPlainParams(fn.parameters, `the local function ${d.name.text}`);
     checkDeps(fn, init.arguments[1], env, "useCallback");
-    return next(bind(env, symbolOf(env, d.name)!, { k: "closure", fn, env }));
+    return next(bind(env, symbolOf(env, d.name)!, { k: "closure", fn, env, memo: true }));
   }
   if (ts.isCallExpression(init) && hookName(env, init.expression) === "useMemo" && ts.isIdentifier(d.name)) {
     const fn = init.arguments[0];
@@ -3755,25 +4193,50 @@ function varDecls(decls: ts.NodeArray<ts.VariableDeclaration>, j: number, env: E
     if (env.keyFn) return next(bind(env, s, { k: "jsx", node: init, env, code: "" }));
     if (bc.kind !== "render" || !bc.jsxConst) fail(init, "JSX is only allowed in a component's render (not in functions, handlers, effects or loops)");
     const code = bc.jsxConst.code(init, env);
+    const key = bc.jsxConst.key(init);
     const { env: e1, name: ln } = freshLocal(env, leanIdent(d.name.text));
-    return `(let ${ln} : ${bc.jsxConst.type} := ${code};\n${next(bind(e1, s, { k: "jsx", node: init, env, code: ln }))})`;
+    return `(let ${ln} : ${bc.jsxConst.type} := ${code};\n${next(bind(e1, s, { k: "jsx", node: init, env, code: ln, key }))})`;
   }
-  if (ts.isObjectBindingPattern(d.name)) {
-    const v = expr(init, env, declT);
-    const { env: e1, name: tmp } = freshLocal(env, "tmp");
-    const r = bindParam(d.name, v.type, e1);
-    // bindParam created its own local name; re-bind to tmp
-    return `(let ${r.binder}${letType(v.type)} := ${v.code};\n${next(r.env)})`;
+  /** Bind the declared name (or pattern) to the value `v`, computed in `e`; then the next declaration. */
+  const bindInit = (v: Val, e: Env): string => {
+    if (ts.isObjectBindingPattern(d.name)) {
+      const { env: e1 } = freshLocal(e, "tmp");
+      const r = bindParam(d.name, v.type, e1);
+      // bindParam created its own local name; re-bind to tmp
+      return `(let ${r.binder}${letType(v.type)} := ${v.code};\n${next(r.env)})`;
+    }
+    if (ts.isArrayBindingPattern(d.name)) {
+      // `const [k, v] = pair` on a tuple
+      const r = bindParam(d.name, v.type, e);
+      return `(let ${r.binder}${letType(v.type)} := ${v.code};\n${next(r.env)})`;
+    }
+    if (!ts.isIdentifier(d.name)) fail(d, "unsupported destructuring");
+    return bindLocal(d.name, v, e, next, declT);
+  };
+  // `const v = f(…)` among the statements of an event handler or effect, `f` a local function
+  // that updates state or calls a parent callback: its statements run there, in order with the
+  // handler's (as for the statement `f(…);`, `inlineHandlerCall`), then `v` is the value it returns
+  if (bc.kind === "handler" && ts.isCallExpression(init) && ts.isIdentifier(init.expression)) {
+    const callee = init.expression;
+    const s = symbolOf(env, callee);
+    const b = s ? env.vars.get(s) : undefined;
+    if (b?.k === "closure" && ts.isBlock(b.fn.body) && closureUpdates(b, env)) {
+      // (the result type: the helper's annotation, else the declaration's, else the first return's)
+      let rt = b.fn.type ? helperValueType(b.fn.type, env, "Ret", `the result of ${callee.text}`) : declT;
+      return inlineHandlerCall(b, init, env, bc, next, (x, e3, back) => {
+        if (!x) fail(b.fn, "missing return value");
+        const v = expr(x, e3, rt);
+        rt = rt ?? v.type;
+        // (at the declared type, as `expr(init, env, declT)` gives it; a present value of an
+        // optional declared type is bound as present, `bindLocal`)
+        const narrowed = declT?.k === "opt" && sameType(v.type, declT.elem);
+        return bindInit(declT && !narrowed ? coerce(v, declT, x, e3) : v, back(e3));
+      });
+    }
   }
-  if (ts.isArrayBindingPattern(d.name)) {
-    // `const [k, v] = pair` on a tuple
-    const v = expr(init, env, declT);
-    const r = bindParam(d.name, v.type, env);
-    return `(let ${r.binder}${letType(v.type)} := ${v.code};\n${next(r.env)})`;
-  }
+  if (ts.isObjectBindingPattern(d.name) || ts.isArrayBindingPattern(d.name)) return bindInit(expr(init, env, declT), env);
   if (!ts.isIdentifier(d.name)) fail(d, "unsupported destructuring");
-  const v = declT?.k === "opt" ? exprPreferElem(init, env, declT) : expr(init, env, declT);
-  return bindLocal(d.name, v, env, next, declT);
+  return bindInit(declT?.k === "opt" ? exprPreferElem(init, env, declT) : expr(init, env, declT), env);
 }
 
 /** ` : T` for a `let` (every local is type-ascribed, so Lean never re-infers, e.g. defaults to Nat). */
@@ -3900,6 +4363,17 @@ function withFact(h: string, env: Env, bc: BlockCtx, rest: (e: Env) => string): 
   return `(open Classical in if ${env.m.fresh("hfact")} : type_of% ${h} then ${paren(rest(env))}\n  else ${skip})`;
 }
 
+/**
+ * Can evaluating `e` do anything but compute a value: call or construct, assign, delete, await,
+ * yield, or throw (`x!` of a nullish `x`)?  (By the program text.)
+ */
+function mayHaveEffect(e: ts.Node): boolean {
+  if (ts.isCallExpression(e) || ts.isNewExpression(e) || ts.isTaggedTemplateExpression(e) || ts.isDeleteExpression(e) || ts.isAwaitExpression(e) || ts.isYieldExpression(e) || ts.isNonNullExpression(e)) return true;
+  if (ts.isBinaryExpression(e) && e.operatorToken.kind >= ts.SyntaxKind.FirstAssignment && e.operatorToken.kind <= ts.SyntaxKind.LastAssignment) return true;
+  if ((ts.isPrefixUnaryExpression(e) || ts.isPostfixUnaryExpression(e)) && (e.operator === ts.SyntaxKind.PlusPlusToken || e.operator === ts.SyntaxKind.MinusMinusToken)) return true;
+  return !!ts.forEachChild(e, (c) => (mayHaveEffect(c) ? true : undefined));
+}
+
 function exprStatement(e: ts.Expression, env: Env, bc: BlockCtx, rest: (e: Env) => string): string {
   const m = env.m;
   e = stripParens(e);
@@ -3919,7 +4393,7 @@ function exprStatement(e: ts.Expression, env: Env, bc: BlockCtx, rest: (e: Env) 
       const op = k === ts.SyntaxKind.PlusEqualsToken ? "+" : "-";
       return assignLocal(e.left, (old) => {
         const r = expr(e.right, env, isNumeric(old.type) ? old.type : undefined);
-        if (old.type.k === "str" && op === "+") return { code: `(${old.code} ++ ${concatPart(r, e.right, e)})`, type: T.str };
+        if (old.type.k === "str" && op === "+") return { code: `(${old.code} ++ ${concatPart(r, e.right, e, env)})`, type: T.str };
         return arith(op, old, r, e, env);
       }, env, rest, e);
     }
@@ -3935,7 +4409,8 @@ function exprStatement(e: ts.Expression, env: Env, bc: BlockCtx, rest: (e: Env) 
       return { code: `(${old.code} ${op} ${one})`, type: old.type };
     }, env, rest, e);
   }
-  if (!ts.isCallExpression(e)) fail(e, "expression statement has no effect");
+  if (ts.isDeleteExpression(e)) fail(e, `\`${nodeText(e, 40)}\` removes the property from the object, which its other users see (VTS data is immutable): build a new object without it instead`);
+  if (!ts.isCallExpression(e)) fail(e, mayHaveEffect(e) ? `this expression statement is not supported in VTS: a statement expression is a call, an assignment (x = e, x += e, x -= e) or x++ / x-- of a local \`let\`, or document.title = …` : "expression statement has no effect");
   const callee = e.expression;
   const sf = specFn(env, callee);
   if (sf) {
@@ -3983,9 +4458,7 @@ function exprStatement(e: ts.Expression, env: Env, bc: BlockCtx, rest: (e: Env) 
   const target = updateTarget(callee, env);
   if (target) {
     if (bc.kind !== "handler" || !env.handler) {
-      fail(e, target.k === "callback"
-        ? "a parent callback can only be invoked inside an event handler"
-        : "state updates during render are not allowed (setState in render causes re-render loops); move it into an event handler or effect");
+      fail(e, env.valueCtx ?? (target.k === "callback" ? "a parent callback can only be invoked inside an event handler" : RENDER_UPDATE_MSG));
     }
     return handlerEffect(target, e, env, rest);
   }
@@ -3993,29 +4466,10 @@ function exprStatement(e: ts.Expression, env: Env, bc: BlockCtx, rest: (e: Env) 
   if (ts.isIdentifier(callee)) {
     const s = symbolOf(env, callee);
     const b = s ? env.vars.get(s) : undefined;
-    if (b?.k === "closure" && bc.kind === "handler") {
-      const fn = b.fn;
-      checkPlainParams(fn.parameters, `the local function ${callee.text}`);
-      if (fn.parameters.length !== e.arguments.length) fail(e, `${callee.text} takes ${fn.parameters.length} argument(s), not ${e.arguments.length}`);
-      let e2: Env = { ...b.env, handler: env.handler, scope: env.scope, curState: undefined, generalized: env.generalized ?? b.env.generalized };
-      let lets = "";
-      fn.parameters.forEach((p, i) => {
-        if (!p.type) fail(p, "helper parameters need type annotations");
-        const t = helperValueType(p.type, env, "Arg", `parameter \`${p.name.getText()}\` of ${callee.text}`);
-        const a = expr(e.arguments[i], env, t);
-        const r = bindParam(p.name, t, e2, "declared");
-        e2 = r.env;
-        lets += `let ${r.binder} := ${a.code};\n`;
-      });
-      const stmts = ts.isBlock(fn.body) ? fn.body.statements : [ts.factory.createExpressionStatement(fn.body)];
-      if (!ts.isBlock(fn.body)) {
-        // expression-bodied: treat as a single statement
-        return lets + exprStatement(fn.body, e2, bc, (e3) => rest({ ...env, handler: e3.handler, scope: e3.scope }));
-      }
-      // (a `return` in the helper ends the helper: its value is not an effect's cleanup)
-      const inner: BlockCtx = { ...bc, onCleanup: undefined, onStmt: undefined, onDone: (e3) => rest({ ...env, handler: e3.handler, scope: e3.scope }) };
-      return `(${lets}${block(stmts, 0, e2, inner, (e3) => rest({ ...env, handler: e3.handler, scope: e3.scope }))})`;
-    }
+    if (b?.k === "closure" && bc.kind === "handler") return inlineHandlerCall(b, e, env, bc, rest, null);
+    // (elsewhere — the render, a loop body, a callback VTS translates as a value — its updates
+    // cannot be the handler's)
+    if (b?.k === "closure" && closureUpdates(b, env)) fail(e, env.handler || env.valueCtx ? HELPER_VALUE_MSG(callee.text) : RENDER_UPDATE_MSG);
   }
   // `n.set(k, v)` / `n.add(x)` / `n.delete(k)` / `n.clear()` on a fresh local Map / Set
   if (ts.isPropertyAccessExpression(callee) && (MUTATORS.has(callee.name.text) || callee.name.text === "forEach")) {
@@ -4027,7 +4481,96 @@ function exprStatement(e: ts.Expression, env: Env, bc: BlockCtx, rest: (e: Env) 
     fail(e, `${callee.name.text} mutates the array/object; VTS data is immutable (use spread, filter, toSorted, toReversed, with)`);
   }
   if (ts.isCallExpression(e) && hookName(env, callee)) fail(e, "hooks must be called at the top level of a component, unconditionally (Rules of Hooks)");
+  if (ts.isIdentifier(callee)) {
+    // a local of the function (TypeScript resolved it) without a binding here: say why
+    const s = symbolOf(env, callee);
+    const local = s && !env.vars.get(s) ? unboundCallee(callee, s, env) : null;
+    if (local) fail(e, local);
+  }
   fail(e, `this call has no modelled effect: ${nodeText(e)}`);
+}
+
+const RENDER_UPDATE_MSG = "state updates during render are not allowed (setState in render causes re-render loops); move it into an event handler or effect";
+/** Why a setter, `dispatch` or parent callback in a callback that a handler or effect runs is rejected (`Env.valueCtx`). */
+const CALLBACK_UPDATE_MSG = "setters, dispatch and parent callbacks may only be called by the statements of an event handler or effect (or of a local helper it calls as a statement or as `const v = helper(…)`), not inside a callback that VTS translates as a value, such as an array method's: compute the values first, then update";
+/** … in a local helper whose call VTS cannot run in order with the handler's own updates. */
+const HELPER_VALUE_MSG = (name: string) =>
+  `\`${name}\` updates state or calls a parent callback: VTS inlines such a helper only where it is called as a statement (\`${name}(…);\`) or as the whole initializer of a local (\`const v = ${name}(…);\`) among the statements of an event handler or effect — not inside an expression, a loop or a callback — so that its updates run in order with the handler's`;
+/** … in a functional update. */
+const UPDATER_MSG = "a functional update `setX((prev) => …)` may not update state or call a parent callback: React calls it when it computes the next state — possibly during the next render, and twice under StrictMode — not as a statement of the handler; compute the new value from `prev` only, and update in the handler";
+
+/**
+ * Does the local function `b` (a closure of `env`) call a setter, `dispatch` or parent callback:
+ * in its body (also in a function created there), or through a local function it calls?  By the
+ * program text: a call that never runs counts too.
+ */
+function closureUpdates(b: Extract<Binding, { k: "closure" }>, env: Env, seen = new Set<ts.Node>()): boolean {
+  if (seen.has(b.fn)) return false;
+  seen.add(b.fn);
+  const e = closureEnv(b, env);
+  let found = false;
+  const visit = (n: ts.Node) => {
+    if (found) return;
+    if (ts.isCallExpression(n)) {
+      const callee = stripParens(n.expression);
+      if (updateTarget(callee, e)) found = true;
+      else if (ts.isIdentifier(callee)) {
+        const s = symbolOf(e, callee);
+        const c = s ? e.vars.get(s) : undefined;
+        if (c?.k === "closure" && closureUpdates(c, e, seen)) found = true;
+      }
+    }
+    if (!found) ts.forEachChild(n, visit);
+  };
+  visit(b.fn.body);
+  return found;
+}
+
+/**
+ * A call `c` of the local function `b` among the statements of an event handler or effect body
+ * (`bc` of kind "handler"): its statements are inlined there, so its updates, parent callback and
+ * facts are the handler's, in order, and `rest` continues the handler after the call.  As a
+ * statement (`onValue` null) a value the helper returns is evaluated — JS computes it, with its
+ * obligations — and discarded; as the initializer of a local, `onValue` binds it (`varDecls`),
+ * given the helper's environment at the `return` and `back`, which makes the caller's from it.
+ * A `return` in the helper ends the helper: its value is never an effect's cleanup.
+ */
+function inlineHandlerCall(
+  b: Extract<Binding, { k: "closure" }>,
+  c: ts.CallExpression,
+  env: Env,
+  bc: BlockCtx,
+  rest: (e: Env) => string,
+  onValue: ((x: ts.Expression | undefined, e3: Env, back: (e3: Env) => Env) => string) | null,
+): string {
+  const fn = b.fn;
+  const name = nodeText(c.expression, 30);
+  checkPlainParams(fn.parameters, `the local function ${name}`);
+  if (fn.parameters.length !== c.arguments.length) fail(c, `${name} takes ${fn.parameters.length} argument(s), not ${c.arguments.length}`);
+  let e2: Env = enterInline(fn, c, name, { ...closureEnv(b, env), handler: env.handler, scope: env.scope, curState: undefined, generalized: env.generalized ?? b.env.generalized, valueCtx: undefined }, env);
+  let lets = "";
+  fn.parameters.forEach((p, i) => {
+    if (!p.type) fail(p, "helper parameters need type annotations");
+    const t = helperValueType(p.type, env, "Arg", `parameter \`${p.name.getText()}\` of ${name}`);
+    const a = expr(c.arguments[i], env, t);
+    const r = bindParam(p.name, t, e2, "declared");
+    e2 = r.env;
+    lets += `let ${r.binder} := ${a.code};\n`;
+  });
+  // back in the caller: its environment, with the handler's updates and the Lean names in scope
+  const back = (e3: Env): Env => ({ ...env, handler: e3.handler, scope: e3.scope });
+  const done = (e3: Env) => rest(back(e3));
+  if (!ts.isBlock(fn.body)) {
+    // expression-bodied: treat as a single statement
+    return lets + exprStatement(fn.body, e2, bc, done);
+  }
+  if (onValue) {
+    const noValue = (): never => fail(fn, "function may finish without returning a value");
+    const inner: BlockCtx = { kind: "handler", fnNode: fn, onDone: noValue, onValue: (x, e3) => onValue(x, e3, back) };
+    return `(${lets}${block(fn.body.statements, 0, e2, inner, noValue)})`;
+  }
+  const inner: BlockCtx = { ...bc, onCleanup: undefined, onStmt: undefined, onDone: done, onValue: (x, e3) => (x ? evalArgs([x], e3, done) : done(e3)) };
+  return `(${lets}${block(fn.body.statements, 0, e2, inner, done)})`;
 }
 
 // (`console`, `localStorage`, `document`, `JSON` and the timer functions are recognised as the
@@ -4109,6 +4652,10 @@ function handlerEffect(t: UpdTarget, c: ts.CallExpression, env: Env, rest: (e: E
   const m = env.m;
   const h = env.handler!;
   const comp = env.comp!;
+  if (t.k === "setter" || t.k === "dispatch") {
+    if (h.noUpdates) fail(c, h.noUpdates);
+    if (h.probe) h.probe.updated = true;
+  }
   if (t.k === "setter") {
     const sv = t.sv;
     const arg = c.arguments[0];
@@ -4120,7 +4667,7 @@ function handlerEffect(t: UpdTarget, c: ts.CallExpression, env: Env, rest: (e: E
       if (a.parameters.length !== 1) fail(a, "functional updates take one parameter");
       const tau = "τ";
       const r = bindParam(a.parameters[0].name, sv.type, { ...env, curState: tau });
-      const e2: Env = { ...r.env, curState: tau, generalized: "a functional update: Lean checks it for every value of its parameter (any state), not only the states React passes" };
+      const e2: Env = { ...r.env, curState: tau, generalized: "a functional update: Lean checks it for every value of its parameter (any state), not only the states React passes", valueCtx: UPDATER_MSG };
       const body = ts.isBlock(a.body) ? valueBlock(a.body.statements, e2, sv.type, a) : expr(a.body, e2, sv.type);
       upd = `(fun ${tau} => { ${tau} with ${leanField(sv.field)} := (let ${r.binder} := ${tau}.${leanField(sv.field)}; ${body.code}) })`;
     } else {
@@ -4146,7 +4693,7 @@ function handlerEffect(t: UpdTarget, c: ts.CallExpression, env: Env, rest: (e: E
   const cb = comp.info.callbacks.find((x) => x.name === t.name)!;
   if (c.arguments.length !== cb.params.length) fail(c, `${cb.name} expects ${cb.params.length} arguments`);
   const as = c.arguments.map((a, i) => paren(expr(a, env, cb.params[i].type).code));
-  const ob = m.ob(c, "callback-contract", `callback contract of ${cb.name}(${c.arguments.map((a) => argText(a)).join(", ")})`);
+  const ob = m.ob(c, "callback-contract", `callback contract of ${cb.name}(${c.arguments.map((a) => argText(a)).join(", ")})${calledAs(c.expression, cb.name)}`);
   const emit = `(${comp.cbVar}.${leanField(cb.name)}${as.map((a) => " " + a).join("")} ${ob})`;
   return rest({ ...env, handler: { ...h, emit } });
 }
@@ -4188,7 +4735,7 @@ function caseTest(dv: Val, l: CaseLabel, discNode: ts.Expression, env: Env): str
     const v = expr(e, env, T.num);
     return `(VReact.JS.Num.eq ${paren(dv.code)} ${paren(v.code)})`;
   }
-  if (t.k !== "int" && t.k !== "str" && t.k !== "bool") fail(discNode, `switch on a value of type ${showType(t)} is not supported (only ints, strings, booleans, string-literal enums and discriminants x.kind)`);
+  if (t.k !== "int" && t.k !== "str" && t.k !== "bool") fail(discNode, `switch on a value of type ${showWithKinds(t, tsTypeOf(discNode, env), env)} is not supported (only ints, strings, booleans, string-literal enums and discriminants x.kind)`);
   const v = expr(e, env, t);
   if (!sameType(v.type, t)) fail(e, `case label of type ${showType(v.type)} in a switch on ${showType(t)}`);
   return `VReact.JS.eq ${paren(dv.code)} ${paren(v.code)}`;
@@ -4286,7 +4833,9 @@ function switchStmt(s: ts.SwitchStatement, env: Env, bc: BlockCtx, rest: (e: Env
     }
   }
   // switch on an enum value: exhaustive match on its constructors
+  const discObs = m.obCount();
   const dv = expr(disc, env);
+  const dvObs = m.obCount() > discObs;
   if (dv.type.k === "enum") {
     const lits = m.reg.enumLits(dv.type);
     const covered = new Set<string>();
@@ -4301,26 +4850,51 @@ function switchStmt(s: ts.SwitchStatement, env: Env, bc: BlockCtx, rest: (e: Env
     const h = m.fresh("h");
     return `(match ${h} : ${dv.code} with${arms})`;
   }
-  // generic switch on a primitive value: if-chain (the labels of a group tested in order)
+  // generic switch on a primitive value: an if-chain.  JS evaluates the case labels in the order
+  // written — those before the default clause, then those after it, the default clause's own
+  // labels (`case X: default:`, `default: case X:`) included — until one matches, and takes the
+  // default body only when none does.  So every group with labels, the default one too, is tested
+  // at its place: a match on a label of the default group takes the default body and evaluates no
+  // later label (`case 1: default: … case k:` never tests k when the value is 1), and each
+  // label's obligations are under the negation of the labels before it.
+  const labelled = groups.filter((g) => g.labels.length > 0);
   let elseCode = defaultGroup ? block(defaultGroup.body, 0, env, bc, after) : rest(env);
-  const tests = caseGroups.map((g) => {
+  const tests = labelled.map((g) => {
     const ls = g.labels.map((l) => {
       const before = m.obCount();
       const code = caseTest(dv, l, disc, env);
       return { code, obs: m.obCount() > before };
     });
-    if (!ls.slice(1).some((l) => l.obs)) return ls.map((l) => l.code).join(" || ");
+    const obs = ls.some((l) => l.obs);
+    if (!ls.slice(1).some((l) => l.obs)) return { code: ls.map((l) => l.code).join(" || "), obs };
     // a later label of the group is evaluated only when the earlier ones do not match (JS): its
     // obligations (`case 0: case xs[3]:`) are under their negation
     let acc = ls[ls.length - 1].code;
     for (let i = ls.length - 2; i >= 0; i--) acc = `(if ${m.fresh("h")} : (${ls[i].code}) = true then true else ${paren(acc)})`;
-    return acc;
+    return { code: acc, obs };
   });
-  for (let gi = caseGroups.length - 1; gi >= 0; gi--) {
-    const g = caseGroups[gi];
-    const h = m.fresh("h");
-    elseCode = `(if ${h} : (${tests[gi]}) = true then ${paren(block(g.body, 0, env, bc, after))} else ${paren(elseCode)})`;
+  // the discriminant is evaluated once, before any label: every test below mentions it
+  let discUsed = false;
+  let gi = labelled.length - 1;
+  if (gi >= 0 && labelled[gi].isDefault) {
+    // the last labels select the default body, as no match does: they are only evaluated (their
+    // obligations stand, bound and unused; labels without obligations have no effect)
+    if (tests[gi].obs) {
+      elseCode = `(let _ := ${tests[gi].code}; ${elseCode})`;
+      discUsed = true;
+    }
+    gi--;
   }
+  for (; gi >= 0; gi--) {
+    // (the default group's body is the default body: then translated a second time, at its labels)
+    const g = labelled[gi];
+    const h = m.fresh("h");
+    elseCode = `(if ${h} : (${tests[gi].code}) = true then ${paren(block(g.body, 0, env, bc, after))} else ${paren(elseCode)})`;
+    discUsed = true;
+  }
+  // no test mentions the discriminant (`switch (e) { default: … }`): JS still evaluates it once,
+  // so one with obligations is kept, bound and unused, for them
+  if (dvObs && !discUsed) elseCode = `(let _ := ${dv.code}; ${elseCode})`;
   return elseCode;
 }
 
@@ -4438,7 +5012,7 @@ export function handlerFn(fnExpr: ts.Expression, env: Env, kind: "discrete" | "r
   if (ts.isIdentifier(fnExpr)) {
     const s = symbolOf(env, fnExpr);
     const b = s ? env.vars.get(s) : undefined;
-    if (b?.k === "closure") return handlerFn(b.fn, { ...b.env, scope: env.scope }, kind, argTypes, hyps, paramTs);
+    if (b?.k === "closure") return handlerFn(b.fn, enterInline(b.fn, fnExpr, fnExpr.text, { ...closureEnv(b, env), scope: env.scope }, env), kind, argTypes, hyps, paramTs);
     if (b?.k === "callback") {
       // forward a parent callback
       const cb = comp.info.callbacks.find((c) => c.name === b.cb.name)!;
@@ -4455,8 +5029,8 @@ export function handlerFn(fnExpr: ts.Expression, env: Env, kind: "discrete" | "r
     }
   }
   if (!ts.isArrowFunction(fnExpr) && !ts.isFunctionExpression(fnExpr)) fail(fnExpr, "expected a function");
-  const acc: HandlerAcc = { kind, updates: [], emit: null, eventVar: null };
-  let e1: Env = { ...env, handler: acc, curState: undefined };
+  const acc: HandlerAcc = { kind, updates: [], emit: null, eventVar: null, ...(!Array.isArray(argTypes) ? { noUpdates: argTypes.noUpdates, probe: argTypes.probe } : {}) };
+  let e1: Env = { ...env, handler: acc, curState: undefined, valueCtx: undefined };
   const params: string[] = [];
   if (!Array.isArray(argTypes)) {
     if (fnExpr.parameters.length > 1) fail(fnExpr, "DOM event handlers take at most one parameter (the event)");
@@ -4480,9 +5054,12 @@ export function handlerFn(fnExpr: ts.Expression, env: Env, kind: "discrete" | "r
       params.push("_");
     }
   } else {
-    if (fnExpr.parameters.length !== argTypes.length) fail(fnExpr, `callback expects ${argTypes.length} parameters`);
-    fnExpr.parameters.forEach((p, i) => {
-      const r = bindParam(p.name, argTypes[i].type, e1, paramTs?.[i] ?? null);
+    // the child passes every argument; a function declaring fewer parameters ignores the
+    // others (TypeScript accepts it for the callback type): they get names the body cannot read
+    if (fnExpr.parameters.length > argTypes.length) fail(fnExpr, `callback expects ${argTypes.length} parameters`);
+    argTypes.forEach((a, i) => {
+      const p = fnExpr.parameters[i];
+      const r = p ? bindParam(p.name, a.type, e1, paramTs?.[i] ?? null) : (({ env: e, name }) => ({ env: e, binder: name }))(freshLocal(e1, leanIdent(a.name)));
       e1 = r.env;
       params.push(r.binder);
     });
@@ -4501,12 +5078,20 @@ export function outcome(h: HandlerAcc, comp: CompCtx): string {
   return `(VReact.Outcome.mk (S := ${comp.stateType}) (E := E) ${upd} ${emit})`;
 }
 
+/** `, through the local pick` when a callback prop is reached through a renamed destructured local (`{ onPick: pick }`). */
+function calledAs(callee: ts.Node, name: string): string {
+  return ts.isIdentifier(callee) && callee.text !== name ? `, through the local ${callee.text}` : "";
+}
+
 function forwardCallback(cb: { name: string; params: Param[] }, node: ts.Node, env: Env, kind: "discrete" | "robust", argTypes: Param[] | DomSite): { code: string; params: string[] } {
   const comp = env.comp!;
   if (kind === "robust") fail(node, "parent callbacks cannot be invoked from effects, timers, continuous/default-priority events or onFocus/onBlur/onInvalid (robust handlers)");
   const ps = !Array.isArray(argTypes) ? [] : argTypes;
   if (!Array.isArray(argTypes) && cb.params.length) fail(node, `${cb.name} needs arguments; wrap it: () => ${cb.name}(…)`);
-  if (Array.isArray(argTypes) && ps.length !== cb.params.length) fail(node, `callback arity mismatch forwarding ${cb.name}`);
+  // the slot's caller passes all its arguments to the forwarded function, which reads only as
+  // many as `cb` has (it was given for `cb`'s type: TypeScript accepts a callback with fewer
+  // parameters for a slot, never one with more): the first ones go to `cb`, the others are ignored
+  if (Array.isArray(argTypes) && ps.length < cb.params.length) fail(node, `callback arity mismatch forwarding ${cb.name}: the slot passes ${ps.length} argument(s), ${cb.name} takes ${cb.params.length}`);
   let e1 = env;
   const names: string[] = [];
   for (const p of ps) {
@@ -4514,12 +5099,100 @@ function forwardCallback(cb: { name: string; params: Param[] }, node: ts.Node, e
     e1 = r.env;
     names.push(r.name);
   }
-  const ob = env.m.ob(node, "callback-contract", `contract of forwarded callback ${cb.name}`);
-  const emit = `(${comp.cbVar}.${leanField(cb.name)}${names.map((n) => " " + n).join("")} ${ob})`;
+  const ob = env.m.ob(node, "callback-contract", `contract of forwarded callback ${cb.name}${calledAs(node, cb.name)}`);
+  const emit = `(${comp.cbVar}.${leanField(cb.name)}${names.slice(0, cb.params.length).map((n) => " " + n).join("")} ${ob})`;
   return { code: `(VReact.Outcome.mk (S := ${comp.stateType}) (E := E) [] (some ${emit}))`, params: !Array.isArray(argTypes) ? ["_"] : names };
 }
 
-/** React hook dependency check (exhaustive deps). */
+/**
+ * Is `.name` in `pa` a data link of a dependency path: a field declared by the project (of a record,
+ * of the props: a callback prop too, whose identity the parent decides), or `length` (array, string)
+ * / `size` (Map, Set)? A library method (`m.has`, `xs.slice`, `s.trim`, `n.toFixed`) is not: it is the
+ * same function for every receiver (`Map.prototype.has`), so React's `Object.is` never sees it change
+ * when the receiver does. Unresolved (no declaration): not a data link (a shorter path is required).
+ */
+function isDataLink(env: Env, pa: ts.PropertyAccessExpression): boolean {
+  const s = env.m.checker.getSymbolAtLocation(pa.name);
+  const ds = s?.declarations;
+  if (!s || !ds?.length) return false;
+  if (!ds.some((d) => env.m.prog.typeEnv.isLibraryFile(d.getSourceFile()))) return true;
+  return (pa.name.text === "length" || pa.name.text === "size") && !!(s.flags & ts.SymbolFlags.Property) && !(s.flags & ts.SymbolFlags.Method);
+}
+
+/**
+ * The key of a dependency path (`#id.f.g`): an identifier followed by data links (`isDataLink`),
+ * each `.` or `?.` (an optional link reads the same property; `a?.b` is `undefined` only while `a`
+ * is), or null. Unlike `pathKey`, which keys narrowing facts, `?.` links are allowed.
+ */
+function depPath(env: Env, e: ts.Expression): string | null {
+  if (ts.isParenthesizedExpression(e)) return depPath(env, e.expression);
+  if (ts.isIdentifier(e)) {
+    const s = symbolOf(env, e);
+    return s ? `#${symId(s)}` : null;
+  }
+  if (ts.isPropertyAccessExpression(e) && isDataLink(env, e)) {
+    const k = depPath(env, e.expression);
+    return k ? `${k}.${e.name.text}` : null;
+  }
+  return null;
+}
+
+/** The first link of the property path `e` that is not a data link (`xs.slice` in `xs.slice.length`), if any. */
+function nonDataLink(env: Env, e: ts.Expression): ts.PropertyAccessExpression | null {
+  while (ts.isParenthesizedExpression(e)) e = e.expression;
+  if (!ts.isPropertyAccessExpression(e)) return null;
+  return nonDataLink(env, e.expression) ?? (isDataLink(env, e) ? null : e);
+}
+
+/**
+ * Why the dependency `d` (not a data path) is rejected, when it is a data path followed by links
+ * that are not data links (`nonDataLink`), else null. A method (`m.has`: declared as a method,
+ * also in each member of a union) gets the method reason; any other link (a library constant such
+ * as `Number.MAX_SAFE_INTEGER`, a tuple's `length`, an undeclared property) only that it is not a
+ * data path. The advice names the receiver to list, unless the path starts outside the component
+ * (a global, an import, a top-level declaration: no binding in `env.vars`), which the check never
+ * requires listing.
+ */
+function nonDataPathReason(env: Env, d: ts.Expression): string | null {
+  const l = nonDataLink(env, d);
+  if (!l || !depPath(env, l.expression)) return null;
+  let root: ts.Expression = l.expression;
+  while (ts.isParenthesizedExpression(root) || ts.isPropertyAccessExpression(root)) root = root.expression;
+  const rs = ts.isIdentifier(root) ? symbolOf(env, root) : undefined;
+  const outside = !rs || !env.vars.has(rs);
+  const recv = nodeText(l.expression);
+  const s = env.m.checker.getSymbolAtLocation(l.name);
+  const ds = s?.declarations ?? [];
+  const method = !!s && ds.length > 0 && (!!(s.flags & ts.SymbolFlags.Method) || ds.every((x) => ts.isMethodSignature(x) || ts.isMethodDeclaration(x)));
+  // (an effect may not list the props object itself: name its fields instead)
+  const onProps = !outside && root === stripParens(l.expression) && env.vars.get(rs!)?.k === "props";
+  const advice = outside
+    ? `a value from outside the component (\`${nodeText(root)}\`) never needs listing: leave it out`
+    : onProps
+      ? `list the fields of \`${recv}\` the body reads (\`${recv}.x\`)`
+      : `list the value it is read on (\`${recv}\`)`;
+  if (method) {
+    const adv = outside || onProps ? advice : `list the value it is called on (\`${recv}\`)`;
+    return `\`${nodeText(l)}\` is a method, not a dependency: it is the same function for every receiver, so React never sees it change; ${adv}`;
+  }
+  const rt = env.m.checker.getTypeAtLocation(l.expression);
+  const why =
+    l.name.text === "length" && env.m.checker.isTupleType(env.m.checker.getNonNullableType(rt))
+      ? `\`${recv}\` is a tuple`
+      : ds.some((x) => env.m.prog.typeEnv.isLibraryFile(x.getSourceFile()))
+        ? `\`${l.name.text}\` is declared by a library`
+        : `\`${l.name.text}\` is not a declared field`;
+  return `\`${nodeText(l)}\` is not a dependency path: ${why}, and after a variable a dependency names only fields the program declares, \`length\` (of arrays and strings) or \`size\` (of Maps and Sets); ${advice}`;
+}
+
+/**
+ * React hook dependency check (exhaustive deps). The model recomputes a `useMemo` value and
+ * re-creates a `useCallback` function at every render, and runs an effect with the current
+ * render's values: exact when the listed values change (by `Object.is`) whenever a value the body
+ * reads does. So the deps are data paths (`depPath`): every reactive value the body reads, as the
+ * longest data path it reads it through (`m` for `m.has(k)`, `xs.length`, `props.item?.count`), must
+ * be listed, or a prefix of it.
+ */
 export function checkDeps(fn: ts.ArrowFunction | ts.FunctionExpression, depsArg: ts.Expression | undefined, env: Env, hook: string) {
   if (!depsArg) {
     if (hook === "useEffect") return;
@@ -4528,11 +5201,21 @@ export function checkDeps(fn: ts.ArrowFunction | ts.FunctionExpression, depsArg:
   if (!ts.isArrayLiteralExpression(depsArg)) fail(depsArg, "dependency list must be an array literal");
   const listed = new Set<string>();
   for (const d of depsArg.elements) {
-    const k = pathKey(env, d);
-    if (!k) fail(d, "dependencies must be identifiers or property paths");
+    const k = depPath(env, d);
+    if (!k) {
+      const why = nonDataPathReason(env, d);
+      if (why) fail(nonDataLink(env, d)!, why);
+      fail(d, "dependencies must be identifiers or property paths (fields, `length`, `size`)");
+    }
     listed.add(k);
   }
   const missing: string[] = [];
+  // the longest data path from `n` up (`m` in `m.has(k)`, `props.item?.count`)
+  const dataPath = (n: ts.Expression): ts.Expression => {
+    let full = n;
+    while (ts.isPropertyAccessExpression(full.parent) && full.parent.expression === full && isDataLink(env, full.parent)) full = full.parent;
+    return full;
+  };
   // every reference counts: identifiers anywhere in the body (template literals, spreads,
   // JSX, nested closures, element access, optional chains), shorthand properties `{ x }`
   // resolved to the variable `x`
@@ -4541,20 +5224,27 @@ export function checkDeps(fn: ts.ArrowFunction | ts.FunctionExpression, depsArg:
       const shorthand = ts.isShorthandPropertyAssignment(n.parent) && n.parent.name === n;
       const s = shorthand ? env.m.checker.getShorthandAssignmentValueSymbol(n.parent) : symbolOf(env, n);
       const b = s ? env.vars.get(s) : undefined;
+      // a local of the component declared after the hook call: in its temporal dead zone at the
+      // call, so the dependency array cannot list it
+      const d = !b && s ? s.valueDeclaration : undefined;
+      const host = fnOf(fn);
+      if (d && host && within(d, host) && !within(d, fn) && d.getStart() > fn.end && localVarDecl(d)) {
+        fail(n, hook === "useMemo"
+          ? `the useMemo function runs here, at the call, and reads \`${n.text}\`, declared after it (${relLoc(d, env.m.prog.root)}): JS throws a ReferenceError (temporal dead zone); declare \`${n.text}\` before the useMemo`
+          : `the ${hook} function reads \`${n.text}\`, declared after the ${hook} call (${relLoc(d, env.m.prog.root)}): VTS translates it with the locals declared before the call, and the dependency array cannot list it there (it is in its temporal dead zone)${isStateSetter(d, env) ? "" : `, so React would keep ${hook === "useEffect" ? "an effect" : "a function"} with a stale \`${n.text}\``}; declare \`${n.text}\` before the ${hook}`);
+      }
       if (b && (b.k === "val" || b.k === "closure" || b.k === "callback" || b.k === "jsx")) {
-        // reactive value: covered if it, or a path starting with it, is listed
-        let full: ts.Expression = n;
-        while (!shorthand && ts.isPropertyAccessExpression(full.parent) && full.parent.expression === full) full = full.parent;
+        // reactive value: covered if it, or a data path starting with it, is listed
         const k1 = `#${symId(s!)}`;
-        const kFull = shorthand ? k1 : pathKey(env, full);
+        const kFull = shorthand ? k1 : depPath(env, dataPath(n));
         const covered = listed.has(k1) || (kFull && [...listed].some((l) => kFull === l || kFull.startsWith(l + ".")));
         if (!covered && !missing.includes(n.text)) missing.push(n.text);
       }
       if (b?.k === "props") {
-        let full: ts.Expression = n;
-        while (ts.isPropertyAccessExpression(full.parent) && full.parent.expression === full) full = full.parent;
-        const kFull = pathKey(env, full);
-        const covered = kFull && [...listed].some((l) => kFull === l || kFull.startsWith(l + ".") || l === pathKey(env, n));
+        const full = dataPath(n);
+        const kFull = depPath(env, full);
+        const kProps = depPath(env, n);
+        const covered = (kProps && listed.has(kProps)) || (kFull && [...listed].some((l) => kFull === l || kFull.startsWith(l + ".")));
         if (!covered && !missing.includes(full.getText())) missing.push(full.getText());
       }
     }

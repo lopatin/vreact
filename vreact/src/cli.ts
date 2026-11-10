@@ -10,8 +10,8 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { translate, type Config, type TranslateResult } from "./module.ts";
-import { runLake, findMarkers, judge, summarizeLeanError, type Verdict, type ErrorCause, type LeanMessage } from "./lean.ts";
+import { translate, isSourceName, type Config, type TranslateResult } from "./module.ts";
+import { runLake, findMarkers, judge, summarizeLeanError, leanNameKey, type Verdict, type ErrorCause, type LeanMessage } from "./lean.ts";
 import { VtsError } from "./util.ts";
 import { editorProject } from "./ide.ts";
 
@@ -39,31 +39,118 @@ export function loadConfig(root: string, only?: string[]): Config {
     }
     if (typeof pc !== "object" || pc === null || Array.isArray(pc)) throw new Error(`${cfgFile}: expected an object such as { "src": "src" }`);
   }
-  if (pc.heartbeats !== undefined && !(Number.isInteger(pc.heartbeats) && pc.heartbeats >= 0)) throw new Error(`${cfgFile}: "heartbeats" must be a non-negative integer (thousands of heartbeats per obligation)`);
+  for (const k of ["src", "proofs", "out"] as const) {
+    if (pc[k] !== undefined && (typeof pc[k] !== "string" || pc[k] === "")) throw new Error(`${cfgFile}: "${k}" must be a directory name (a non-empty string)`);
+  }
+  for (const k of ["include", "exclude"] as const) {
+    if (pc[k] !== undefined && !(Array.isArray(pc[k]) && pc[k].every((x) => typeof x === "string" && x !== ""))) throw new Error(`${cfgFile}: "${k}" must be a list of file names (strings)`);
+  }
+  // (a safe integer, written as a numeral in the generated Lean: 1e21 would be written `1e+21`)
+  if (pc.heartbeats !== undefined && !(Number.isSafeInteger(pc.heartbeats) && pc.heartbeats >= 0 && pc.heartbeats <= MAX_HEARTBEATS))
+    throw new Error(`${cfgFile}: "heartbeats" must be an integer from 0 (no limit) to ${MAX_HEARTBEATS} (thousands of heartbeats per obligation; the default is 1000000)`);
   const srcDir = path.resolve(root, pc.src ?? "src");
   if (!pc.include && !(fs.existsSync(srcDir) && fs.statSync(srcDir).isDirectory()))
     throw new Error(`no source directory ${srcDir}: run vreact in the project directory (or pass --root DIR), or set "src" in vreact.json`);
+  const outDir = path.resolve(root, pc.out ?? ".vreact");
+  const proofsDir = path.resolve(root, pc.proofs ?? "proofs");
+  checkOutDir(cfgFile, root, srcDir, proofsDir, outDir);
   const exclude = new Set((pc.exclude ?? ["main.tsx", "main.ts", "vite-env.d.ts"]).map((e) => path.resolve(srcDir, e)));
   const files: string[] = [];
+  const links: string[] = [];
+  // (symbolic links are not followed, but reported: the bundler loads a module from its real
+  // path, which a link changes — see `sourcePathErrors` in module.ts)
   const walk = (d: string) => {
     for (const f of fs.readdirSync(d).sort()) {
       const p = path.join(d, f);
-      if (fs.statSync(p).isDirectory()) {
+      const st = fs.lstatSync(p);
+      if (st.isSymbolicLink()) {
+        let target: fs.Stats | null = null;
+        try {
+          target = fs.statSync(p);
+        } catch {
+          target = null;
+        }
+        if (target?.isDirectory() ? f !== "node_modules" && !f.startsWith(".") : isSourceName(f) && !exclude.has(p)) links.push(p);
+      } else if (st.isDirectory()) {
         if (f !== "node_modules" && !f.startsWith(".")) walk(p);
-      } else if (/\.(ts|tsx)$/.test(f) && !/\.d\.ts$|\.test\.|\.spec\./.test(f) && !exclude.has(p)) files.push(p);
+      } else if (isSourceName(f) && !exclude.has(p)) files.push(p);
     }
   };
-  if (pc.include) for (const inc of pc.include) files.push(path.resolve(root, inc));
+  // (only TypeScript sources: a .js/.jsx file under allowJs gets its types from JSDoc comments,
+  // `/** @type {T} */ (e)` casts the translator never sees)
+  if (pc.include) for (const inc of pc.include) {
+    if (!isSourceName(inc)) throw new Error(`${path.join(root, "vreact.json")}: "include" lists ${inc}, which is not a VTS source: only .ts and .tsx files (not .d.ts, .js, .jsx or tests) can be verified`);
+    files.push(path.resolve(root, inc));
+  }
   else walk(srcDir);
   return {
     root,
     srcDir,
     files: only?.length ? files.filter((f) => only.some((o) => path.resolve(root, o) === f)) : files,
-    outDir: path.resolve(root, pc.out ?? ".vreact"),
-    proofsDir: path.resolve(root, pc.proofs ?? "proofs"),
+    ...(links.length ? { links } : {}),
+    outDir,
+    proofsDir,
     leanLib: LEAN_LIB,
     ...(pc.heartbeats !== undefined ? { heartbeats: pc.heartbeats } : {}),
   };
+}
+
+/** The largest "heartbeats" of vreact.json (thousands per obligation): a thousand times the default. */
+const MAX_HEARTBEATS = 1_000_000_000;
+
+/**
+ * vreact removes `<out>/VTS`, `<out>/Proofs` and `<out>/.lake` before it writes the generated Lean
+ * project: "out" must be a directory of its own — not the project directory or one containing
+ * it, nor "src" or "proofs" or a directory containing one of them, nor inside "proofs" (whose
+ * Lean files are the user's; on a case-insensitive disk `./VTS` is `./vts`, and `./Proofs` is
+ * `./proofs`). It may be inside "src" (`"src": "."` with the default `.vreact`): the sources are
+ * `.ts`/`.tsx` files, and vreact removes `<out>/VTS` and `<out>/Proofs` only when they hold
+ * nothing but Lean files (`notGenerated` in module.ts). Paths are compared through symbolic
+ * links and without regard to letter case.
+ */
+function checkOutDir(cfgFile: string, root: string, srcDir: string, proofsDir: string, outDir: string) {
+  const problem = outDirProblem(root, srcDir, proofsDir, outDir);
+  if (!problem) return;
+  const dflt = path.resolve(root, ".vreact");
+  const suggest = dflt !== path.resolve(outDir) && !outDirProblem(root, srcDir, proofsDir, dflt) ? `, such as ".vreact"` : ` (one that neither is nor contains the project directory, "src" or "proofs", and is not inside "proofs")`;
+  throw new Error(`${cfgFile}: "out" (${JSON.stringify(path.relative(root, outDir) || ".")}) ${problem}: vreact replaces the directories VTS/, Proofs/ and .lake/ inside "out" with the Lean project it generates; set "out" to a directory of its own${suggest}`);
+}
+
+/** What is wrong with `outDir` as "out" (see `checkOutDir`), null when nothing is. */
+function outDirProblem(root: string, srcDir: string, proofsDir: string, outDir: string): string | null {
+  const out = canonicalPath(outDir);
+  const within = (a: string, b: string) => a === b || a.startsWith(b.endsWith(path.sep) ? b : b + path.sep);
+  if (within(canonicalPath(root), out)) return `is ${out === canonicalPath(root) ? "the project directory itself" : "a directory containing the project directory"}`;
+  for (const [name, dir] of [["src", srcDir], ["proofs", proofsDir]] as const) {
+    const d = canonicalPath(dir);
+    // (inside "src" is allowed; inside "proofs" is not)
+    if (within(d, out) || (name === "proofs" && within(out, d))) {
+      const caseOnly = !(path.resolve(outDir) === path.resolve(dir) || path.resolve(outDir).startsWith(path.resolve(dir) + path.sep) || path.resolve(dir).startsWith(path.resolve(outDir) + path.sep));
+      return `${out === d ? "is the same directory as" : within(out, d) ? "is inside" : "contains"} the "${name}" directory (${JSON.stringify(path.relative(root, dir) || ".")}${caseOnly ? ", through a symbolic link or on a disk that ignores letter case" : ""})`;
+    }
+  }
+  return null;
+}
+
+/**
+ * The path `p` names, for comparison: through symbolic links (its longest existing part
+ * resolved), Unicode-normalised and lower-cased (a case-insensitive disk is the default on macOS).
+ */
+function canonicalPath(p: string): string {
+  let head = path.resolve(p);
+  const tail: string[] = [];
+  for (;;) {
+    try {
+      head = fs.realpathSync(head);
+      break;
+    } catch {
+      const parent = path.dirname(head);
+      if (parent === head) break;
+      tail.unshift(path.basename(head));
+      head = parent;
+    }
+  }
+  return path.join(head, ...tail).normalize("NFC").toLowerCase();
 }
 
 const C = process.stdout.isTTY
@@ -96,6 +183,20 @@ function printTranslationErrors(tr: TranslateResult, root: string) {
 
 const STD_AXIOMS = new Set(["propext", "Classical.choice", "Quot.sound"]);
 
+/**
+ * A set of Lean names matched by name, not by spelling (`leanNameKey`): the translator writes
+ * a @trusted function `gα` as `VTS.m.«gα»`, and `#print axioms` prints it `VTS.m.gα`.
+ */
+class NameSet {
+  private readonly keys: Set<string>;
+  constructor(names: Iterable<string>) {
+    this.keys = new Set([...names].map(leanNameKey));
+  }
+  has(name: string): boolean {
+    return this.keys.has(leanNameKey(name));
+  }
+}
+
 export type Status = "verified" | "relative" | "trusted" | "assumes" | "incomplete" | "unchecked";
 
 /** `assume(…)` facts: the axiom `VReact.assumed` (printed `assumed` under `open VReact`). */
@@ -121,15 +222,16 @@ export function isNativeAxiom(a: string): boolean {
  * `VReact.assumed` stands for the program's `assume(…)` facts (ASSUMES) only where
  * `#vreact_assumed` (`outside`) found no declaration outside the generated code that uses it
  * directly: a user proof that does is an axiom of its own (TRUSTED), and without that report
- * the item is not checked.
+ * the item is not checked. `ownTrusted`: the item's own @trusted axioms (by name, never by a
+ * name prefix: see `Item.ownTrusted`).
  */
-function classify(axioms: string[] | undefined, own: string, trustedAxioms: Set<string>, outside: string[] | undefined): Status {
+function classify(axioms: string[] | undefined, ownTrusted: NameSet, trustedAxioms: NameSet, outside: string[] | undefined): Status {
   if (!axioms) return "unchecked";
   if (axioms.includes("sorryAx") || axioms.some(isNativeAxiom)) return "incomplete";
   const assumed = axioms.some((a) => ASSUMED.has(a));
   if (assumed && outside === undefined) return "unchecked";
   const vts = axioms.filter((a) => trustedAxioms.has(a));
-  if (vts.some((a) => a === own || a.startsWith(own + "."))) return "trusted";
+  if (vts.some((a) => ownTrusted.has(a))) return "trusted";
   if (axioms.some((a) => !STD_AXIOMS.has(a) && !ASSUMED.has(a) && !trustedAxioms.has(a))) return "trusted";
   if (assumed && outside!.length) return "trusted";
   if (assumed) return "assumes";
@@ -148,12 +250,12 @@ const worst = (sts: Status[]) => sts.reduce((a, b) => (ORDER.indexOf(a) <= ORDER
  * elaborate — it may be missing, or another declaration of that name may stand in for it,
  * which `#print axioms` cannot show), then the axioms of its main declarations.
  */
-function itemStatus(v: Verdict, it: Item, trustedAxioms: Set<string>, broken: boolean): Status {
+function itemStatus(v: Verdict, it: Item, trustedAxioms: NameSet, broken: boolean): Status {
   const ids = new Set(it.obs);
   if (v.failed.some((f) => ids.has(f.ob.id))) return "incomplete";
   const decl = [...v.declErrors.keys()].some(it.owns) || v.sorries.some((s) => !!s.decl && it.owns(s.decl));
   if (decl || broken) return "incomplete";
-  const sts = it.axiomNames.map((q) => classify(v.axioms.get(q), it.own, trustedAxioms, v.assumedOutside.get(q)));
+  const sts = it.axiomNames.map((q) => classify(v.axioms.get(q), it.ownTrusted, trustedAxioms, v.assumedOutside.get(q)));
   // obligations Lean did not finish although their file was elaborated
   if (v.unchecked.some((u) => ids.has(u.id)) && !sts.includes("unchecked")) return "incomplete";
   return worst(sts);
@@ -174,33 +276,47 @@ interface Item {
   owns: (lean: string) => boolean;
   /** the declarations whose axioms make up its status */
   axiomNames: string[];
-  /** its own namespace (for its own @trusted axioms) */
-  own: string;
+  /**
+   * its own @trusted axioms (those of its @trusted declaration; for a certificate, its root
+   * component's), by name: a @trusted declaration of a module nested in its namespace (`g` of
+   * `src/M/f.ts`, `VTS.M.f.g`, below a function `f` of `src/M.ts`) is a dependency, not its own
+   */
+  ownTrusted: NameSet;
 }
+
+/** The axioms the translator emits for a @trusted function. */
+const trustedFnAxioms = (f: TranslateResult["modules"][number]["functions"][number]): string[] => (f.trusted ? [f.qname, ...f.posts] : []);
+/** The axioms the translator emits for a @trusted component (component.ts). */
+const trustedCompAxioms = (c: TranslateResult["modules"][number]["components"][number]): string[] => (c.trusted ? ["init_inv", "stable", "renderTrusted"].map((s) => `${c.ns}.${s}`) : []);
 
 function items(tr: TranslateResult, root: string): { comps: Item[]; certs: Item[]; fns: Item[]; consts: Item[] } {
   const out = { comps: [] as Item[], certs: [] as Item[], fns: [] as Item[], consts: [] as Item[] };
   for (const mr of tr.modules) {
     const file = relp(root, mr.tsFile);
+    // the declarations of this module (no other module declares any of them): a component's are
+    // those in its namespace — a module nested there (`src/M/Comp.ts` next to a component `Comp`
+    // of `src/M.tsx`) declares names with the same prefix, which are not the component's
+    const mine = new Set(mr.declNames);
     for (const c of mr.components) {
       const root = new Set(["root_pre", "element", "certificate"].map((s) => `${c.ns}.${s}`));
-      out.comps.push({ key: c.ns, name: c.name, file, module: mr.ns, obs: c.obs, ownObs: c.obs, refs: c.refs, owns: (q) => q.startsWith(c.ns + ".") && !root.has(q), axiomNames: [`${c.ns}.component`], own: c.ns });
+      out.comps.push({ key: c.ns, name: c.name, file, module: mr.ns, obs: c.obs, ownObs: c.obs, refs: c.refs, owns: (q) => mine.has(q) && q.startsWith(c.ns + ".") && !root.has(q), axiomNames: [`${c.ns}.component`], ownTrusted: new NameSet(trustedCompAxioms(c)) });
     }
     for (const c of mr.certificates) {
       const base = c.qname.replace(/\.certificate$/, "");
       const root = new Set(["root_pre", "element", "certificate"].map((s) => `${base}.${s}`));
       // (its obligations include its root component's, which belong to the component)
-      const comp = new Set(mr.components.find((x) => x.ns === base)?.obs ?? []);
-      out.certs.push({ key: c.qname, name: `${c.name}.certificate`, file, module: mr.ns, obs: c.obs, ownObs: c.obs.filter((o) => !comp.has(o)), refs: c.refs, owns: (q) => root.has(q), axiomNames: [c.qname], own: base });
+      const rootComp = mr.components.find((x) => x.ns === base);
+      const comp = new Set(rootComp?.obs ?? []);
+      out.certs.push({ key: c.qname, name: `${c.name}.certificate`, file, module: mr.ns, obs: c.obs, ownObs: c.obs.filter((o) => !comp.has(o)), refs: c.refs, owns: (q) => root.has(q), axiomNames: [c.qname], ownTrusted: new NameSet(rootComp ? trustedCompAxioms(rootComp) : []) });
     }
     for (const f of mr.functions) {
       // a function is as verified as its definition and all its postcondition theorems
       const names = new Set([f.qname, ...f.posts]);
-      out.fns.push({ key: f.qname, name: f.name, file, module: mr.ns, obs: f.obs, ownObs: f.obs, refs: f.refs, owns: (q) => names.has(q), axiomNames: [...names], own: f.qname });
+      out.fns.push({ key: f.qname, name: f.name, file, module: mr.ns, obs: f.obs, ownObs: f.obs, refs: f.refs, owns: (q) => names.has(q), axiomNames: [...names], ownTrusted: new NameSet(trustedFnAxioms(f)) });
     }
     for (const c of mr.constants) {
       const names = new Set([c.qname, ...c.facts]);
-      out.consts.push({ key: c.qname, name: c.name, file, module: mr.ns, obs: c.obs, ownObs: c.obs, refs: c.refs, owns: (q) => names.has(q), axiomNames: [...names], own: c.qname });
+      out.consts.push({ key: c.qname, name: c.name, file, module: mr.ns, obs: c.obs, ownObs: c.obs, refs: c.refs, owns: (q) => names.has(q), axiomNames: [...names], ownTrusted: new NameSet([]) });
     }
   }
   return out;
@@ -269,13 +385,8 @@ function brokenCones(tr: TranslateResult, v: Verdict, all: Item[]): Map<string, 
 }
 
 /** The axioms the translator emits for @trusted functions and components. */
-function trustedAxiomsOf(tr: TranslateResult): Set<string> {
-  const out = new Set<string>();
-  for (const mr of tr.modules) {
-    for (const f of mr.functions) if (f.trusted) [f.qname, ...f.posts].forEach((q) => out.add(q));
-    for (const c of mr.components) if (c.trusted) ["init_inv", "stable", "renderTrusted"].forEach((s) => out.add(`${c.ns}.${s}`));
-  }
-  return out;
+function trustedAxiomsOf(tr: TranslateResult): NameSet {
+  return new NameSet(tr.modules.flatMap((mr) => [...mr.functions.flatMap(trustedFnAxioms), ...mr.components.flatMap(trustedCompAxioms)]));
 }
 
 export interface Report {
@@ -509,7 +620,7 @@ export function reportFrom(cfg: Config, tr: TranslateResult, messages: LeanMessa
   const trustReason = (it: Item): string | undefined => {
     const axs = it.axiomNames.flatMap((q) => v.axioms.get(q) ?? []);
     // (an @trusted declaration is TRUSTED for its own sake)
-    if (axs.some((a) => trustedAxioms.has(a) && (a === it.own || a.startsWith(it.own + ".")))) return undefined;
+    if (axs.some((a) => it.ownTrusted.has(a))) return undefined;
     const foreign = [...new Set(axs.filter((a) => !STD_AXIOMS.has(a) && !ASSUMED.has(a) && a !== "sorryAx" && !trustedAxioms.has(a) && !isNativeAxiom(a)))];
     const viaProofs = [...new Set(it.axiomNames.flatMap((q) => (v.axioms.get(q)?.some((a) => ASSUMED.has(a)) ? (v.assumedOutside.get(q) ?? []) : [])))];
     const parts: string[] = [];

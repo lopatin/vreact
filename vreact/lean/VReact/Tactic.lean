@@ -971,14 +971,41 @@ private def finishCheap : TacticM (Option Exception) := withMainContext do
   | none => return some (.error (← getRef) (← addMessageContext m!"vreact_auto could not prove the goal{indentD (MessageData.ofGoal goal)}"))
 
 open Lean Meta Elab Tactic in
-/-- The expensive fallbacks (`simp_all` variants) after `finishCheap` failed with `err`:
-`none` if one closes the goal, otherwise `err`. -/
+/-- Run `k` with a budget of its own: `b` heartbeats (Lean's raw count, as `IO.getNumHeartbeats`),
+counted from now (see `vreact_ob`). -/
+def withHeartbeatBudget {α : Type} (b : Nat) (k : TacticM α) : TacticM α :=
+  controlAt CoreM fun runInBase => do
+    let now ← IO.getNumHeartbeats
+    withReader (fun ctx => { ctx with initHeartbeats := now, maxHeartbeats := b }) (runInBase k)
+
+open Lean Meta Elab Tactic in
+/-- A goal that is a closed proposition once the equations of variables with values are
+substituted (`subst_vars`: `n = 2` from a test `n === 2`), decided by evaluation (`decide`:
+kernel-checked, no axioms), with a small budget of its own, so that an evaluation that does not
+finish fails like the other fallbacks instead of using up the obligation's budget.  Facts about
+literals that the simp set does not compute: `String(1 + 2) === "3"`, `" x ".trim() === "x"`,
+`"abc".slice(-2) === "bc"`, `[1, 2, 3].at(-1) === 3`.  (The opaque numbers never evaluate.) -/
+private def decideClosed : TacticM (Option Exception) := do
+  let s ← saveState
+  let r ← tryCatchRuntimeEx
+    (do
+      withHeartbeatBudget (50000 * 1000) (withoutRecover (evalTactic (← `(tactic| (subst_vars; decide)))))
+      unless (← getUnsolvedGoals).isEmpty do throwError "unsolved goals"
+      pure none)
+    (fun ex => pure (some ex))
+  if r.isSome then s.restore
+  return r
+
+open Lean Meta Elab Tactic in
+/-- The expensive fallbacks (`simp_all` variants, then `decideClosed`) after `finishCheap` failed
+with `err`: `none` if one closes the goal, otherwise `err`. -/
 private def finishSlow (err : Exception) : TacticM (Option Exception) := withMainContext do
   if (← attemptClose (← `(tactic| (simp_all; done)))).isNone then return none
   if (← attemptClose (← `(tactic| (simp_all; grind)))).isNone then return none
   -- guarded contracts (`∃ (h : a), b h`): arithmetic and simp facts inside them
   if (← attemptClose (← `(tactic| (vreact_unpack; omega)))).isNone then return none
   if (← attemptClose (← `(tactic| (vreact_unpack; simp_all; done)))).isNone then return none
+  if (← decideClosed).isNone then return none
   return some err
 
 open Lean Meta in
@@ -1286,14 +1313,6 @@ macro_rules
   | `(tactic| vreact_auto) => `(tactic|
       (vreact_prep
        all_goals vreact_finish))
-
-open Lean Meta Elab Tactic in
-/-- Run `k` with a budget of its own: `b` heartbeats (Lean's raw count, as `IO.getNumHeartbeats`),
-counted from now (see `vreact_ob`). -/
-def withHeartbeatBudget {α : Type} (b : Nat) (k : TacticM α) : TacticM α :=
-  controlAt CoreM fun runInBase => do
-    let now ← IO.getNumHeartbeats
-    withReader (fun ctx => { ctx with initHeartbeats := now, maxHeartbeats := b }) (runInBase k)
 
 open Lean in
 private partial def treeSizeAux (e : Expr) : StateM (Std.HashMap Expr Nat) Nat := do

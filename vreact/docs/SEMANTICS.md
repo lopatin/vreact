@@ -36,7 +36,7 @@ exact, total meaning in Lean, while still covering what real React code uses.
 | `{kind:"a",…} \| {kind:"b",…}`               | `inductive`, one constructor per variant | discriminated unions |
 | `readonly T[]`, `T[]`                        | `List T`                                | immutable |
 | `T \| null`, `T \| undefined`, `f?: T`       | `Option T`                              | not both null and undefined |
-| `[A, B]`                                     | `A × B`                                 | |
+| `[A, B]`                                     | `A × B`                                 | fixed length, at least one element (`[A]` is `A`); named members `[lo: A, hi: B]` too; the empty tuple `[]` and optional (`a?: A`) or rest (`...r: A[]`) members are rejected: they admit other lengths (`[a?: A]` admits `[]`, where `t[0]` is `undefined`) |
 | `ReadonlyMap<K, V>`, `Map<K, V>`             | `JS.JSMap K V`: entries in insertion order, keys distinct | keys `boolean`/`int`/`string`/enum or an equality-constrained type parameter; values not optional |
 | `ReadonlySet<T>`, `Set<T>`                   | `JS.JSSet T`: elements in insertion order, distinct | elements as Map keys |
 | `(x: A) => void` (props only)                | callback with a contract                | see §2.4; never data (a function's parameter or result, state, a constant, a local, a hole, an array element or a non-props field: rejected) |
@@ -71,7 +71,19 @@ TypeScript checks it. Inline object types and string-literal unions are structur
 inline type in one module is one Lean type (`hole<{ readonly v: int }>()` in a
 function returning `{ readonly v: int }`). A value is widened where TypeScript
 allows it: an `int` to a `number`, a present value to an optional one, an array
-elementwise (`int[]` to `(int | null)[]`), an enum member to its string.
+elementwise (`int[]` to `(int | null)[]`), an enum member to its string. An
+ordering comparison or `+ - *` of an `int` with a `number`, in either order, widens
+the `int` (`i < xs.length / 2`, `i * 0.5`: JS computes on the same values); two
+`int`s stay integer arithmetic. A conditional and an array literal without an
+expected type have the type that covers all their branches or elements, as
+TypeScript's does (`c ? i : 0.5` and `[i, 2.5]` are numbers, `c ? color : "other"`
+and `[color, "other"]` strings, `[[], [1]]` is `int[][]`) where that is wider than
+the first one's; otherwise the others are read at the first one's type (`c ? xs :
+[]`, `c ? color : "red"` is a `Color`). An unannotated top-level constant may be
+initialised with a numeric, string or boolean literal (other initialisers need an
+annotation); a numeric literal, possibly negated, is typed by its value: an
+integer is an `int` (`2.0` and `1e3` are the ints 2 and 1000), any other value a
+`number` (`-2.5`, `1e21`, `1e400`, which JS reads as Infinity).
 
 Function types and React nodes have no Lean value type: a function parameter or
 result, constant, state, local, data prop, callback parameter, `hole<T>()`, type argument
@@ -119,8 +131,15 @@ Rejected: `any`, `as` casts, classes, `this` (also `this` parameters), mutation 
 objects/arrays (of Maps and Sets: see §1.2), `==` (except `== null`), `===` on objects,
 Maps and Sets (reference identity), generic types, components and arrows (generic
 top-level functions are supported, below), exceptions (`try`), `var`, `while`,
-recursion (for now), recursive types,
-`async`.
+recursion (for now: a function that calls itself in its body — a `@trusted` function's body is
+not translated, so it may — or in its `requires`, also a `@trusted` one, whose argument JS
+evaluates on every call — an `ensures` lambda, which JS never calls, may; a component that
+refers to itself in its body — renders itself, directly or in a JSX constant, a map callback, a
+branch or a closure; a `@trusted` component's body is not translated, so it may render itself;
+and declarations that refer to each other in a cycle — functions that call each other,
+components that render each other — also when the cycle runs through the body of a `@trusted`
+one, which the cycle check reads, or through modules that import each other: an import cycle),
+recursive types, `async`.
 
 **Generic functions.** A top-level function may have type parameters; each is a
 Lean binder `{T : Type}` of the definition, abstract in its body, and its constraint
@@ -185,7 +204,11 @@ Every expression maps to a Lean term whose value is the JavaScript value.
 * Array methods `map filter some every find findIndex includes indexOf slice
   concat join reduce toSorted toReversed with at flatMap` and spread `[...xs, x]`
   map to their exact list counterparts (`slice` implements JS's negative-index
-  clamping, `with` carries a bounds obligation). `toSorted(cmp)` follows
+  clamping, `with` carries a bounds obligation: `0 ≤ i < xs.length`; an index
+  written `-k`, which JS counts from the end, is `JS.withEnd xs k v` with the
+  obligation `0 < k ≤ xs.length`, writing at `xs.length - k`; any other index must
+  be non-negative, stronger than JS, which would count a negative one from the end:
+  its obligation then fails). `toSorted(cmp)` follows
   ECMA-262: for a comparator that is *consistent* on the elements (`JS.Consistent`:
   reflexive, symmetric and transitive `=`, transitive `<` and `>`) the result is the
   unique stable sort; otherwise the order is implementation-defined (V8 and a
@@ -242,7 +265,9 @@ Every expression maps to a Lean term whose value is the JavaScript value.
   VERIFIED although false in JS: `RlNegZero.ts`.) React compares state and effect
   dependencies with `Object.is`, which tells `-0` from `0`; that decides only
   whether a component re-renders (with equal output) and whether an effect runs
-  again, and effects are robust (§2.6), so it does not change what is verified.
+  again, and effects are robust (§2.6), so it does not change what is verified
+  (the runtime model, §3, leaves to the run whether an effect whose int dependency
+  is 0 before and after runs again).
 * `a + b` with a string operand (by its TypeScript type) is concatenation; an
   `int`, `boolean` or enum operand is converted exactly as in a template literal
   (`-5 + "a"` is `"-5a"`); a `number` or possibly-null operand is rejected.
@@ -325,7 +350,14 @@ Every expression maps to a Lean term whose value is the JavaScript value.
   are the standard library's. A local, parameter, import or project declaration
   spelled like one of them is that binding (`const undefined = 3` is 3; a project
   `type int = number` is `number`; `import * as Math from "./m"` is not
-  JavaScript's Math, and a use of it is rejected). A hook is React's only when
+  JavaScript's Math, and a use of it is rejected). A namespace import of a
+  verified module (`import * as L from "./lib"`, or a namespace another module
+  re-exports, `export * as L from "./lib"`) makes `L.f(…)` and `L.K` the
+  module's verified function `f` and constant `K`, resolved through the import
+  alias exactly as the named imports `f` and `K` are: JS reads the module's
+  exports, which are initialised before the importing module runs (imports are
+  acyclic). The namespace object itself is not data (a bare use of `L` is
+  rejected), and so is `<L.Row/>` (a component tag is a plain name). A hook is React's only when
   its name, or the namespace before the dot, is bound by an import: React's
   types also declare a UMD global `React`, which a module bundle does not define
   (tsconfig `allowUmdGlobalAccess`, which lets a module use it, is rejected).
@@ -337,7 +369,21 @@ Every expression maps to a Lean term whose value is the JavaScript value.
   so default values, rest parameters, optional (`x?`) and `this` parameters —
   each would give the parameter another value — are rejected, and so are
   parameter and result annotations with a function type or a React node (no
-  Lean value type: the argument and the result are data).
+  Lean value type: the argument and the result are data). Among the statements
+  of an event handler or effect, a helper called as a statement (`f(…);`), or as
+  the whole initializer of a local (`const v = f(…);`) when it calls a setter,
+  `dispatch` or parent callback, is inlined as statements of the handler: its
+  updates, parent callback and facts are the handler's, in the order JS runs
+  them, and at its `return` the handler goes on (the returned value is
+  evaluated, with its obligations, and dropped, or bound to `v`). Anywhere else a
+  helper is called for its value — inside an expression, a loop body, a callback,
+  the render — and translated as a value, so one that reaches a setter,
+  `dispatch` or parent callback there is rejected; so is such a call inside an
+  array-method callback (a value) or a functional update (React calls it while it
+  computes the next state). In an effect, an event handler or a timer callback,
+  `return undefined;` and `return void 0;` are `return;` (React runs an
+  effect's result as its cleanup only when it is not undefined, react-dom 18.3.1
+  `commitHookEffectListUnmount`, and ignores what a handler returns).
 * Module initialisation: a module's top-level code runs in source order when it
   is loaded (after the modules it imports, and re-exports `export … from` are
   imports: no cycles), and a `const` read before its declaration has run throws a
@@ -352,7 +398,14 @@ Every expression maps to a Lean term whose value is the JavaScript value.
   about an `@opaque` constant of the same module; one about an imported constant
   is rejected) is a theorem placed after every declaration it mentions (its
   constant, other constants, the functions it calls — function declarations are
-  hoisted, so they may be declared below the constant).
+  hoisted, so they may be declared below the constant). It is proved by
+  evaluation: every `@opaque` constant it mentions (of the module or an imported
+  one) is unfolded to its value, in its proof and in the obligations inside its
+  statement (an index `A[0]`, a divisor, a precondition — Lean elaborates those
+  with the statement, before the proof runs, so each unfolds the constants
+  itself). The theorem is named after the first `@opaque` constant of the module
+  that the fact mentions (`A.post`, `A.post2`, …), and the automation adds it to
+  a goal that mentions that constant.
 * Per-file compilation: the bundler compiles each file on its own (Vite: esbuild),
   so it cannot tell that an imported name is a type, and keeps `export { Item }`
   or `export default Item` of an imported type (and the import): the module then
@@ -389,8 +442,15 @@ Every expression maps to a Lean term whose value is the JavaScript value.
   a `switch` case), `switch` ↦ `match` / if-chain (first matching
   label; `default` in any position takes the values no label matches; labels of
   a switch on an int, string, boolean or number are compared with `===`, and may be
-  literals, negated literals or constants — a non-integer label on an int is
-  rejected, it can never match), `throw`
+  literals, negated literals, constants or other expressions of the
+  discriminant's type (`xs[3]`, `idiv(10, d)`) — a non-integer label on an int is
+  rejected, it can never match. As in JS, the discriminant is evaluated once, then
+  the labels in the order written, those grouped with `default` (`case X:
+  default:`, `default: case X:`) included, until one matches: a label's
+  obligations are under the negation of the labels before it, a match on a label
+  of the default group takes the default body and evaluates no later label, and a
+  discriminant no label is compared with, as in `switch (e) { default: … }`, still
+  has its obligations), `throw`
   ↦ an obligation that the point is unreachable. Statements after a `return` in
   the same block never run and are rejected (in function bodies, component
   bodies, handlers, effects and timer callbacks alike), so the translation never
@@ -441,7 +501,40 @@ Every expression maps to a Lean term whose value is the JavaScript value.
   (a customized built-in element, defined by script outside the program); a
   literal `javascript:` URL in `href`, `src`, `action`, `formAction`, `data`,
   `xlinkHref`; `srcDoc` (a document with this page's origin, whose scripts reach
-  `parent.document`). Other attributes are data of the element (`VNode.elem`).
+  `parent.document`). A `name` or `id` that HTML's named access would turn into a
+  property React reads (§5, "Elements and attributes": a form answers `form.x` with its
+  control named or with id `x`, the document `document.x` with an `<iframe>`, `<form>`,
+  `<object>`, … named `x`, before their own properties) is rejected: on `<input>`,
+  `<button>`, `<select>`, `<textarea>`, `<output>`, `<fieldset>`, `<object>` and
+  `<img>` (`name` and `id`) and on `<form>`, `<iframe>`, `<embed>` (`name`), every value
+  the attribute may take must be no name the app's code reads, calls or writes on
+  forms (on the document, for an element the document exposes) and no name starting
+  with `_` (`src/domNames.ts`: `parentNode`, `removeChild`, `createElement`, `value`,
+  `type`, …; common field names such as `name`, `title`, `id`, `submit` are accepted
+  on form controls) — a literal, a choice between literals, an enum, or a string with
+  a literal part holding a character outside `[A-Za-z0-9_$]` (`` `qty-${id}` ``, which
+  no property name has); any other expression is rejected. A written `id` of any
+  element, or `name` of an `<embed>`, `<form>`, `<iframe>`, `<img>`, `<object>`, may not
+  be a global the app's code reads (`nodeName`, `type`, `contentEditable`,
+  `correspondingUseElement`, `IS_REACT_ACT_ENVIRONMENT`, `jest`, `MSApp`, a name
+  starting with `_`). Other attributes are data of the element (`VNode.elem`).
+* The content of a `<select>`, an `<optgroup>` and an `<option>` is restricted
+  to what react-dom 18.3.1's `validateDOMNesting` allows without a warning
+  (`isTagValidWithParent`): a `<select>` holds `<option>` and `<optgroup>`
+  elements and text, an `<optgroup>` `<option>` elements and text, an `<option>`
+  text only (its label) — however the element gets there (a keyed list, a
+  condition, a JSX const, checked where it is used). Any other element and any user
+  component there are rejected. React only warns about such content and creates it
+  with the DOM API, where it is an event target, and react-dom's ChangeEventPlugin
+  picks the native events that make an `onChange` by the target control, then
+  collects `onChange` on the whole path from it to the root: a checkbox inside a
+  select would run the select's `onChange` on a click, a text field on an
+  `input`, with that control as `e.target`. With this content a select's
+  `onChange` runs for the select's own `change` event only (an option or optgroup
+  never makes an `onChange`, and a text node is never React's target:
+  `getEventTarget` takes its parent), with the select as `e.target`. A
+  `<datalist>`'s content is not restricted (no event modelling depends on it),
+  but the `<option>`s in it follow the rule above.
 * The parameters of a translated function (component, callback, DOM handler,
   array callback, functional update, local helper, top-level function) are bound
   to the arguments by position: a `this` parameter (TypeScript's annotation of the
@@ -493,7 +586,33 @@ Every expression maps to a Lean term whose value is the JavaScript value.
   created (a later assignment, or one in an enclosing loop), and no function —
   including immediately-run array callbacks — may assign a `let` declared
   outside it. Array-method callbacks, spec predicates and the `useMemo` factory
-  run in place and read the current values.
+  run in place and read the current values. A local arrow function (a helper or
+  handler, not `useCallback`) is translated where it is called or attached as a
+  handler, in the environment of its creation extended with the `const`s and
+  `let`s declared after it that are initialised at that point: JS reads them when
+  the function runs, which is then or later (a handler runs after the render),
+  and each has a single value from its initialisation on (a `let` declared after
+  a function that reads it cannot be assigned at all, by the first check);
+  variables are identified by their TypeScript symbols, so a name resolves as in
+  JS. A use before the declaration (a call in the render, a JSX const) is rejected
+  (the call would read it in its temporal dead zone). This holds for the state
+  values and setters too: each is bound from its own `useState` / `useReducer`
+  declaration on (the Lean locals `let n := σ.n` stand at the top of `render`,
+  but a function that runs before the declaration — a helper called there, an
+  array callback, the `useMemo` factory, a JSX const — and reads them is
+  rejected: React 18 throws a ReferenceError at mount). A `useEffect`, `useCallback`
+  or `useMemo` function that reads a local declared after the hook call is
+  rejected: the function is translated with the locals declared before the call,
+  and its dependency array cannot list it there (temporal dead zone), so React
+  could keep the function of an earlier render (the `useMemo` factory runs at the
+  call: a ReferenceError). The checks cover everything that is
+  translated: the bodies of components and functions (their contracts included),
+  constant initialisers and module-level `assert(…)` facts, and of a `@trusted`
+  declaration, whose body is not translated, its contracts (`requires`, `ensures`,
+  `invariant`, `callbackRequires`) and a component's initial state (`useState` /
+  `useReducer` arguments), since its axioms state them. A local function is inlined where it is called or
+  attached, so it cannot call itself, directly or through other local functions
+  (rejected as a recursive call).
 * A DOM handler's event parameter is `DomEvent` (`e.target.value`,
   `e.currentTarget.value`, `e.target.checked`, `e.key`: arbitrary values, fixed for
   the run of the handler). This describes JS only while the handler's own
@@ -516,9 +635,12 @@ Every expression maps to a Lean term whose value is the JavaScript value.
   `e.target` is the element where the native event happened (`getEventTarget`; a
   text node's parent), any element inside the one the handler is on, so it is
   read only where nothing inside the element can be a target: an `<input>` (void),
-  a `<textarea>` (text only), a `<select>`'s `onChange`/`onInput` (`change` and
-  `input` fire at the select). There `e.target` and `e.currentTarget` are the same
-  element, so the model's one `value` describes both. `e.key` is read only in
+  a `<textarea>` (text only), a `<select>`'s `onChange` (it runs for the select's
+  own `change` event only, given the restricted content above). There `e.target`
+  and `e.currentTarget` are the same element, so the model's one `value` describes
+  both. Not in a `<select>`'s `onInput`: an `input` event a script dispatches at
+  one of its options bubbles to the select with the option as its target (read
+  `e.currentTarget.value` there). `e.key` is read only in
   `onKeyDown`/`onKeyUp`/`onKeyPress` (a `SyntheticKeyboardEvent`, whose `key` is
   always a string: `getEventKey`). TypeScript's type of the field must say
   `string`/`boolean` too (it rules out a parameter annotated `any`).
@@ -531,12 +653,12 @@ Every expression maps to a Lean term whose value is the JavaScript value.
 | `ensures((r: T) => c)`            | theorem `f.post : ∀ args, h_pre → c[r := f args]` (a generic function's: also `∀ T` and its constraint binders) |
 | `requires(c)` in a component      | the props precondition `pre`; every `<C …/>` must prove it (several are conjoined in order, as in functions) |
 | `invariant(c)` in a component     | the state invariant `inv` (after the hooks; several are conjoined in order) |
-| `callbackRequires(cb, (…) => c)`  | the contract of a callback prop (§2.4) |
+| `callbackRequires(cb, (…) => c)`  | the contract of the callback prop `cb` holds (§2.4) |
 | `assert(c)` / `assume(c)`         | obligation + fact / trusted fact (reported): `c` whenever control reaches it, for every input the declaration's contracts allow; not in a generic function, a `for…of` body, an array-method callback or a functional update |
 | `forall exists distinct implies`  | bounded quantifiers, key uniqueness (`List.Nodup`), implication |
 | `/** @opaque */` on a function    | callers see only its `ensures` (modular verification) |
 | `/** @trusted */`                 | body not verified; contract assumed (reported, appears as a Lean axiom); not on a generic function |
-| `hole<T>()`                       | a placeholder for `vreact synth`: `sorry`; while a function has one, its `ensures` theorems are `sorry` too (reported INCOMPLETE) |
+| `hole<T>()`                       | a placeholder for `vreact synth`: `sorry`; while a function has one, its `ensures` theorems are `sorry` too (reported INCOMPLETE). Synth fills holes in code only, never one inside a contract (`requires`, `ensures`, `invariant`, `decreases`, `callbackRequires`, `assert`, `assume`) nor one in a function without `ensures` that a contract depends on (its fill would be checked against nothing and become part of that contract), and reports a fill only when Lean proved the exact text it writes |
 
 A caller uses a contract through its instances: for each call `f a₁ … aₙ` in a goal or a
 hypothesis, the automation adds `f.post a₁ … aₙ` — the proved theorem at the call's actual
@@ -551,17 +673,51 @@ itself — gets no instance there.
 A contract is a proposition with JS's evaluation order: the right operand of
 `a && b` is translated under the hypothesis `a` (`∃ (h : a), b` when `b` has
 proof obligations, plain `a ∧ b` otherwise), `a || b` as `a ∨ ∃ (h : ¬a), b`,
-`c ? x : y` as `(∀ (h : c), x) ∧ (∀ (h : ¬c), y)`, `implies(a, b)` as
-`∀ (h : a), b`, `forall(lo, hi, i => p)` as `∀ i, ∀ (h₁ : lo ≤ i), ∀ (h₂ : i < hi), p`
+`c ? x : y` as `(∀ (h : c), x) ∧ (∀ (h : ¬c), y)`,
+`forall(lo, hi, i => p)` as `∀ i, ∀ (h₁ : lo ≤ i), ∀ (h₂ : i < hi), p`
 and `xs.every(x => p)` as `∀ x, ∀ (h : x ∈ xs), p`, so an index obligation in `b`,
-`p`, … sees its guard. (In code, `implies` is a function call: both arguments are
-evaluated.) Several `requires` (or `invariant`) statements are one condition
-`c₁ && c₂ && …`: a later one may rely on the earlier ones as guards.
+`p`, … sees its guard (JS calls a quantifier body only for `lo ≤ i < hi`, or for
+the array's elements; `distinct`'s key function runs on every element, and its
+obligations are proved for every value of its parameter).
+An `every`/`some` callback other than `x => p`, and a `forall`/`exists` callback
+other than `i => p`, such as a block body `x => { …; return p; }` or a
+`function (x) { … }`, is read as code: the calls JS makes on the elements, or for
+`lo ≤ i < hi`.
+
+`implies(a, b)` is a function call (vreact/spec: `return !a || b`), so JS evaluates
+`b` whatever `a` is. `requires(c)`, `invariant(c)`, `assert(c)`, `assume(c)` and a
+module-level `assert(c)` are calls too: JS evaluates `c` at every call, render,
+`dispatch` or module load, also with contract checking off — and with it every
+quantifier body and callback run inside `c`. In those contracts `implies(a, b)` is
+`a → b` with `b` translated where `a` is evaluated: the obligations of `b` (an index,
+a `!`, a divisor, a callee's `requires`) must hold without `a`, and `a` narrows
+nothing in `b`. Guard them with `!a || b` (`xs.length === 0 || xs[0] > 0`,
+`x === null || x.v > 0`) or `a ? b : true`. Only a contract that JS never calls — an
+`ensures` lambda, and the expression body of a `callbackRequires` lambda (vreact/spec's
+`callbackRequires` ignores it) — reads `implies(a, b)` as `∀ (h : a), b`, so that `b`
+may index (and narrow) under `a` (`vreact synth`'s tests, which call an `ensures`
+lambda, evaluate that `implies` as `!a || b`: §5). A block body `{ …; return c; }` of a
+`callbackRequires` lambda is read as code, its obligations holding for every argument.
+(In code, likewise, `implies` evaluates both arguments.) `callbackRequires(cb, p)` is a
+call as well: JS evaluates `cb` at every render (and only creates the lambda `p`), so
+`cb` must be a read that cannot throw, `props.<name>` on the props parameter or a name
+destructured from it (§2.4).
+
+Several `requires` (or `invariant`) statements are one condition
+`c₁ && c₂ && …`: a later one may rely on the earlier ones as guards. (JS evaluates
+each of them in turn, but every call site, `dispatch` and `<C …/>` proves all of
+them, and every state a component renders satisfies its invariant, so the earlier
+ones hold whenever a later one is evaluated.) An
+`invariant(c)` may read only the state declared before it: the runtime evaluates
+`c` where the statement stands (vreact/spec's `invariant` is an ordinary call),
+where a later state value is in its temporal dead zone — TypeScript reports a
+direct read, not one inside a lambda (`forall(0, 1, (i) => b >= i)`), which is
+rejected.
 Narrowing tests in a guard narrow what JS evaluates under it, as in code — also
 in a compound guard: in `b || s.kind === "a" || s.to.length > 0` (left-associated,
 any length), `x !== null && y !== null && x + y > 0`, `!(x === null || y === null) || …`,
-`implies(x !== null && …, …)` and `c ? … : …` the later operand is translated where
-every earlier operand failed (held), each test becoming a `match`. Such a compound
+`implies(x !== null && …, …)` (in an `ensures` or a `callbackRequires` lambda) and `c ? … : …` the later operand is
+translated where every earlier operand failed (held), each test becoming a `match`. Such a compound
 guard is decomposed only when a later operand needs its narrowing; otherwise it
 stays one condition (the normal forms above).
 
@@ -659,7 +815,28 @@ app, and onFocus of the new one run in one batch, after a trusted click too:
 `CxFocusRobust.tsx`), a click on a `<label>` focuses its control, `el.focus()`
 fires blur and focus, form validation fires `invalid` at every invalid control —
 so `onFocus`, `onBlur`, `onInvalid` (and the composition events, whose fallback
-uses `focusout`) are checked robust as well.
+uses `focusout`) are checked robust as well. An update from a focus handler that
+runs inside React's commit is rendered and committed at once, at the end of that
+commit (it is discrete: SyncLane); if that commit mounts an `autoFocus` element
+again (a key or a condition that depends on the state), the chain repeats, and
+after 50 nested commits React throws "Maximum update depth exceeded" from the
+setter, inside the handler — which the model does not have. So a focus handler
+(onFocus, onBlur, the composition handlers) on an `autoFocus` element, or on an
+element around one, may not update state (setters, `dispatch`; parent callbacks
+are rejected for robust handlers anyway) unless no render of its component after
+the first mounts an `autoFocus` element: every `autoFocus` element of the
+component is written in its only `return` (a statement of the body), reached from
+the returned value through elements and fragments only — not under a condition, in
+a list or a local constant —, with no `key` on it or on an element around it, and
+the component renders no other component (`FaDomAutoFocusTrack`; otherwise
+`FaDomAutoFocusChain`, `FaDomAutoFocusAround`, `FaDomAutoFocusAroundBlur`,
+`FaDomAutoFocusRendersComponent`). Then only the element that had focus before the
+first such commit can make an update that mounts anything, once (focus moves only
+to `autoFocus` elements inside the chain), and the updates of the accepted handlers re-render
+only their own component, which mounts no `autoFocus` element and so focuses
+nothing (VTS has no layout effects; the passive effects React runs at the end of
+such a commit have default-priority updates, rendered later): the chain ends at
+most two commits later.
 
 **Rebasing.** These *deferred* updates are still pending when a later discrete
 event runs. React keeps one update queue per hook; it renders the discrete
@@ -696,11 +873,41 @@ function returning a view tree in which
 * every keyed list stores the proof that its keys are pairwise distinct
   (React's reconciliation requirement; `int` and `string` keys never mix; a string-literal
   enum key is its string, `Key.str (JS.str k)`),
+* the children of every element and fragment of which two or more may have an explicit
+  `key={…}` store the proof that the keys of the children present are pairwise distinct
+  (`VList.withKeys`).  React reconciles the children of one element (or fragment) as one
+  array and compares their keys as strings, `'' + key`: `key={1}` and `key="1"` are one key,
+  `key={undefined}` is none, `key={null}` is `"null"`.  With two equal keys react-dom's
+  `reconcileChildrenArray` keeps one old fiber per key, and the other is neither reused nor
+  deleted: its DOM stays, with stale handlers, and it is never unmounted — which the model's
+  reconciliation by position cannot describe.  A child contributes the keys of what it can
+  render at the top level of the array: an element, the branches of `c ? a : b` and `c && a`
+  (under their conditions), the element of a JSX const (its key as evaluated at the
+  declaration); a fragment and a keyed list are one child each, with an array — and keys — of
+  their own, so a list item's key never meets the key of a sibling of the list.  Two children
+  that are always present with the same key written as a string (`key="a"`, also a JSX const
+  rendered twice) are rejected; keys written as strings that no two children share need no
+  proof; every other case is a `unique-keys` obligation over the keys as strings (string,
+  `int`, number, boolean and string-enum keys and their optional forms; another key type next
+  to other keyed children is rejected).  The keys in it are the terms already translated for
+  the elements (a conditional child's conditions are translated again with the same
+  obligation ids, `ModCtx.replay`), so a key's or a condition's obligations are not new
+  obligations: a failing one is reported once, and the `unique-keys` goal, which contains
+  its admitted proof, is not checked until it is fixed.  The automation proves keys that
+  differ in a literal prefix (`` `viewer-${id}` `` / `` `notes-${id}` ``) or a literal end
+  (`` `${id}-title` `` / `` `${id}-body` ``, `key={id}` / `` `${id}-edit` ``,
+  `` `${id}-title` `` / `key="title"`: a common first part and a common literal end cancel, and
+  the last code units then differ or one side is left non-empty), an `int` key next to a
+  string key that is no integer's rendering (`key={id}` / `key="title"`; an integer's
+  rendering starts and ends with a digit or `-`), and different `int` keys,
 * every expression JavaScript evaluates during render is kept in the term with
   its obligations, including `key={…}` outside lists (`VNode.withKey`; a key
-  change remounts, which is covered because both keeping the state and
-  re-initialising it are verified) and boolean children (`VNode.ofBool`, rendered
-  as nothing),
+  change remounts — fresh state, every effect runs again — which a run of the
+  model may do to any instance at any time, `Action.remount` in §3, and both
+  keeping the state and re-initialising it are verified; with distinct sibling
+  keys, React moves a keyed child's state only to a child of the same component,
+  which keeping the state with new props covers) and boolean children
+  (`VNode.ofBool`, rendered as nothing),
 * every parent callback handed to a child stores the proof that, assuming the
   child's callback contract, the parent's invariant is preserved.
 
@@ -710,33 +917,123 @@ invariant-preserving interactions.
 ### 2.4 Composition: callbacks as assume/guarantee
 
 A child declares `callbackRequires(props.onPick, (i) => 0 <= i && i < props.n)`.
+The first argument is the callback prop, taken by the binding it holds, as a call
+of it is, never by its spelling: `props.onPick` on the props parameter, or a name
+destructured from it — with `{ onPick: pick }` the contract
+`callbackRequires(pick, …)` is onPick's, and with `{ onA: onB, onB: onA }`
+`callbackRequires(onA, …)` is props.onB's. JS evaluates this argument at every render,
+and these reads cannot throw. Anything else (a module function or another object's
+property spelled like a callback prop, `Math.max` with a prop `max`,
+`(c ? props : null)!.onPick`, `xs[i].onPick`) is rejected. The lambda's parameters are
+the callback's arguments; its body is a contract that JS never calls (§1.3:
+`implies(a, b)` an implication whose consequent may rely on its guard, as in an
+`ensures`; guards in scope).
 
-* **Guarantee (child):** every call `props.onPick(e)` must prove the contract.
+* **Guarantee (child):** every call `props.onPick(e)` (or `pick(e)`, and every
+  forward of the callback to a child) must prove the contract.
 * **Assume (parent):** the parent's function passed as `onPick` is verified
   under the contract. In Lean the callback returns an `Emit` — the parent
   outcome packaged with the proof that it preserves the parent's invariant
   against the parent's (current) snapshot.
 
 A handler may invoke at most one parent callback per execution path (two would
-compose two parent outcomes that were only checked separately). Several
-`callbackRequires` for one callback are conjoined.
+compose two parent outcomes that were only checked separately).
+
+The parent's function may declare fewer parameters than the callback type, as
+TypeScript allows: the child passes every argument and the function ignores the
+others, which get Lean names its body cannot read (the contract is still assumed
+for all of them). A parent callback forwarded to a child slot (`<GC onX={props.onPick}/>`)
+whose type has more parameters receives the slot's first arguments — the
+function `props.onPick` holds was given for its own type, so it reads no more —
+and the forward must prove the forwarded contract on them from the slot's
+(`FaRejCallbackForwardPrefix.tsx`); a slot with fewer parameters is rejected. Several
+`callbackRequires` for one callback are conjoined, also when one names a parameter
+another ignores (`(a) => a > 0` and `(x, y) => y > 0`).
 
 ### 2.5 Lifecycle obligations
 
 * `init_inv` — mounting (`useState(init)`, `useReducer(r, init)`) establishes the invariant.
+  An initial value may read the props, the state declared before it and top-level
+  declarations. React evaluates `useState(x)` in every render but uses `x` only at
+  mount, when every earlier state value is its own initial value: so `init` binds
+  an earlier state value to its initial value. A non-lazy initial value that reads
+  earlier state is also translated in the render, against that render's state (its
+  value unused, its obligations checked): JS evaluates it there too (`useState(10 %
+  a)` after `a` became 0). A lazy `useState(() => …)` runs at mount only.
 * `stable` — when the parent re-renders with new props, React keeps the state:
   `inv props s → pre props' → inv props' s`. An invariant like
   `count <= props.max` is rejected (`PropsStability.tsx`): the parent may lower `max`.
 
 ### 2.6 Effects
 
-`useEffect(body, deps)` runs after commit when its dependency values changed.
-Its synchronous updates and the timers it registers must be robust and may not
-call parent callbacks; `deps` must be exhaustive (otherwise stale closures;
+`useEffect(body, deps)` runs after the first commit and then after every commit
+whose render gave it a dependency that differs (`Object.is`) from the one the
+previous render gave it (React 18 `updateEffectImpl` / `areHookInputsEqual`;
+after every commit when it has no dependency array). Its synchronous updates
+and the timers it registers must be robust and may not call parent callbacks; `deps` must be exhaustive (otherwise stale closures;
 the check sees every reference, including shorthand properties `{ x }`; the same
-check applies to `useMemo` / `useCallback`). The model has no cleanup step, so a
-returned cleanup is restricted statically: it must be an inline function that
-only calls `clearTimeout` / `clearInterval` and makes external writes
+check applies to `useMemo` / `useCallback`, which the model recomputes, and
+re-creates, at every render: exact only because the listed values change, by
+React's `Object.is`, whenever a value the body reads does).
+
+Dependencies are *data paths*: an identifier followed by fields declared by the
+program (of records, of the props, `?.` or `.`: an optional link reads the same
+property), and `length` (arrays, strings) or `size` (Maps, Sets). Each reactive
+value the body reads counts as the longest data path it is read through — `m`
+for `m.has(k)`, `xs` for `xs.slice(1)`, `props.item?.count`, `xs.length` — and
+must be listed, or a prefix of it (`[props.item]` covers `props.item?.count`;
+before, nothing covered a props path read with `?.`: `FaDepsOptionalChain.tsx`).
+A library method is never a dependency: `m.has` is `Map.prototype.has`, the same
+function for every Map (`xs.slice`, `s.trim` likewise), so React never sees it
+change, and before, `[m.has]` covered `m.has(2)`: a `useMemo` kept its first
+value in React while the model recomputed it, and a broken invariant was
+VERIFIED (`FaDepsMemoMethod.tsx`, `FaDepsCallbackMethod.tsx`,
+`FaDepsArraySlice.tsx`). Such a dependency is rejected, naming the receiver to
+list instead. So is any other link that is not a data link — a library constant
+(`Number.MAX_SAFE_INTEGER`), a tuple's `length` — with that reason, not the
+method one (`FaDepsLibConstantMsg.tsx`, `FaDepsTupleLengthMsg.tsx`). A path that
+starts outside the component (a global such as `Math` or `Number`, an import, a
+top-level declaration) is never required, and the message says to leave it out
+rather than list it (`FaDepsOutsideMethodMsg.tsx`, `FaDepsOutsideValueOk.tsx`).
+
+An effect's dependency values (`VReact.DepVal`, compared with the previous
+render's) follow React's identities (`Object.is`): an int, string, boolean or enum
+by value (but an int that is 0 before and after is undecided: either may be `-0`,
+§3); another data value (a `number`, array, record, Map, optional) as `obj`, whose
+`Object.is` the model does not decide, so where no other dependency changed the
+run chooses whether the effect runs (§3), covering what React does (both
+choices are verified: the effect is robust, and so is every timer it registers,
+whichever render registered it); a setter or `dispatch` contributes nothing
+(React keeps one function per hook); a local helper arrow is `obj` (a new
+function at every render: in React the effect runs after every render, one of
+the runs the model allows), and so is a JSX const (a new element object at every
+render); a top-level declaration of the program — a function, a constant, a
+component, or an import of one — and a data path from it (`CFG.step`)
+contribute nothing: it is created once, when its module is evaluated (top-level
+variables are const, and an import binding cannot be reassigned), so React never
+sees it change (`FaDepsEffectOutsideFn.tsx`, `FaDepsEffectOutsideImport/`), and
+nor does `undefined`; a `useCallback` function contributes the dependency values
+of its own dependencies (React returns the cached function until one of them
+changes, so it changes exactly when they do: `useCallback(f, [])` listed in an
+effect runs it once, as `[]` does; `FaDepsEffectUseCallback.tsx`,
+`FaDepsEffectHelper.tsx`; one that lists a top-level function or a JSX const,
+`FaDepsEffectJsxConst.tsx`). Any other value from outside the component — a
+global such as `Math`, which need not keep its value (`innerWidth` changes) — is
+rejected as an effect dependency, also through a `useCallback` that lists one,
+with that reason: the dependency check never requires one, so leave it out
+(`FaDepsEffectGlobalMsg.tsx`). A parent callback (`props.onPick`, or
+destructured) is rejected as an effect dependency, also through a `useCallback`
+that lists one: an effect never calls one, and when the parent passes a new
+function is not modelled. The props object itself is not an effect dependency
+either (a `useMemo` / `useCallback` may list it: the same props object has the
+same fields): list the fields the effect reads. VTS arithmetic can produce `-0`
+(`-n` with `n` 0, `-1 * 0`, `-3 % 3`), which the model's `int` does not
+represent (it is `0`; `===`, `<`, Map keys, `includes` and string conversion
+also treat them alike); a switch between `0` and `-0` is one of the undecided
+cases above (`FaDepsEffectNegZero.tsx`).
+
+The model has no cleanup step, so a returned cleanup is restricted statically:
+it must be an inline function that only calls `clearTimeout` / `clearInterval` and makes external writes
 (`console.*`, `localStorage.*`, `document.title = …`) with pure arguments,
 possibly under `if`/`else` with pure conditions —
 no setters, `dispatch`, parent callbacks or local helpers. JS still evaluates
@@ -766,13 +1063,24 @@ are checked themselves, aside); no `new`, `delete`, `await`, tagged templates, a
 `++`/`--`, casts, `arguments` or `any`. So the code cannot mutate a state value in place
 (`xs.push(1)`, `m.get(k)!.push(x)`, `Array.prototype.push.call(xs, 1)`) or reach a setter
 (`[1].map(setN)`, `String({ toString: setN })`).
-Running a robust effect any number of times (StrictMode) is safe.
+Running a robust effect any number of times is safe; React's StrictMode, in
+development, runs every effect of a newly mounted component a second time
+(setup, cleanup, setup), which the runtime model's first flush does by the run's
+choice (§3).
 
 A timer is registered only by a statement at the top level of the effect body
 (`setTimeout(…)` / `const id = setInterval(…)`, with at most a delay argument,
-which is evaluated — checked — at that statement). Its callback is checked under the
+which is evaluated — checked — at that statement). Its callback is translated in
+the environment of the effect body at the registration: each top-level `const`
+declared before it is translated again inside the task, as the effect body
+translates it — JS evaluated it once, before the registration, from the snapshot
+and the effect's earlier consts, and it keeps that value. Not bound there, and
+rejected if the callback reads them: the body's `let`s, a local Map or Set the body
+mutates (re-translating its declaration would give its value before the
+mutations), and a `const` whose value has obligations of its own (they are checked
+in the effect body, not repeated). The callback is checked under the
 path condition of that registration. That condition is made of the top-level
-early returns `if (c) return;` (no `else`) and the `assert(c)` / `assume(c)`
+early returns `if (c) return;` (no `else`; also `return undefined;`) and the `assert(c)` / `assume(c)`
 statements before it. The callback captures the same snapshot as the effect: an
 effect cannot assign a variable it captures, and a captured `let` is not
 reassigned after the effect is created. So the model's task is
@@ -781,15 +1089,23 @@ skip` for an assert or assume. The `skip` branch stands for a timer the program
 never registers, and it does nothing. A condition about the snapshot says nothing
 about the state the timer fires against, so `setLeft(l => l - 1)` still needs its
 own guard (`CxTimerGuardFail.tsx`). A condition is used only if it translates in
-the component's scope without obligations of its own: one that reads a const
-local to the effect body is left out, which only weakens the facts.
+that environment without obligations of its own (it may read the consts bound
+there); others are left out, which only weakens the facts.
 (`CxTimerGuard.tsx`: the guarded countdown
 `if (left <= 0) return; setTimeout(() => setLeft(left - 1), …)`.)
 
 Hooks (`useState`, `useReducer`, `useEffect`, `useMemo`, `useCallback`) are
 matched by React by call order, so they must be top-level statements of the
-component, before any statement that may return (an `if`, a `switch`, …); a hook
-in a branch, loop, handler or closure is rejected.
+component, before any top-level `if` or `switch` and any statement that may
+return; a hook in a branch, loop, handler or closure is rejected. A block before
+a hook may still branch without returning (`{ if (x !== null) { … } }`): the
+hook runs at every render all the same, and the translation, which goes on once
+per path, gives each path's render each effect once, translated in that path's
+environment (`FaStmtsBlockIfEffect.tsx`). Parentheses around a hook call
+(`(useEffect(…))`, `const [n, setN] = (useState(0))`) do not change it. The other
+React hooks (`useLayoutEffect`, whose updates are synchronous during the commit,
+`useRef`, `useContext`, …) are not modelled and are rejected, as is a hook other
+than `useEffect` called as a statement with its value unused.
 
 ---
 
@@ -808,14 +1124,51 @@ Transitions:
 | `mount`          | initialisers, render, mount children |
 | `reconcile`      | match new child elements to old instances by position/key **and component identity**: same component ⇒ keep state (`mount_keeps_state`), otherwise mount fresh (`mount_fresh_state`); removed children unmount |
 | `dispatch`       | a discrete event runs one handler of the latest render; its queue is processed; its parent-callback outcome propagates up the instance path; affected instances re-render |
-| `flushEffects`   | after commit, effects whose deps changed run (robust), timers are (re)registered |
+| `flushEffects`   | after commit, each effect whose dependency array differs from the previous render's runs (robust) and registers its timers; the render's dependencies are recorded; at the first flush after mounting, every effect may run a second time (StrictMode) |
+| `remount`        | an instance is unmounted and its element mounted afresh: initial state, no recorded dependencies, no timers, children mounted afresh (React: a changed `key` outside a list, a changed enclosing host element type) |
 | `fireTask`       | a timer callback fires against the current state |
 
-**Theorem `run_allInv`.** For every sequence of actions (user events, effect
-flushes, timer firings), every mounted instance satisfies its invariant.
+An instance records the dependency arrays its render gave its effects at its
+last flush; a flush compares each effect's new array with the recorded one at
+the same position, one dependency at a time, as React does (`Effect.fires`,
+`depsChanged`; every effect runs at the first flush after mounting, and on every
+flush when it has no array). Where the model's values do not decide `Object.is`
+— an object, array, Map, optional value or `number` (identity, `NaN` and `-0`
+are not modelled), or an int that is 0 before and after (it may be `-0`) — and no
+other dependency of the effect changed, the `flush` action chooses whether it
+runs (the `rerun` of `Action.flush inst rerun strict`), so a flush can do what React does in either
+case. The model has no cleanup step: the timers of earlier runs stay
+registered, so a run may fire a timer React cleared (more runs, not fewer).
+(Before, the flush compared each effect's dependencies with themselves, so no
+run of the model ran an effect with a dependency array a second time, nor
+registered the timers of such a run: `FaRuntimeEffectRerun`, whose proof file
+shows the re-run; `FaRuntimeTwoEffects` shows that each effect is compared with
+its own recorded array.)
 
-The proof is by construction: `dispatch`, `flushEffects`, `fireTask` and
-`reconcile` can only be *defined* because each component supplies its
+React 18's StrictMode (every example mounts its app under `<StrictMode>`) runs,
+in development, the cleanup and then the setup of every effect of a newly
+mounted component again, in the same flush and with the same closures. The
+`flush` action chooses whether it does (`Action.flush inst rerun strict`,
+`flushRuns`): at the first flush after mounting, `strict` runs every effect a
+second time, so the updates of the second setups queue after those of the first;
+at a later flush it changes nothing (`FaRuntimeStrictMount`).
+
+React unmounts an instance and mounts its element afresh when its `key` outside
+a list changes, or the type of an enclosing host element (`<div>` → `<section>`,
+a Fragment ↔ an element); the model's paths contain neither, so `reconcile`
+keeps the instance there. A run may instead remount any instance at any time
+(`Action.remount`, `Inst.remount`): initial state, no recorded dependencies (so
+its next flush runs every effect), no timers (a setter of an unmounted
+component does nothing), children mounted afresh — more runs than React has,
+not fewer (`FaRuntimeRemount`). (Before, no run of the model reset an instance
+React remounts at the same path, or ran its effects again.)
+
+**Theorem `run_allInv`.** For every sequence of actions (user events, effect
+flushes, remounts, timer firings), every mounted instance satisfies its
+invariant.
+
+The proof is by construction: `dispatch`, `flushEffects`, `fireTask`,
+`reconcile` and `mount` can only be *defined* because each component supplies its
 obligations. `vreact verify` instantiates the theorem for every root component
 as `App.certificate`; `#print axioms App.certificate` then lists every
 assumption the whole application relies on. A fully verified app depends only
@@ -866,7 +1219,8 @@ fails (indices, divisions, non-null assertions, preconditions of called
 functions — also in keys and boolean children), and neither do handlers, effects,
 timers and cleanups (also the arguments of external writes and timer delays,
 whose values are not used); keys are
-distinct; child preconditions hold; callback contracts hold in both directions;
+distinct (in keyed lists, and among the keyed children of every element and fragment,
+compared as strings); child preconditions hold; callback contracts hold in both directions;
 hook rules hold (static checks). For every function: its body is safe and its
 `ensures` hold.
 
@@ -887,23 +1241,62 @@ hook rules hold (static checks). For every function: its body is safe and its
   it when the Lean toolchain or the VReact library changes.
   Each source file is one Lean module `VTS.<path>` (`Defs.lean`: types,
   constants, functions each followed by its `ensures` theorems; `View.lean`:
-  components and certificates); files whose module names coincide, also up to
+  components and certificates). A path segment is made a Lean name component
+  that is a plain identifier: other characters than letters, digits and `_`
+  become `_`; a segment starting with a digit or `_` gets a leading `M` (Lean
+  gives `_`-names meanings: declarations in a namespace `VTS._hyg`, a
+  macro-scoped name, are lost); a Lean token or root name (`end`, `List`) or a
+  generated name (`VTS`, `Proofs`, `VReact`, …) gets a trailing `_`, and so does a
+  module directly in `src` named `Base` in any letter case, keeping its case
+  (`src/Base.ts` is `VTS.Base_`, lemmas `proofs/Base_.lean`; `src/base.ts` is
+  `VTS.base_`, lemmas `proofs/base_.lean`), whose lemma file would otherwise be
+  `proofs/Base.lean` (on a case-insensitive disk also as `proofs/base.lean`), the
+  global lemma file every `Defs.lean` imports (`proofs/Base.lean` reaching a
+  generated module through its imports, also through other proof files, would
+  close an import cycle, and is rejected with that explanation, at the import;
+  a proof file's imports are read by Lean's parser, in the whitelist check below,
+  never from its text, so an escaped `import «VTS».m.Defs` or an import after a
+  line comment containing `/-` counts too); files whose module names coincide, also up to
   letter case, are rejected, and so are modules whose generated directories
   differ only in case (`src/lib.ts` and `src/Lib/x.ts`) and modules that would
   generate the same Lean name (`src/a/b.ts` declaring `post` next to a function
   `b` of `src/a.ts` with an `ensures`: both `VTS.a.b.post`; also the names Lean
   derives from a structure or inductive — fields, constructors, `rec`, … —
   and, below another module's function `f`, `f.post`, `f.post2`, …, `f.eq_1`,
-  …), and within a module a function or constant named like a type of the
-  module (TypeScript keeps the two apart; both would be `VTS.m.Limits`).
+  …), and within a module a function, component or constant named like a type
+  of the module (TypeScript keeps the two apart; both would be `VTS.m.Limits`,
+  for a component the namespace of its `Props`, `State`, `init`, … beside the
+  type's fields). An inline object type, string-literal union or discriminated
+  union is named after the place it occurs (a constant `config` or `Config`:
+  `Config`; a function's result: `<Fn>Result`; a state `timer`: `Timer`), with a
+  subscript (`Config₂`, which neither a TypeScript identifier nor a module name
+  contains) when a type, function, component or constant of the module has that
+  name, or when it is (or begins) the namespace of a nested module (a local `x`
+  of `src/m.ts` beside `src/m/X.ts`, the namespace `VTS.m.X`: `X₂`).
   Namespaces may otherwise nest (`src/ui/Board.tsx` next to a component
   `Board` of `src/ui.tsx`). User lemmas `proofs/<path>.lean` are imported by
   that module's `View.lean` and by the `Defs.lean` of every module importing it
   (unless that would close an import cycle); `proofs/Base.lean` by every
-  `Defs.lean`. When every importing module can import them, the `ensures`
-  theorems of the module's functions that no other function or constant of the
-  module uses are proved after the lemmas, in `Posts.lean` (imported by the
-  module's `View.lean` and the importing modules' `Defs.lean`).
+  `Defs.lean`; any other proof file only through the imports of these. Lake
+  builds the root module `VTS` and what it imports, nothing else, so a proof
+  file that no generated module imports, directly or through other proof files,
+  would never be elaborated (its errors and `sorry`s never reported): it is
+  rejected (a misspelt `proofs/model.lean` next to `src/Model.ts` — names are
+  case-sensitive, also on a case-insensitive disk —, a stray copy, a file of
+  theorems nothing imports; `FaReportUnimportedProof`). The imports are those
+  Lean's parser reads in the headers: block comments nest, a line comment ends
+  only at a line feed (not at a lone CR or a U+2028), CRLF is a line break —
+  the proof file check reports Lean's reading, and a proof file whose header
+  vreact reads otherwise is rejected (`FaReportProofHiddenImport`,
+  `FaReportProofCRLF`, `FaReportProofHeaderForms`). A proof file's path names its
+  module (`proofs/a/b.lean` is `Proofs.a.b`), so every directory name and the
+  file name must be an identifier: `proofs/x.y.lean` would be `Proofs.x.y`,
+  which `import` loads from `proofs/x/y.lean`, and `proofs/my-lemmas.lean` names
+  no module — rejected (`FaReportProofDottedName`). When every importing
+  module can import them, the `ensures` theorems of the module's functions that
+  no other function or constant of the module uses are proved after the lemmas,
+  in `Posts.lean` (imported by the module's `View.lean` and the importing
+  modules' `Defs.lean`).
   Generated files set `autoImplicit false`, so a binder the translation failed to
   emit is a Lean error, never an auto-bound variable.
   For generic functions (§1.1), Lean checks that each call's type arguments and
@@ -939,7 +1332,10 @@ hook rules hold (static checks). For every function: its body is safe and its
   `vreact: …` (failed: the failure text and the goal) or `vreact:blocked …`
   (it depends on `sorry` from a failure elsewhere: its goal contains one, the
   proof found uses one — also through a definition it unfolded, or an
-  auxiliary lemma —, it failed on a goal that unfolds to a `hole()`, or Lean
+  auxiliary lemma —, it failed on a goal that unfolds to a `hole()` through
+  the definitions the automation unfolds — reducible ones, the `@[vreact_simp]`
+  ones (a component's `inv`, `pre` and `init`), and the `@opaque` constants
+  that an obligation inside a module-level fact unfolds —, or Lean
   hid the automation's error because it mentions such a `sorry`), and the goal
   is admitted with `sorry`. A blocked obligation is *not checked*: neither
   proved (a proof through the admitted proof of a false statement proves
@@ -949,7 +1345,8 @@ hook rules hold (static checks). For every function: its body is safe and its
   looks for the case that fails, as a diagnosis: the goal's cases (the branches
   of its `if`s and `switch`es, named as Lean's `split` names them, outermost
   first: `isTrue`/`isFalse` the branches of an `if`, also of a `switch` on a
-  number or a string, which is a chain of `if`s, one per body; `h_k` the k-th
+  number or a string, which is a chain of `if`s, one per group of labels sharing
+  a body, in the order written (`default`'s own labels too); `h_k` the k-th
   alternative of a `match`, and a `switch` on a union or an enum has one per
   `case` label in the order written, then one for the rest, `default` wherever
   it is written; conditions in the translation, such as the sign test of `%`,
@@ -1068,8 +1465,20 @@ hook rules hold (static checks). For every function: its body is safe and its
   with an error makes every obligation of its item unproved; when Lean still
   reports clean axioms for its name, something else (e.g. a declaration of a
   user proof) stands in for it, so every item that uses it, directly or not, is
-  `INCOMPLETE` as well. An axiom that is neither Lean's standard ones, nor
-  `VReact.assumed`, nor emitted for a `@trusted` declaration (e.g. one declared
+  `INCOMPLETE` as well. Declarations and axioms are attributed to items by
+  identity, never by a name prefix: an item's declarations are among those its
+  own module generates (no other module generates the same name, §5), and its
+  own `@trusted` axioms are exactly those emitted for its `@trusted` declaration
+  (for a certificate, its root component's) — a module nested in an item's
+  namespace (`src/M/f.ts`, `VTS.M.f`, below a function `f` of `src/M.ts`; or
+  `src/M/Comp.ts` below a component `Comp`) keeps its holes, errors and
+  `@trusted` axioms, which are then dependencies (`VERIFIED*`), not the item's
+  own (`FaReportNestedTrusted`, `FaReportNestedHole`). Names are compared as
+  Lean names, not as text: the translator writes a non-ASCII name escaped
+  (`VTS.m.«gα»`), Lean prints it as its parser needs it (`VTS.m.gα`), and both
+  are the same `@trusted` axiom (`FaReportGreekTrusted`). An axiom that is neither
+  Lean's standard ones, nor `VReact.assumed`, nor emitted for a `@trusted`
+  declaration (e.g. one declared
   in a user proof, which the kernel re-check below also reports as an error that
   breaks every module importing it) makes the items that depend on it `TRUSTED` (the verdict
   says "modulo axioms from outside the translation"), except an axiom of native
@@ -1094,8 +1503,11 @@ hook rules hold (static checks). For every function: its body is safe and its
   module with a declaration that uses `VReact.assumed` directly, which breaks every
   module importing it — `GxAssumeInProofs`.)
 * **User proofs** (`proofs/**/*.lean`, `proofs/Base.lean`) are imported into
-  generated files, so whatever they declare takes effect while the translation is
-  checked. Before Lean runs, `vreact` checks every proof file against a whitelist
+  generated files (every one of them: a proof file that no generated module
+  imports, directly or through other proof files — by the imports Lean reads in
+  the headers —, or whose path is not a module name, is rejected, §5), so whatever
+  they declare takes effect while the translation is checked. Before Lean
+  runs, `vreact` checks every proof file against a whitelist
   (`lean/ProofCheck.lean`, the `vreact-proofcheck` program of the library): it
   parses the file with Lean's own parser, in exactly the environment the file is
   elaborated in — `Init` + `VReact` when its imports reach `VReact` or a generated
@@ -1107,7 +1519,10 @@ hook rules hold (static checks). For every function: its body is safe and its
   as a string) —, rejects a file that does not parse completely, and accepts
   only: plain `import`s of `VTS.…` (generated modules), `Proofs.…` (other proof
   files, which must exist, without a cycle), `VReact` (the whole library, not a
-  part such as `VReact.JS`) and `Init` (not a part such as `Init.Core`);
+  part such as `VReact.JS`) and `Init` (not a part such as `Init.Core`) — the
+  check also hands `vreact` each file's imports as the parser read them, which is
+  how `vreact` knows them (for the import cycles through `proofs/Base.lean` and
+  the upstream lemma files, above, and for the build records), never from the text;
   `theorem`, `def`, `abbrev`, `example` (modifiers: doc
   comment, the attributes below, `private`, `protected`, `noncomputable`,
   `nonrec`) declared outside the namespaces `VTS` and `VReact` and not named like a
@@ -1160,15 +1575,31 @@ hook rules hold (static checks). For every function: its body is safe and its
   `declare …`, `declare global`, `declare module`, namespaces and a project file
   in the program that is not a VTS source (a `.d.ts` reached by `/// <reference
   path>`, tsconfig `typeRoots`/`types`/`paths`) are rejected, as is
-  `/// <reference no-default-lib="true"/>`. What JSX means is configured as
+  `/// <reference no-default-lib="true"/>` (TypeScript takes any declaration file
+  carrying it for its standard library; vreact takes only the files in TypeScript's own
+  lib directory as the standard library, so such a project file is rejected as a
+  project file in the program). What JSX means is configured as
   well: only `"jsx": "react-jsx"` (React 18's automatic runtime) is accepted — no
   other `jsxImportSource`, no `@jsx…` pragmas (in any comment and any letter
   case: esbuild and Babel read them anywhere in a file, TypeScript in its leading
-  comments with the name lower-cased), no `tsconfig.json` inside the source
-  directories (the bundler compiles a file with the settings of the tsconfig.json
-  nearest to it). A project without a tsconfig.json is checked with vreact's
-  defaults, and the bundler is trusted to compile it the same way (Vite reads the
-  nearest tsconfig.json above the project, if any).
+  comments with the name lower-cased). The bundler compiles a file with the
+  settings of the tsconfig.json nearest to it (Vite: looked for from the file's
+  real directory up to the root of the file system, none inside `node_modules`),
+  so for every source that must be the project's own tsconfig.json — a
+  `tsconfig.json` inside the source directories, or next to a source outside the
+  project, is rejected; a project without a tsconfig.json is checked with vreact's
+  defaults, and rejected when a tsconfig.json above it exists (the bundler would
+  compile its files with that one). A solution-style tsconfig.json (`"references"`,
+  as in Vite's react-ts template) is rejected: Vite compiles a file it does not
+  include with the referenced tsconfig that does (`tsconfig.app.json`), which
+  vreact does not read. Vite also merges in the tsconfig files `"extends"` names,
+  resolving each path as Node's `require.resolve` does from the extending file
+  (the path, then with `.js`, `.json`, `.node` added; tsconfck), where TypeScript
+  tries the path, then with `.json` added: each `"extends"` path is resolved both
+  ways (also through symbolic links, from the real path and from the path itself)
+  and must lead to the same file at every step (`"./base"` with a `base.js` next
+  to `base.json` is rejected); a package name (`"@tsconfig/…"`, looked for in
+  `node_modules` by two different algorithms) is rejected.
 * **TypeScript's checker.** VTS relies on the program type-checking without
   errors (null and undefined, the types of library and React declarations,
   imports): `@ts-ignore`, `@ts-expect-error` and `@ts-nocheck` are rejected
@@ -1203,7 +1634,27 @@ hook rules hold (static checks). For every function: its body is safe and its
   `imports` — would make them differ, and so would a `b.js` next to `b.ts` for
   `"./b"`); `react`, `vreact/spec` and the `react/jsx-runtime` of JSX must
   resolve to the installed packages' declarations, and to the same files
-  without those settings.
+  without those settings. Vite gives every module the id of its real path
+  (`resolve.preserveSymlinks` is false) and resolves its relative imports from
+  there, and it reads everything from the first `?` or `#` of a path as a URL
+  query or hash (`./limits#v2` is `./limits`); its dev server serves a module at
+  the URL of its path, which the server percent-decodes (`limits%61.ts` is served
+  as `limitsa.ts`) and the browser's URL parser changes (`\` becomes `/`, tabs
+  and line breaks are dropped): so the sources must be inside the project
+  directory, with no symbolic link below it on their path (a link in the source
+  directory, to a file or a directory, is rejected), and neither a source's real
+  path nor an import path may contain `?`, `#`, `%`, `\`, a tab or a line break.
+  Vite also maps the imports of a module (relative ones, and `react`) through an
+  object `"browser"` field of the nearest package.json it can load — skipping one
+  that is not JSON, starts with a byte order mark, is `null` or has a
+  `"sideEffects"` list it cannot read —: such a field in any package.json from a
+  source's directory up to the root of the file system is rejected. The
+  sources are the `.ts`/`.tsx` files of `"src"` (vreact.json), except declaration
+  files, tests (a name containing `.test.` or `.spec.`), files in `node_modules`
+  or in a directory whose name starts with `.`, and those listed in `"exclude"`
+  — or exactly the files listed in `"include"` (`.ts`/`.tsx` sources only); a verified file that imports one
+  of the skipped files is rejected (saying why it was skipped). A skipped file
+  that nothing imports is not checked and not mentioned in the report.
 * **The JS runtime model** (`JS.lean`, `JSMap.lean`): e.g. that `Array.prototype.slice` behaves
   like `JS.slice`, and that a JS `Map`/`Set` with keys of the admitted types behaves like
   `JS.JSMap`/`JS.JSSet` (insertion order, SameValueZero as Lean equality on those types). Definitions follow ECMA-262 directly; where ECMA-262 leaves a
@@ -1214,7 +1665,14 @@ hook rules hold (static checks). For every function: its body is safe and its
   position/key/type), and the event table of `component.ts` (React handler prop
   → native events → priority), which mirrors react-dom 18.3.1's event plugins
   and `getEventPriority`. Rebasing is covered by the argument of §2.2 (with
-  `Runtime.rebase_safe`), not by `dispatch`.
+  `Runtime.rebase_safe`), not by `dispatch`. **The app must mount its components
+  with `createRoot` (or `hydrateRoot`)**, React 18's concurrent root, in `main.tsx`,
+  which VTS does not check: §2.2's batching (a timer's or an effect's updates are
+  applied together, then rendered) is that root's automatic batching. Under a legacy
+  root (`ReactDOM.render`/`ReactDOM.hydrate`, which React 18 still runs, "as if it's
+  running React 17") every update outside a React event handler renders at once, so a
+  timer that calls two setters renders the state between them, which the
+  certificate does not cover.
 * **Abstractions:** integers are unbounded, and an `int` is a mathematical
   integer; values are JS values up to the sign of zero, which no accepted
   operation observes (a division needs a divisor that is not zero, §1.2);
@@ -1241,8 +1699,12 @@ hook rules hold (static checks). For every function: its body is safe and its
   configuration of its own, e.g. a classic-runtime preset, is not checked).
 * **DOM event fields:** which elements have a string `value` (`<input>`,
   `<select>`, `<textarea>`, `<button>`, `<option>`, `<output>`, `<data>`) and a
-  boolean `checked` (`<input>`), that nothing inside an `<input>`, a `<textarea>`
-  or (for `change`/`input`) a `<select>` is an event target, and that React 18.3.1
+  boolean `checked` (`<input>`), that nothing inside an `<input>` or a
+  `<textarea>` is an event target, that react-dom 18.3.1's ChangeEventPlugin makes
+  an `onChange` for a `<select>` from a `change` event at the select itself and
+  never for an event at an `<option>` or `<optgroup>` (`shouldUseChangeEvent`,
+  `isTextInputElement`, `shouldUseClickEvent`: VTS enforces that a select holds
+  nothing else, §1.2), and that React 18.3.1
   gives `e.currentTarget` the handler's element and `e.key` a string in keyboard
   handlers (HTML standard; react-dom `executeDispatch`, `getEventTarget`,
   `getEventKey`) — not TypeScript's bivariant handler types. These are HTML
@@ -1258,10 +1720,72 @@ hook rules hold (static checks). For every function: its body is safe and its
   particular what a link, an `<iframe>`, `<object>` or `<embed>` loads is assumed
   not to run script in this page — a `javascript:` URL built at run time, or a
   same-origin frame, could change the DOM React manages.
-* **Outside the subset:** the entry point (`main.tsx`), React itself, the DOM,
-  CSS. No other script, browser extension or user edit changes the DOM React
-  manages (the user cannot: `contentEditable` is rejected; an extension that
-  rewrites text nodes, e.g. a page translator, makes React's updates throw).
+  `name` and `id` have one: HTML's named access. A form (HTMLFormElement is
+  `[LegacyOverrideBuiltIns]`) answers `form.x` with the control (a listed element:
+  `<input>` other than an image button, `<button>`, `<select>`, `<textarea>`,
+  `<output>`, `<fieldset>`, `<object>`) or `<img>` that belongs to it — inside it, or
+  naming it with `form=…` — with name or id `x`, before any property of the form, and
+  keeps answering with it under a name it once had (its past names map). The document
+  does the same with the names of `<iframe>` (its window), `<form>`, `<embed>`, `<img>`
+  and `<object>` and the ids of `<object>` and of an `<img>` with a name. react-dom
+  reads properties of forms and of the document (`form.parentNode` while restoring a
+  radio group, which then loops forever, Chromium 152; `form.appendChild`/`removeChild`
+  in its commit, `document.createElement` for every new element, which then throw;
+  `nodeName` in its event plugins; `correspondingUseElement` on every event's target;
+  `document.activeElement` in every commit), so §1.2 rejects, on these elements, every
+  `name`/`id` value that may be a reserved name (`src/domNames.ts`). Of the property
+  names along the prototype chains of a form and of the document (Chromium 152's, the
+  members TypeScript's lib.dom.d.ts declares, Firefox's non-standard ones), those
+  react, react-dom and scheduler 18.3.1 access at all, on any object (`x.n`,
+  `x["n"]`, `"n" in x`, in any of their builds: `parentNode`, `removeChild`,
+  `createElement`, `nodeType`, `length`, …) are reserved, but for the ones they read
+  only on other objects (`name`, `id`, `action`, `target`, `children`, `clear`,
+  `implementation`, and `location`, read on a window, where no element can shadow
+  it); `body`, read on the document only, is reserved there only; `title`, which VTS
+  code writes on the document (`document.title = …`), is reserved there. The other
+  names (`title` and `body` on forms, `method`, `submit`, `reset`, `lang`, `role`,
+  `elements`, `cookie`, …) occur in the bundle at most as strings no code uses as a
+  property key of a DOM node, or in comments: react-dom computes property keys on DOM
+  nodes only for its expandos, an `<input>`'s `value`/`checked`, vendor-prefixed
+  style names and `checked`/`multiple`/`muted`/`selected`, which it writes on an
+  element given that prop — @types/react allows none of them on a `<form>`. VTS code
+  reads no property of a form or the document. Also reserved: the patterns `on…`,
+  vendor prefixes, `aria…`, every name starting with `_` (React's expandos on DOM
+  nodes: `__reactFiber$…`, `_valueTracker`, `_wrapperState`, …; with a control of
+  such a name, defining the expando on the form throws), and the names react-dom
+  reads on a node that may be a form or the document that browsers do not define
+  there (`correspondingUseElement`, `parentWindow`, `window`, `document`,
+  `documentMode`, `attachEvent`, `detachEvent`, `value`, `type`, `data`, `checked`).
+  That list is the trusted part: react-dom's other property reads are on fibers,
+  events, its own objects, or nodes it picked by tag (an `<input>`'s `value`, a
+  `<select>`'s `options`), which have no named getter; its writes on a form reach the
+  setters of the prototypes past a named property (Chromium 152: `form.className = …`
+  with a control named className sets the attribute), but for a new expando, whose
+  names start with `_`, and it writes no property of the document after `createRoot`
+  (Chromium 152 silently drops a write to a document property an element shadows:
+  `document.title = …` with a `<form name="title">`, `FaDomClobberDocTitle`). The
+  window (no `[LegacyOverrideBuiltIns]`) answers `window.x` with an element of id
+  `x` (or name, for `<embed>`, `<form>`, `<iframe>`, `<img>`, `<object>`) only when
+  the window defines no property `x`; the app bundle reads such globals only in
+  react-dom's event plugins, which use the window as the target node of an event
+  with no target fiber (`window.nodeName.toLowerCase()` throws there, and the
+  event's handlers do not run), and in its development build's test flags
+  (`IS_REACT_ACT_ENVIRONMENT`, `jest`: warnings only). A written id naming one of
+  them, or starting with `_`, is rejected; **a computed `id` of an element that only
+  the window exposes is not checked**: it is assumed not to be `nodeName`,
+  `contentEditable`, `type`, `correspondingUseElement`, `IS_REACT_ACT_ENVIRONMENT`,
+  `jest`, `MSApp` or a name starting with `_` (e.g. text the user typed).
+  vreact/spec's runtime (`spec/index.js`, in the bundle) is no-ops outside
+  `vreact synth`, which installs its test hook under a symbol key of the global
+  object (`Symbol.for("vreact.spec.test")`): no element can define it, and the
+  runtime ignores anything there but a plain object with an array `posts`. (It
+  read `globalThis.__VREACT_TEST__`, which an element with that id defined, and
+  every `ensures` threw: `FaDomTestHookId`.)
+* **Outside the subset:** the entry point (`main.tsx`: it must use `createRoot` or
+  `hydrateRoot`, see "The React model"), React itself, the DOM, CSS. No other
+  script, browser extension or user edit changes the DOM React manages (the user
+  cannot: `contentEditable` is rejected; an extension that rewrites text nodes, e.g.
+  a page translator, makes React's updates throw).
 * **Event bubbling, multi-handler events and activation behaviour** are handled
   by a static restriction rather than modelled: the runtime runs one handler per
   event, and VTS rejects every layout in which one event — one native dispatch
@@ -1326,7 +1850,11 @@ hook rules hold (static checks). For every function: its body is safe and its
   inside other batches (label activation focuses the control; `autoFocus`
   focuses during React's commit; validation on submit), have robust handlers
   (§2.2), and robust handlers cannot call parents, so several of them in one
-  batch compose with each other and with the one discrete handler. `onSelect`
+  batch compose with each other and with the one discrete handler; those of an
+  `autoFocus` element and of the elements around one may not update state, unless
+  no later render of their component mounts an `autoFocus` element (§2.2: React
+  commits their updates at once, inside the commit, and a chain of such commits can
+  end in "Maximum update depth exceeded"). `onSelect`
   and capture-phase handlers are rejected; unknown handler names are rejected,
   never discrete.
 
@@ -1361,3 +1889,9 @@ random inputs come from a seeded generator, one per hole (its seed made from the
 run's seed, `--seed N`, default 1, the function's name and the hole's position), so
 a run tests the same inputs whatever order the holes are searched in, and two runs
 say the same up to the 60 s time limits; the seed, too, only steers the search.
+The tests run the function's own `requires` and `ensures` as JS does (a throw in an
+`ensures` fails the candidate), except that an `implies(a, b)` an `ensures` lambda
+reads as a proposition (its body, under `!`, `&&`, `||`, `?:`, `implies` and in
+quantifier bodies) is evaluated as `!a || b`: `b` only where `a` holds, as the
+prover reads it there (§1.3); vreact/spec's `implies` would evaluate `b` also where
+`a` fails (`xs[0].v` of `[]` throws) and fail every candidate.

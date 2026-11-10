@@ -15,10 +15,28 @@
  * one (a file `NO_TSCONFIG` means none); the header of its first source file applies. Files in
  * `smuggled/` replace the proof files of the same name in the generated project after the
  * translation (a proof the whitelist would reject: the report must stay honest regardless).
+ * A case whose header is `// expect: synth …` runs `vreact synth` on its (first) source file, in
+ * its own project, instead of verifying it (see `synthCase` for its tokens).
+ *
+ * Symbolic links in a case are copied as links (their targets verbatim). A file `ISOLATED` puts
+ * the case's project in a directory of the system's temporary directory, with no tsconfig.json
+ * above it (vreact rejects a project without one of its own whose files the bundler would compile
+ * with one above it, as vreact/tsconfig.json is above tests/.work) and a node_modules/ of links
+ * to vreact, react and @types/react. A file `VIA_LINK` (with `ISOLATED`) makes the project at
+ * `<dir>/real/app`, copies the case's `_above/` to `<dir>/real/` (the directory above the
+ * project's real location), and runs vreact on the project through the symbolic link `<dir>/app`
+ * (the bundler finds files from a module's real path). A `reject` case is also met by an error of
+ * vreact.json (loadConfig), with the message of that error.
+ *
+ * A file `RUNTIME.mjs` in a directory case checks what the app bundle runs: once the report meets
+ * the expectations it runs as `node RUNTIME.mjs <vreact's spec/index.js> <the case's project>`
+ * and must exit with status 0.
  */
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import ts from "typescript";
 import { loadConfig, verify, reportFrom, CAUSE_LABEL, type Report } from "../src/cli.ts";
@@ -26,6 +44,7 @@ import { translate, moduleNs } from "../src/module.ts";
 import { parseMessages, judge, findMarkers, leanDecls, leanBin, runLake, summarizeLeanError } from "../src/lean.ts";
 import { editorProject, LAKEFILE_MARKER } from "../src/ide.ts";
 import { argText, nodeText, exprText } from "../src/util.ts";
+import { synthCommand, type SynthResult } from "../src/synth.ts";
 import { honestyChecks } from "./honesty.ts";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -76,7 +95,7 @@ for (const c of cases.filter((c) => c.expect[0] === "reject")) {
 
 // verified / fail cases: one Lean build
 console.log("semantic cases (Lean)");
-const sem = cases.filter((c) => c.expect[0] !== "reject");
+const sem = cases.filter((c) => c.expect[0] !== "reject" && c.expect[0] !== "synth");
 const dir = path.join(work, "semantic");
 project(dir, sem.map((c) => c.file));
 const r = sem.length || !only.length ? verify(loadConfig(dir), { json: true }) : null;
@@ -240,10 +259,12 @@ console.log("message attribution (judge)");
   const ob = (id: number) => ({ id, kind: "k", desc: `ob${id}`, where: `src/m.ts:${id}:1`, file: "m.ts", line: id });
   const v = judge(ids.map(ob), msgs, findMarkers(out), out);
   const st = (id: number) => (v.failed.some((f) => f.ob.id === id) ? "failed" : v.unchecked.some((u) => u.id === id) ? "unchecked" : "proved");
-  const want: Record<number, string> = { 1: "failed", 2: "unchecked", 3: "unchecked", 4: "unchecked", 5: "proved", 6: "failed", 7: "unchecked", 8: "proved" };
+  // ob1: an error of its declaration at no marker (a timeout at the declaration's start) is the
+  // declaration's, not a failure of its only obligation (round-2 finding lean-r2-1)
+  const want: Record<number, string> = { 1: "unchecked", 2: "unchecked", 3: "unchecked", 4: "unchecked", 5: "proved", 6: "failed", 7: "unchecked", 8: "proved" };
   const got = Object.fromEntries(ids.map((i) => [i, st(i)]));
   const causes = v.internal.map((i) => i.cause).join(",");
-  if (JSON.stringify(got) === JSON.stringify(want)) ok("judge: decl-level timeout fails its only obligation; a broken declaration's obligations, an unelaborated file's and one without `vreact:ok` are not proved; a failure beats a forged `vreact:ok`");
+  if (JSON.stringify(got) === JSON.stringify(want)) ok("judge: a decl-level error (a timeout) leaves its only obligation unchecked, never failed; a broken declaration's obligations, an unelaborated file's and one without `vreact:ok` are not proved; a failure beats a forged `vreact:ok`");
   else bad("judge attribution", `expected ${JSON.stringify(want)}, got ${JSON.stringify(got)}`);
   const f6 = v.failed.find((f) => f.ob.id === 6)?.message;
   if (f6 === "`grind` failed\n⊢ False") ok("judge: a `vreact_ob` failure shows Lean's text and goal");
@@ -423,6 +444,105 @@ console.log("message attribution (judge)");
   else bad("leanDecls keywords", `expected ${want}, got ${got}`);
 }
 
+/**
+ * `// expect: synth <token…>`: `vreact synth` on the case's source file `file` (in project `dir`).
+ * Tokens: `write` (--write), `size=N` (the largest candidate size), `seconds=N` (the search time
+ * of one hole), `<Fn>=<fill>` (the proved fill of the first hole of function Fn; `<Fn>#k=<fill>`
+ * of its k-th; `-`: none proved), `<Fn>.status=<status>` (of each hole of Fn), `out=<text>` /
+ * `noout=<text>` (synth's output contains / does not contain the text), `written=<text>` /
+ * `absent=<text>` (the file's code, without its `//` comments, contains / does not contain it after
+ * the run), `unchanged` (the file is as before), `maxsecs=N` (the run took less than N seconds).
+ * `~` stands for a space.
+ */
+async function synthCase(name: string, dir: string, file: string, expect: string[]) {
+  const num = (k: string) => {
+    const t = expect.find((x) => x.startsWith(`${k}=`));
+    return t === undefined ? undefined : Number(t.slice(k.length + 1));
+  };
+  const seconds = num("seconds");
+  const opts = { write: expect.includes("write"), maxSize: num("size"), timeLimitMs: seconds === undefined ? undefined : seconds * 1000 };
+  const src = path.join(dir, "src", file);
+  const before = fs.readFileSync(src, "utf8");
+  const lines: string[] = [];
+  const log = console.log;
+  console.log = (...a: unknown[]) => void lines.push(a.join(" "));
+  let res: SynthResult[] = [];
+  const t0 = Date.now();
+  const exitCode = process.exitCode;
+  try {
+    res = await synthCommand(dir, [path.join("src", file)], opts);
+  } catch (e) {
+    lines.push(`synth threw: ${(e as Error).stack}`);
+  } finally {
+    console.log = log;
+    process.exitCode = exitCode;
+  }
+  const secs = (Date.now() - t0) / 1000;
+  const out = lines.join("\n");
+  const after = fs.readFileSync(src, "utf8");
+  const afterCode = after.replace(/\/\/.*$/gm, "");
+  const why: string[] = [];
+  if (out.includes("synth threw: ")) why.push(out.slice(out.indexOf("synth threw: ")));
+  for (const t of expect.slice(1)) {
+    const at = t.indexOf("=");
+    if (at < 0) {
+      if (t === "unchanged" && after !== before) why.push("the file was written");
+      else if (t !== "write" && t !== "unchanged") why.push(`unknown synth token ${t}`);
+      continue;
+    }
+    const [k, v0] = [t.slice(0, at), t.slice(at + 1)];
+    const v = v0.replace(/~/g, " ");
+    if (["size", "seconds"].includes(k)) continue;
+    if (k === "out" && !out.includes(v)) why.push(`expected the output to mention "${v}"`);
+    else if (k === "noout" && out.includes(v)) why.push(`expected the output not to mention "${v}"`);
+    else if (k === "written" && !afterCode.includes(v)) why.push(`expected the file to contain "${v}" after the run, got:\n${after}`);
+    else if (k === "absent" && afterCode.includes(v)) why.push(`expected the file not to contain "${v}" after the run, got:\n${after}`);
+    else if (k === "maxsecs" && !(secs < Number(v))) why.push(`expected the run to take less than ${v}s, it took ${secs.toFixed(0)}s`);
+    else if (k.endsWith(".status")) {
+      const rs = res.filter((r) => r.fn === k.slice(0, -7));
+      if (!rs.length || !rs.every((r) => r.status === v)) why.push(`${k}: expected ${v}, got ${rs.map((r) => r.status).join(", ") || "no result"}`);
+    } else if (!["out", "noout", "written", "absent", "maxsecs"].includes(k)) {
+      const m = /^(.*?)(?:#(\d+))?$/.exec(k)!;
+      const r = res.filter((x) => x.fn === m[1])[m[2] ? Number(m[2]) - 1 : 0];
+      const got = r?.proved ? r.solution : "-";
+      if (!r) why.push(`no result for ${k}`);
+      else if (got !== v) why.push(`${k}: expected ${v === "-" ? "no proved fill" : v}, got ${got === "-" ? `none (${r.status}: ${r.note ?? ""})` : got}`);
+    }
+  }
+  if (!why.length) ok(name, `synth: ${expect.slice(1).join(" ")}  (${secs.toFixed(0)}s)`);
+  else bad(name, `${why.join("; ")}\n--- synth output:\n${out}`);
+}
+
+// synth cases given as single files: each in its own project
+const synthFiles = cases.filter((c) => c.expect[0] === "synth");
+if (synthFiles.length) console.log("synthesis cases");
+for (const c of synthFiles) {
+  const d = path.join(work, c.name);
+  fs.rmSync(d, { recursive: true, force: true });
+  project(d, [c.file]);
+  await synthCase(c.name, d, c.file, c.expect);
+}
+
+/**
+ * The directory of the `ISOLATED` cases: in the system's temporary directory, with no tsconfig.json
+ * above it, and a node_modules/ of links to vreact, react and @types/react (the same libraries as in
+ * tests/.work). An error when the temporary directory has a tsconfig.json above it.
+ */
+function isolatedBase(): string | { error: string } {
+  // (one directory per checkout of the tool: suites of several checkouts may run at once)
+  const base = path.join(fs.realpathSync(os.tmpdir()), `vreact-tests-isolated-${createHash("sha256").update(here).digest("hex").slice(0, 12)}`);
+  const above = ts.findConfigFile(base, ts.sys.fileExists, "tsconfig.json");
+  if (above) return { error: `ISOLATED: ${above} is above the temporary directory ${base}; set TMPDIR to a directory without a tsconfig.json above it` };
+  const tool = path.join(here, "..");
+  const nm = path.join(base, "node_modules");
+  fs.rmSync(nm, { recursive: true, force: true });
+  fs.mkdirSync(path.join(nm, "@types"), { recursive: true });
+  fs.symlinkSync(tool, path.join(nm, "vreact"));
+  fs.symlinkSync(path.join(tool, "node_modules", "react"), path.join(nm, "react"));
+  fs.symlinkSync(path.join(tool, "node_modules", "@types", "react"), path.join(nm, "@types", "react"));
+  return base;
+}
+
 // directory cases: each is its own project
 const dirCases = fs.readdirSync(casesDir).filter((f) => fs.statSync(path.join(casesDir, f)).isDirectory() && selected(f)).sort();
 if (dirCases.length) console.log("multi-file cases (own project each)");
@@ -432,22 +552,59 @@ for (const name of dirCases) {
   const m = files.length ? /^\/\/ expect: (.*)$/.exec(fs.readFileSync(path.join(src, files[0]), "utf8").split("\n")[0]) : null;
   if (!m) throw new Error(`${name}/: its first source file needs a // expect: header`);
   const expect = m[1].trim().split(/\s+/);
-  const dir = path.join(work, name);
+  let dir = path.join(work, name);
+  if (fs.existsSync(path.join(src, "ISOLATED"))) {
+    const base = isolatedBase();
+    if (typeof base !== "string") {
+      bad(name, base.error);
+      continue;
+    }
+    dir = path.join(base, name);
+  }
+  // (`VIA_LINK`: the project is made at <dir>/real/app and reached through the link <dir>/app)
+  const linkBase = fs.existsSync(path.join(src, "VIA_LINK")) ? dir : null;
+  if (linkBase) {
+    fs.rmSync(linkBase, { recursive: true, force: true });
+    dir = path.join(linkBase, "real", "app");
+  }
   fs.rmSync(dir, { recursive: true, force: true });
   fs.mkdirSync(path.join(dir, "src"), { recursive: true });
-  for (const f of files) fs.copyFileSync(path.join(src, f), path.join(dir, "src", f));
-  // subdirectories other than proofs/, smuggled/ and _node_modules/ are source directories (nested
+  // (a symbolic link is copied as a link, its target verbatim)
+  const copy = (from: string, to: string) => {
+    if (fs.lstatSync(from).isSymbolicLink()) fs.symlinkSync(fs.readlinkSync(from), to);
+    else fs.cpSync(from, to, { recursive: true, verbatimSymlinks: true });
+  };
+  for (const f of files) copy(path.join(src, f), path.join(dir, "src", f));
+  // subdirectories other than proofs/, smuggled/, _node_modules/ and _above/ are source directories (nested
   // modules); _node_modules/ is the project's node_modules/ (installed libraries, e.g. type declarations)
-  for (const f of fs.readdirSync(src)) if (f !== "proofs" && f !== "smuggled" && f !== "_node_modules" && fs.statSync(path.join(src, f)).isDirectory()) fs.cpSync(path.join(src, f), path.join(dir, "src", f), { recursive: true });
+  for (const f of fs.readdirSync(src)) if (f !== "proofs" && f !== "smuggled" && f !== "_node_modules" && f !== "_above" && fs.statSync(path.join(src, f)).isDirectory()) copy(path.join(src, f), path.join(dir, "src", f));
   if (fs.existsSync(path.join(src, "_node_modules"))) fs.cpSync(path.join(src, "_node_modules"), path.join(dir, "node_modules"), { recursive: true });
   if (fs.existsSync(path.join(src, "proofs"))) fs.cpSync(path.join(src, "proofs"), path.join(dir, "proofs"), { recursive: true });
   if (fs.existsSync(path.join(src, "vreact.json"))) fs.copyFileSync(path.join(src, "vreact.json"), path.join(dir, "vreact.json"));
   if (fs.existsSync(path.join(src, "tsconfig.json"))) fs.copyFileSync(path.join(src, "tsconfig.json"), path.join(dir, "tsconfig.json"));
   else if (!fs.existsSync(path.join(src, "NO_TSCONFIG"))) fs.writeFileSync(path.join(dir, "tsconfig.json"), tsconfig);
+  if (linkBase) {
+    if (fs.existsSync(path.join(src, "_above"))) fs.cpSync(path.join(src, "_above"), path.join(linkBase, "real"), { recursive: true });
+    fs.symlinkSync(path.join("real", "app"), path.join(linkBase, "app"));
+    dir = path.join(linkBase, "app");
+  }
+  if (expect[0] === "synth") {
+    await synthCase(name, dir, files[0], expect);
+    continue;
+  }
   if (expect[0] === "reject") {
     // several expected messages are separated by ` ;; `; a message is also matched with its
     // location (`proofs/m.lean:4:1: …`, relative to the case's project)
-    const tr = translate(loadConfig(dir));
+    // (an error of vreact.json, from loadConfig, is a rejection too)
+    let cfg: ReturnType<typeof loadConfig> | null = null;
+    let cfgError = "";
+    try {
+      cfg = loadConfig(dir);
+    } catch (e) {
+      if (!(e instanceof Error)) throw e;
+      cfgError = e.message;
+    }
+    const tr = cfg ? translate(cfg) : { ok: false, tsDiagnostics: [`loadConfig: ${cfgError}`], errors: [] as { file: string; line: number; col: number; message: string }[] };
     const wants = expect.slice(1).join(" ").split(" ;; ");
     const msgs = [...tr.tsDiagnostics, ...tr.errors.map((e) => `${e.file ? path.relative(dir, e.file).split(path.sep).join("/") : "?"}:${e.line}:${e.col}: ${e.message}`)];
     const missing = wants.filter((w) => !msgs.some((x) => x.includes(w)));
@@ -494,6 +651,11 @@ for (const name of dirCases) {
     if (JSON.stringify(kinds) !== JSON.stringify(want)) why.push(`expected failures [${want.join(", ")}], got [${kinds.join(", ")}]`);
   }
   if (expect[0] === "status" && rr.failures.length) why.push(`unexpected failures: ${rr.failures.map((f) => f.where).join(", ")}`);
+  const runtime = path.join(src, "RUNTIME.mjs");
+  if (!why.length && fs.existsSync(runtime)) {
+    const p = spawnSync(process.execPath, [runtime, path.join(here, "..", "spec", "index.js"), dir], { encoding: "utf8" });
+    if (p.status !== 0) why.push(`RUNTIME.mjs failed (status ${p.status}): ${(p.stdout + p.stderr).trim().split("\n").slice(-6).join(" | ")}`);
+  }
   if (!why.length) ok(name, expect.join(" "));
   else bad(name, why.join("; "));
 }
@@ -517,7 +679,11 @@ if (r && !only.length) {
   const at = lines.findIndex((l) => /^\d+ obligation\(s\) not checked:$/.test(l));
   const listed = at < 0 ? [] : lines.slice(at + 1).filter((l, i, xs) => xs.slice(0, i + 1).every((x) => x.startsWith("  ")));
   const kinded = /^ {2}src\/\S+:\d+:\d+ \[[a-z-]+\](, src\/\S+:\d+:\d+ \[[a-z-]+\])*(, … \(\d+\))?: /;
-  if (listed.length && listed.every((l) => kinded.test(l)) && listed.some((l) => /ReducerActionPreLong\.tsx:\d+:\d+ \[callback\]/.test(l))) ok(`command line: the "not checked" lines (${listed.length}) name each obligation's kind`);
+  // (a line shows the first four obligations of its reason: when other cases sort before it,
+  // ReducerActionPreLong's callback is among the elided ones, `… (n)`, of its reason's line)
+  const witness = r.notChecked.find((u) => /^src\/ReducerActionPreLong\.tsx:\d+:\d+$/.test(u.where));
+  const witnessLine = !!witness && listed.some((l) => l.includes(`${witness.where} [callback]`) || (/, … \(\d+\): /.test(l) && l.endsWith(`: ${witness.reason}`)));
+  if (listed.length && listed.every((l) => kinded.test(l)) && witness?.kind === "callback" && witnessLine) ok(`command line: the "not checked" lines (${listed.length}) name each obligation's kind`);
   else bad("not checked lines", listed.slice(0, 3).join(" | ") || "(none)");
   const help = run(["--help"]);
   if (help.status !== 0 || !help.stdout.startsWith("usage:")) bad_.push(`vreact --help: exit ${help.status}`);

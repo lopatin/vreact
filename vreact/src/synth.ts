@@ -14,10 +14,12 @@
  *      deletion), with `m.get(k)`, `m.has(k)`, `.size`.
  *   3. Test each candidate by *running the real transpiled JavaScript* on random
  *      inputs: the function's own `requires` filters inputs, its own `ensures`
- *      must hold on the result (counterexample-driven pruning). Inputs that reach
+ *      must hold on the result (counterexample-driven pruning; an `implies(a, b)`
+ *      in an `ensures` evaluates `b` only where `a` holds, as the prover reads
+ *      it: `lazyImplies`). Inputs that reach
  *      another, still unfilled hole are skipped. The inputs come from a seeded
  *      generator (`--seed N`, default 1; one per hole), so a run is reproducible
- *      up to the time limits.
+ *      up to the time limits, which hold while a candidate runs (vm timeouts).
  *   4. Prove the survivors with Lean, in order. A candidate is reported "proved"
  *      only when Lean elaborated the function and all its postcondition theorems,
  *      no obligation of the function failed, and their axioms contain no sorry.
@@ -28,13 +30,16 @@
  *      early return) runs once and is reused whatever the earlier fills are, and
  *      a hole without survivors backjumps over the holes it does not depend on.
  *
+ * Holes are filled in code only: a hole inside a contract (`requires`, `ensures`,
+ * `assert`, …) is the specification the others are filled against, never filled.
  * The source file is never modified while searching: candidates are checked
  * from memory (`Config.overrides`). With `--write`, the proved fills are written
- * once at the end.
+ * once at the end: exactly the text Lean checked last.
  */
 import ts from "typescript";
 import fs from "node:fs";
 import path from "node:path";
+import vm from "node:vm";
 import { createRequire } from "node:module";
 import { pathToFileURL } from "node:url";
 import { loadConfig } from "./cli.ts";
@@ -72,6 +77,8 @@ interface Task {
   holes: Hole[];
   /** number of `ensures` of the function (each one is a postcondition theorem) */
   ensures: number;
+  /** holes inside the function's contract (`requires(hole<boolean>())`): never filled, the function is not searched */
+  contractHoles: { where: string; call: string; type: string }[];
 }
 
 type Edit = { at: [number, number]; text: string };
@@ -88,7 +95,17 @@ const MAX_LEAN_CHECKS_JOINT = 2;
 const MAX_TENTATIVE = 3;
 /** candidates sent to Lean untested when no generated input exercises the hole */
 const MAX_UNTESTED = 3;
+/** after this many candidates in a row that no input could test, the hole counts as one no input can test */
+const MAX_UNTESTABLE_RUN = 50;
+/** candidates whose tests were cut off (after passing some) held back for the ones whose tests finish */
+const MAX_CUT_HELD = 3;
 const STD_AXIOMS = new Set(["propext", "Classical.choice", "Quot.sound"]);
+/**
+ * The calls of vreact/spec whose argument is a contract, not code: a hole inside one is a
+ * placeholder of the specification synth fills holes against (filling it against that same
+ * contract is circular: `requires(false)` makes any body "proved"), so it is never filled.
+ */
+const CONTRACT_FNS = new Set(["requires", "ensures", "decreases", "invariant", "callbackRequires", "assert", "assume"]);
 const SPEC_RE = /^vreact\/spec$/;
 
 
@@ -97,6 +114,54 @@ const SPEC_RE = /^vreact\/spec$/;
 function applyEdits(src: string, edits: Edit[]): string {
   let out = src;
   for (const e of [...edits].sort((a, b) => b.at[0] - a.at[0])) out = out.slice(0, e.at[0]) + e.text + out.slice(e.at[1]);
+  return out;
+}
+
+/**
+ * Edits that make the tests read an own `ensures` lambda as the prover does. JS never calls that
+ * lambda (only the tests do), and the translator reads `implies(a, b)` in it as `∀ (h : a), b`
+ * (`Env.ghost`): `b` and its obligations only where `a` holds. vreact/spec's `implies` is a
+ * function, which would evaluate `b` also where `a` fails, so that a `b` throwing there (an index
+ * into an array of records, a `!`, `idiv`) would fail every candidate. Each such call becomes
+ * `(!(a) || (b))`, in the positions that `prop` reads as a proposition (the lambda's body, `!`,
+ * `&&`, `||`, `?:`, implies' arguments, the bodies of `forall`/`exists`/`every`/`some`); an
+ * `implies` anywhere else (a `filter` callback, an operand of `===`) is code, where the prover
+ * also evaluates both arguments, and stays a call.
+ */
+function lazyImplies(body: ts.Expression, sf: ts.SourceFile, specOf: (callee: ts.Expression) => string | null): Edit[] {
+  const K = ts.SyntaxKind;
+  const out: Edit[] = [];
+  const fnBody = (f: ts.Expression | undefined) => (f && (ts.isArrowFunction(f) || ts.isFunctionExpression(f)) && !ts.isBlock(f.body) ? (f.body as ts.Expression) : null);
+  const visit = (e0: ts.Expression): void => {
+    let e = e0;
+    while (ts.isParenthesizedExpression(e)) e = e.expression;
+    if (ts.isPrefixUnaryExpression(e) && e.operator === K.ExclamationToken) return visit(e.operand);
+    if (ts.isBinaryExpression(e) && (e.operatorToken.kind === K.AmpersandAmpersandToken || e.operatorToken.kind === K.BarBarToken)) {
+      visit(e.left);
+      return visit(e.right);
+    }
+    if (ts.isConditionalExpression(e)) {
+      visit(e.condition);
+      visit(e.whenTrue);
+      return visit(e.whenFalse);
+    }
+    if (!ts.isCallExpression(e)) return;
+    const k = specOf(e.expression);
+    const args = e.arguments;
+    if (k === "implies" && args.length === 2) {
+      const [a, b] = args;
+      out.push({ at: [e.getStart(sf), a.getStart(sf)], text: "(!(" });
+      out.push({ at: [a.getEnd(), b.getStart(sf)], text: ") || (" });
+      out.push({ at: [b.getEnd(), e.getEnd()], text: "))" });
+      visit(a);
+      return visit(b);
+    }
+    const q = (k === "forall" || k === "exists") && args.length === 3 ? fnBody(args[2])
+      : !k && ts.isPropertyAccessExpression(e.expression) && ["every", "some"].includes(e.expression.name.text) && args.length === 1 ? fnBody(args[0])
+      : null;
+    if (q) visit(q);
+  };
+  visit(body);
   return out;
 }
 
@@ -109,6 +174,8 @@ function needsParens(hole: ts.CallExpression): boolean {
   if ((ts.isCallExpression(p) || ts.isNewExpression(p)) && p.arguments?.includes(hole)) return false;
   if (ts.isArrayLiteralExpression(p)) return false;
   if (ts.isConditionalExpression(p) && p.condition !== hole) return false;
+  // the whole condition of an `if`, a loop or a `switch`
+  if ((ts.isIfStatement(p) || ts.isWhileStatement(p) || ts.isDoStatement(p) || ts.isSwitchStatement(p)) && p.expression === hole) return false;
   return true;
 }
 
@@ -157,42 +224,98 @@ function isPropertyName(n: ts.Identifier): boolean {
   return false;
 }
 
-/** Drop `hole` from the vreact/spec import when the text no longer uses it (noUnusedLocals). */
-function dropUnusedHoleImport(text: string, fileName: string): string {
+/**
+ * The bindings a text declares that a fill can leave without a use: the names its imports bind
+ * (`hole` from vreact/spec, a type imported for a hole's type argument) and its own type aliases
+ * and interfaces that are not exported, each with whether the text uses it outside its own
+ * declaration (by symbol: not a field or property spelled like it, nor a local that shadows it).
+ */
+interface Binding {
+  key: string;
+  name: ts.Identifier;
+  decl: ts.Statement;
+  used: boolean;
+}
+
+function bindingsOf(text: string, fileName: string): { sf: ts.SourceFile; bindings: Binding[] } {
   const { sf, checker } = fileChecker(fileName, text);
+  const found: { key: string; name: ts.Identifier; decl: ts.Statement }[] = [];
   for (const st of sf.statements) {
-    if (!ts.isImportDeclaration(st) || !ts.isStringLiteral(st.moduleSpecifier) || !SPEC_RE.test(st.moduleSpecifier.text)) continue;
-    const nb = st.importClause?.namedBindings;
-    if (!nb || !ts.isNamedImports(nb) || st.importClause?.isTypeOnly) continue;
-    const els = nb.elements;
-    const i = els.findIndex((e) => (e.propertyName ?? e.name).text === "hole" && !e.isTypeOnly);
-    if (i < 0) continue;
-    const local = els[i].name.text;
-    // only references to the imported binding count: not a field or property spelled `hole`,
-    // nor a local (parameter, destructured name) that shadows it
-    const imported = checker.getSymbolAtLocation(els[i].name);
+    if (ts.isImportDeclaration(st) && ts.isStringLiteral(st.moduleSpecifier) && st.importClause) {
+      const from = st.moduleSpecifier.text;
+      const c = st.importClause;
+      if (c.name) found.push({ key: `import\u0000${from}\u0000${c.name.text}`, name: c.name, decl: st });
+      const nb = c.namedBindings;
+      if (nb && ts.isNamespaceImport(nb)) found.push({ key: `import\u0000${from}\u0000${nb.name.text}`, name: nb.name, decl: st });
+      if (nb && ts.isNamedImports(nb)) for (const e of nb.elements) found.push({ key: `import\u0000${from}\u0000${e.name.text}`, name: e.name, decl: st });
+    } else if ((ts.isTypeAliasDeclaration(st) || ts.isInterfaceDeclaration(st)) && !st.modifiers?.some((m) => m.kind === ts.SyntaxKind.ExportKeyword || m.kind === ts.SyntaxKind.DefaultKeyword || m.kind === ts.SyntaxKind.DeclareKeyword)) {
+      found.push({ key: `type\u0000${st.name.text}`, name: st.name, decl: st });
+    }
+  }
+  const bindings = found.map((b) => {
+    const sym = checker.getSymbolAtLocation(b.name);
     let used = false;
     const visit = (n: ts.Node) => {
-      if (used || n === st) return;
-      if (ts.isIdentifier(n) && n.text === local && !isPropertyName(n)) {
+      if (used || n === b.decl) return;
+      if (ts.isIdentifier(n) && n.text === b.name.text && !isPropertyName(n)) {
         const p = n.parent;
-        const s = ts.isShorthandPropertyAssignment(p) && p.name === n ? checker.getShorthandAssignmentValueSymbol(p) : checker.getSymbolAtLocation(n);
-        // (no symbol at all: keep the import, to be safe)
-        if (!imported || !s || s === imported) used = true;
+        // (an export specifier, or no symbol at all: kept, to be safe)
+        const s = ts.isExportSpecifier(p) ? undefined : ts.isShorthandPropertyAssignment(p) && p.name === n ? checker.getShorthandAssignmentValueSymbol(p) : checker.getSymbolAtLocation(n);
+        if (!sym || !s || s === sym) used = true;
       }
       ts.forEachChild(n, visit);
     };
     ts.forEachChild(sf, visit);
-    if (used) return text;
-    if (els.length === 1 && !st.importClause!.name) {
-      // the whole import goes (with its line break)
-      let end = st.getEnd();
-      if (text[end] === "\r") end++;
-      if (text[end] === "\n") end++;
-      return text.slice(0, st.getStart(sf)) + text.slice(end);
+    return { ...b, used };
+  });
+  return { sf, bindings };
+}
+
+/** Delete statement `st` with its JSDoc and its line break. */
+function statementCut(text: string, sf: ts.SourceFile, st: ts.Statement): Edit {
+  let end = st.getEnd();
+  if (text[end] === "\r") end++;
+  if (text[end] === "\n") end++;
+  return { at: [st.getStart(sf, true), end], text: "" };
+}
+
+/**
+ * After the fills (noUnusedLocals): drop each binding the original text used and the filled text
+ * no longer uses — the `hole` import, and an import or a type of the file's own (not exported)
+ * whose only uses were in replaced `hole<T>()` calls — until none is left. A binding the user left
+ * unused stays. The uses a fill removes are all type arguments of `hole`, so the module's
+ * JavaScript stays the same (TypeScript emits no import that only types use).
+ */
+function dropUnusedAfterFill(text: string, fileName: string, usedInBase: (key: string) => boolean): string {
+  for (let round = 0; round < 20; round++) {
+    const { sf, bindings } = bindingsOf(text, fileName);
+    const gone = new Set(bindings.filter((b) => !b.used && usedInBase(b.key)).map((b) => b.name));
+    if (!gone.size) return text;
+    const edits: Edit[] = [];
+    for (const st of sf.statements) {
+      if (ts.isImportDeclaration(st) && st.importClause) {
+        const c = st.importClause;
+        const nb = c.namedBindings;
+        const names = [c.name, ...(nb && ts.isNamespaceImport(nb) ? [nb.name] : []), ...(nb && ts.isNamedImports(nb) ? nb.elements.map((e) => e.name) : [])].filter((x): x is ts.Identifier => !!x);
+        if (!names.some((x) => gone.has(x))) continue;
+        const keepDefault = !!c.name && !gone.has(c.name);
+        const keptNamed = nb && ts.isNamedImports(nb) ? nb.elements.filter((e) => !gone.has(e.name)) : [];
+        const keepNs = !!nb && ts.isNamespaceImport(nb) && !gone.has(nb.name);
+        if (!keepDefault && !keptNamed.length && !keepNs) {
+          edits.push(statementCut(text, sf, st)); // the whole import goes
+          continue;
+        }
+        if (nb && ts.isNamedImports(nb) && keptNamed.length < nb.elements.length) {
+          if (keptNamed.length) edits.push({ at: [nb.getStart(sf), nb.getEnd()], text: `{ ${keptNamed.map((e) => e.getText(sf)).join(", ")} }` });
+          else edits.push({ at: [c.name!.getEnd(), nb.getEnd()], text: "" }); // `X, { a }` → `X`
+        }
+        if (nb && ts.isNamespaceImport(nb) && !keepNs) edits.push({ at: [c.name!.getEnd(), nb.getEnd()], text: "" }); // `X, * as N` → `X`
+        if (c.name && !keepDefault) edits.push({ at: [c.name.getStart(sf), nb!.getStart(sf)], text: "" }); // `X, { a }` → `{ a }`
+      } else if ((ts.isTypeAliasDeclaration(st) || ts.isInterfaceDeclaration(st)) && gone.has(st.name)) {
+        edits.push(statementCut(text, sf, st));
+      }
     }
-    const [a, b] = i < els.length - 1 ? [els[i].getStart(sf), els[i + 1].getStart(sf)] : [els[i - 1].getEnd(), els[i].getEnd()];
-    return text.slice(0, a) + text.slice(b);
+    text = applyEdits(text, edits);
   }
   return text;
 }
@@ -317,6 +440,11 @@ function narrowingAtHoles(holeEnvs: HoleEnv[]): Map<string, Narrow> {
   return out;
 }
 
+/** A field read as `o.f`: its name is an identifier name (a field such as "my-field" has no such read in VTS, which rejects `o["my-field"]`). */
+const isIdentName = (f: string) => /^[\p{ID_Start}$_][\p{ID_Continue}$\u200C\u200D]*$/u.test(f);
+/** The key of a field in an object literal: `f`, or `"my-field"`. */
+const propKey = (f: string) => (isIdentName(f) ? f : JSON.stringify(f));
+
 function holeScope(narrowed: Narrow, prog: Program, params: Map<string, VType>): Atom[] {
   const reg = prog.reg;
   // the fields of a value of type t (of a union: those its possible variants share)
@@ -337,11 +465,12 @@ function holeScope(narrowed: Narrow, prog: Program, params: Map<string, VType>):
     scope.push({ code: name, type: t, size: 1 });
     // one level of field access (two for records of records / narrowed variants)
     for (const f of fieldsOf(t, narrowed.get(name)?.variants)) {
+      if (!isIdentName(f.name)) continue;
       const p = `${name}.${f.name}`;
       const ft = narrowT(p, f.type);
       scope.push({ code: p, type: ft, size: 1 });
       if (ft.k === "rec" || (ft.k === "union" && narrowed.get(p)?.variants)) {
-        for (const g of fieldsOf(ft, narrowed.get(p)?.variants)) scope.push({ code: `${p}.${g.name}`, type: narrowT(`${p}.${g.name}`, g.type), size: 2 });
+        for (const g of fieldsOf(ft, narrowed.get(p)?.variants)) if (isIdentName(g.name)) scope.push({ code: `${p}.${g.name}`, type: narrowT(`${p}.${g.name}`, g.type), size: 2 });
       }
     }
   }
@@ -549,10 +678,16 @@ class Enumerator {
       this.bySize.set(k, tab);
     }
     if (tab[size] === undefined) {
-      const built = this.build(t, size);
       // bound the search space: keep the first MAX_TERMS terms of each type and size
-      if (built.length > MAX_TERMS) this.capped = true;
-      tab[size] = built.length > MAX_TERMS ? built.slice(0, MAX_TERMS) : built;
+      const built: Atom[] = [];
+      for (const a of this.build(t, size)) {
+        if (built.length === MAX_TERMS) {
+          this.capped = true;
+          break;
+        }
+        built.push(a);
+      }
+      tab[size] = built;
     }
     return tab[size];
   }
@@ -587,86 +722,71 @@ class Enumerator {
         return [];
     }
   }
-  build(t: VType, size: number): Atom[] {
+  /**
+   * The terms of type t and size `size`, lazily (in a fixed order): the search tests them as they
+   * come, under its time limit, and a table keeps the first MAX_TERMS; nothing builds every
+   * combination of a wide literal or call first (their number grows exponentially with the fields).
+   */
+  *build(t: VType, size: number): Generator<Atom> {
     const reg = this.prog.reg;
-    const out: Atom[] = [];
-    const push = (code: string) => out.push({ code, type: t, size });
+    const mk = (code: string): Atom => ({ code, type: t, size });
     const same = (a: VType) => key(a) === key(t);
     if (size === 1) {
-      for (const a of this.scope) if (a.size === 1 && same(a.type)) push(a.code);
-      for (const l of this.literals(t)) push(l);
-      return out;
+      for (const a of this.scope) if (a.size === 1 && same(a.type)) yield mk(a.code);
+      for (const l of this.literals(t)) yield mk(l);
+      return;
     }
-    if (size === 2) for (const a of this.scope) if (a.size === 2 && same(a.type)) push(a.code);
+    if (size === 2) for (const a of this.scope) if (a.size === 2 && same(a.type)) yield mk(a.code);
     // calls of helper functions of the module: f(a1, …, an)
     for (const h of this.helpers) {
       if (!same(h.ret) || h.params.length === 0 || size - 1 < h.params.length) continue;
-      const sp = (n: number, parts: number): number[][] => {
-        if (parts === 1) return n >= 1 ? [[n]] : [];
-        const r: number[][] = [];
-        for (let i = 1; i <= n - parts + 1; i++) for (const rest of sp(n - i, parts - 1)) r.push([i, ...rest]);
-        return r;
-      };
-      for (const split of sp(size - 1, h.params.length)) {
-        let partial: string[][] = [[]];
-        for (let i = 0; i < h.params.length; i++) {
-          const opts = this.terms(h.params[i], split[i]).map((a) => a.code);
-          const next: string[][] = [];
-          for (const p of partial) for (const o of opts) next.push([...p, o]);
-          partial = next;
-          if (partial.length > 2000) break;
-        }
-        for (const args of partial) if (args.length === h.params.length) push(`${h.name}(${args.join(", ")})`);
+      for (const split of splits(size - 1, h.params.length)) {
+        const lists = this.parts(h.params, split, 2000, (_i, code) => code);
+        if (lists) for (const args of product(lists)) yield mk(`${h.name}(${args.join(", ")})`);
       }
     }
-    const splits = (n: number, parts: number): number[][] => {
-      if (parts === 1) return n >= 1 ? [[n]] : [];
-      const r: number[][] = [];
-      for (let i = 1; i <= n - parts + 1; i++) for (const rest of splits(n - i, parts - 1)) r.push([i, ...rest]);
-      return r;
-    };
     switch (t.k) {
       case "int": {
         for (const a of this.terms(T.int, size - 1)) {
-          push(`${a.code} + 1`);
-          push(`${a.code} - 1`);
+          yield mk(`${a.code} + 1`);
+          yield mk(`${a.code} - 1`);
         }
-        for (const [i, j] of splits(size - 1, 2)) for (const a of this.terms(T.int, i)) for (const b of this.terms(T.int, j)) if (a.code < b.code) push(`${a.code} + ${b.code}`);
-        for (const [tk, tt] of this.types) if (tt.k === "arr") for (const a of this.terms(tt, size - 1)) if (!a.code.includes("=>")) push(`${a.code}.length`);
-        for (const [, tt] of this.types) if (tt.k === "map" || tt.k === "set") for (const a of this.terms(tt, size - 1)) push(`${wrap(a.code)}.size`);
+        for (const [i, j] of splits(size - 1, 2)) for (const a of this.terms(T.int, i)) for (const b of this.terms(T.int, j)) if (a.code < b.code) yield mk(`${a.code} + ${b.code}`);
+        for (const [tk, tt] of this.types) if (tt.k === "arr") for (const a of this.terms(tt, size - 1)) if (!a.code.includes("=>")) yield mk(`${a.code}.length`);
+        for (const [, tt] of this.types) if (tt.k === "map" || tt.k === "set") for (const a of this.terms(tt, size - 1)) yield mk(`${wrap(a.code)}.size`);
         break;
       }
       case "bool": {
-        for (const a of this.terms(T.bool, size - 1)) push(`!${wrap(a.code)}`);
+        for (const a of this.terms(T.bool, size - 1)) yield mk(`!${wrap(a.code)}`);
         for (const [i, j] of splits(size - 1, 2)) {
           // (values of a type parameter: only under an equality constraint)
           const eqTVars = [...this.types.values()].filter((x) => x.k === "tvar" && x.eq);
           for (const pt of [T.int, T.str, ...eqTVars]) {
             for (const a of this.terms(pt, i)) for (const b of this.terms(pt, j)) {
               if (a.code === b.code) continue;
-              push(`${wrap(a.code)} === ${wrap(b.code)}`);
-              if (pt.k === "int") push(`${wrap(a.code)} < ${wrap(b.code)}`);
+              yield mk(`${wrap(a.code)} === ${wrap(b.code)}`);
+              if (pt.k === "int") yield mk(`${wrap(a.code)} < ${wrap(b.code)}`);
             }
           }
           // m.has(k), s.has(x)
           for (const [, tt] of this.types) {
             if (tt.k !== "map" && tt.k !== "set") continue;
-            for (const c of this.terms(tt, i)) for (const k of this.terms(tt.k === "map" ? tt.key : tt.elem, j)) push(`${wrap(c.code)}.has(${k.code})`);
+            for (const c of this.terms(tt, i)) for (const k of this.terms(tt.k === "map" ? tt.key : tt.elem, j)) yield mk(`${wrap(c.code)}.has(${k.code})`);
           }
         }
         break;
       }
       case "str": {
-        for (const a of this.terms(T.str, size - 1)) if (!a.code.endsWith(".trim()")) push(`${wrap(a.code)}.trim()`);
+        for (const a of this.terms(T.str, size - 1)) if (!a.code.endsWith(".trim()")) yield mk(`${wrap(a.code)}.trim()`);
         break;
       }
       case "opt": {
-        for (const a of this.terms(t.elem, size - 1)) push(a.code);
+        for (const a of this.terms(t.elem, size - 1)) yield mk(a.code);
         // m.get(k): undefined for a missing key
         if ((t as OptT).absent !== "null") {
           for (const [, tt] of this.types) {
             if (tt.k !== "map" || key(tt.val) !== key(t.elem)) continue;
-            for (const [i, j] of splits(size - 1, 2)) for (const m of this.terms(tt, i)) for (const k of this.terms(tt.key, j)) push(`${wrap(m.code)}.get(${k.code})`);
+            for (const [i, j] of splits(size - 1, 2)) for (const m of this.terms(tt, i)) for (const k of this.terms(tt.key, j)) yield mk(`${wrap(m.code)}.get(${k.code})`);
           }
         }
         break;
@@ -676,7 +796,7 @@ class Enumerator {
         for (const [i, j, l] of splits(size - 1, 3)) {
           for (const m of this.terms(t, i)) {
             if (m.code.startsWith("new Map()")) continue;
-            for (const k of this.terms(t.key, j)) for (const v of this.terms(t.val, l)) push(`new Map(${m.code}).set(${k.code}, ${v.code})`);
+            for (const k of this.terms(t.key, j)) for (const v of this.terms(t.val, l)) yield mk(`new Map(${m.code}).set(${k.code}, ${v.code})`);
           }
         }
         break;
@@ -686,7 +806,7 @@ class Enumerator {
         for (const [i, j] of splits(size - 1, 2)) {
           for (const s of this.terms(t, i)) {
             if (s.code.startsWith("new Set()")) continue;
-            for (const x of this.terms(t.elem, j)) push(`new Set(${s.code}).add(${x.code})`);
+            for (const x of this.terms(t.elem, j)) yield mk(`new Set(${s.code}).add(${x.code})`);
           }
         }
         break;
@@ -700,7 +820,7 @@ class Enumerator {
             for (const f of fields) {
               for (const e of this.terms(f.type, j)) {
                 if (e.code === `${v.code}.${f.name}`) continue;
-                push(`{ ...${v.code}, ${f.name}: ${e.code} }`);
+                yield mk(`{ ...${v.code}, ${propKey(f.name)}: ${e.code} }`);
               }
             }
           }
@@ -714,24 +834,16 @@ class Enumerator {
               const g = fields[b];
               for (const e1 of this.terms(f.type, j)) for (const e2 of this.terms(g.type, l)) {
                 if (e1.code === `${v.code}.${f.name}` || e2.code === `${v.code}.${g.name}`) continue;
-                push(`{ ...${v.code}, ${f.name}: ${e1.code}, ${g.name}: ${e2.code} }`);
+                yield mk(`{ ...${v.code}, ${propKey(f.name)}: ${e1.code}, ${propKey(g.name)}: ${e2.code} }`);
               }
             }
           }
         }
         // full literal (fields from small terms)
         if (fields.length && size - 1 >= fields.length) {
-          for (const sp of splits(size - 1, fields.length)) {
-            if (sp.some((x) => x > 3)) continue;
-            let partial: string[][] = [[]];
-            for (let fi = 0; fi < fields.length; fi++) {
-              const opts = this.terms(fields[fi].type, sp[fi]).map((e) => `${fields[fi].name}: ${e.code}`);
-              const next: string[][] = [];
-              for (const p of partial) for (const o of opts) next.push([...p, o]);
-              partial = next;
-              if (partial.length > 4000) break;
-            }
-            for (const p of partial) if (p.length === fields.length) push(`{ ${p.join(", ")} }`);
+          for (const sp of splits(size - 1, fields.length, 3)) {
+            const lists = this.parts(fields.map((f) => f.type), sp, 4000, (fi, code) => `${propKey(fields[fi].name)}: ${code}`);
+            if (lists) for (const p of product(lists)) yield mk(`{ ${p.join(", ")} }`);
           }
         }
         break;
@@ -740,18 +852,12 @@ class Enumerator {
         const u = reg.union(t);
         for (const v of u.variants) {
           if (v.fields.length === 0) {
-            if (size === 2) push(`{ ${u.tag}: ${JSON.stringify(v.lit)} }`);
+            if (size === 2) yield mk(`{ ${propKey(u.tag)}: ${JSON.stringify(v.lit)} }`);
             continue;
           }
           for (const sp of splits(size - 1, v.fields.length)) {
-            let partial: string[][] = [[]];
-            for (let fi = 0; fi < v.fields.length; fi++) {
-              const opts = this.terms(v.fields[fi].type, sp[fi]).map((e) => `${v.fields[fi].name}: ${e.code}`);
-              const next: string[][] = [];
-              for (const p of partial) for (const o of opts) next.push([...p, o]);
-              partial = next;
-            }
-            for (const p of partial) push(`{ ${u.tag}: ${JSON.stringify(v.lit)}, ${p.join(", ")} }`);
+            const lists = this.parts(v.fields.map((f) => f.type), sp, Infinity, (fi, code) => `${propKey(v.fields[fi].name)}: ${code}`)!;
+            for (const p of product(lists)) yield mk(`{ ${propKey(u.tag)}: ${JSON.stringify(v.lit)}, ${p.join(", ")} }`);
           }
         }
         break;
@@ -759,37 +865,37 @@ class Enumerator {
       case "arr": {
         const E = t.elem;
         // [...xs, e]
-        for (const [i, j] of splits(size - 1, 2)) for (const xs of this.terms(t, i)) for (const e of this.terms(E, j)) push(`[...${xs.code}, ${e.code}]`);
+        for (const [i, j] of splits(size - 1, 2)) for (const xs of this.terms(t, i)) for (const e of this.terms(E, j)) yield mk(`[...${xs.code}, ${e.code}]`);
         // [...xs, ...ys]
         for (const [i, j] of splits(size - 1, 2)) {
           for (const xs of this.terms(t, i)) for (const ys of this.terms(t, j)) {
             if (xs.code === "[]" || ys.code === "[]") continue;
-            push(`[...${xs.code}, ...${ys.code}]`);
+            yield mk(`[...${xs.code}, ...${ys.code}]`);
           }
         }
         // [e]
-        for (const e of this.terms(E, size - 1)) push(`[${e.code}]`);
+        for (const e of this.terms(E, size - 1)) yield mk(`[${e.code}]`);
         // [...m.keys()], [...m.values()], [...s]
         for (const [, tt] of this.types) {
           if (tt.k === "map") {
-            if (key(tt.key) === key(E)) for (const m of this.terms(tt, size - 1)) push(`[...${wrap(m.code)}.keys()]`);
-            if (key(tt.val) === key(E)) for (const m of this.terms(tt, size - 1)) push(`[...${wrap(m.code)}.values()]`);
+            if (key(tt.key) === key(E)) for (const m of this.terms(tt, size - 1)) yield mk(`[...${wrap(m.code)}.keys()]`);
+            if (key(tt.val) === key(E)) for (const m of this.terms(tt, size - 1)) yield mk(`[...${wrap(m.code)}.values()]`);
           }
-          if (tt.k === "set" && key(tt.elem) === key(E)) for (const s of this.terms(tt, size - 1)) push(`[...${s.code}]`);
+          if (tt.k === "set" && key(tt.elem) === key(E)) for (const s of this.terms(tt, size - 1)) yield mk(`[...${s.code}]`);
         }
         // (the fields of a record element, or the constrained fields of a type parameter's)
         const elemFields = E.k === "rec" ? reg.rec(E) : E.k === "tvar" ? (E.fields ?? []) : [];
         if (elemFields.length && this.lambdaDepth === 0) {
           const fields = elemFields;
-          const keys = fields.filter((f) => ["int", "str", "enum"].includes(f.type.k));
+          const keys = fields.filter((f) => ["int", "str", "enum"].includes(f.type.k) && isIdentName(f.name));
           // xs.filter((x) => x.k !== v)
           for (const [i, j] of splits(size - 2, 2)) {
             for (const xs of this.terms(t, i)) {
               if (xs.code.includes("=>")) continue;
               for (const k of keys) for (const v of this.terms(k.type, j)) {
                 if (/\bx\b/.test(v.code)) continue;
-                push(`${wrap(xs.code)}.filter((x) => x.${k.name} !== ${v.code})`);
-                push(`${wrap(xs.code)}.filter((x) => x.${k.name} === ${v.code})`);
+                yield mk(`${wrap(xs.code)}.filter((x) => x.${k.name} !== ${v.code})`);
+                yield mk(`${wrap(xs.code)}.filter((x) => x.${k.name} === ${v.code})`);
               }
             }
           }
@@ -803,7 +909,7 @@ class Enumerator {
                 for (const f of fields) {
                   if (f.name === k.name) continue;
                   for (const e of this.inner(E, f.type, l)) {
-                    push(`${wrap(xs.code)}.map((x) => (x.${k.name} === ${v.code} ? { ...x, ${f.name}: ${e} } : x))`);
+                    yield mk(`${wrap(xs.code)}.map((x) => (x.${k.name} === ${v.code} ? { ...x, ${propKey(f.name)}: ${e} } : x))`);
                   }
                 }
               }
@@ -815,19 +921,56 @@ class Enumerator {
       default:
         break;
     }
-    return out;
+  }
+  /**
+   * The options of each part of a call or literal: the terms of `types[i]` at size `sizes[i]`,
+   * spelled by `spell`; null when the combinations of all parts but the last outnumber `cap` (those
+   * are not built, as before the build was lazy).
+   */
+  parts(types: readonly VType[], sizes: readonly number[], cap: number, spell: (i: number, code: string) => string): string[][] | null {
+    const lists: string[][] = [];
+    let n = 1;
+    for (let i = 0; i < types.length; i++) {
+      lists.push(this.terms(types[i], sizes[i]).map((a) => spell(i, a.code)));
+      n *= lists[i].length;
+      if (n > cap && i < types.length - 1) return null;
+    }
+    return lists;
   }
   /** terms of type `ft` over the scope extended with the lambda variable `x : E` */
   inner(E: VType, ft: VType, size: number): string[] {
     const reg = this.prog.reg;
     const xs: Atom[] = [{ code: "x", type: E, size: 1 }];
-    if (E.k === "rec") for (const f of reg.rec(E)) xs.push({ code: `x.${f.name}`, type: f.type, size: 1 });
-    if (E.k === "tvar") for (const f of E.fields ?? []) xs.push({ code: `x.${f.name}`, type: f.type, size: 1 });
+    if (E.k === "rec") for (const f of reg.rec(E)) if (isIdentName(f.name)) xs.push({ code: `x.${f.name}`, type: f.type, size: 1 });
+    if (E.k === "tvar") for (const f of E.fields ?? []) if (isIdentName(f.name)) xs.push({ code: `x.${f.name}`, type: f.type, size: 1 });
     const sub = new Enumerator(this.prog, [...this.scope.filter((a) => !a.code.startsWith("x")), ...xs], ft, size);
     sub.lambdaDepth = 1;
     const r = sub.terms(ft, size).map((a) => a.code).filter((c) => /\bx\b/.test(c) || size === 1);
     if (sub.capped) this.capped = true;
     return r;
+  }
+}
+
+/** The ways to write n as an ordered sum of `parts` sizes, each between 1 and `max`, lazily (the first part varying slowest). */
+function* splits(n: number, parts: number, max = Infinity): Generator<number[]> {
+  if (parts < 1 || n < parts || n > max * parts) return;
+  if (parts === 1) {
+    yield [n];
+    return;
+  }
+  for (let i = 1; i <= Math.min(max, n - parts + 1); i++) for (const rest of splits(n - i, parts - 1, max)) yield [i, ...rest];
+}
+
+/** The cartesian product of `lists`, lazily, the first list varying slowest (as nested loops would). */
+function* product<A>(lists: readonly (readonly A[])[], i = 0, acc: A[] = []): Generator<A[]> {
+  if (i === lists.length) {
+    yield [...acc];
+    return;
+  }
+  for (const x of lists[i]) {
+    acc.push(x);
+    yield* product(lists, i + 1, acc);
+    acc.pop();
   }
 }
 
@@ -1028,6 +1171,8 @@ function show(x: unknown): string {
  */
 class Sandbox {
   private cache = new Map<string, Record<string, unknown>>();
+  /** dependencies whose top-level code has not finished running (dropped from the cache if it never does) */
+  private loading = new Set<string>();
   private spec: Record<string, unknown>;
   constructor(spec: Record<string, unknown>) {
     this.spec = spec;
@@ -1057,8 +1202,25 @@ class Sandbox {
         let m = this.cache.get(f);
         if (!m) {
           m = {};
+          // (cached before it runs, for import cycles; as in Node, a module whose top-level code
+          // throws is not cached: the next import runs it again, so every candidate sees the same)
           this.cache.set(f, m);
-          this.evalModule(f, fs.readFileSync(f, "utf8").replace(/^\uFEFF/, ""), "", m);
+          this.loading.add(f);
+          // a dependency's top-level code runs as plain JavaScript (outside test mode), once
+          const g = globalThis as Record<string | symbol, unknown>;
+          const test = g[TEST_HOOK];
+          const legacy = g[LEGACY_TEST_HOOK];
+          g[TEST_HOOK] = g[LEGACY_TEST_HOOK] = undefined;
+          try {
+            this.evalModule(f, fs.readFileSync(f, "utf8").replace(/^\uFEFF/, ""), "", m);
+          } catch (e) {
+            this.cache.delete(f);
+            throw e;
+          } finally {
+            this.loading.delete(f);
+            g[TEST_HOOK] = test;
+            g[LEGACY_TEST_HOOK] = legacy;
+          }
         }
         return m;
       }
@@ -1067,40 +1229,161 @@ class Sandbox {
     }
     return createRequire(from)(spec);
   }
+  /**
+   * Forget the dependencies whose top-level code was cut off (a time limit terminates JavaScript
+   * without running its `catch`/`finally` blocks).
+   */
+  abandonLoading() {
+    for (const f of this.loading) this.cache.delete(f);
+    this.loading.clear();
+  }
   /** Run `text` (TS source of `file`) as a CommonJS module; `epilogue` is appended JS. */
   evalModule(file: string, text: string, epilogue = "", exports: Record<string, unknown> = {}): Record<string, unknown> {
-    const js = ts.transpileModule(text, {
-      compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022, jsx: ts.JsxEmit.ReactJSX, esModuleInterop: true, verbatimModuleSyntax: false },
-      fileName: file,
-    }).outputText;
-    const module = { exports };
-    const body = new Function("exports", "require", "module", "__filename", "__dirname", js + "\n" + epilogue);
-    body(module.exports, (s: string) => this.require(file, s), module, file, path.dirname(file));
+    const { run, module } = this.compileModule(file, text, "", epilogue, exports);
+    run();
     return module.exports;
   }
+  /**
+   * Compile `text` as a CommonJS module without running it: `run()` runs its top-level code.
+   * `prologue` is JS that runs first (after a "use strict" directive), where the module's function
+   * declarations are already defined (hoisted) and the module object is `CJS_MODULE`; `epilogue`
+   * runs last.
+   *
+   * The module keeps its ES meaning (what Node or a bundler runs): a constant read before its
+   * declaration ran throws a ReferenceError also when it is exported (`esmBindings`), and the
+   * module's own top-level names — `module`, `exports`, `require`, `__filename`, `__dirname` are
+   * legal ones — never meet the CommonJS wrapper's (`cjsNames`).
+   */
+  compileModule(file: string, text: string, prologue: string, epilogue: string, exports: Record<string, unknown> = {}) {
+    let js = ts.transpileModule(esmBindings(text, file), {
+      compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022, jsx: ts.JsxEmit.ReactJSX, esModuleInterop: true, verbatimModuleSyntax: false },
+      fileName: file,
+      transformers: { after: [cjsNames] },
+    }).outputText;
+    if (prologue) {
+      const strict = /^\s*"use strict";/.exec(js);
+      js = strict ? strict[0] + "\n" + prologue + "\n" + js.slice(strict[0].length) : prologue + "\n" + js;
+    }
+    const module = { exports };
+    const req = (s: string) => this.require(file, s);
+    // (the usual CommonJS names too, unless the module declares one of its own: then the wrapper's
+    // parameter of that name would be redeclared, a SyntaxError)
+    let aliases: [string, unknown][] = [["exports", module.exports], ["require", req], ["module", module], ["__filename", file], ["__dirname", path.dirname(file)]];
+    let body: (...a: unknown[]) => unknown;
+    try {
+      body = new Function(CJS_EXPORTS, CJS_REQUIRE, CJS_MODULE, ...aliases.map(([n]) => n), js + "\n" + epilogue) as typeof body;
+    } catch (e) {
+      if (!(e instanceof SyntaxError)) throw e;
+      aliases = [];
+      body = new Function(CJS_EXPORTS, CJS_REQUIRE, CJS_MODULE, js + "\n" + epilogue) as typeof body;
+    }
+    return { module, run: () => body(module.exports, req, module, ...aliases.map(([, v]) => v)) };
+  }
+}
+
+/** The CommonJS wrapper's parameters (TypeScript's output refers to them by these names: `cjsNames`). */
+const CJS_EXPORTS = "__vreactExports__";
+const CJS_REQUIRE = "__vreactRequire__";
+const CJS_MODULE = "__vreactModule__";
+const CJS_RENAME = new Map([["exports", CJS_EXPORTS], ["require", CJS_REQUIRE], ["module", CJS_MODULE]]);
+
+/**
+ * After TypeScript's CommonJS transform: the `exports`, `require` and `module` that the transform
+ * itself wrote (identifiers with no source node) become the wrapper's parameters, so that a
+ * module-level `const module = …` of the program's (a legal name in an ES module) is a binding of
+ * its own, not a redeclaration of the wrapper's parameter (a SyntaxError) or of its exports object.
+ */
+const cjsNames: ts.TransformerFactory<ts.SourceFile> = (ctx) => (sf) => {
+  const f = ts.factory;
+  const visit = (n: ts.Node): ts.Node => {
+    // (a property name is not a variable: `exports.module = module` keeps its key)
+    if (ts.isPropertyAccessExpression(n)) {
+      const e = ts.visitNode(n.expression, visit) as ts.Expression;
+      return ts.isPropertyAccessChain(n) ? f.updatePropertyAccessChain(n, e, n.questionDotToken, n.name) : f.updatePropertyAccessExpression(n, e, n.name);
+    }
+    if (ts.isPropertyAssignment(n) && !ts.isComputedPropertyName(n.name)) return f.updatePropertyAssignment(n, n.name, ts.visitNode(n.initializer, visit) as ts.Expression);
+    if (ts.isIdentifier(n) && !ts.getParseTreeNode(n)) {
+      const to = CJS_RENAME.get(ts.idText(n));
+      if (to) return f.createIdentifier(to);
+    }
+    return ts.visitEachChild(n, visit, ctx);
+  };
+  return ts.visitNode(sf, visit) as ts.SourceFile;
+};
+
+/**
+ * `export const A = …, B = …;` becomes `const A = …, B = …;` with `export { A, B };` at the end:
+ * the same module for ES semantics, but TypeScript's CommonJS output then reads `A` in the module
+ * (a binding that throws a ReferenceError until its declaration ran, as in an ES module) instead of
+ * `exports.A` (undefined until then: a read of a constant that the module's top-level code never
+ * initialized would pass silently, as `undefined`).
+ */
+function esmBindings(text: string, file: string): string {
+  if (!/\bexport\s+(const|let|var)\b/.test(text)) return text;
+  const sf = ts.createSourceFile(file, text, ts.ScriptTarget.ES2022, true, file.endsWith(".tsx") ? ts.ScriptKind.TSX : ts.ScriptKind.TS);
+  const edits: Edit[] = [];
+  const names: string[] = [];
+  for (const st of sf.statements) {
+    if (!ts.isVariableStatement(st) || st.modifiers?.some((m) => m.kind === ts.SyntaxKind.DeclareKeyword)) continue;
+    const exp = st.modifiers?.find((m) => m.kind === ts.SyntaxKind.ExportKeyword);
+    if (!exp || !st.declarationList.declarations.every((d) => ts.isIdentifier(d.name))) continue;
+    edits.push({ at: [exp.getStart(sf), exp.getEnd()], text: "" });
+    for (const d of st.declarationList.declarations) names.push((d.name as ts.Identifier).text);
+  }
+  return names.length ? applyEdits(text, edits) + `\nexport { ${names.join(", ")} };\n` : text;
 }
 
 interface RunResult {
   ok: boolean;
   valid: number;
   why?: string;
-  /** no generated input exercises the hole (independent of the candidate) */
+  /** no generated input exercises the hole with this candidate */
   untestable?: string;
+  /**
+   * ... and that holds whatever the candidate: no input skipped for it evaluated the hole first
+   * (the candidate's value could not have decided whether the input reaches another hole, fails
+   * the precondition or reads what the module never initialized)
+   */
+  untestableAll?: boolean;
   /** failure category for the summary */
   cat?: string;
+  /**
+   * the tests ran out of time: "search", the search's limit (stop); "candidate", this candidate's
+   * own cap. `valid` is then the number of inputs it passed before (none failed)
+   */
+  timeout?: "search" | "candidate";
 }
 
 interface Runner {
-  run(candidate: string): RunResult;
+  /** test `candidate`, in at most `budgetMs` (the search's remaining time) */
+  run(candidate: string, budgetMs: number): RunResult;
 }
 
+/**
+ * The global vreact/spec's runtime reads its test hook from (spec/index.js): a symbol key, which
+ * the page cannot define (HTML's named access on Window can define any string-named global the
+ * window lacks: an element with that id). The hook is a plain object with `posts` (an array) and
+ * `fill`; spec/index.js ignores anything else there.
+ */
+const TEST_HOOK = Symbol.for("vreact.spec.test");
+/** where a vreact/spec runtime before the symbol key looked for it (a project's older install) */
+const LEGACY_TEST_HOOK = "__VREACT_TEST__";
 const OWN_ENSURES = "__vreactOwnEnsures__";
 const OWN_REQUIRES = "__vreactOwnRequires__";
 const TARGET = "__vreactSynthTarget__";
+/** called where the tested hole is evaluated (the candidate is tested as `(__vreactHit__(), candidate)`) */
+const HIT = "__vreactHit__";
+const RUN = "__vreactSynthRun__";
+/** at most this long for one candidate's tests (a slower candidate is dropped, and the search goes on) */
+const CANDIDATE_MS = 5000;
+/** a timed run of the tests: a time limit terminates them, deep inside a candidate's loops too */
+const RUN_SCRIPT = new vm.Script(`${RUN}()`);
 const OTHER_HOLE = { other: "hole" };
 const OWN_PRE = { own: "precondition" };
 /** what vreact/spec's hole() throws outside test mode (the contracts are evaluated outside it) */
 const isUnfilledHoleError = (e: unknown) => e instanceof Error && e.message.startsWith("vreact: unfilled hole()");
+/** reading a module binding whose initialization never ran (the module's top-level code stopped before it) */
+const isUninitialized = (e: unknown) => e instanceof ReferenceError && /before initialization/.test(e.message);
 
 function makeRunner(sb: Sandbox, target: string, fname: string, paramTypes: VType[], prog: Program, pools: Pools, textFor: (cand: string) => string, rand: Rand, tparams: readonly TParam[] = []): Runner {
   // fixed sample set (re-used across candidates; counterexamples are moved to the front); the
@@ -1109,84 +1392,161 @@ function makeRunner(sb: Sandbox, target: string, fname: string, paramTypes: VTyp
     const inst = chooseInst(rand, tparams);
     return paramTypes.map((t) => gen(rand, t, prog, pools, 0, inst));
   });
-  const g = globalThis as Record<string, unknown>;
-  return {
-    run(candidate) {
-      let f: (...a: unknown[]) => unknown;
+  const g = globalThis as Record<string | symbol, unknown>;
+  const clear = () => {
+    g[TEST_HOOK] = g[LEGACY_TEST_HOOK] = undefined;
+    g[OWN_ENSURES] = undefined;
+    g[OWN_REQUIRES] = undefined;
+    g[HIT] = undefined;
+  };
+  // inputs on which the candidate passed so far (what a time limit leaves of a cut-off run)
+  let passedSoFar = 0;
+  const test = (candidate: string): RunResult => {
+    let f: (...a: unknown[]) => unknown;
+    let mod: { module: { exports: Record<string, unknown> }; run: () => void };
+    try {
+      // (the target is taken before the top-level code runs: function declarations are hoisted)
+      mod = sb.compileModule(target, textFor(candidate), `${CJS_MODULE}.exports.${TARGET} = ${fname};`, "");
+    } catch (e) {
+      return { ok: false, valid: 0, why: "does not load: " + (e as Error).message, cat: "does not load" };
+    }
+    // The module's top-level code may call its functions (`export const TEN: int = inc(9);`): it
+    // runs in test mode, where the target's own contract is defined (its requires rejects the
+    // input; its ensures are not checked there) and another hole stops it. Code it stops before
+    // is never initialized: an input reading it is skipped (it cannot judge the candidate).
+    let stopped: string | null = null;
+    let hitAtLoad = false;
+    g[TEST_HOOK] = g[LEGACY_TEST_HOOK] = {
+      posts: [],
+      fill: () => {
+        throw OTHER_HOLE;
+      },
+    };
+    g[OWN_ENSURES] = () => {};
+    g[OWN_REQUIRES] = (c: unknown) => {
+      if (!c) throw OWN_PRE;
+    };
+    g[HIT] = () => {
+      hitAtLoad = true;
+    };
+    try {
+      mod.run();
+    } catch (e) {
+      stopped = e === OTHER_HOLE ? "it runs into an unfilled hole" : e === OWN_PRE ? `it calls ${fname} outside its precondition` : `it throws: ${(e as Error)?.message}`;
+    } finally {
+      clear();
+    }
+    f = mod.module.exports[TARGET] as typeof f;
+    if (typeof f !== "function") return { ok: false, valid: 0, why: `does not load: ${stopped ?? `${fname} is not a function`}`, cat: "does not load" };
+    let valid = 0;
+    let pre = 0;
+    let other = 0;
+    let contract = 0;
+    let uninit = 0;
+    // inputs skipped after the hole was evaluated (the candidate may have decided it)
+    let skippedAfterHit = 0;
+    for (let i = 0; i < samples.length; i++) {
+      const args = structuredClone(samples[i]);
+      const own: ((r: unknown) => boolean)[] = [];
+      let hit = false;
+      g[TEST_HOOK] = g[LEGACY_TEST_HOOK] = {
+        posts: [], // postconditions of called helpers: not this function's contract
+        fill: () => {
+          throw OTHER_HOLE;
+        },
+      };
+      g[OWN_ENSURES] = (p: (r: unknown) => boolean) => own.push(p);
+      g[OWN_REQUIRES] = (c: unknown) => {
+        if (!c) throw OWN_PRE;
+      };
+      g[HIT] = () => {
+        hit = true;
+      };
+      let r: unknown;
       try {
-        const exp = sb.evalModule(target, textFor(candidate), `module.exports.${TARGET} = ${fname};`);
-        f = exp[TARGET] as typeof f;
+        r = f(...args);
       } catch (e) {
-        return { ok: false, valid: 0, why: "does not load: " + (e as Error).message, cat: "does not load" };
-      }
-      let valid = 0;
-      let pre = 0;
-      let other = 0;
-      let contract = 0;
-      for (let i = 0; i < samples.length; i++) {
-        const args = structuredClone(samples[i]);
-        const own: ((r: unknown) => boolean)[] = [];
-        g.__VREACT_TEST__ = {
-          posts: [], // postconditions of called helpers: not this function's contract
-          fill: () => {
-            throw OTHER_HOLE;
-          },
-        };
-        g[OWN_ENSURES] = (p: (r: unknown) => boolean) => own.push(p);
-        g[OWN_REQUIRES] = (c: unknown) => {
-          if (!c) throw OWN_PRE;
-        };
-        let r: unknown;
-        try {
-          r = f(...args);
-        } catch (e) {
-          if (e === OWN_PRE) {
-            pre++;
-            continue;
-          }
-          if (e === OTHER_HOLE) {
-            other++;
-            continue;
-          }
-          samples.unshift(samples.splice(i, 1)[0]);
-          if ((e as Error)?.constructor?.name === "PreconditionFailed") return { ok: false, valid, why: `a call violates a precondition on ${show(args)}`, cat: "a call violates a precondition" };
-          return { ok: false, valid, why: `throws on ${show(args)}: ${(e as Error)?.message}`, cat: "throws" };
-        } finally {
-          g.__VREACT_TEST__ = undefined;
-          g[OWN_ENSURES] = undefined;
-          g[OWN_REQUIRES] = undefined;
-        }
-        let verdict: "pass" | "fail" | "skip" = "pass";
-        for (const p of own) {
-          try {
-            if (!p(r)) verdict = "fail";
-          } catch (e) {
-            // the contract calls a function that still has a hole: this input cannot judge the candidate
-            verdict = isUnfilledHoleError(e) ? "skip" : "fail";
-          }
-          if (verdict !== "pass") break;
-        }
-        if (verdict === "skip") {
-          contract++;
+        if (e === OWN_PRE) {
+          pre++;
+          if (hit) skippedAfterHit++;
           continue;
         }
-        valid++;
-        if (verdict === "fail") {
-          samples.unshift(samples.splice(i, 1)[0]); // counterexample first next time
-          return { ok: false, valid, why: `postcondition fails on ${show(args)} ↦ ${show(r)}`, cat: "postcondition fails" };
+        if (e === OTHER_HOLE) {
+          other++;
+          if (hit) skippedAfterHit++;
+          continue;
         }
+        if (stopped && isUninitialized(e)) {
+          uninit++;
+          // (where the candidate ran during the top-level code, it may be why that code stopped)
+          if (hit || hitAtLoad) skippedAfterHit++;
+          continue;
+        }
+        samples.unshift(samples.splice(i, 1)[0]);
+        if ((e as Error)?.constructor?.name === "PreconditionFailed") return { ok: false, valid, why: `a call violates a precondition on ${show(args)}`, cat: "a call violates a precondition" };
+        return { ok: false, valid, why: `throws on ${show(args)}: ${(e as Error)?.message}`, cat: "throws" };
+      } finally {
+        clear();
       }
-      if (valid > 0) return { ok: true, valid };
-      if (contract > 0) {
-        // (not "postcondition fails": the contract cannot be evaluated, e.g. it calls a @trusted stub whose body is a hole)
-        const why = `no generated input can test this hole: the contract of ${fname} runs into a hole (unfinished code it calls) on every input that reaches it (${contract} of ${samples.length})`;
-        return { ok: false, valid: 0, why, untestable: why };
+      let verdict: "pass" | "fail" | "skip" | "uninit" = "pass";
+      for (const p of own) {
+        try {
+          if (!p(r)) verdict = "fail";
+        } catch (e) {
+          // the contract calls a function that still has a hole, or reads what the module's
+          // top-level code never initialized: this input cannot judge the candidate
+          verdict = isUnfilledHoleError(e) ? "skip" : stopped && isUninitialized(e) ? "uninit" : "fail";
+        }
+        if (verdict !== "pass") break;
       }
-      const why =
-        pre === samples.length ? `no generated input satisfies the precondition of ${fname} (is it satisfiable?)`
-        : other + pre === samples.length ? `no generated input can test this hole (${other} of ${samples.length} reach another unfilled hole)`
-        : "no generated input exercises this hole";
-      return { ok: false, valid: 0, why, untestable: why };
+      if (verdict === "skip" || verdict === "uninit") {
+        if (verdict === "skip") contract++;
+        else uninit++;
+        if (hit || (verdict === "uninit" && hitAtLoad)) skippedAfterHit++;
+        continue;
+      }
+      valid++;
+      if (verdict === "pass") passedSoFar++;
+      if (verdict === "fail") {
+        samples.unshift(samples.splice(i, 1)[0]); // counterexample first next time
+        return { ok: false, valid, why: `postcondition fails on ${show(args)} ↦ ${show(r)}`, cat: "postcondition fails" };
+      }
+    }
+    if (valid > 0) return { ok: true, valid };
+    const untestableAll = skippedAfterHit === 0;
+    const reasons: string[] = [];
+    if (pre) reasons.push(`${pre} fail the precondition of ${fname}`);
+    if (other) reasons.push(`${other} reach another unfilled hole`);
+    // (not "postcondition fails": the contract cannot be evaluated, e.g. it calls a @trusted stub whose body is a hole)
+    if (contract) reasons.push(`on ${contract} the contract of ${fname} runs into a hole (unfinished code it calls)`);
+    if (uninit) reasons.push(`${uninit} read what the module's top-level code never initialized (${stopped})`);
+    const why =
+      pre === samples.length ? `no generated input satisfies the precondition of ${fname} (is it satisfiable?)`
+      : `no generated input can test this hole${untestableAll ? "" : ` with this candidate`} (of ${samples.length} inputs, ${reasons.join("; ")})`;
+    return { ok: false, valid: 0, why, untestable: why, untestableAll };
+  };
+  return {
+    run(candidate, budgetMs) {
+      const ms = Math.max(1, Math.floor(Math.min(CANDIDATE_MS, budgetMs)));
+      let res: RunResult | undefined;
+      passedSoFar = 0;
+      g[RUN] = () => {
+        res = test(candidate);
+      };
+      try {
+        RUN_SCRIPT.runInThisContext({ timeout: ms });
+      } catch (e) {
+        if ((e as { code?: string })?.code !== "ERR_SCRIPT_EXECUTION_TIMEOUT") throw e;
+        // (terminated: no `finally` of the tests ran; no input failed before, or they would have
+        // stopped there: `valid` is the inputs it passed until then)
+        sb.abandonLoading();
+        if (budgetMs <= CANDIDATE_MS) return { ok: false, valid: passedSoFar, why: "the search's time limit was reached while it was tested", timeout: "search" };
+        return { ok: false, valid: passedSoFar, why: `its tests take longer than ${CANDIDATE_MS / 1000}s`, cat: "too slow to test", timeout: "candidate" };
+      } finally {
+        clear();
+        g[RUN] = undefined;
+      }
+      return res!;
     },
   };
 }
@@ -1212,6 +1572,8 @@ interface Survivor {
   code: string;
   valid: number;
   untested?: boolean;
+  /** its tests were cut off by a time limit (after `valid` passed inputs) */
+  cut?: boolean;
 }
 
 /**
@@ -1226,7 +1588,11 @@ interface Search {
   passed: number;
   sizeReached: number;
   stop: string;
+  /** no generated input can test this hole (whatever the candidate, or for the last candidates tested) */
   untestable: string | null;
+  /** candidates no input could test, where that depends on the candidate: how many, and the first with its reason */
+  deferred: number;
+  untestableSome?: string;
   searchMs: number;
   fails: Map<string, { n: number; example: string }>;
   /** the hole works with a Map or Set (its type, its scope's, or their parts) */
@@ -1235,7 +1601,7 @@ interface Search {
 
 function newSearch(h: Hole, en: Enumerator, runner: Runner, maxSize: number, limitMs: number): Search {
   const collections = [...en.types.values()].some((t) => t.k === "map" || t.k === "set");
-  const S: Search = { next: () => null, tested: 0, passed: 0, sizeReached: 0, stop: "", untestable: null, searchMs: 0, fails: new Map(), collections };
+  const S: Search = { next: () => null, tested: 0, passed: 0, sizeReached: 0, stop: "", untestable: null, deferred: 0, searchMs: 0, fails: new Map(), collections };
   const seenText = new Set<string>();
   const seenCanon = new Set<string>();
   // the same candidate up to whitespace and parentheses goes to Lean once
@@ -1246,6 +1612,15 @@ function newSearch(h: Hole, en: Enumerator, runner: Runner, maxSize: number, lim
     return true;
   };
   let untested = 0;
+  // candidates that no input could test, where that depends on the candidate (the hole decides
+  // whether an input reaches another hole, e.g. an `if` guard): later candidates are still tested,
+  // and these go to Lean (or the next hole's search) untested only after the tested survivors
+  const deferred: Survivor[] = [];
+  let untestableRun = 0;
+  // candidates whose tests were cut off by a time limit after they passed some (none failed): held
+  // back while the search finds candidates whose tests finish, tried once MAX_CUT_HELD are held or
+  // the search ends
+  const held: Survivor[] = [];
   function* run(): Generator<Survivor> {
     // search time excludes the Lean checks done while the generator is suspended
     let resume = Date.now();
@@ -1253,45 +1628,99 @@ function newSearch(h: Hole, en: Enumerator, runner: Runner, maxSize: number, lim
       S.searchMs += Date.now() - resume;
       resume = -1;
     };
+    const left = () => limitMs - (S.searchMs + (Date.now() - resume));
+    // the smallest candidates, untested (at most MAX_UNTESTED in all)
+    function* untestedOnes(xs: Survivor[]): Generator<Survivor, boolean> {
+      for (const sv of xs) {
+        if (untested >= MAX_UNTESTED) return false;
+        untested++;
+        pause();
+        yield sv;
+        resume = Date.now();
+      }
+      return true;
+    }
+    function* release(): Generator<Survivor> {
+      for (const sv of held.splice(0)) {
+        S.passed++;
+        pause();
+        yield sv;
+        resume = Date.now();
+      }
+    }
     try {
-      for (let size = 1; size <= maxSize; size++) {
+      search: for (let size = 1; size <= maxSize; size++) {
         S.sizeReached = size;
         for (const c of en.build(h.type, size)) {
-          if (S.searchMs + (Date.now() - resume) > limitMs) {
+          if (left() <= 0) {
             S.stop = `the ${(limitMs / 1000).toFixed(0)}s time limit was reached at size ${size}`;
-            return;
+            break search;
           }
           if (S.tested >= MAX_CANDIDATES) {
             S.stop = `the cap of ${MAX_CANDIDATES} candidates was reached at size ${size}`;
-            return;
+            break search;
           }
           if (seenText.has(c.code)) continue;
           seenText.add(c.code);
           if (S.untestable) {
             // the inputs cannot exercise this hole: the smallest candidates go to Lean untested
-            if (untested++ >= MAX_UNTESTED) {
+            if (untested >= MAX_UNTESTED) {
               S.stop = `${MAX_UNTESTED} untested candidates were tried`;
-              return;
+              break search;
             }
             if (!fresh(c.code)) continue;
-            pause();
-            yield { code: c.code, valid: 0, untested: true };
-            resume = Date.now();
+            yield* untestedOnes([{ code: c.code, valid: 0, untested: true }]);
             continue;
           }
           S.tested++;
-          const r = runner.run(c.code);
+          const r = runner.run(c.code, left());
           if (process.env.VREACT_SYNTH_DEBUG && S.tested <= 12) console.log(`    [${r.ok ? "pass" : "fail"}] ${c.code}  ${r.why ?? ""}`);
-          if (r.untestable) {
-            S.untestable = r.untestable;
-            console.log(`  ${r.untestable}: the smallest candidates are checked by Lean only`);
-            untested++;
-            fresh(c.code);
-            pause();
-            yield { code: c.code, valid: 0, untested: true };
-            resume = Date.now();
+          if (r.timeout) {
+            if (r.valid > 0) {
+              // it passed every input that ran: Lean judges it, after the candidates whose tests finish
+              console.log(`  cut off (${r.why}) after passing ${r.valid} random tests: ${c.code}`);
+              if (fresh(c.code)) held.push({ code: c.code, valid: r.valid, cut: true });
+            } else if (r.timeout === "candidate") {
+              // not one input finished in its 5 s: as a candidate no input could test (tried
+              // untested, after the tested ones). (One the search's own limit cut off is not: that
+              // moment says nothing about it.)
+              console.log(`  cut off (${r.why}) before any test finished: ${c.code}`);
+              S.untestableSome ??= `${c.code}: ${r.why}, and no test finished before`;
+              S.deferred++;
+              if (fresh(c.code)) deferred.push({ code: c.code, valid: 0, untested: true });
+            }
+            if (r.timeout === "search") {
+              S.stop = `the ${(limitMs / 1000).toFixed(0)}s time limit was reached at size ${size}, while ${c.code} was tested`;
+              break search;
+            }
+            if (held.length >= MAX_CUT_HELD) yield* release();
             continue;
           }
+          if (r.untestable && r.untestableAll) {
+            // whatever the candidate (no input evaluated the hole before it was skipped)
+            S.untestable = r.untestable;
+            console.log(`  ${r.untestable}: the smallest candidates are checked by Lean only`);
+            if (!fresh(c.code)) continue;
+            yield* untestedOnes([{ code: c.code, valid: 0, untested: true }]);
+            continue;
+          }
+          if (r.untestable) {
+            S.untestableSome ??= `${c.code}: ${r.untestable}`;
+            S.deferred++;
+            if (fresh(c.code)) deferred.push({ code: c.code, valid: 0, untested: true });
+            if (++untestableRun < MAX_UNTESTABLE_RUN) continue;
+            // no input could test the last MAX_UNTESTABLE_RUN candidates: as for a hole no input
+            // can test, the smallest candidates go to Lean untested
+            S.untestable = `no generated input could test the last ${MAX_UNTESTABLE_RUN} candidates (e.g. ${S.untestableSome})`;
+            console.log(`  ${S.untestable}: the smallest candidates are checked by Lean only`);
+            const xs = deferred.splice(0);
+            if (!(yield* untestedOnes(xs))) {
+              S.stop = `${MAX_UNTESTED} untested candidates were tried`;
+              break search;
+            }
+            continue;
+          }
+          untestableRun = 0;
           if (!r.ok) {
             const cat = r.cat ?? "fails";
             const e = S.fails.get(cat) ?? { n: 0, example: `${c.code}: ${r.why}` };
@@ -1306,7 +1735,16 @@ function newSearch(h: Hole, en: Enumerator, runner: Runner, maxSize: number, lim
           resume = Date.now();
         }
       }
-      S.stop = `all candidates up to size ${maxSize} were tried` + (en.capped ? ` (sub-expression lists were capped at ${MAX_TERMS} per type and size, so some larger candidates were never built)` : "");
+      if (!S.stop) S.stop = `all candidates up to size ${maxSize} were tried` + (en.capped ? ` (sub-expression lists were capped at ${MAX_TERMS} per type and size, so some larger candidates were never built)` : "");
+      if (held.length) {
+        console.log(`  ${held.length} candidate(s) whose tests were cut off after they passed some: tried now`);
+        yield* release();
+      }
+      if (deferred.length) {
+        // the candidates the inputs could not test, after every tested survivor
+        console.log(`  ${S.deferred} candidate(s) could not be tested (e.g. ${S.untestableSome}): the smallest go to Lean untested`);
+        yield* untestedOnes(deferred.splice(0));
+      }
     } finally {
       if (resume >= 0) pause();
     }
@@ -1346,10 +1784,12 @@ export interface SynthResult {
   note?: string;
 }
 
-export async function synthCommand(root: string, files: string[], opts: { write?: boolean; json?: boolean; maxSize?: number; seed?: number }): Promise<SynthResult[]> {
+export async function synthCommand(root: string, files: string[], opts: { write?: boolean; json?: boolean; maxSize?: number; seed?: number; timeLimitMs?: number }): Promise<SynthResult[]> {
   if (!files.length) throw new Error("usage: vreact synth <file.tsx> [--write]");
   const cfg = loadConfig(root);
   const maxSize = opts.maxSize ?? 9;
+  // the search time of one hole (tests may lower it)
+  const timeLimitMs = opts.timeLimitMs ?? TIME_LIMIT_MS;
   const seed = opts.seed ?? DEFAULT_SEED;
   // the file as the program knows it (same spelling as cfg.files: case-insensitive file systems, symlinks)
   const typed = path.resolve(root, files[0]);
@@ -1463,6 +1903,18 @@ export async function synthCommand(root: string, files: string[], opts: { write?
     }
     const fd = fn as ts.FunctionDeclaration;
     const name = fd.name?.text ?? "?";
+    let task = tasks.find((t) => t.fn === fd);
+    // a hole inside a contract call of the function (its requires/ensures, an assert, …)
+    let call: string | null = null;
+    for (let n: ts.Node = node.parent; n && n !== fd && !call; n = n.parent) {
+      const k = ts.isCallExpression(n) ? specFn(env, n.expression) : null;
+      if (k && CONTRACT_FNS.has(k)) call = k;
+    }
+    if (call) {
+      if (!task) tasks.push((task = { fn: fd, name, holes: [], ensures: 0, contractHoles: [] }));
+      task.contractHoles.push({ where, call, type: node.typeArguments?.[0] ? node.typeArguments[0].getText(sf) : "?" });
+      return;
+    }
     if (!node.typeArguments?.[0]) {
       console.log(`hole in ${name}`);
       return skipped(name, "?", `${where}: write hole<T>() with an explicit type`);
@@ -1476,8 +1928,7 @@ export async function synthCommand(root: string, files: string[], opts: { write?
       console.log(`hole in ${name}`);
       return skipped(name, "?", `${where}: ${e.message}`);
     }
-    let task = tasks.find((t) => t.fn === fd);
-    if (!task) tasks.push((task = { fn: fd, name, holes: [], ensures: 0 }));
+    if (!task) tasks.push((task = { fn: fd, name, holes: [], ensures: 0, contractHoles: [] }));
     task.holes.push({ index, node, span: [node.getStart(sf), node.getEnd()], type, fn: fd, scope: [], parens: needsParens(node) });
   });
 
@@ -1556,6 +2007,29 @@ export async function synthCommand(root: string, files: string[], opts: { write?
   };
   const leanDeps = dependsOn(true);
   const runDeps = dependsOn(false);
+  /**
+   * The functions that a contract of the program depends on (a `requires`, `ensures`, `assert`, …
+   * anywhere, in any of its files: what its Lean statement mentions), each with the first such
+   * contract. A fill of one changes what that contract says.
+   */
+  const contractUse = new Map<ts.FunctionDeclaration, string>();
+  for (const f of cfg.files) {
+    const file = program.getSourceFile(f);
+    if (!file) continue;
+    const visit = (n: ts.Node) => {
+      const k = ts.isCallExpression(n) ? specFn(env, n.expression) : null;
+      if (k && CONTRACT_FNS.has(k)) {
+        let owner: ts.Node | undefined = n.parent;
+        while (owner && !(ts.isFunctionDeclaration(owner) && ts.isSourceFile(owner.parent))) owner = owner.parent;
+        const ownerFn = owner as ts.FunctionDeclaration | undefined;
+        const where = ownerFn ? `the ${k}(…) of ${ownerFn.name?.text ?? "a function"}` : `a module-level ${k}(…)${file === sf ? "" : ` in ${path.relative(root, file.fileName)}`}`;
+        for (const d of leanDeps.from(n, ownerFn)) if (!contractUse.has(d)) contractUse.set(d, where);
+        return;
+      }
+      ts.forEachChild(n, visit);
+    };
+    visit(file);
+  }
   const holesIn = (d: ts.FunctionDeclaration) => {
     const hs: ts.CallExpression[] = [];
     if (d.body) findHoles(d.body, hs);
@@ -1572,13 +2046,22 @@ export async function synthCommand(root: string, files: string[], opts: { write?
     }
     ordered.push(t);
   };
+  // and first of all the functions that the module's top-level code runs (constant initializers,
+  // module-level asserts): while one has a hole, that code stops there when the module loads in the
+  // tests, and the constants declared after it stay uninitialized for every other function's tests
+  // (an input that reads one cannot judge a candidate)
+  const runAtLoad = new Set<ts.FunctionDeclaration>();
+  for (const st of sf.statements) if (!ts.isFunctionDeclaration(st) && !ts.isImportDeclaration(st) && !ts.isTypeAliasDeclaration(st) && !ts.isInterfaceDeclaration(st)) runDeps.from(st, undefined, runAtLoad);
+  for (const t of tasks) if (runAtLoad.has(t.fn)) visitTask(t, new Set());
   for (const t of tasks) visitTask(t, new Set());
 
   const sb = holeCalls.length ? await Sandbox.create(target) : null;
   const accepted = new Map<Hole, string>(); // proved fills (text inserted at the hole)
   const acceptedTasks: Task[] = [];
   const editsOf = (fills: Map<Hole, string>): Edit[] => [...fills].map(([h, text]) => ({ at: h.span, text }));
-  const leanText = (fills: Map<Hole, string>) => dropUnusedHoleImport(applyEdits(base, editsOf(fills)), target);
+  // (what the original text uses: only a binding a fill left without a use is dropped)
+  const baseUsed = new Map(bindingsOf(base, target).bindings.map((b) => [b.key, b.used]));
+  const leanText = (fills: Map<Hole, string>) => dropUnusedAfterFill(applyEdits(base, editsOf(fills)), target, (k) => !!baseUsed.get(k));
   /** the functions among `ds` whose Lean definition still has a hole (`sorry`): not filled by `fills`, not @trusted (axiomatized) */
   const unfinished = (ds: Iterable<ts.FunctionDeclaration>, fills: Map<Hole, string>) => [...ds].filter((d) => !isTrusted(d) && holesIn(d).some((h) => ![...fills.keys()].some((x) => x.node === h)));
   /** a function whose body still has a hole that no proved fill replaces (@trusted or not: the tests run its body) */
@@ -1625,6 +2108,30 @@ export async function synthCommand(root: string, files: string[], opts: { write?
     const relative = [...new Set([...names.flatMap((q) => v.axioms.get(q)!), ...viaProofs])].filter((a) => !STD_AXIOMS.has(a));
     return { status: "proved", relative };
   };
+  /**
+   * The functions of the target module that the fill texts call and whose Lean declarations rest
+   * on a sorry (a failed obligation of theirs, admitted, or a hole): a candidate calling one is
+   * "pending" because of its own choice of helper, not because of the function being filled.
+   */
+  const sorryCallees = (c: Checked, fills: string[]): string[] => {
+    if (!c.v) return [];
+    const mr = c.tr.modules.find((m) => path.resolve(m.tsFile) === path.resolve(target));
+    const called = new Set<string>();
+    for (const code of fills) {
+      const visit = (n: ts.Node) => {
+        if (ts.isCallExpression(n) && ts.isIdentifier(n.expression)) called.add(n.expression.text);
+        ts.forEachChild(n, visit);
+      };
+      visit(ts.createSourceFile("c.ts", `(${code});`, ts.ScriptTarget.ES2022, true));
+    }
+    return [...called].filter((nm) => {
+      const fi = mr?.functions.find((f) => f.name === nm);
+      return !!fi && [fi.qname, ...fi.posts].some((q) => !c.v!.axioms.has(q) || c.v!.axioms.get(q)!.includes("sorryAx"));
+    });
+  };
+  const callsAny = (code: string, names: Set<string>) => [...names].some((nm) => new RegExp(`(^|[^\\w$.])${nm.replace(/\$/g, "\\$")}\\(`).test(code));
+  /** the holes whose fills in `fills` call one of `names` */
+  const taintedBy = (fills: Map<Hole, string>, names: Set<string>) => [...fills].filter(([, c]) => callsAny(c, names)).map(([x]) => x);
   const provedStatus = (relative: string[]) => (relative.length ? "proved-relative" : "proved");
   const relNote = (relative: string[]) => `proved assuming ${relative.join(", ")} (@trusted contracts, assume(…) facts or axioms of user proofs, not proved)`;
 
@@ -1635,6 +2142,16 @@ export async function synthCommand(root: string, files: string[], opts: { write?
     const record = (h: Hole, solution: string | null, tested: number, status: string, note?: string, relative?: string[]) => {
       results.push({ fn: task.name, hole: showType(h.type), solution, tested, proved: status === "proved" || status === "proved-relative", status, ...(relative?.length ? { relative_to: relative } : {}), note });
     };
+    if (task.contractHoles.length) {
+      const c = task.contractHoles[0];
+      const more = task.contractHoles.length > 1 ? ` (and ${task.contractHoles.length - 1} more)` : "";
+      console.log(n ? holesLabel : `hole in ${task.name}`);
+      const why = `${c.where}: a hole inside ${c.call}(…)${more} is part of the contract of ${task.name}, the specification its holes are filled against: synth never fills it (a fill proved against the contract it is part of could be vacuous, e.g. requires(false)); write the contract by hand`;
+      for (const ch of task.contractHoles) results.push({ fn: task.name, hole: ch.type, solution: null, tested: 0, proved: false, status: "skipped", note: why });
+      for (const h of task.holes) record(h, null, 0, "skipped", why);
+      console.log(`  ✗ not searched: ${why}`);
+      continue;
+    }
     if (isTrusted(fd)) {
       console.log(`${holesLabel}`);
       for (const h of task.holes) record(h, null, 0, "skipped", "@trusted");
@@ -1717,10 +2234,26 @@ export async function synthCommand(root: string, files: string[], opts: { write?
       const k = specFn(env, callee);
       if (k === "ensures") {
         ownContract.push({ at: [callee.getStart(sf), callee.getEnd()], text: OWN_ENSURES });
+        // (`implies` in the lambda: `b` only where `a` holds, as the prover reads it)
+        const post = st.expression.arguments[0];
+        const pb = post && (ts.isArrowFunction(post) || ts.isFunctionExpression(post)) && !ts.isBlock(post.body) ? (post.body as ts.Expression) : null;
+        if (pb) ownContract.push(...lazyImplies(pb, sf, (c) => specFn(env, c)));
         task.ensures++;
       } else if (k === "requires") ownContract.push({ at: [callee.getStart(sf), callee.getEnd()], text: OWN_REQUIRES });
       else if (k !== "decreases") break;
       contractStmts.push(st);
+    }
+    // a function that a contract depends on, with no ensures of its own: Lean checks its fill against
+    // nothing, so any fill (the smallest: `true`, `0`) would be "proved" — and would become part of
+    // that contract (an ensures that says nothing, a requires that rules out every input). Like a
+    // hole inside a contract, it is the specification: not filled
+    const usedBy = contractUse.get(fd);
+    if (usedBy && task.ensures === 0) {
+      const why = `${task.name} has no ensures and ${usedBy} calls it (directly or through other functions): Lean would check a fill of ${task.name} against no postcondition, so any fill (the smallest first: \`true\`, \`0\`) would be "proved" and would become part of that contract: synth does not fill it; give ${task.name} an ensures that says what it computes, or write it by hand`;
+      console.log(`${holesLabel}`);
+      console.log(`  ✗ not searched: ${why}`);
+      for (const h of task.holes) record(h, null, 0, "skipped", why);
+      continue;
     }
     // a contract whose Lean statement mentions a function with a hole cannot be proved (its
     // theorems then depend on that function's `sorry`) until that function is finished. Only what
@@ -1737,12 +2270,14 @@ export async function synthCommand(root: string, files: string[], opts: { write?
     const pools = harvest(fd);
     const t0All = Date.now();
     // time for the whole function: the per-hole limit for each hole, and one more for backtracking
-    const deadline = t0All + TIME_LIMIT_MS * (n + 1);
+    const deadline = t0All + timeLimitMs * (n + 1);
     const leanBudget = MAX_LEAN_CHECKS * n;
     let leanRuns = 0;
     let blocked: string | null = null; // no fill of this function can be checked now
     let halt: string | null = null; // this function's time or Lean-check budget is spent
     let provedRelative: string[] = [];
+    // helpers whose proofs rest on a sorry (found by Lean checks of candidates calling them)
+    const sorryHelpers = new Set<string>();
     const notes = new Map<Hole, { tested: number; last?: string; cand?: string }>();
     // deps[i]: the earlier holes that a call reaching hole i may also evaluate (only their fills
     // can change what the tests of hole i say)
@@ -1763,8 +2298,8 @@ export async function synthCommand(root: string, files: string[], opts: { write?
       // the earlier holes this one cannot share a call with stay unfilled (calls reaching them are skipped)
       // (the hole's own random inputs: the same whatever the earlier fills and the search order)
       const rand = seeded(`${seed}\u0000${task.name}\u0000${i}`);
-      const runner = makeRunner(sb!, target, task.name, pTypes as VType[], prog, pools, (cand) => applyEdits(base, [...editsOf(new Map([...accepted, ...ctx, [h, fillText(h, cand)]])), ...ownContract]), rand, tparamsOf.get(fd) ?? []);
-      return newSearch(h, en, runner, maxSize, Math.min(TIME_LIMIT_MS, Math.max(5000, deadline - Date.now())));
+      const runner = makeRunner(sb!, target, task.name, pTypes as VType[], prog, pools, (cand) => applyEdits(base, [...editsOf(new Map([...accepted, ...ctx, [h, `(${HIT}(), ${cand})`]])), ...ownContract]), rand, tparamsOf.get(fd) ?? []);
+      return newSearch(h, en, runner, maxSize, Math.min(timeLimitMs, Math.max(Math.min(5000, timeLimitMs), deadline - Date.now())));
     };
 
     /** `failed`: the hole whose search failed; `told`: the backjump was reported */
@@ -1782,6 +2317,13 @@ export async function synthCommand(root: string, files: string[], opts: { write?
       const ctxText = [...ctx].map(([x, c]) => `hole ${task.holes.indexOf(x) + 1} = ${c}`).join(", ");
       const label = n > 1 ? `hole ${i + 1}/${n} in ${task.name}${ctxText ? ` (with ${ctxText})` : ""}` : `hole in ${task.name}`;
       const key = [i, ...[...ctx].map(([x, c]) => `${task.holes.indexOf(x)}=${c}`)].join("\u0000");
+      // an earlier hole's fill calls a helper whose proof rests on a sorry: no fill of this hole can
+      // make the function proved with it (only another fill of that hole can)
+      const tainted = taintedBy(tentative, sorryHelpers).map((x) => task.holes.indexOf(x));
+      if (tainted.length) {
+        console.log(`${label}: not searched: ${tainted.map((j) => `hole ${j + 1}'s fill (${tentative.get(task.holes[j])})`).join(", ")} calls ${[...sorryHelpers].filter((nm) => tainted.some((j) => callsAny(tentative.get(task.holes[j])!, new Set([nm])))).join(", ")}, whose proof rests on a sorry`);
+        return { sol: null, conflict: new Set(tainted), failed: i, told: true };
+      }
       let s = searches.get(key);
       const reused = !!s;
       if (!s) {
@@ -1807,11 +2349,15 @@ export async function synthCommand(root: string, files: string[], opts: { write?
       // the candidates of this hole depend on the fills of deps[i] only
       const conflict = new Set(deps[i]);
       let examined = 0;
+      // fills of this (non-final) hole tried with a search of the next hole
+      let tried = 0;
       let leanChecks = 0;
       let stop = "";
       const rejected: string[] = [];
       const untranslatable: string[] = [];
       let sol: Map<Hole, string> | null = null;
+      // candidates whose proof rests on a sorry of a helper they call (not proved; the next ones are tried)
+      const viaSorry: string[] = [];
       // with several holes, a rejection may be the fault of an earlier fill: backtrack sooner
       const leanCap = n > 1 ? MAX_LEAN_CHECKS_JOINT : MAX_LEAN_CHECKS;
       for (let k = 0; !blocked && !halt; k++) {
@@ -1819,11 +2365,25 @@ export async function synthCommand(root: string, files: string[], opts: { write?
         if (!sv) break;
         examined++;
         const ins = fillText(h, sv.code);
-        notes.set(h, { tested: s.tested, cand: ins });
+        // (what the tests said about it, for the messages)
+        const passes = sv.untested ? `${ins} (untested)` : sv.cut ? `${ins} passes the tests that ran` : `${ins} passes the tests`;
+        notes.set(h, { tested: s.tested, cand: passes });
         const after = `(${s.tested} candidate(s) tested in ${(s.searchMs / 1000).toFixed(1)}s)`;
-        if (!sv.untested) console.log(`  candidate passes ${sv.valid} random tests: ${ins}   ${after}`);
+        if (sv.cut) console.log(`  candidate passes the ${sv.valid} random tests that ran before its tests were cut off: ${ins}   ${after}`);
+        else if (!sv.untested) console.log(`  candidate passes ${sv.valid} random tests: ${ins}   ${after}`);
         else console.log(`  untested candidate: ${ins}`);
         if (!last) {
+          if (callsAny(ins, sorryHelpers)) {
+            // (the function's proof would rest on that sorry whatever the later holes are filled with)
+            console.log(`  ? not tried: ${ins} calls ${[...sorryHelpers].filter((nm) => callsAny(ins, new Set([nm]))).join(", ")}, whose proof rests on a sorry (see above)`);
+            viaSorry.push(ins);
+            if (viaSorry.length >= MAX_TENTATIVE + 5) {
+              stop = `${viaSorry.length} fills of this hole that pass the tests call a helper whose proof rests on a sorry`;
+              break;
+            }
+            continue;
+          }
+          tried++;
           console.log(`  … proof pending the other hole(s) of ${task.name}: searching hole ${i + 2} with this fill`);
           const r = await solve(i + 1, new Map([...tentative, [h, ins]]));
           if (r.sol) {
@@ -1842,7 +2402,7 @@ export async function synthCommand(root: string, files: string[], opts: { write?
             return { sol: null, conflict: r.conflict, failed: r.failed, told: true };
           }
           for (const c of r.conflict) if (c !== i) conflict.add(c);
-          if (examined >= MAX_TENTATIVE) {
+          if (tried >= MAX_TENTATIVE) {
             stop = `${MAX_TENTATIVE} fills of this hole were tried with the next one`;
             break;
           }
@@ -1850,6 +2410,15 @@ export async function synthCommand(root: string, files: string[], opts: { write?
         }
         // Lean checks the whole function: its verdict depends on every fill
         for (const j of earlier()) conflict.add(j);
+        if (callsAny(ins, sorryHelpers)) {
+          console.log(`  ? not checked: ${ins} calls ${[...sorryHelpers].filter((nm) => callsAny(ins, new Set([nm]))).join(", ")}, whose proof rests on a sorry (see above)`);
+          viaSorry.push(ins);
+          if (examined >= leanCap + 5) {
+            stop = `${examined} candidates passing the tests were not proved`;
+            break;
+          }
+          continue;
+        }
         const all = new Map([...accepted, ...tentative, [h, ins]]);
         const text = leanText(all);
         const cached = checks.has(text);
@@ -1857,7 +2426,8 @@ export async function synthCommand(root: string, files: string[], opts: { write?
           halt = `the cap of ${leanBudget} Lean checks for ${task.name} was reached`;
           break;
         }
-        const st = statusOf(check(text), text, task, all);
+        const checked = check(text);
+        const st = statusOf(checked, text, task, all);
         if (st.status === "untranslatable") {
           // (a synth limitation, not a verdict of Lean)
           console.log(`  ✗ ${ins}: does not translate: ${st.why}`);
@@ -1876,10 +2446,27 @@ export async function synthCommand(root: string, files: string[], opts: { write?
             console.log(`  ✗ Lean rejects ${ins}: ${st.why}`);
             rejected.push(ins);
           } else {
-            // blocked / pending: no candidate of this function can be checked now
-            console.log(`  ? not proved: ${ins} passes the tests, but ${st.why}`);
-            blocked = st.why;
-            break;
+            // blocked / pending because of a helper that this function's fills call (whose proof
+            // rests on a sorry): only the fills calling it are affected
+            const own = sorryCallees(checked, [...tentative.values(), ins]);
+            for (const nm of own) sorryHelpers.add(nm);
+            const theirs = taintedBy(tentative, new Set(own)).map((x) => task.holes.indexOf(x));
+            if (theirs.length) {
+              // an earlier hole's fill calls it: so would every candidate of this hole with that fill
+              const which = theirs.map((j) => `hole ${j + 1} (${tentative.get(task.holes[j])})`).join(", ");
+              console.log(`  ? not proved: ${passes}, but ${st.why}: the fill of ${which} calls ${own.filter((nm) => theirs.some((j) => callsAny(tentative.get(task.holes[j])!, new Set([nm])))).join(", ")}, whose proof rests on a sorry (a failed obligation or a hole); fills of ${theirs.length > 1 ? "those holes" : `hole ${theirs[0] + 1}`} that do not call it are tried next`);
+              notes.set(h, { ...notes.get(h), tested: s.tested, last: `the fill of ${which} calls a helper whose proof rests on a sorry` });
+              return { sol: null, conflict: new Set(theirs), failed: i, told: true };
+            }
+            if (own.length) {
+              console.log(`  ? not proved: ${passes}, but ${st.why}: it calls ${own.join(", ")}, whose proof rests on a sorry (a failed obligation or a hole); candidates that do not call ${own.length > 1 ? "them" : "it"} are tried next`);
+              viaSorry.push(ins);
+            } else {
+              // no candidate of this function can be checked now
+              console.log(`  ? not proved: ${passes}, but ${st.why}`);
+              blocked = st.why;
+              break;
+            }
           }
         }
         if (leanChecks >= leanCap || examined >= leanCap + 5) {
@@ -1888,9 +2475,11 @@ export async function synthCommand(root: string, files: string[], opts: { write?
         }
       }
       if (sol) return { sol, conflict };
-      notes.set(h, { ...notes.get(h), tested: s.tested, last: stop || s.stop });
+      const viaSorryNote = viaSorry.length ? `the candidate(s) that pass the tests call ${[...sorryHelpers].join(", ")}, whose proof rests on a sorry` : "";
+      notes.set(h, { ...notes.get(h), tested: s.tested, last: viaSorryNote || stop || s.stop });
       if (blocked || halt) return { sol: null, conflict, failed: i };
-      const what = s.untestable ?? (s.passed ? `${s.passed} candidate(s) passed the tests, none was proved` : "no candidate passed the tests");
+      const untestedNote = s.deferred ? ` (${s.deferred} could not be tested, e.g. ${s.untestableSome})` : "";
+      const what = s.untestable ?? (s.passed ? `${s.passed} candidate(s) passed the tests, none was proved${untestedNote}` : `no candidate passed the tests${untestedNote}`);
       if (!reused) {
         console.log(`  ${s.tested} candidates tested in ${(s.searchMs / 1000).toFixed(1)}s, up to size ${s.sizeReached}; stopped: ${stop || s.stop || "search exhausted"}`);
         const top = [...s.fails.entries()].sort((a, b) => b[1].n - a[1].n)[0];
@@ -1902,6 +2491,7 @@ export async function synthCommand(root: string, files: string[], opts: { write?
       if (rejected.length && s.untestable) console.log("  the inputs cannot test this hole and Lean rejects the smallest candidates: write this one by hand");
       else if (rejected.length) console.log("  the random tests accept candidates that Lean rejects: write this one by hand");
       else if (untranslatable.length) console.log(`  the candidate(s) that pass the tests do not translate (${eg(untranslatable)}): a synth limitation, write this one by hand`);
+      else if (viaSorry.length) console.log(`  the candidate(s) that pass the tests (${eg(viaSorry)}) call ${[...sorryHelpers].join(", ")}, whose proof rests on a sorry: fix ${sorryHelpers.size > 1 ? "them" : "it"} first, or write this one by hand`);
       // (Maps and Sets: the grammar only grows them, so a fill that deletes is never found)
       else if (last || !s.passed) console.log(`  write this one by hand (synth builds straight-line expressions; guarded updates need an \`if\`${s.collections ? "; it only adds to a Map or Set, by new Map(m).set(k, v) or new Set(s).add(x): deleting is not in its grammar" : ""}), or check that the spec is satisfiable`);
       return { sol: null, conflict, failed: i };
@@ -1917,7 +2507,7 @@ export async function synthCommand(root: string, files: string[], opts: { write?
     } else {
       for (const h of task.holes) {
         const nt = notes.get(h);
-        record(h, null, nt?.tested ?? 0, "not-proved", blocked ? `${nt?.cand ? `${nt.cand} passes the tests, but ` : ""}${blocked}` : (halt ?? nt?.last));
+        record(h, null, nt?.tested ?? 0, "not-proved", blocked ? `${nt?.cand ? `${nt.cand}, but ` : ""}${blocked}` : (halt ?? nt?.last));
       }
       if (halt) console.log(`  stopped: ${halt}`);
       if (n > 1) console.log(`  (no hole of ${task.name} is filled: its holes are only proved together)`);

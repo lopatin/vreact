@@ -9,9 +9,10 @@
  */
 import ts from "typescript";
 import { T, type VType, type Param, type Field, leanType, showType, typeOfNode, checkValueType, propertyName, isLibSymbol, collectionKind } from "./types.ts";
-import { type Env, ModCtx, type CompCtx, type CompInfo, type StateVar, type FnInfo, type Binding, bind, freshLocal, refSymbol } from "./ctx.ts";
-import { expr, prop, propAll, block, branch, handlerFn, checkDeps, hookName, specFn, isGlobal, symbolOf, bindParam, type BlockCtx, typeOf, valueBlock, lambda, outcome, checkClosures, topLevelHookDecls, fnParamTsTypes, stripParens, isNumeric, evalArgs, isDocumentTitle, jsxAttrText, checkPlainParams, isNullLit, ARRAY_MUTATORS } from "./translate.ts";
-import { fail, leanField, leanIdent, leanStr, jsStr, paren, nodeText, indent, VtsError, jsxTextValue, asciiLower } from "./util.ts";
+import { type Env, type Val, type Mark, ModCtx, type CompCtx, type CompInfo, type CallbackInfo, type StateVar, type FnInfo, type Binding, bind, freshLocal, refSymbol } from "./ctx.ts";
+import { expr, prop, propAll, block, branch, handlerFn, checkDeps, hookName, specFn, isGlobal, symbolOf, globalOf, bindParam, type BlockCtx, typeOf, valueBlock, isUndefinedReturn, nsMember, contractLambda, outcome, checkClosures, topLevelHookDecls, fnParamTsTypes, stripParens, isNumeric, evalArgs, isDocumentTitle, jsxAttrText, checkPlainParams, isNullLit, ARRAY_MUTATORS, isMutatedLocal, toStr, nullishKinds } from "./translate.ts";
+import { fail, leanField, leanIdent, leanStr, jsStr, paren, nodeText, indent, VtsError, jsxTextValue, asciiLower, relLoc } from "./util.ts";
+import { reservedName, windowReserved } from "./domNames.ts";
 
 /* ─────────────────────── React 18.3.1 event model ───────────────────────
  * Native DOM events → React handler props, and their priorities, as in
@@ -116,7 +117,7 @@ function staticAttr(e: ts.JsxElement | ts.JsxSelfClosingElement, name: string): 
 function changeNatives(tag: string, e: ts.JsxElement | ts.JsxSelfClosingElement, html: boolean): string[] {
   const any = ["click", "input", "change"];
   if (!html) return any;
-  if (tag === "select") return ["change"];
+  if (tag === "select") return ["change"]; // its content is options only (CONTENT_RULES), which make no onChange
   if (tag === "textarea") return ["input", "change"];
   if (tag !== "input") return any; // a change of any form control inside bubbles here
   const t = staticAttr(e, "type");
@@ -229,6 +230,16 @@ interface Prepass {
   inv: string[];
   stateVars: StateVar[];
   inits: string[];
+  /** the Lean locals `init` binds the initial values to when a later one reads an earlier state value */
+  initNames: string[];
+  /** whether an initial value reads a state value declared before it (`useState(a)`) */
+  initReadsState: boolean;
+  /**
+   * The initial values that read an earlier state value and that React evaluates at every
+   * render, not only at mount (all but a lazy `useState(() => …)`), at their types: also checked
+   * in the render, with the state of that render (`translateComponent`).
+   */
+  renderChecks: { node: ts.Expression; type: VType }[];
   contracts: Map<string, { binders: string[]; prop: string }>;
   renderStmts: ts.Statement[];
   /** env with props bound (for pre / contracts / init) */
@@ -259,8 +270,10 @@ export function translateComponent(fn: ts.FunctionDeclaration, info: CompInfo, m
   }
   const body = fn.body;
   if (!body) fail(fn, "component without body");
-  // closures (handlers, effects, updaters, callbacks) over render-local `let`s must agree with JS
-  if (!info.trusted) checkClosures(body, env);
+  // closures (handlers, effects, updaters, callbacks) over render-local `let`s must agree with JS;
+  // of a @trusted component, in what is translated although its render is not (its contracts
+  // and initial state: a block-bodied every/some callback there is read as code)
+  checkClosures(body, env, info.trusted ? body.statements.filter((s) => prepassTranslates(s, env)) : undefined);
   const pp = prepass(body.statements, env, comp, m);
   comp.stateVars = pp.stateVars;
   deferredFields.set(comp, computeDeferred(body, comp, env));
@@ -279,7 +292,11 @@ export function translateComponent(fn: ts.FunctionDeclaration, info: CompInfo, m
   out += `@[vreact_simp] def pre (props : Props) : Prop :=\n  ${pp.pre.length ? pp.pre.join(" ∧\n  ") : "True"}\n\n`;
   const stateLets = pp.stateVars.map((s) => `let ${leanIdent(s.name)} := σ.${leanField(s.field)}; `).join("");
   out += `@[vreact_simp] def inv (props : Props) (σ : State) : Prop :=\n  ${pp.inv.length ? stateLets + "\n  " + pp.inv.join(" ∧\n  ") : "True"}\n\n`;
-  out += `@[vreact_simp] def init (props : Props) (hpre : pre props) : State :=\n  State.mk${pp.inits.map((x) => " " + paren(x)).join("")}\n\n`;
+  // (a later initial value that reads an earlier state value reads its initial value: a local)
+  const initBody = pp.initReadsState
+    ? `${pp.inits.map((x, i) => `let ${pp.initNames[i]} : ${leanType(pp.stateVars[i].type)} := ${x};\n  `).join("")}State.mk${pp.initNames.map((x) => " " + x).join("")}`
+    : `State.mk${pp.inits.map((x) => " " + paren(x)).join("")}`;
+  out += `@[vreact_simp] def init (props : Props) (hpre : pre props) : State :=\n  ${initBody}\n\n`;
   const invNode = fn.name!;
   if (info.trusted) {
     out += `axiom init_inv : ∀ (props : Props) (hpre : pre props), inv props (init props hpre)\n`;
@@ -301,22 +318,33 @@ export function translateComponent(fn: ts.FunctionDeclaration, info: CompInfo, m
     for (const sv of pp.stateVars) {
       lets += `let ${leanIdent(sv.name)} := σ.${leanField(sv.field)};\n  `;
     }
-    renv = bindStateVars(renv, body.statements, pp.stateVars);
-    const effects: string[] = [];
+    // The Lean names of the state values are taken for the whole render (`lets`), but each state
+    // value and setter is bound at its own declaration (`renderBlock`): before it, JS has it in
+    // its temporal dead zone, so a function called there (a helper, an array callback, the
+    // useMemo factory, a JSX const) that reads it throws a ReferenceError.
+    const sc = new Set(renv.scope);
+    for (const sv of pp.stateVars) sc.add(leanIdent(sv.name));
+    renv = { ...renv, scope: sc };
+    // an initial value that reads earlier state and that React evaluates at every render (its
+    // value then unused): checked there too, against the state of the render (`stateVar`; it
+    // reads only state declared before it)
+    const allState = bindStateVars(renv, body.statements, pp.stateVars);
+    for (const rc of pp.renderChecks) {
+      const n0 = m.obligations.length;
+      const v = expr(rc.node, { ...allState, limits: INIT_LIMITS }, rc.type);
+      if (m.obligations.length > n0) lets += `let _ : ${leanType(rc.type)} := ${v.code};\n  `;
+    }
+    // (renderBlock attaches to each return the effects registered on its path)
     const bc: BlockCtx = {
       kind: "render",
       fnNode: fn,
       onReturn: (e, env2) => {
         if (!e) fail(fn, "components must return JSX or null");
-        const node = jsxNode(e, env2);
-        return effects.length ? `(VReact.VNode.withEffects [${effects.join(",\n  ")}]\n  ${paren(node)})` : node;
+        return jsxNode(e, env2);
       },
       jsxConst: jsxConstCtx(comp),
     };
-    (bc as BlockCtx & { onEffect?: (c: ts.CallExpression, env: Env) => void }).onEffect = (c, env2) => {
-      effects.push(effectCode(c, env2, info));
-    };
-    const renderBody = withBubble(NO_BUBBLE, () => renderBlock(pp.renderStmts, renv, bc));
+    const renderBody = withBubble(NO_BUBBLE, () => renderBlock(pp.renderStmts, renv, bc, (c, env2) => effectCode(c, env2, info)));
     out += `${sig} :=\n  ${lets}${renderBody}\n\n`;
   }
   out += `def component : VReact.Component spec := ⟨fun d cb s hpre hinv => render d cb s hpre hinv⟩\n\n`;
@@ -341,6 +369,36 @@ function deferredOf(comp: CompCtx): StateVar[] {
   return deferredFields.get(comp) ?? [];
 }
 
+/**
+ * The hook call an initialiser or expression statement is, through parentheses
+ * (`(useEffect(…))`, `const [n, setN] = (useState(0))`: the same call in JS), or null.
+ */
+function hookCall(e: ts.Expression | undefined): ts.CallExpression | null {
+  if (!e) return null;
+  const x = stripParens(e);
+  return ts.isCallExpression(x) ? x : null;
+}
+
+/** Is `c` a call of useState / useReducer? */
+function isStateHook(c: ts.CallExpression | null, env: Env): boolean {
+  const h = c ? hookName(env, c.expression) : null;
+  return h === "useState" || h === "useReducer";
+}
+
+/** Hooks VTS does not model (rejected wherever they are called). */
+const UNMODELLED_HOOKS = new Set(["useRef", "useContext", "useLayoutEffect", "useSyncExternalStore", "useTransition", "useDeferredValue", "useId", "useImperativeHandle"]);
+
+/** What the restricted environments of a component's contracts and initial values give access to (`Env.limits`). */
+const PRE_LIMITS = "a requires(…) may mention only the props and top-level declarations (it is what every parent must establish before the component renders)";
+const INV_LIMITS = "an invariant may mention only the props, the state and top-level declarations";
+const CBREQ_LIMITS = "callbackRequires(…) may mention only the callback's arguments, the props and top-level declarations";
+const INIT_LIMITS = "an initial value (useState / useReducer) may read only the props, the state values declared before it (at mount, their initial values) and top-level declarations";
+
+/** Why the hook `h` is rejected: it is not modelled. */
+function unmodelledHook(h: string): string {
+  return `${h} is not modelled in VTS yet${h === "useLayoutEffect" ? " (its updates are synchronous, during the commit; use useEffect)" : ""}`;
+}
+
 /** Syntactic over-approximation: setters/dispatches reachable (through local closures) from an effect or a non-discrete handler. */
 function computeDeferred(body: ts.Block, comp: CompCtx, env: Env): StateVar[] {
   const checker = env.m.checker;
@@ -351,7 +409,7 @@ function computeDeferred(body: ts.Block, comp: CompCtx, env: Env): StateVar[] {
       if (ts.isIdentifier(n.name)) {
         const sym = checker.getSymbolAtLocation(n.name);
         if (sym) closures.set(sym, n.initializer);
-      } else if (ts.isArrayBindingPattern(n.name) && ts.isCallExpression(n.initializer) && ["useState", "useReducer"].includes(hookName(env, n.initializer.expression) ?? "")) {
+      } else if (ts.isArrayBindingPattern(n.name) && isStateHook(hookCall(n.initializer), env)) {
         const [a, b] = n.name.elements;
         if (a && b && ts.isBindingElement(a) && ts.isIdentifier(a.name) && ts.isBindingElement(b) && ts.isIdentifier(b.name)) {
           const sv = comp.stateVars.find((x) => x.name === (a.name as ts.Identifier).text);
@@ -405,13 +463,15 @@ function rebase(comp: CompCtx): { vary: string; x0: string; names: string } {
   return { vary, x0, names: d.map((s) => s.name).join(", ") };
 }
 
+/** `env` with the state values and setters / dispatches declared by `stmts` bound. */
 function bindStateVars(env: Env, stmts: readonly ts.Statement[], svs: StateVar[]): Env {
   let e = env;
   for (const s of stmts) {
     if (!ts.isVariableStatement(s)) continue;
     for (const d of s.declarationList.declarations) {
-      if (!ts.isArrayBindingPattern(d.name) || !d.initializer || !ts.isCallExpression(d.initializer)) continue;
-      const h = hookName(e, d.initializer.expression);
+      const c = hookCall(d.initializer);
+      if (!ts.isArrayBindingPattern(d.name) || !c) continue;
+      const h = hookName(e, c.expression);
       if (h !== "useState" && h !== "useReducer") continue;
       const [a, b] = d.name.elements;
       const sv = svs.find((x) => ts.isBindingElement(a) && ts.isIdentifier(a.name) && x.name === a.name.text)!;
@@ -429,63 +489,84 @@ function bindStateVars(env: Env, stmts: readonly ts.Statement[], svs: StateVar[]
   return e;
 }
 
-/** Render statements: like `block`, plus useEffect handling. */
-function renderBlock(stmts: ts.Statement[], env: Env, bc: BlockCtx): string {
-  const onEffect = (bc as BlockCtx & { onEffect?: (c: ts.CallExpression, env: Env) => void }).onEffect!;
-  // peel effects off at top level (they are hooks: unconditional, before returns)
-  const rest: ts.Statement[] = [];
-  const run = (i: number, e: Env): string => {
+/**
+ * Render statements: like `block`, plus useEffect handling.  `effect` translates a top-level
+ * useEffect call in the environment where it runs.
+ */
+function renderBlock(stmts: ts.Statement[], env: Env, bc: BlockCtx, effect: (c: ts.CallExpression, env: Env) => string): string {
+  // peel effects off at top level (they are hooks: unconditional, before returns).  A statement
+  // before them may still branch without returning (`{ if (x !== null) { … } }`): the scan then
+  // goes on once per path, and each path's returns carry the effects registered on that path,
+  // each once and translated in that path's environment (its narrowings, its locals)
+  const run = (i: number, e: Env, effects: readonly string[]): string => {
     if (i >= stmts.length) fail(bc.fnNode, "component must return");
     const s = stmts[i];
-    if (ts.isExpressionStatement(s) && ts.isCallExpression(s.expression) && hookName(e, s.expression.expression) === "useEffect") {
-      onEffect(s.expression, e);
-      return run(i + 1, e);
+    const c = ts.isExpressionStatement(s) ? hookCall(s.expression) : null;
+    if (c && hookName(e, c.expression) === "useEffect") return run(i + 1, e, [...effects, effect(c, e)]);
+    // `const [n, setN] = useState(…)`: from here on `n` is this render's state value (its Lean
+    // local is bound at the top of the render) and `setN` its setter
+    if (ts.isVariableStatement(s) && isStateHook(hookCall(s.declarationList.declarations[0]?.initializer), e)) {
+      return run(i + 1, bindStateVars(e, [s], e.comp!.stateVars), effects);
     }
     if (ts.isReturnStatement(s) && i < stmts.length - 1) fail(stmts[i + 1], "unreachable code after return (it never runs)");
+    const pbc: BlockCtx = effects.length
+      ? { ...bc, onReturn: (r, env2) => `(VReact.VNode.withEffects [${effects.join(",\n  ")}]\n  ${paren(bc.onReturn!(r, env2))})` }
+      : bc;
     // translate this statement with a continuation that resumes the scan
-    return block([s], 0, e, bc, (e2) => run(i + 1, e2));
+    return block([s], 0, e, pbc, (e2) => run(i + 1, e2, effects));
   };
-  return run(0, env);
+  return run(0, env, []);
 }
 
 function prepass(stmts: readonly ts.Statement[], env: Env, comp: CompCtx, m: ModCtx): Prepass {
-  const pp: Prepass = { pre: [], inv: [], stateVars: [], inits: [], contracts: new Map(), renderStmts: [], propsEnv: env };
+  const pp: Prepass = { pre: [], inv: [], stateVars: [], inits: [], initNames: [], initReadsState: false, renderChecks: [], contracts: new Map(), renderStmts: [], propsEnv: env };
   let sawNonHook = false;
-  let stateEnv: Env = env; // props + state (as σ.field) for invariants
+  let stateEnv: Env = { ...env, limits: INV_LIMITS }; // props + state (as σ.field) for invariants
+  // the initial values: the props, and each state value declared so far bound to its own
+  // initial value (`initNames`), which it has when React evaluates a later one at mount
+  let initEnv: Env = { ...env, limits: INIT_LIMITS };
+  const stateSyms: ts.Symbol[] = [];
   // several requires / invariants form one condition each, in order: a later one may use
   // the earlier ones as guards (`propAll`, as for function preconditions)
   const reqs: ts.Expression[] = [];
   const invs: ts.Expression[] = [];
+  // for each invariant, how many state values are declared before it
+  const invAt: number[] = [];
   for (const s of stmts) {
-    if (ts.isExpressionStatement(s) && ts.isCallExpression(s.expression)) {
-      const c = s.expression;
+    const c = ts.isExpressionStatement(s) ? hookCall(s.expression) : null;
+    if (c) {
       const sf = specFn(env, c.expression);
       if (sf === "requires" || sf === "invariant") {
         if (c.arguments.length !== 1) fail(c, `${sf}(condition)`);
         (sf === "requires" ? reqs : invs).push(c.arguments[0]);
+        if (sf === "invariant") invAt.push(stateSyms.length);
         continue;
       }
       if (sf === "callbackRequires") {
+        if (c.arguments.length !== 2) fail(c, "callbackRequires(cb, (args) => condition)");
         const cbE = c.arguments[0];
-        const name = ts.isPropertyAccessExpression(cbE) ? cbE.name.text : ts.isIdentifier(cbE) ? cbE.text : null;
-        const cb = comp.info.callbacks.find((x) => x.name === name);
-        if (!cb) fail(cbE, "callbackRequires expects a callback prop");
-        const lam = c.arguments[1];
-        if (!lam || !(ts.isArrowFunction(lam) || ts.isFunctionExpression(lam))) fail(c, "callbackRequires(cb, (args) => condition)");
-        // (parameter annotations are checked against the callback prop's parameter types)
-        const l = lambda(lam, env, cb.params.map((p) => p.type), T.bool, fnParamTsTypes(m.checker.getTypeAtLocation(cbE), cbE, env) ?? cb.params.map(() => null));
-        const prop = `${paren(l.body.code)} = true`;
+        const cb = contractCallback(cbE, env, comp);
+        const lam = stripParens(c.arguments[1]);
+        if (!(ts.isArrowFunction(lam) || ts.isFunctionExpression(lam))) fail(c, "callbackRequires(cb, (args) => condition)");
+        // (parameter annotations are checked against the callback prop's parameter types; the
+        // body is a contract proposition: JS never runs it)
+        const l = contractLambda(lam, { ...env, limits: CBREQ_LIMITS }, cb.params.map((p) => p.type), fnParamTsTypes(m.checker.getTypeAtLocation(cbE), cbE, env) ?? cb.params.map(() => null));
+        const prop = l.prop;
         const prev = pp.contracts.get(cb.name);
         if (!prev) pp.contracts.set(cb.name, { binders: l.binders, prop });
         else {
           // several contracts for one callback: all of them hold (conjunction), the
-          // later one's parameters renamed to the first one's binders (simultaneously)
+          // later one's parameters renamed to the first one's binders (simultaneously).  Both
+          // have one binder per parameter of the callback; a parameter the earlier ones ignore
+          // (`_`, which the later one would receive as a placeholder) is named after the later
+          // one's binder, made distinct from the others (the earlier contracts do not mention it)
           const binders = [...prev.binders];
-          for (let i = binders.length; i < l.binders.length; i++) {
-            let nb = l.binders[i];
-            for (let k = 1; binders.includes(nb); k++) nb = `${l.binders[i]}_${k}`;
-            binders.push(nb);
-          }
+          l.binders.forEach((lb, i) => {
+            if (binders[i] !== "_" || lb === "_") return;
+            let nb = lb;
+            for (let k = 1; binders.includes(nb); k++) nb = lb.endsWith("»") ? `${lb.slice(0, -1)}_${k}»` : `${lb}_${k}`;
+            binders[i] = nb;
+          });
           const same = l.binders.every((b, i) => b === binders[i]);
           const later = same ? paren(prop) : `((fun ${l.typed.join(" ")} => ${prop})${l.binders.map((_, i) => " " + binders[i]).join("")})`;
           pp.contracts.set(cb.name, { binders, prop: `${prev.prop} ∧ ${later}` });
@@ -493,34 +574,55 @@ function prepass(stmts: readonly ts.Statement[], env: Env, comp: CompCtx, m: Mod
         continue;
       }
       if (sf) fail(c, `${sf}(…) is not allowed in a component body`);
+      // a hook called as a statement at the top level (`(useEffect(…))` too): only useEffect
       const h = hookName(env, c.expression);
-      if (h === "useEffect" || h === "useLayoutEffect") {
+      if (h) {
         if (sawNonHook) fail(c, "hooks must run unconditionally before any early return (Rules of Hooks)");
-        pp.renderStmts.push(s);
-        continue;
+        if (h === "useEffect") {
+          pp.renderStmts.push(s);
+          continue;
+        }
+        if (UNMODELLED_HOOKS.has(h)) fail(c, unmodelledHook(h));
+        const bound = h === "useState" || h === "useReducer" ? `const [value, ${h === "useState" ? "setValue" : "dispatch"}] = ${h}(…)` : `const value = ${h}(…)`;
+        fail(c, `${h}(…) as a statement (its value unused) is not supported: bind it (${bound})`);
       }
     }
     if (ts.isVariableStatement(s)) {
+      // every declarator: `const x = 1, [n, setN] = useState(0)` declares a hook too
+      for (const dd of s.declarationList.declarations) {
+        const ddc = hookCall(dd.initializer);
+        const hh = ddc ? hookName(env, ddc.expression) : null;
+        if (hh && UNMODELLED_HOOKS.has(hh)) fail(dd, unmodelledHook(hh));
+        if (hh === "useEffect") fail(dd, "useEffect(…) returns nothing: call it as a statement, useEffect(() => { … }, [deps]);");
+        // (a `var` is one hoisted binding: a second `var [m, setN] = useState(…)` would rebind setN
+        // for every closure created before it, and a `let` could be reassigned)
+        if (hh && !(s.declarationList.flags & ts.NodeFlags.Const)) fail(dd, `declare the result of ${hh}(…) with const, not ${s.declarationList.flags & ts.NodeFlags.Let ? "let" : "var"} (a var is one hoisted binding that a later declaration rebinds, and a let can be reassigned)`);
+        if ((hh === "useState" || hh === "useReducer") && s.declarationList.declarations.length !== 1) {
+          fail(dd, `declare a ${hh} on its own (\`const [value, ${hh === "useState" ? "setValue" : "dispatch"}] = ${hh}(…);\`), not with other variables in one declaration`);
+        }
+      }
       const d = s.declarationList.declarations[0];
-      if (d && d.initializer && ts.isCallExpression(d.initializer)) {
-        const h = hookName(env, d.initializer.expression);
-        if (h === "useState" || h === "useReducer") {
-          if (sawNonHook) fail(d, "hooks must run unconditionally before any early return (Rules of Hooks)");
-          if (s.declarationList.declarations.length !== 1) fail(s, "one hook per declaration");
-          const sv = stateVar(d, h, env, m, pp);
-          pp.stateVars.push(sv);
-          const a = (d.name as ts.ArrayBindingPattern).elements[0] as ts.BindingElement;
-          stateEnv = bind(stateEnv, symbolOf(env, a.name)!, { k: "val", code: leanIdent(sv.name), type: sv.type });
-          continue;
-        }
-        if (h === "useRef" || h === "useContext" || h === "useLayoutEffect" || h === "useSyncExternalStore" || h === "useTransition" || h === "useDeferredValue" || h === "useId" || h === "useImperativeHandle") {
-          fail(d, `${h} is not modelled in VTS yet`);
-        }
+      const dc = hookCall(d?.initializer);
+      const h = dc ? hookName(env, dc.expression) : null;
+      if (dc && (h === "useState" || h === "useReducer")) {
+        if (sawNonHook) fail(d, "hooks must run unconditionally before any early return (Rules of Hooks)");
+        const sv = stateVar(d, dc, h, initEnv, m, pp, stateSyms);
+        pp.stateVars.push(sv);
+        const a = (d.name as ts.ArrayBindingPattern).elements[0] as ts.BindingElement;
+        const sym = symbolOf(env, a.name)!;
+        stateEnv = bind(stateEnv, sym, { k: "val", code: leanIdent(sv.name), type: sv.type });
+        const r = freshLocal(initEnv, leanIdent(sv.name));
+        initEnv = bind(r.env, sym, { k: "val", code: r.name, type: sv.type });
+        pp.initNames.push(r.name);
+        stateSyms.push(sym);
+        // (kept in the render statements: the state value and setter are bound from here on)
+        pp.renderStmts.push(s);
+        continue;
       }
       // useMemo / useCallback: allowed only here (top level), before any early return
       for (const dd of s.declarationList.declarations) {
-        const init = dd.initializer && ts.isParenthesizedExpression(dd.initializer) ? dd.initializer.expression : dd.initializer;
-        if (!init || !ts.isCallExpression(init)) continue;
+        const init = hookCall(dd.initializer);
+        if (!init) continue;
         const h = hookName(env, init.expression);
         if (h !== "useMemo" && h !== "useCallback") continue;
         if (sawNonHook) fail(dd, "hooks must run unconditionally before any early return (Rules of Hooks)");
@@ -530,10 +632,67 @@ function prepass(stmts: readonly ts.Statement[], env: Env, comp: CompCtx, m: Mod
     if (ts.isIfStatement(s) || ts.isReturnStatement(s) || ts.isSwitchStatement(s) || mayReturn(s)) sawNonHook = true;
     pp.renderStmts.push(s);
   }
-  // (an invariant can only mention state declared before it: TypeScript rejects the rest)
-  if (reqs.length) pp.pre.push(propAll(reqs, env));
+  // An invariant may mention only the state declared before it: JS evaluates the argument of
+  // `invariant(…)` where it stands, so a later state value is in its temporal dead zone there
+  // (TypeScript rejects a direct read, not one inside a function: `forall(0, 1, (i) => b >= i)`).
+  invs.forEach((inv, i) => {
+    const later = stateSyms.slice(invAt[i]);
+    const id = firstRead(inv, later, m.checker);
+    if (id) {
+      fail(id, `this invariant reads the state \`${id.text}\`, declared after it (${relLoc(refSymbol(m.checker, id)!.valueDeclaration!, m.prog.root)}): JS evaluates invariant(…)'s argument where it stands, and there \`${id.text}\` is in its temporal dead zone (a ReferenceError); move the invariant after the declaration`);
+    }
+  });
+  if (reqs.length) pp.pre.push(propAll(reqs, { ...env, limits: PRE_LIMITS }));
   if (invs.length) pp.inv.push(propAll(invs, stateEnv));
   return pp;
+}
+
+/**
+ * Does `prepass` translate (part of) this statement of a component body?  Its contracts
+ * (`requires`, `invariant`, `callbackRequires`: any spec call, the others being rejected) and its
+ * `useState` / `useReducer` declarations (the initial state).  For a @trusted component, whose
+ * render is not translated, these are the statements `checkClosures` must cover.
+ */
+function prepassTranslates(s: ts.Statement, env: Env): boolean {
+  if (ts.isExpressionStatement(s) && ts.isCallExpression(s.expression)) return !!specFn(env, s.expression.expression);
+  if (ts.isVariableStatement(s)) {
+    return s.declarationList.declarations.some((d) => {
+      const init = d.initializer && stripParens(d.initializer);
+      if (!init || !ts.isCallExpression(init)) return false;
+      const h = hookName(env, init.expression);
+      return h === "useState" || h === "useReducer";
+    });
+  }
+  return false;
+}
+
+/**
+ * The callback prop whose contract `callbackRequires(cbE, …)` states: the one `cbE` holds, by its
+ * binding (as a call `cbE(…)` resolves it), never by its spelling — `props.onPick` on the props
+ * parameter, or a name destructured from the props parameter (`{ onPick }`, `{ onPick: pick }`:
+ * the local `pick` holds props.onPick).
+ */
+function contractCallback(cbE: ts.Expression, env: Env, comp: CompCtx): CallbackInfo {
+  const form = `callbackRequires(cb, (args) => condition) states the contract of a callback prop of ${comp.info.name}: write cb as props.<name> (props being the props parameter) or as a name destructured from the props parameter`;
+  const e = stripParens(cbE);
+  if (ts.isIdentifier(e)) {
+    const s = symbolOf(env, e);
+    const b = s ? env.vars.get(s) : undefined;
+    if (b?.k === "callback") return b.cb;
+    if (b?.k === "props") fail(e, `\`${e.text}\` is the props object, not one of its callbacks: ${form}`);
+    if (b?.k === "val") fail(e, `\`${e.text}\` holds a data prop of ${comp.info.name}, not a callback prop: ${form}`);
+    fail(e, `\`${e.text}\` is not a name destructured from the props parameter of ${comp.info.name}: ${form}`);
+  }
+  if (ts.isPropertyAccessExpression(e) && !e.questionDotToken && ts.isIdentifier(e.expression)) {
+    const s = symbolOf(env, e.expression);
+    if (s && env.vars.get(s)?.k === "props") {
+      const cb = comp.info.callbacks.find((x) => x.name === e.name.text);
+      if (cb) return cb;
+      fail(e, `props.${e.name.text} is not a callback prop of ${comp.info.name}: ${form}`);
+    }
+    fail(e, `\`${nodeText(e.expression)}\` is not the props parameter of ${comp.info.name}: ${form}`);
+  }
+  fail(e, `${form} (not \`${nodeText(e)}\`)`);
 }
 
 /** Does a statement of the component body contain a `return` of the component (not of a nested function)? */
@@ -565,12 +724,42 @@ function actionOnlyPre(r: FnInfo, env: Env) {
   }
 }
 
-function stateVar(d: ts.VariableDeclaration, h: string, env: Env, m: ModCtx, pp: Prepass): StateVar {
+/** Does `n` refer to one of the variables `syms` (also as a shorthand property `{ a }`)? */
+function readsAny(n: ts.Node, syms: readonly ts.Symbol[], checker: ts.TypeChecker): boolean {
+  return !!firstRead(n, syms, checker);
+}
+
+/** The first identifier in `n` that refers to one of the variables `syms` (also as a shorthand property `{ a }`), or null. */
+function firstRead(n: ts.Node, syms: readonly ts.Symbol[], checker: ts.TypeChecker): ts.Identifier | null {
+  if (!syms.length) return null;
+  if (ts.isIdentifier(n)) {
+    const s = refSymbol(checker, n);
+    if (s && syms.includes(s)) return n;
+  }
+  return ts.forEachChild(n, (c) => firstRead(c, syms, checker) ?? undefined) ?? null;
+}
+
+/**
+ * A `useState` / `useReducer` slot, its initial value translated in `env`: the props, and the
+ * state values declared before it (`earlier`) bound to their initial values.  React evaluates
+ * the argument `init` in the render (`useState(a)` reads the state `a` of that render) and uses it
+ * only at mount, when every earlier state value is its initial value: so `init` has the value
+ * it is translated to here.  An argument evaluated at every render that reads earlier state is
+ * also checked in the render, against the state there (`renderChecks`): its value is discarded
+ * then, but JS still evaluates it.
+ */
+function stateVar(d: ts.VariableDeclaration, c: ts.CallExpression, h: string, env: Env, m: ModCtx, pp: Prepass, earlier: readonly ts.Symbol[]): StateVar {
   if (!ts.isArrayBindingPattern(d.name) || d.name.elements.length < 1) fail(d, `use const [value, setValue] = ${h}(…)`);
+  // a default value or a rest element changes what JS binds (`const [n = 5] = useState<int | undefined>(undefined)`
+  // gives 5; `const [...xs] = useState(0)` gives the pair [state, setter]); a third element is undefined
+  for (const el of d.name.elements) {
+    if (ts.isBindingElement(el) && el.dotDotDotToken) fail(el, `a rest element in the destructuring of ${h}(…) is not supported (JS collects the pair [value, ${h === "useState" ? "setter" : "dispatch"}] into it): use const [value, ${h === "useState" ? "setValue" : "dispatch"}] = ${h}(…)`);
+    if (ts.isBindingElement(el) && el.initializer) fail(el, `a default value in the destructuring of ${h}(…) is not supported (JS uses it whenever the element is undefined): give ${h}(…) the initial value instead`);
+  }
+  if (d.name.elements.length > 2) fail(d.name.elements[2], `${h}(…) returns a pair: use const [value, ${h === "useState" ? "setValue" : "dispatch"}] = ${h}(…)`);
   const a = d.name.elements[0];
   if (!ts.isBindingElement(a) || !ts.isIdentifier(a.name)) fail(d, "state variable must be an identifier");
   const name = a.name.text;
-  const c = d.initializer as ts.CallExpression;
   if (h === "useState") {
     let t: VType | undefined = c.typeArguments?.[0] ? typeOfNode(c.typeArguments[0], m.prog.typeEnv, name[0].toUpperCase() + name.slice(1)) : undefined;
     if (t) checkValueType(c.typeArguments![0], t, m.reg, `state \`${name}\``);
@@ -578,10 +767,16 @@ function stateVar(d: ts.VariableDeclaration, h: string, env: Env, m: ModCtx, pp:
     if (!init) fail(c, "useState needs an initial value");
     let v;
     const ii = ts.isParenthesizedExpression(init) ? init.expression : init;
+    const reads = readsAny(init, earlier, m.checker);
     if (ts.isArrowFunction(ii) && ii.parameters.length === 0) {
+      // (a lazy initialiser: React calls it at mount only)
       v = ts.isBlock(ii.body) ? valueBlock(ii.body.statements, env, t, ii) : expr(ii.body, env, t);
     } else v = expr(init, env, t);
     t = t ?? v.type;
+    if (reads) {
+      pp.initReadsState = true;
+      if (!(ts.isArrowFunction(ii) && ii.parameters.length === 0)) pp.renderChecks.push({ node: init, type: t });
+    }
     pp.inits.push(v.code);
     return { name, field: name, type: t };
   }
@@ -606,12 +801,108 @@ function stateVar(d: ts.VariableDeclaration, h: string, env: Env, m: ModCtx, pp:
     fail(initFn, "useReducer's third (init) argument is not supported; compute the initial state in the second argument");
   } else {
     initCode = expr(c.arguments[1], env, st).code;
+    if (readsAny(c.arguments[1], earlier, m.checker)) {
+      pp.initReadsState = true;
+      pp.renderChecks.push({ node: c.arguments[1], type: st });
+    }
   }
   pp.inits.push(initCode!);
   return { name, field: name, type: st, reducer: r, actionType: r.params[1].type };
 }
 
 /* ───────────────────────────── effects ───────────────────────────── */
+
+/**
+ * The dependency values (`VReact.DepVal`) that the effect dependency `d` (translated in `env`)
+ * contributes; React compares each entry with `Object.is` to the previous render's. A data value by
+ * its type (a number, array, record, Map or optional: `obj`, whose `Object.is` the model does not
+ * decide — the run chooses whether the effect runs again, `depsChanged`; effects are robust, so
+ * either choice is verified, SEMANTICS §2.6); a setter or `dispatch`: none (React keeps one
+ * function per hook, so it never changes); a local arrow: `obj` (a new function at every render:
+ * in React the effect runs after every render, one of the model's choices); a
+ * `useCallback` function: the values of its own dependencies (React returns the cached function
+ * until one of them changes, so it changes when they do); a JSX const: `obj` (a new element object
+ * at every render); a path that starts at a top-level declaration of the program (a function,
+ * constant or component, or an import of one): none (created once, when its module is evaluated —
+ * top-level variables are const — so the same value at every render), and so is `undefined`; a
+ * path that starts at anything else declared outside the component (a global such as `Math`):
+ * rejected, with that reason (the dependency check never requires one; `innerWidth` would
+ * change); a parent callback: rejected (an effect never calls one, and when the parent passes a
+ * new function is not modelled), and so is the props object (its fields are the dependencies).
+ * `at` is the effect's dependency `d` comes from, `via` the useCallback it was reached through.
+ */
+function effectDepVals(d: ts.Expression, env: Env, at: ts.Expression, via: string | null): string[] {
+  const e = stripParens(d);
+  const s = ts.isIdentifier(e) ? symbolOf(env, e) : undefined;
+  const b = s ? env.vars.get(s) : undefined;
+  const propsCb = (x: ts.Expression): boolean => {
+    if (!ts.isPropertyAccessExpression(x) || !ts.isIdentifier(x.expression)) return false;
+    const ps = symbolOf(env, x.expression);
+    return !!ps && env.vars.get(ps)?.k === "props" && !env.comp!.info.data.some((f) => f.name === x.name.text);
+  };
+  if (b?.k === "callback" || propsCb(e)) {
+    const why = "an effect never calls parent callbacks, and when the parent passes a new function is not modelled";
+    if (via) fail(at, `the effect depends on ${via}, a useCallback function whose dependency \`${nodeText(e)}\` is a parent callback: not supported as an effect dependency (${why})`);
+    fail(at, `\`${nodeText(e)}\` is a parent callback: it cannot be an effect dependency (${why})`);
+  }
+  if (b?.k === "props") {
+    const what = "the props object is not an effect dependency: list the fields the effect reads (props.x)";
+    if (via) fail(at, `the effect depends on ${via}, a useCallback function that lists the props object: ${what}`);
+    fail(at, what);
+  }
+  if (b?.k === "setter" || b?.k === "dispatch") return [];
+  if (b?.k === "closure") {
+    const call = b.fn.parent;
+    if (ts.isCallExpression(call) && call.arguments[0] === b.fn && hookName(b.env, call.expression) === "useCallback") {
+      const deps = call.arguments[1];
+      // (checkDeps checked an array literal at the declaration)
+      if (!deps || !ts.isArrayLiteralExpression(deps)) fail(at, "useCallback needs a dependency array");
+      return deps.elements.flatMap((x) => effectDepVals(x, b.env, at, via ?? `\`${nodeText(e)}\``));
+    }
+    return ["VReact.DepVal.obj"];
+  }
+  if (b?.k === "jsx") return ["VReact.DepVal.obj"];
+  // the variable the path starts with, when it is declared outside the component
+  let root: ts.Expression = e;
+  let first: ts.Expression | null = null; // the link right after the root (`L.K` in `L.K.f`)
+  while (ts.isPropertyAccessExpression(root) || ts.isParenthesizedExpression(root)) {
+    if (ts.isPropertyAccessExpression(root)) first = root;
+    root = root.expression;
+  }
+  const rs = ts.isIdentifier(root) ? symbolOf(env, root) : undefined;
+  if (rs && !env.vars.has(rs)) {
+    // (and `undefined`, a non-writable global: always the same value)
+    if (globalOf(env, root) || (root === e && isGlobal(env, root, "undefined"))) return [];
+    // `L.K`, L a verified module's namespace: K is that module's top-level declaration, as
+    // `import { K }` gives it — created once, the same at every render
+    if (first && nsMember(env, first)?.g) return [];
+    const decl = env.comp!.info.decl;
+    const inComp = (x: ts.Node): boolean => {
+      for (let n: ts.Node | undefined = x; n; n = n.parent) if (n === decl) return true;
+      return false;
+    };
+    const ds = rs.declarations ?? [];
+    if (ds.length && !ds.some(inComp)) {
+      const what = `${root === e ? "is" : `starts at \`${nodeText(root)}\`,`} declared outside the component, and not a top-level declaration of the program (a function, constant or component)`;
+      const why = `not supported as an effect dependency; the dependency check never requires a value from outside the component: leave it out`;
+      if (via) fail(at, `the effect depends on ${via}, a useCallback function whose dependency \`${nodeText(e)}\` ${what}: ${why} (of ${via}'s dependencies)`);
+      fail(at, `\`${nodeText(e)}\` ${what}: ${why}`);
+    }
+  }
+  const v = expr(d, env);
+  switch (v.type.k) {
+    case "int":
+      return [`VReact.DepVal.int ${paren(v.code)}`];
+    case "str":
+      return [`VReact.DepVal.str ${paren(v.code)}`];
+    case "bool":
+      return [`VReact.DepVal.bool ${paren(v.code)}`];
+    case "enum":
+      return [`VReact.DepVal.str (VReact.JS.str ${paren(v.code)})`];
+    default:
+      return [`VReact.DepVal.obj`];
+  }
+}
 
 function effectCode(c: ts.CallExpression, env: Env, info: CompInfo): string {
   const m = env.m;
@@ -622,21 +913,7 @@ function effectCode(c: ts.CallExpression, env: Env, info: CompInfo): string {
   // deps
   let deps = "none";
   if (c.arguments[1] && ts.isArrayLiteralExpression(c.arguments[1])) {
-    const ds = c.arguments[1].elements.map((d) => {
-      const v = expr(d, env);
-      switch (v.type.k) {
-        case "int":
-          return `VReact.DepVal.int ${paren(v.code)}`;
-        case "str":
-          return `VReact.DepVal.str ${paren(v.code)}`;
-        case "bool":
-          return `VReact.DepVal.bool ${paren(v.code)}`;
-        case "enum":
-          return `VReact.DepVal.str (VReact.JS.str ${paren(v.code)})`;
-        default:
-          return `VReact.DepVal.obj`;
-      }
-    });
+    const ds = c.arguments[1].elements.flatMap((d) => effectDepVals(d, env, d, null));
     deps = `some [${ds.join(", ")}]`;
   }
   // split the body into: synchronous statements, timer registrations (tasks), cleanup
@@ -660,8 +937,6 @@ function effectCode(c: ts.CallExpression, env: Env, info: CompInfo): string {
     if (ts.isCallExpression(e) && (isGlobal(env, e.expression, "setInterval") || isGlobal(env, e.expression, "setTimeout"))) return e;
     return null;
   };
-  // the path condition of the timers registered so far down the effect body (`timerGuard`)
-  const guards: TimerGuard[] = [];
   stmts.forEach((s, i) => {
     // JS does not run what follows a top-level `return` (the model must not either)
     if (ts.isReturnStatement(s) && i < stmts.length - 1) fail(stmts[i + 1], "unreachable code after return (it never runs)");
@@ -677,12 +952,10 @@ function effectCode(c: ts.CallExpression, env: Env, info: CompInfo): string {
       // registered: `onStmt`)
       if (call.arguments[1]) pureCleanupExpr(call.arguments[1], env, TIMER_ARG_RULE, "a timer's delay");
       const timer = call.arguments[0];
-      tasks.push(`(fun _ => ${guardedTimer(guards, 0, env, (e) => handlerFn(timer, e, "robust", []).code)})`);
+      tasks.push(`(fun _ => ${timerTask(stmts.slice(0, i), 0, env, fn, timerCalls, timer, (e) => handlerFn(timer, e, "robust", []).code)})`);
       timerCalls.set(s, call);
       return;
     }
-    const g = timerGuard(s, env);
-    if (g) guards.push(g);
   });
   // the synchronous part, translated as a robust handler body; a timer registration evaluates
   // its delay there (its callback is a task), and `return cleanup` the cleanup's arguments
@@ -732,7 +1005,7 @@ function returnsUndefined(e0: ts.Expression, env: Env): boolean {
   if (!ts.isBlock(body)) return returnsUndefined(body, b.env);
   let value = false;
   const visit = (n: ts.Node) => {
-    if (ts.isReturnStatement(n) && n.expression) value = true;
+    if (ts.isReturnStatement(n) && n.expression && !isUndefinedReturn(n.expression, b.env)) value = true;
     if (!ts.isFunctionLike(n)) ts.forEachChild(n, visit);
   };
   body.statements.forEach(visit);
@@ -752,7 +1025,8 @@ interface TimerGuard {
 function timerGuard(s: ts.Statement, env: Env): TimerGuard | null {
   if (ts.isIfStatement(s) && !s.elseStatement) {
     const t = s.thenStatement;
-    const bare = (x: ts.Statement) => ts.isReturnStatement(x) && !x.expression;
+    // (`return undefined;` is `return;`: no cleanup)
+    const bare = (x: ts.Statement) => ts.isReturnStatement(x) && (!x.expression || isUndefinedReturn(x.expression, env));
     if (bare(t) || (ts.isBlock(t) && t.statements.length === 1 && bare(t.statements[0]))) return { cond: s.expression, holds: false };
     return null;
   }
@@ -764,36 +1038,98 @@ function timerGuard(s: ts.Statement, env: Env): TimerGuard | null {
 }
 
 /**
- * A timer callback (`body`), checked under the path condition of its registration.
- * The effect body registers the timer only past `guards` (top-level early returns,
- * asserts, assumes), each about the snapshot the effect runs with — the same one the
- * callback captures (an effect cannot assign a variable it captures, and a captured
- * `let` is not reassigned after the effect is created).  So the callback is
- * `if h : c then body else skip` (or the reverse): the skip branch is a timer the real
- * program never registers, and does nothing, which preserves every invariant.  A
- * guard is used only if it translates in the component's environment (effect-local
- * consts are not in scope there; the guards before it may narrow) without
- * obligations of its own (those stay with the effect body); others are left out,
- * which only weakens the timer's facts.
+ * A timer callback (`body`), translated in the environment of the effect body at its
+ * registration and checked under the path condition there.  `items` are the effect body's
+ * top-level statements before the registration (`env`: the component's environment at the
+ * `useEffect`).  The callback captures the same snapshot as the effect: an effect cannot assign
+ * a variable it captures, and a captured `let` is not reassigned after the effect is created.
+ * * A guard (top-level early return, assert, assume: `timerGuard`) holds whenever the timer is
+ *   registered, so the callback is `if h : c then body else skip` (or the reverse): the skip
+ *   branch is a timer the real program never registers, and does nothing, which preserves every
+ *   invariant.  A guard is used only if it translates here without obligations of its own (those
+ *   stay with the effect body); others are left out, which only weakens the timer's facts.
+ * * A top-level `const` that the callback or another statement refers to is bound to its
+ *   value by translating its declaration again here, as
+ *   the effect body does: it is evaluated once, before the registration, from the snapshot and
+ *   the effect's earlier consts, and keeps that value (a local Map / Set the effect mutates
+ *   afterwards is not bound).  Only a declaration that translates without obligations of its own
+ *   (those stay with the effect body) is bound; the others, the `let`s and the timer handles
+ *   are recorded in `env.unavailable`, for the message if the callback reads them.
  */
-function guardedTimer(guards: TimerGuard[], i: number, env: Env, body: (e: Env) => string): string {
-  if (i === guards.length) return body(env);
-  const g = guards[i];
+function timerTask(items: readonly ts.Statement[], i: number, env: Env, fn: ts.Node, timerCalls: ReadonlyMap<ts.Statement, ts.CallExpression>, cb: ts.Expression, body: (e: Env) => string): string {
+  if (i === items.length) return body(env);
+  const s = items[i];
   const m = env.m;
-  let usable = false;
+  const next = (e: Env) => timerTask(items, i + 1, e, fn, timerCalls, cb, body);
+  const g = timerGuard(s, env);
+  if (g) {
+    let usable = false;
+    m.dryRun(() => {
+      const n0 = m.obligations.length;
+      try {
+        branch(g.cond, env, () => "true", () => "false");
+        usable = m.obligations.length === n0;
+      } catch (err) {
+        if (!(err instanceof VtsError)) throw err;
+      }
+    });
+    if (!usable) return next(env);
+    const skip = outcome({ kind: "robust", updates: [], emit: null, eventVar: null }, env.comp!);
+    return g.holds ? branch(g.cond, env, next, () => skip) : branch(g.cond, env, () => skip, next);
+  }
+  if (!ts.isVariableStatement(s)) return next(env);
+  const names = boundNames(s.declarationList);
+  // (a declaration that neither the callback nor another statement refers to is left out; an
+  // earlier one can only through a local function, which may run after it)
+  const syms = names.map((n) => symbolOf(env, n)).filter((x): x is ts.Symbol => !!x);
+  if (![cb, ...items.filter((_, j) => j !== i)].some((n) => readsAny(n, syms, m.checker))) return next(env);
+  const unavailable = (why: (name: string) => string): Env => {
+    const u = new Map(env.unavailable ?? []);
+    for (const n of names) {
+      const sym = symbolOf(env, n);
+      if (sym) u.set(sym, why(n.text));
+    }
+    return { ...env, unavailable: u };
+  };
+  if (timerCalls.has(s)) return next(unavailable((x) => `\`${x}\` is a timer handle: it can only be cleared, with clearTimeout(${x}) / clearInterval(${x}) in the effect's cleanup`));
+  if (!(s.declarationList.flags & (ts.NodeFlags.Const | ts.NodeFlags.Let))) return next(unavailable(() => "use const or let (no var)"));
+  if (!(s.declarationList.flags & ts.NodeFlags.Const)) {
+    return next(unavailable((x) => `\`${x}\` is a \`let\` of the effect body: VTS binds in a timer callback only the effect body's \`const\`s declared before the registration, computed from the props, the state and earlier such consts`));
+  }
+  if (s.declarationList.declarations.some((d) => isMutatedLocal(d))) {
+    return next(unavailable((x) => `\`${x}\` is a Map or Set the effect body mutates: VTS binds in a timer callback only the effect body's \`const\`s that keep the value of their declaration`));
+  }
+  // the declaration, translated as the effect body translates it (a robust handler body)
+  const acc = { kind: "robust" as const, updates: [], emit: null, eventVar: null };
+  const eh: Env = { ...env, handler: acc, curState: undefined };
+  const bc: BlockCtx = { kind: "handler", fnNode: fn, onDone: () => fail(s, "internal: a declaration has no outcome") };
+  let why: string | null = null;
   m.dryRun(() => {
     const n0 = m.obligations.length;
     try {
-      branch(g.cond, env, () => "true", () => "false");
-      usable = m.obligations.length === n0;
+      block([s], 0, eh, bc, () => "()");
+      if (m.obligations.length !== n0) why = "its value has proof obligations of its own (they are checked in the effect body, not repeated in the callback); compute it in the callback instead";
     } catch (err) {
       if (!(err instanceof VtsError)) throw err;
+      why = err.message;
     }
   });
-  if (!usable) return guardedTimer(guards, i + 1, env, body);
-  const skip = outcome({ kind: "robust", updates: [], emit: null, eventVar: null }, env.comp!);
-  const next = (e: Env) => guardedTimer(guards, i + 1, e, body);
-  return g.holds ? branch(g.cond, env, next, () => skip) : branch(g.cond, env, () => skip, next);
+  if (why !== null) {
+    const reason = why;
+    return next(unavailable((x) => `\`${x}\` is a const of the effect body that VTS cannot bind in a timer callback: ${reason}`));
+  }
+  return block([s], 0, eh, bc, (e2) => next({ ...e2, handler: env.handler, curState: env.curState }));
+}
+
+/** The identifiers a declaration list binds (through destructuring patterns). */
+function boundNames(l: ts.VariableDeclarationList): ts.Identifier[] {
+  const out: ts.Identifier[] = [];
+  const visit = (n: ts.BindingName) => {
+    if (ts.isIdentifier(n)) out.push(n);
+    else for (const el of n.elements) if (!ts.isOmittedExpression(el)) visit(el.name);
+  };
+  for (const d of l.declarations) visit(d.name);
+  return out;
 }
 
 const TIMER_ARG_RULE = "the delay of setTimeout/setInterval must be data (a literal, a constant, props or state, pure functions of them): no mutating methods (push, sort, set, …), casts, `arguments`, `any`, setters or helpers";
@@ -1008,7 +1344,8 @@ function pureCleanupExpr(n: ts.Node, env: Env, rule = CLEANUP_RULE, who = "effec
       const d = s && (s.flags & ts.SymbolFlags.Alias ? env.m.checker.getAliasedSymbol(s) : s).declarations?.[0];
       ok = !env.vars.get(s!) && (isGlobal(env, callee, "String") || !!specFn(env, callee) || (!!d && env.m.prog.globals.get(d)?.k === "fn"));
     } else if (ts.isPropertyAccessExpression(callee)) {
-      ok = isPureLibMethod(callee, env);
+      // (a verified function through a module namespace, `L.f(…)`, is the module's function f)
+      ok = isPureLibMethod(callee, env) || nsMember(env, callee)?.g?.k === "fn";
     }
     if (!ok) {
       const mut = ts.isPropertyAccessExpression(callee) && (ARRAY_MUTATORS.has(callee.name.text) || ["set", "add", "delete", "clear"].includes(callee.name.text)) ? ` (it mutates ${nodeText(callee.expression, 30)})` : "";
@@ -1066,7 +1403,11 @@ function isJsx(e: ts.Node): boolean {
 
 /** How render blocks translate a JSX const at its declaration: a VNode of this render. */
 function jsxConstCtx(comp: CompCtx): NonNullable<BlockCtx["jsxConst"]> {
-  return { code: (e, env) => withBubble({ ...bubble, ns: "deferred" }, () => jsxNode(e, env)), type: `VReact.VNode ${comp.stateType} E (${comp.invName} ${comp.propsVar}) ${comp.snap}` };
+  return {
+    code: (e, env) => withBubble({ ...bubble, ns: "deferred", content: null }, () => jsxNode(e, env)),
+    type: `VReact.VNode ${comp.stateType} E (${comp.invName} ${comp.propsVar}) ${comp.snap}`,
+    key: (e) => translatedKey(stripParens(e)),
+  };
 }
 
 /** A VNode term for a JSX-valued expression. */
@@ -1075,7 +1416,7 @@ export function jsxNode(e0: ts.Expression, env: Env): string {
   if (ts.isParenthesizedExpression(e)) return jsxNode(e.expression, env);
   if (e.kind === ts.SyntaxKind.NullKeyword || isGlobal(env, e, "undefined") || e.kind === ts.SyntaxKind.FalseKeyword) return "VReact.VNode.empty";
   if (ts.isJsxElement(e) || ts.isJsxSelfClosingElement(e)) return element(e, env);
-  if (ts.isJsxFragment(e)) return `(VReact.VNode.elem "fragment" [] [] ${children(e.children, env)})`;
+  if (ts.isJsxFragment(e)) return `(VReact.VNode.elem "fragment" [] [] ${children(e.children, env, e, "<>…</>")})`;
   if (ts.isConditionalExpression(e)) return branch(e.condition, env, (e1) => jsxNode(e.whenTrue, e1), (e2) => jsxNode(e.whenFalse, e2));
   if (ts.isBinaryExpression(e) && e.operatorToken.kind === ts.SyntaxKind.AmpersandAmpersandToken) {
     return branch(e.left, env, (e1) => jsxNode(e.right, e1), () => "VReact.VNode.empty");
@@ -1115,8 +1456,21 @@ export function jsxNode(e0: ts.Expression, env: Env): string {
   }
 }
 
-function children(cs: ts.NodeArray<ts.JsxChild>, env: Env): string {
+/**
+ * The children of an element or a fragment (`parent`, described as `what`).  React reconciles
+ * them as one array, so the explicit keys of the elements in it must be pairwise distinct
+ * (`siblingKeys`).
+ */
+function children(cs: ts.NodeArray<ts.JsxChild>, env: Env, parent: ts.Node, what: string): string {
   const items: string[] = [];
+  const slots: Slot[] = [];
+  const child = (x: ts.Expression) => {
+    const from = env.m.mark();
+    items.push(jsxNode(x, env));
+    const el = parensOnly(x);
+    // (the key of an element child, as just translated in it)
+    slots.push({ expr: x, from, to: env.m.mark(), key: ts.isJsxElement(el) || ts.isJsxSelfClosingElement(el) ? translatedKey(el) : undefined });
+  };
   for (const c of cs) {
     if (ts.isJsxText(c)) {
       const t = jsxTextValue(c.text, c);
@@ -1126,12 +1480,173 @@ function children(cs: ts.NodeArray<ts.JsxChild>, env: Env): string {
     if (ts.isJsxExpression(c)) {
       if (!c.expression) continue;
       if (c.dotDotDotToken) fail(c, "spread children are not supported");
-      items.push(jsxNode(c.expression, env));
+      child(c.expression);
       continue;
     }
-    items.push(jsxNode(c as ts.Expression, env));
+    child(c as ts.Expression);
   }
-  return items.length ? `(VReact.VList.ofList [\n    ${items.map((i) => indent(i, 2).trimStart()).join(",\n    ")}])` : "VReact.VList.nil";
+  const list = items.length ? `(VReact.VList.ofList [\n    ${items.map((i) => indent(i, 2).trimStart()).join(",\n    ")}])` : "VReact.VList.nil";
+  return siblingKeys(slots, env, parent, what, list);
+}
+
+/**
+ * A child of an element or fragment written as an expression or an element: its translation
+ * ran between the marks `from` and `to` (to translate it again for its keys, `ModCtx.replay`);
+ * `key` is the translated `key={…}` of an element child.
+ */
+interface Slot {
+  expr: ts.Expression;
+  from: Mark;
+  to: Mark;
+  key: Val | undefined;
+}
+
+/** `e` without parentheses (what `jsxNode` looks through). */
+function parensOnly(e: ts.Expression): ts.Expression {
+  while (ts.isParenthesizedExpression(e)) e = e.expression;
+  return e;
+}
+
+/** An explicitly keyed element that a child can put into its parent's children array. */
+interface SiblingKey {
+  attr: ts.JsxAttribute;
+  /** the key, when it is written as a string (`key="a"`, `key={"a"}`) */
+  lit: string | null;
+  /** the child is this element, unconditionally */
+  always: boolean;
+}
+
+/** The `key` attribute of a JSX element, or null. */
+function keyAttrOf(e: ts.JsxElement | ts.JsxSelfClosingElement): ts.JsxAttribute | null {
+  for (const a of attrs(e)) if (ts.isJsxAttribute(a) && a.name.getText() === "key") return a;
+  return null;
+}
+
+/** The JSX const a child expression names (`{row}`), or null. */
+function jsxConstOf(e: ts.Expression, env: Env): { node: ts.Expression; env: Env; key: Val | undefined } | null {
+  if (!ts.isIdentifier(e)) return null;
+  const s = symbolOf(env, e);
+  const b = s ? env.vars.get(s) : undefined;
+  return b?.k === "jsx" ? { node: b.node, env: b.env, key: b.key } : null;
+}
+
+/**
+ * The explicitly keyed elements that the child `e0` can put at the top level of the children
+ * array it is in, following `jsxNode`: the element itself, the branches of `c ? a : b` and
+ * `c && a`, the element of a JSX const.  A fragment and a keyed list (`xs.map(…)`) are one child
+ * of the array (React makes each a fragment fiber), whose keys are those of an array of its own.
+ */
+function siblingKeysOf(e0: ts.Expression, env: Env, always: boolean, out: SiblingKey[]): SiblingKey[] {
+  const e = stripParens(e0);
+  if (ts.isJsxElement(e) || ts.isJsxSelfClosingElement(e)) {
+    const a = keyedByMap.has(e) ? null : keyAttrOf(e);
+    if (a) out.push({ attr: a, lit: literalAttr(a), always });
+  } else if (ts.isConditionalExpression(e)) {
+    siblingKeysOf(e.whenTrue, env, false, out);
+    siblingKeysOf(e.whenFalse, env, false, out);
+  } else if (ts.isBinaryExpression(e) && e.operatorToken.kind === ts.SyntaxKind.AmpersandAmpersandToken) {
+    siblingKeysOf(e.right, env, false, out);
+  } else {
+    const c = jsxConstOf(e, env);
+    if (c) siblingKeysOf(c.node, c.env, always, out);
+  }
+  return out;
+}
+
+/**
+ * React 18 compares the keys of the elements of one children array as strings (`'' + key`:
+ * `key={1}` and `key="1"` are the same key) and requires them to be pairwise distinct: with two
+ * equal keys, `reconcileChildrenArray` warns ("Encountered two children with the same key") and,
+ * once an update leaves its first pass, `mapRemainingChildren` keeps one old fiber per key, so the
+ * other is neither reused nor deleted — its DOM stays, with stale handlers, and it is never
+ * unmounted.  The model reconciles these children by position (`VNode.withKey`), which matches
+ * React only when the keys are distinct.  So when two or more children of `parent` may have an
+ * explicit key, two that are always present with the same written key are rejected, and unless
+ * all keys are strings that differ between children, the children carry a `unique-keys`
+ * obligation (`VList.withKeys`) over the keys of the children present, as strings.
+ */
+function siblingKeys(slots: Slot[], env: Env, parent: ts.Node, what: string, list: string): string {
+  const keyed = slots.map((s) => ({ slot: s, keys: siblingKeysOf(s.expr, env, true, []) })).filter((s) => s.keys.length);
+  if (keyed.length < 2) return list;
+  const seen = new Map<string, SiblingKey>();
+  for (const { keys } of keyed) {
+    for (const k of keys) {
+      if (!k.always || k.lit === null) continue;
+      if (seen.has(k.lit)) fail(k.attr, `two children of ${what} have the same key ${JSON.stringify(k.lit)}: React requires the keys of the children of one element to be distinct (with two equal keys it can duplicate or omit children, and one of them stays mounted, with its handlers, after it is removed); give them distinct keys`);
+      seen.set(k.lit, k);
+    }
+  }
+  // keys written as strings that no two children share: distinct, whichever are present
+  const lits = keyed.map(({ keys }) => keys.map((k) => k.lit));
+  if (lits.every((ls) => ls.every((l) => l !== null)) && lits.every((ls, i) => ls.every((l) => lits.every((other, j) => j === i || !other.includes(l))))) return list;
+  const parts = keyed.map(({ slot }) => slotKeysTerm(slot, env));
+  const shown = keyed.flatMap(({ keys }) => keys.map((k) => (k.lit !== null ? JSON.stringify(k.lit) : nodeText(attrValue(k.attr)!, 40))));
+  const ob = env.m.ob(parent, "unique-keys", `the keys of the children of ${what} are distinct (React compares them as strings): ${shown.join(", ")}`);
+  return `(VReact.VList.withKeys (${parts.join(" ++\n    ")})\n  ${ob}\n  ${list})`;
+}
+
+/**
+ * The keys (as strings, in a Lean list) that the child `s` puts into its parent's children
+ * array.  Each key is the term already translated for the element (`key={…}` in `VNode.withKey`),
+ * with the same obligations: the copies are the same obligations, so a failing one is reported
+ * once.  An element child: its key as translated in it.  A JSX const: its key as translated at its
+ * declaration, where JS evaluates it (the Lean local names there are still in scope: later locals
+ * get fresh names).  A conditional child: its translation is replayed (`ModCtx.replay`: the same
+ * text, conditions, hypothesis names and obligation ids), building the same conditionals over the
+ * keys of the branches.
+ */
+function slotKeysTerm(s: Slot, env: Env): string {
+  const e = parensOnly(s.expr);
+  if (ts.isJsxElement(e) || ts.isJsxSelfClosingElement(e)) return elementKeysTerm(e, s.key, env);
+  const c = jsxConstOf(e, env);
+  if (c) return elementKeysTerm(c.node, c.key, env);
+  return env.m.replay(s.from, s.to, () => replayKeys(s.expr, env));
+}
+
+/** The translation of `jsxNode(e0, env)` again (the same calls, in order), returning the keys `e0` puts into the array. */
+function replayKeys(e0: ts.Expression, env: Env): string {
+  const e = ts.isParenthesizedExpression(e0) ? e0.expression : e0;
+  if (ts.isParenthesizedExpression(e)) return replayKeys(e.expression, env);
+  if (ts.isJsxElement(e) || ts.isJsxSelfClosingElement(e)) {
+    element(e, env);
+    return elementKeysTerm(e, translatedKey(e), env);
+  }
+  if (ts.isConditionalExpression(e)) return branch(e.condition, env, (e1) => replayKeys(e.whenTrue, e1), (e2) => replayKeys(e.whenFalse, e2));
+  if (ts.isBinaryExpression(e) && e.operatorToken.kind === ts.SyntaxKind.AmpersandAmpersandToken) {
+    return branch(e.left, env, (e1) => replayKeys(e.right, e1), () => "[]");
+  }
+  jsxNode(e, env);
+  const c = jsxConstOf(e, env);
+  return c ? elementKeysTerm(c.node, c.key, env) : "[]";
+}
+
+/** The keys an element (or a JSX const's node) puts into the array: its `key` (`v`: as translated), or none. */
+function elementKeysTerm(e: ts.Expression, v: Val | undefined, env: Env): string {
+  if (!(ts.isJsxElement(e) || ts.isJsxSelfClosingElement(e)) || keyedByMap.has(e)) return "[]";
+  const a = keyAttrOf(e);
+  return a ? keyString(a, v, env) : "[]";
+}
+
+/**
+ * The key of `key={…}` as React sees it, `'' + key`, as a Lean list: one string, or none for
+ * `undefined` (React's `jsx()` ignores an undefined key, but makes a null one the key "null").
+ * `v` is the key's translation (none for a key written as a string).
+ */
+function keyString(a: ts.JsxAttribute, v: Val | undefined, env: Env): string {
+  const lit = literalAttr(a);
+  if (lit !== null) return `[${jsStr(lit)}]`;
+  const val = attrValue(a)!;
+  if (!v) throw new Error(`internal error: the key ${nodeText(val, 40)} was not translated where its element was`);
+  const scalar = (t: VType) => ["str", "int", "num", "bool", "enum"].includes(t.k);
+  if (scalar(v.type)) return `[${toStr(v, val, env)}]`;
+  if (v.type.k === "opt" && scalar(v.type.elem)) {
+    const kinds = nullishKinds(val, env);
+    // (the arm uses only its binder, so a fixed name cannot capture; no fresh name: a replay must
+    // not count hypotheses the translation it repeats did not)
+    const x = "key₀";
+    return `(match ${v.code} with | some ${x} => [${toStr({ code: x, type: v.type.elem }, val, env)}] | none => [${!kinds || kinds.null ? jsStr("null") : ""}])`;
+  }
+  fail(val, `a key of type ${showType(v.type)} next to other keyed children: React compares the keys of the children of one element as strings ('' + key), which VTS models for string, int, number, boolean and string-enum keys (and their optional forms); key by one of these`);
 }
 
 function attrs(e: ts.JsxElement | ts.JsxSelfClosingElement): ts.NodeArray<ts.JsxAttributeLike> {
@@ -1153,6 +1668,12 @@ function element(e: ts.JsxElement | ts.JsxSelfClosingElement, env: Env): string 
   const tag = tagNode.getText();
   const kids = ts.isJsxElement(e) ? e.children : undefined;
   if (ts.isJsxNamespacedName(tagNode)) fail(tagNode, `namespaced JSX tags (<${tag}>) are not supported: use an HTML element (<div>, <button>, …) or a verified component`);
+  // (`<L.Row>`, L a verified module's namespace, is not dynamic, but VTS reads a component tag only as a name)
+  const nm = ts.isPropertyAccessExpression(tagNode) ? nsMember(env, tagNode) : null;
+  if (nm && ts.isPropertyAccessExpression(tagNode)) {
+    const x = tagNode.name.text;
+    fail(tagNode, `<${tag}> names ${nm.g?.k === "comp" ? "the component " : ""}\`${x}\` through the module namespace \`${tagNode.expression.getText()}\`: VTS reads a component tag only as a plain name; import it by name (\`import { ${x} } from …\`) and write <${x} …/>`);
+  }
   if (!ts.isIdentifier(tagNode)) fail(tagNode, `<${tag}> is a dynamic element type: JSX renders whatever \`${tag}\` holds (an HTML tag name or a component), which VTS does not model. Write the element (<button>) or the component (<Row>, imported by name) directly, e.g. under a condition`);
   if (tagNode.text !== tag) fail(tagNode, `<${tag}>: write the tag name without escapes`);
   if (tag.includes("-")) fail(tagNode, `<${tag}> is a custom element: its behaviour (events, activation, form submission) is defined by script outside the verified program; use HTML elements and verified components`);
@@ -1234,6 +1755,10 @@ interface Bubble {
   act: Activation | null;
   /** the namespace React creates the elements at this position in (`Namespace`) */
   ns: Namespace;
+  /** directly inside a `<select>`, `<optgroup>` or `<option>`: that tag, whose content is restricted (`CONTENT_RULES`); null: any content */
+  content: string | null;
+  /** the nearest enclosing focus handler (focusin/focusout) that updates state (`onBlur on <div>`): no autoFocus element may be inside it (`focusesOnMount`), unless its component never mounts one again (`autoFocusRemount`) */
+  focusUpd: string | null;
 }
 interface Activation {
   /** `a <label>`, `a submit button <button> of a form with onSubmit on <form>` */
@@ -1252,7 +1777,35 @@ interface Activation {
  * the declaration is translated as HTML without the namespace's rejections.
  */
 type Namespace = "html" | "svg" | "math" | "deferred";
-const NO_BUBBLE: Bubble = { natives: new Map(), handlers: [], onClick: null, form: null, act: null, ns: "html" };
+const NO_BUBBLE: Bubble = { natives: new Map(), handlers: [], onClick: null, form: null, act: null, ns: "html", content: null, focusUpd: null };
+
+/**
+ * The content of a `<select>`, an `<optgroup>` and an `<option>` (HTML elements): the elements
+ * each may contain, besides text — react-dom 18.3.1's `validateDOMNesting`
+ * (`isTagValidWithParent`): a select holds `<option>`s and `<optgroup>`s, an optgroup
+ * `<option>`s, an option text only.  React only warns about other content and creates it with
+ * the DOM API, where it is a real event target; but VTS's event model relies on these rules.
+ * react-dom's ChangeEventPlugin picks the native events that make an `onChange` by the
+ * *target* control and collects `onChange` on the whole path from it to the root: a checkbox
+ * inside a select would run the select's `onChange` on a click, a text field on an `input`,
+ * with that control as `e.target`.  With this content, a select's `onChange` runs on the
+ * select's own `change` event only (`changeNatives`; an option or optgroup never makes an
+ * `onChange`), with the select as `e.target` (a text node is never React's target:
+ * `getEventTarget` takes its parent).  No user component either: its elements are checked as a
+ * tree of their own.
+ */
+const CONTENT_RULES: ReadonlyMap<string, readonly string[]> = new Map([
+  ["select", ["option", "optgroup"]],
+  ["optgroup", ["option"]],
+  ["option", []],
+]);
+
+/** Rejects `what` (an element, or a user component) directly inside `<parent>`, whose content `CONTENT_RULES` restricts. */
+function failContent(at: ts.Node, what: string, parent: string, component: boolean): never {
+  const allowed = CONTENT_RULES.get(parent)!;
+  const may = allowed.length ? `${allowed.map((t) => `<${t}>`).join(" and ")} elements${component ? " written in this component" : ""} and text` : "text (its label)";
+  fail(at, `${what} inside <${parent}>: ${parent === "select" ? "a" : "an"} <${parent}> may contain only ${may}, as react-dom's validateDOMNesting says (React only warns, and creates it anyway). VTS models a <select>'s onChange as run by the select's own change event, with the select as e.target, but react-dom also runs it for a click on a checkbox or an input in a text field anywhere inside the select, with that element as e.target; ${parent === "option" ? "write the option's label as text (a string or a number, also in {…})" : `put ${component ? "the component" : "the element"} next to the <select>`}`);
+}
 let bubble: Bubble = NO_BUBBLE;
 
 function withBubble<T>(b: Bubble, f: () => T): T {
@@ -1401,6 +1954,8 @@ function checkEvents(tag: string, e: ts.JsxElement | ts.JsxSelfClosingElement, h
     form: html && tag === "form" ? { submit: handlerOf("onSubmit") ?? bubble.natives.get("submit") ?? null, reset: handlerOf("onReset") ?? bubble.natives.get("reset") ?? null } : bubble.form,
     act: mine ?? passOn,
     ns: childNs,
+    content: html && CONTENT_RULES.has(tag) ? tag : null,
+    focusUpd: bubble.focusUpd,
   };
 }
 
@@ -1446,15 +2001,132 @@ function namespaces(tag: string, tagNode: ts.Node): { ns: Namespace; childNs: Na
   return { ns, childNs: ns === "svg" && tag === "foreignObject" ? "html" : ns };
 }
 
+/**
+ * Why a focus handler that updates state may not run in the commit that mounts an autoFocus
+ * element: react-dom 18.3.1 focuses an autoFocus `<button>`, `<input>`, `<select>` or `<textarea>`
+ * in the commit that mounts it (`commitMount`, with React's event system enabled again), so the
+ * focusout and focusin events run onBlur on the element that had focus and onFocus on the
+ * autoFocus element and the elements around them, synchronously. Their updates are discrete
+ * (SyncLane) and React renders and commits them at once, at the end of that commit; if that
+ * commit mounts an autoFocus element again (one whose key or presence depends on the state), the
+ * chain goes on, and after 50 nested commits the setter throws "Maximum update depth exceeded"
+ * (`checkForNestedUpdates`) — inside the handler. With no updates in the focus handlers of an
+ * autoFocus element and of the elements around one, only the element that had focus before the
+ * first such commit can update state (once: it does not get focus back inside the chain), so the
+ * chain stops after one more commit. (A component inside an element with handlers is rejected, so
+ * the elements around an autoFocus element that have handlers are in its component.)
+ *
+ * Such updates are accepted in a component no render of which mounts an autoFocus element after
+ * its first (`autoFocusRemount` is null): a focus handler is robust, so it updates only its own
+ * component's state (no parent callbacks), and React renders and commits that component's
+ * subtree only, which then mounts no autoFocus element and focuses nothing (VTS has no layout
+ * effects, and the passive effects React runs at the end of such a commit have default-priority
+ * updates, which are rendered later); so inside a chain these updates add one commit that starts
+ * no further one, and the argument above still bounds the chain.
+ */
+const AUTOFOCUS_CHAIN = "React focuses an autoFocus element in the commit that mounts it, which runs the focus handlers (onFocus, onBlur) of it, of the element that loses focus and of the elements around them synchronously inside that commit; their updates are rendered and committed at once, and when that commit mounts an autoFocus element again (its key or presence depends on the state), the chain repeats until React throws \"Maximum update depth exceeded\" from the setter, after 50 nested commits";
+
+/** React 18.3.1 focuses these elements in the commit that mounts them when their `autoFocus` prop is truthy (`commitMount`). */
+const AUTOFOCUS_TAGS = new Set(["button", "input", "select", "textarea"]);
+
+/** The `autoFocus` attribute of `<tag>` when React may focus it as it mounts it (any letter case, any value but a literal false); null otherwise. */
+function focusesOnMount(tag: string, e: ts.JsxElement | ts.JsxSelfClosingElement, html: boolean): ts.JsxAttribute | null {
+  if (!html || !AUTOFOCUS_TAGS.has(tag)) return null;
+  return attrsNamed(e, "autofocus").find((a) => {
+    const v = a.initializer && ts.isJsxExpression(a.initializer) ? a.initializer.expression : undefined;
+    return !(v && stripParens(v).kind === ts.SyntaxKind.FalseKeyword);
+  }) ?? null;
+}
+
+const autoFocusRemounts = new WeakMap<ts.FunctionDeclaration, { why: string | null }>();
+
+/**
+ * Why a render of the component `decl` after its first may mount an autoFocus element (null when
+ * none does): it renders another component (which may have autoFocus elements under a condition
+ * of its props), or one of its own autoFocus elements is not created by its first render and kept
+ * by every later one (`notKept`). Only the component's own JSX matters besides: JSX occurs only in
+ * the value a component returns (with the local JSX constants and list callbacks of that value),
+ * and ReactNode props are rejected.
+ */
+function autoFocusRemount(decl: ts.FunctionDeclaration): string | null {
+  const hit = autoFocusRemounts.get(decl);
+  if (hit) return hit.why;
+  let why: string | null = null;
+  const body = decl.body;
+  /** the component's returns (not those of nested functions) */
+  const returns: ts.ReturnStatement[] = [];
+  const findReturns = (n: ts.Node) => {
+    if (ts.isReturnStatement(n)) returns.push(n);
+    if (!ts.isFunctionLike(n) && !ts.isClassLike(n)) ts.forEachChild(n, findReturns);
+  };
+  body?.statements.forEach(findReturns);
+  const only = returns.length === 1 && returns[0].parent === body ? returns[0] : null;
+  const name = decl.name?.text ?? "the component";
+  const line = (n: ts.Node) => n.getSourceFile().getLineAndCharacterOfPosition(n.getStart()).line + 1;
+  const visit = (n: ts.Node) => {
+    if (why) return;
+    if (ts.isJsxSelfClosingElement(n) || ts.isJsxOpeningElement(n)) {
+      const tag = n.tagName.getText();
+      const el = ts.isJsxOpeningElement(n) ? n.parent : n;
+      if (!ts.isIdentifier(n.tagName) || !/^[a-z]/.test(tag)) why = `${name} renders <${tag}> (line ${line(n)}), whose own autoFocus elements a render may mount`;
+      else if (focusesOnMount(tag, el, true)) {
+        const r = notKept(el, only, returns.length);
+        if (r) why = `its <${tag} autoFocus> on line ${line(n)} ${r}`;
+      }
+    }
+    ts.forEachChild(n, visit);
+  };
+  if (body) visit(body);
+  autoFocusRemounts.set(decl, { why });
+  return why;
+}
+
+/**
+ * Why the element `el` is not created by the first render of its component and kept by every
+ * later one (null when it is): it must be written in the component's only return (`ret`, a
+ * statement of the body itself), reached from the returned value through elements and fragments
+ * only — not under a condition, in a list or a local constant — with no `key` on it or on an
+ * element around it. (React matches the children of an element by key, or by index when they have
+ * none; a `{…}` child, whatever it renders, keeps the index of the children after it.)
+ */
+function notKept(el: ts.JsxElement | ts.JsxSelfClosingElement, ret: ts.ReturnStatement | null, returns: number): string | null {
+  let n: ts.Node = el;
+  for (;;) {
+    if ((ts.isJsxElement(n) || ts.isJsxSelfClosingElement(n)) && attrsNamed(n, "key").length) return n === el ? "has a key" : "is inside an element with a key";
+    const p: ts.Node = n.parent;
+    if (ts.isJsxElement(p) && p.children.some((c) => c === n)) {
+      n = p;
+      continue;
+    }
+    if (ts.isJsxFragment(p) || ts.isParenthesizedExpression(p)) {
+      n = p;
+      continue;
+    }
+    if (ts.isReturnStatement(p)) return p === ret ? null : returns > 1 ? "is in one of several returns" : "is not in the component's own return";
+    return "is rendered under a condition, in a list or through a local constant";
+  }
+}
+
 function intrinsic(tag: string, e: ts.JsxElement | ts.JsxSelfClosingElement, kids: ts.NodeArray<ts.JsxChild> | undefined, env: Env): string {
   const m = env.m;
   const comp = env.comp!;
   const tagNode = ts.isJsxElement(e) ? e.openingElement.tagName : e.tagName;
   const { ns, childNs } = namespaces(tag, tagNode);
+  if (bubble.content !== null && !CONTENT_RULES.get(bubble.content)!.includes(tag)) failContent(tagNode, `<${tag}>`, bubble.content, false);
   const html = ns === "html" || ns === "deferred";
   const handlerAttrs = attrs(e).filter(ts.isJsxAttribute).filter((a) => /^on[A-Z]/.test(a.name.getText()));
   const infos = new Map(handlerAttrs.map((a) => [a, eventInfo(a.name.getText(), tag, e, a, html)] as const));
-  const inner = checkEvents(tag, e, handlerAttrs, infos, ns, childNs);
+  let inner = checkEvents(tag, e, handlerAttrs, infos, ns, childNs);
+  const autoFocus = focusesOnMount(tag, e, html);
+  /** why a later render of this component may mount an autoFocus element (AUTOFOCUS_CHAIN), or null */
+  const remount = () => autoFocusRemount(comp.info.decl);
+  const keep = `, or keep every autoFocus element of ${comp.info.name} mounted from its first render on: written in its only return, not under a condition or in a list, with no key on it or around it, in a component that renders no other component`;
+  if (autoFocus && bubble.focusUpd) {
+    const why = remount();
+    if (why) fail(autoFocus, `autoFocus on <${tag}> inside an element with ${bubble.focusUpd}, which updates state, and a later render of ${comp.info.name} may mount an autoFocus element (${why}): ${AUTOFOCUS_CHAIN} (move that handler to an element that does not contain this one, or drop autoFocus${keep})`);
+  }
+  /** focus handlers of this element that update state (on an autoFocus element only in a component that never mounts one again: `autoFocusRemount`) */
+  const focusUpd: string[] = [];
   // react-dom throws while rendering a void element with children, and a <textarea> with
   // children and a defaultValue (or several children); a textarea's children are its value
   const passed = passedChildren(kids);
@@ -1478,7 +2150,14 @@ function intrinsic(tag: string, e: ts.JsxElement | ts.JsxSelfClosingElement, kid
       if (!val) fail(a, "handler attribute needs a value");
       const info = infos.get(a)!;
       const ev = info.model;
-      const h = handlerFn(val, env, info.discrete ? "discrete" : "robust", { tag, prop: name, html });
+      // a focus handler (focusin/focusout) of an autoFocus element, or of an element around one,
+      // runs inside the commit that mounts the autoFocus element (AUTOFOCUS_CHAIN)
+      const focusSide = info.natives.some((n) => n === "focusin" || n === "focusout");
+      const probe = { updated: false };
+      const why = focusSide && autoFocus ? remount() : null;
+      const noUpdates = why ? `${name} on <${tag}> with autoFocus updates state, and a later render of ${comp.info.name} may mount an autoFocus element (${why}): ${AUTOFOCUS_CHAIN} (drop autoFocus, or the update${keep})` : undefined;
+      const h = handlerFn(val, env, info.discrete ? "discrete" : "robust", { tag, prop: name, html, ...(focusSide ? { probe, noUpdates } : {}) });
+      if (probe.updated) focusUpd.push(`${name} on <${tag}>`);
       const run = `(fun ${h.params[0] ?? "_"} => ${h.code})`;
       if (!info.discrete) {
         const ok = m.ob(a, "handler-robust", `${name} handler on <${tag}> (${info.why}) preserves the invariant of ${comp.info.name} from any state`);
@@ -1531,7 +2210,8 @@ function intrinsic(tag: string, e: ts.JsxElement | ts.JsxSelfClosingElement, kid
     }
     as.push(`⟨${leanStr(name)}, ${av}⟩`);
   }
-  const ch = kids ? withBubble(inner, () => children(kids, env)) : "VReact.VList.nil";
+  if (focusUpd.length) inner = { ...inner, focusUpd: focusUpd[0] };
+  const ch = kids ? withBubble(inner, () => children(kids, env, e, `<${tag}>`)) : "VReact.VList.nil";
   return withKey(key, `(VReact.VNode.elem ${leanStr(tag)} [${as.join(", ")}]\n  [${hs.join(",\n   ")}]\n  ${ch})`);
 }
 
@@ -1577,6 +2257,7 @@ function checkAttribute(a: ts.JsxAttribute, lname: string, tag: string, e: ts.Js
   if (lit !== null && URL_ATTRS.has(lname) && asciiLower(lit.replace(/^[\x00-\x20]+/, "").replace(/[\t\n\r]/g, "")).startsWith("javascript:")) {
     fail(a, `a javascript: URL runs its code in the page when it is followed: code outside the verified program; use a handler (onClick) instead`);
   }
+  if (lname === "name" || lname === "id") checkNamedAccess(a, lname, tag, env);
   if (tag === "input" && (lname === "value" || lname === "defaultvalue")) {
     const types = attrValues(e, "type", env);
     if ((types === undefined || types.includes("file")) && lit !== "") {
@@ -1585,20 +2266,131 @@ function checkAttribute(a: ts.JsxAttribute, lname: string, tag: string, e: ts.Js
   }
 }
 
+/** Elements a form's named getter answers by their `name` and `id`: its listed elements (form-associated custom elements are rejected) and `<img>`. */
+const FORM_NAMED = new Set(["button", "fieldset", "input", "object", "output", "select", "textarea", "img"]);
+/** Elements the document's named getter answers by their `name` (and the window's, by name). */
+const DOC_BY_NAME = new Set(["embed", "form", "iframe", "img", "object"]);
+/** Elements the document's named getter answers by their `id` (an `<img>` when it also has a name). */
+const DOC_BY_ID = new Set(["object", "img"]);
+/** No property name of a form, the document or the window has a character other than these (domNames.ts). */
+const PROPERTY_CHARS = /^[A-Za-z0-9_$]*$/;
+
+/**
+ * `name` / `id` and HTML's named access (domNames.ts). A form answers `form.x` with its control
+ * or image named (or with id) "x", before any property of the form ([LegacyOverrideBuiltIns]),
+ * and so does the document with the names of `<embed>`, `<form>`, `<iframe>`, `<img>` and
+ * `<object>` and the ids of `<object>` and `<img>`: react-dom reads properties of forms and of
+ * the document (`parentNode`, `createElement`, …), and gets the element instead. On these
+ * elements every value the attribute may have must be no name the app's code reads, calls or
+ * writes there (`reservedName`, on the document when the document exposes the element): a literal,
+ * a choice between literals, an enum, a number, or a string built with a literal part holding a
+ * character that no property name has (`qty-${id}`); another expression is rejected. The window
+ * answers `window.x` only for names it does not define; there the global names the app bundle
+ * reads (`windowReserved`) are rejected as written ids; a computed id is not checked (a
+ * documented assumption, SEMANTICS §5). `name` on other elements is exposed nowhere.
+ */
+function checkNamedAccess(a: ts.JsxAttribute, lname: "name" | "id", tag: string, env: Env) {
+  const onDoc = (lname === "name" ? DOC_BY_NAME : DOC_BY_ID).has(tag);
+  const named = FORM_NAMED.has(tag) || onDoc;
+  if (lname === "name" && !named) return;
+  const v = attrValue(a);
+  if (!v) return; // a boolean attribute: React does not set a name or id given `true`
+  const objs = [FORM_NAMED.has(tag) ? "the form it belongs to (a <form> around it, or the one form=… names)" : "", onDoc ? "the document" : ""].filter((x) => x).join(" and of ");
+  const there = onDoc ? (FORM_NAMED.has(tag) ? "on forms or on the document" : "on the document") : "on forms";
+  const reserved = (x: string) => named && PROPERTY_CHARS.test(x) && reservedName(x, onDoc);
+  const reject = (x: string) =>
+    fail(a, reserved(x)
+      ? `${a.name.getText()}="${x}" on <${tag}>: HTML's named access makes this element the property ${x} of ${objs}, whatever they define, and the app's code uses ${x} ${there} (react-dom reads or calls it, or an effect sets document.title): it would get this element instead (with form.parentNode React loops forever after a click on a radio button, with form.removeChild or document.createElement it throws). Choose another ${lname}, e.g. one with a "-" in it`
+      : `${a.name.getText()}="${x}" on <${tag}>: HTML's named access makes this element the global ${x} (window.${x}), which the app's code reads at run time (react-dom, or vreact/spec's runtime); choose another ${lname}`);
+  const lits = namedAccessValues(v, env);
+  if (lits === undefined) {
+    if (!named) return; // a computed id of an element only the window exposes: not checked (SEMANTICS §5)
+    fail(a, `${a.name.getText()}={…} on <${tag}>: HTML's named access makes this element the property of ${objs} that its value names, whatever they define, so no value it takes may be a name the app's code uses ${there} (react-dom reads form.parentNode, document.createElement, …), and VTS cannot tell what this one may be. Use a string literal, a choice between literals (c ? "a" : "b"), an enum, a number, or a string with a literal part that holds a character other than letters, digits, _ and $ (\`qty-\${id}\`, "qty-" + id), which no property name has`);
+  }
+  // the window exposes every element by its id, and <embed>, <form>, <img>, <object> and frames by name
+  const onWindow = lname === "id" || DOC_BY_NAME.has(tag);
+  for (const x of lits) if (reserved(x) || (onWindow && windowReserved(x))) reject(x);
+}
+
+/**
+ * The strings an attribute value `x` may set (React sets no attribute for null, undefined or a
+ * boolean): the literals; "-" for a number (its decimal digits, a minus sign, "NaN", "Infinity",
+ * none of them a property name of a form or the document), and for a string built with a literal
+ * part that holds a character outside [A-Za-z0-9_$]; an enum's members. Undefined when unknown.
+ */
+function namedAccessValues(x0: ts.Expression, env: Env): string[] | undefined {
+  const x = stripParens(x0);
+  if (ts.isStringLiteral(x) && x.parent && ts.isJsxAttribute(x.parent)) return [jsxAttrText(x)];
+  if (ts.isStringLiteralLike(x)) return [x.text];
+  if (isNullLit(x, env) || x.kind === ts.SyntaxKind.TrueKeyword || x.kind === ts.SyntaxKind.FalseKeyword) return [];
+  if (ts.isConditionalExpression(x)) {
+    const l = namedAccessValues(x.whenTrue, env);
+    const r = namedAccessValues(x.whenFalse, env);
+    return l && r ? [...l, ...r] : undefined;
+  }
+  if (holdsOtherChar(x)) return ["-"];
+  let t: VType;
+  try {
+    t = typeOf(x, env);
+  } catch (err) {
+    if (err instanceof VtsError) return undefined;
+    throw err;
+  }
+  if (t.k === "int" || t.k === "num") return ["-", "NaN", "Infinity"];
+  if (t.k === "bool") return [];
+  if (t.k === "enum") return env.m.reg.enumLits(t);
+  return undefined;
+}
+
+/** Does every string `x` may be hold a character outside [A-Za-z0-9_$] (written in one of its literal parts)? */
+function holdsOtherChar(x0: ts.Expression): boolean {
+  const x = stripParens(x0);
+  if (ts.isStringLiteralLike(x)) return !PROPERTY_CHARS.test(x.text);
+  if (ts.isTemplateExpression(x)) return !PROPERTY_CHARS.test(x.head.text) || x.templateSpans.some((sp) => !PROPERTY_CHARS.test(sp.literal.text));
+  if (ts.isBinaryExpression(x) && x.operatorToken.kind === ts.SyntaxKind.PlusToken) return holdsOtherChar(x.left) || holdsOtherChar(x.right);
+  if (ts.isConditionalExpression(x)) return holdsOtherChar(x.whenTrue) && holdsOtherChar(x.whenFalse);
+  return false;
+}
+
 /** Elements returned by `xs.map(…)`, whose key is translated (as the key function) by `keyedMap`. */
 const keyedByMap = new WeakSet<ts.Node>();
+
+/**
+ * The last translation of each `key={…}` (by `keyExpr`), read right after the translation of its
+ * element (`translatedKey`): the keys of siblings are these terms, with their obligations.
+ */
+const keyVals = new WeakMap<ts.JsxAttribute, Val>();
+
+/** The translation of the element's `key={…}` its translation just made (undefined: no key, or one written as a string). */
+function translatedKey(e: ts.Expression): Val | undefined {
+  if (!(ts.isJsxElement(e) || ts.isJsxSelfClosingElement(e))) return undefined;
+  const a = keyAttrOf(e);
+  return a ? keyVals.get(a) : undefined;
+}
 
 /** The translated `key={…}` of an element outside a keyed map: JS evaluates it on every render, so its obligations count. */
 function keyExpr(a: ts.JsxAttribute, e: ts.Node, env: Env): string | null {
   if (keyedByMap.has(e)) return null;
   const val = attrValue(a);
   if (!val) fail(a, "key needs a value");
+  keyVals.delete(a);
   if (ts.isStringLiteral(val)) return null;
-  return expr(val, env).code;
+  const v = expr(val, env);
+  keyVals.set(a, v);
+  return v.code;
 }
 
 function withKey(key: string | null, node: string): string {
   return key === null ? node : `(VReact.VNode.withKey ${paren(key)}\n  ${node})`;
+}
+
+/**
+ * A component that renders (or otherwise refers to) itself: recursion, which VTS does not
+ * support. React would render one more instance per level (a recursion without a base case
+ * never ends), and the model has no recursive components.
+ */
+export function selfRenderMsg(name: string, what: string): string {
+  return `${what} inside ${name}: a component that refers to itself (renders itself, directly or through a JSX constant, a map callback or a branch) is recursion, which is not supported yet; flatten the nested data into an array (e.g. rows with a depth field) and render it with map`;
 }
 
 function componentElement(tagNode: ts.JsxTagNameExpression, e: ts.JsxElement | ts.JsxSelfClosingElement, kids: ts.NodeArray<ts.JsxChild> | undefined, env: Env): string {
@@ -1606,6 +2398,7 @@ function componentElement(tagNode: ts.JsxTagNameExpression, e: ts.JsxElement | t
   // its elements would be created in the enclosing <svg>'s (<math>'s) namespace, while it is
   // checked as the root of an HTML tree
   if (bubble.ns === "svg" || bubble.ns === "math") fail(e, `<${tagNode.getText()}> inside <${bubble.ns}>: React would create its elements in the ${bubble.ns === "svg" ? "SVG" : "MathML"} namespace (an <input> there is no HTML control), while it is verified as HTML; render the component outside the <${bubble.ns}>${bubble.ns === "svg" ? ", or inside a <foreignObject>" : ""}`);
+  if (bubble.content !== null) failContent(e, `<${tagNode.getText()}>`, bubble.content, true);
   if (bubble.handlers.length) fail(e, `<${tagNode.getText()}> is nested inside an element with ${bubble.handlers.join("/")}: its events would bubble into a second handler (move the handler, or the component, out)`);
   if (bubble.act) fail(e, `<${tagNode.getText()}> is nested inside ${bubble.act.what}: a click inside it would run its handlers and, through the activation of the enclosing element, another one, in one batch when a script dispatches the click (move the component out${bubble.act.label ? "; a label can name a control inside it with htmlFor" : ""})`);
   let sym = m.checker.getSymbolAtLocation(tagNode);
@@ -1613,6 +2406,8 @@ function componentElement(tagNode: ts.JsxTagNameExpression, e: ts.JsxElement | t
   const g = sym?.declarations?.[0] ? m.prog.globals.get(sym.declarations[0]) : undefined;
   if (!g || g.k !== "comp") fail(tagNode, `<${tagNode.getText()}> is not a verified component (declare it in a VTS module, or mark it @trusted)`);
   const info = g.info;
+  // (module.ts rejects every reference of a component to itself before the translation: backstop)
+  if (env.comp?.info === info) fail(tagNode, selfRenderMsg(info.name, `<${tagNode.getText()}>`));
   if (kids && kids.some((k) => !(ts.isJsxText(k) && !jsxTextValue(k.text, k)))) fail(e, "children of user components are not supported yet");
   const given = new Map<string, ts.JsxAttribute>();
   for (const a of attrs(e)) {

@@ -232,4 +232,52 @@ warning: declaration uses `sorry`
 #guard_msgs in
 example : (0 : Nat) > 5 := by vreact_ob exact _bt_aux
 
+/-! A failure on a goal that unfolds to a `sorry` standing for data (a `hole()`: the automation
+cannot know its value) through a definition the automation unfolds is blocked: a reducible one,
+an `@[vreact_simp]` one (a component's `inv`), or a constant the obligation's own tactic unfolds
+(the `@opaque` constants of a module-level fact).  Through a definition the automation does not
+unfold (an `@opaque` constant elsewhere), the failure is the obligation's own. -/
+section
+/-- warning: declaration uses `sorry` -/
+#guard_msgs in
+private def holeInv (n : Int) : Prop := (sorry : Bool) = true ∧ n ≥ 0
+-- (its equation lemma, which the simp set gets, holds the `sorry` too)
+/-- warning: declaration uses `sorry` -/
+#guard_msgs in
+attribute [local vreact_simp] holeInv
+
+/-- warning: declaration uses `sorry` -/
+#guard_msgs in
+private def holeConst : List Int := sorry
+
+/--
+warning: vreact:blocked it depends on `sorry` from elsewhere (an obligation that failed, a declaration with an error, or a hole()) that its goal or its proof contains, so this obligation could not be checked on its own; fix that first
+no proof
+⊢ holeInv 0
+---
+warning: declaration uses `sorry`
+-/
+#guard_msgs in
+example : holeInv 0 := by vreact_ob fail "no proof"
+
+/--
+warning: vreact:blocked it depends on `sorry` from elsewhere (an obligation that failed, a declaration with an error, or a hole()) that its goal or its proof contains, so this obligation could not be checked on its own; fix that first
+no proof
+⊢ 0 < sorry.length
+---
+warning: declaration uses `sorry`
+-/
+#guard_msgs in
+example : 0 < holeConst.length := by vreact_ob (try unfold holeConst at *); fail "no proof"
+
+/--
+warning: vreact: no proof
+⊢ 0 < holeConst.length
+---
+warning: declaration uses `sorry`
+-/
+#guard_msgs in
+example : 0 < holeConst.length := by vreact_ob fail "no proof"
+end
+
 end VReactBudgetTest

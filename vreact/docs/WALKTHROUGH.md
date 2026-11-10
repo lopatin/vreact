@@ -24,8 +24,27 @@ npm create vite@latest kanban -- --template react-ts   # or any React+TS project
 cd kanban && npm i ../../vreact                         # provides `vreact` and `vreact/spec`
 ```
 
-`tsconfig.json` must have `"strict": true` and `"lib": ["ES2023", "DOM"]` (VTS uses
-`toSorted`, `toReversed`, `with`). Add `vreact.json`:
+The template's `tsconfig.json` is solution-style (`"files": []` and `"references"` to
+`tsconfig.app.json` and `tsconfig.node.json`), which vreact rejects: Vite would compile the
+sources with `tsconfig.app.json`, which vreact does not read. Make `tsconfig.json` the one
+config of the sources — move the `compilerOptions` and `"include": ["src"]` of
+`tsconfig.app.json` into it, remove `"files"` and `"references"`, and delete
+`tsconfig.app.json` (keep `tsconfig.node.json` for `vite.config.ts` if you type-check it). It
+must have `"strict": true`, `"jsx": "react-jsx"` and `"lib": ["ES2023", "DOM"]` (VTS uses
+`toSorted`, `toReversed`, `with`), for example:
+
+```json
+{
+  "compilerOptions": {
+    "target": "ES2022", "lib": ["ES2023", "DOM"], "module": "ESNext",
+    "moduleResolution": "Bundler", "jsx": "react-jsx", "strict": true,
+    "noEmit": true, "skipLibCheck": true, "allowImportingTsExtensions": true
+  },
+  "include": ["src"]
+}
+```
+
+Add `vreact.json`:
 
 ```json
 { "src": "src", "exclude": ["main.tsx"], "proofs": "proofs", "out": ".vreact" }

@@ -40,7 +40,15 @@ missing. All the app needs from npm is that `vreact` (and `react`, `@types/react
 resolve from its folder — `npm i <tool>` or a symlinked `node_modules` both work. The app needs `"strict": true`, `"jsx": "react-jsx"` and `"lib": ["ES2023", "DOM"]` in tsconfig (no other
 `jsxImportSource`, no JSX pragmas, no `@ts-ignore`/`@ts-expect-error`/`@ts-nocheck` in verified files) and `vreact.json`
 (`{"src":"src","exclude":["main.tsx"],"proofs":"proofs","out":".vreact"}`).
-Keep `main.tsx` (createRoot) outside the verified program.
+Keep `main.tsx` outside the verified program, and mount the app with `createRoot` (or
+`hydrateRoot`): certificates assume React 18's concurrent root, whose automatic batching
+the model has; a legacy `ReactDOM.render` root renders between two setters of a timer. `"out"` must be a directory of its
+own (vreact replaces its `VTS/`, `Proofs/` and `.lake/`): not the app folder, `src` or `proofs`,
+nor containing one, nor inside `proofs` (inside `src` is fine: `"src": "."` with `.vreact`). Files
+named `*.test.*`/`*.spec.*` in `src` are skipped as tests (not verified; a verified file must not
+import one). No `"references"` in tsconfig.json (merge Vite's `tsconfig.app.json` into it),
+`"extends"` only to a project file named in full (`"./tsconfig.base.json"`), no symbolic links in
+`src`, no `?`, `#`, `%` or `\` in file paths, no object `"browser"` field in a package.json.
 
 Lean editors (WebStorm/IntelliJ with `lean4ij`, VS Code with the Lean 4 extension):
 `setup.sh /path/to/app` and every `vreact verify` write `lean-toolchain` (the tool's Lean
@@ -87,9 +95,25 @@ change (it is incremental and usually takes seconds).
    `xs.filter(x => x.k !== v)`, `xs.map(x => x.k === v ? { ...x, f: e } : x)`,
    calls of the module's total helpers (generic ones at the hole's types),
    `± 1` and comparisons — smallest first,
-   up to size 9. Each hole costs up to ~60 s of search plus up to 5 Lean checks
+   up to size 9. Each hole costs up to ~60 s of search (candidates are built as
+   they are tested, and the limit holds while one is tested; one candidate's
+   tests get at most 5 s: one cut off after passing the tests that ran goes to
+   Lean after the candidates whose tests finish, or once 3 such are held back)
+   plus up to 5 Lean checks
    of candidates that pass the random tests; a function with n holes takes up
-   to about n times that. Guarded updates (`if … return s;`)
+   to about n times that. Holes go in code only: a hole inside a contract
+   (`requires`, `ensures`, `invariant`, `decreases`, `callbackRequires`,
+   `assert`, `assume`) is never filled — the contract is what the holes are
+   filled against, so a fill proved against it could be vacuous
+   (`requires(false)`) — and its function is not searched: write the contract
+   by hand. Likewise a function that a contract calls (directly or through
+   other functions) and that has no `ensures` of its own is not filled: Lean
+   would check its fill against nothing (`true` would be "proved") and the fill
+   would become part of that contract — give it an `ensures` or write it. The
+   functions that module-level code calls (`export const N: int = f(1);`) are
+   filled first: while one has a hole, the constants declared after that call
+   stay uninitialized in the tests, and inputs that read one are skipped.
+   Guarded updates (`if … return s;`)
    are not in the grammar: write the guard by hand and leave a hole in each
    branch (or `case`) — the holes of one function are filled and proved
    together (holes in different branches or cases are searched once each,
@@ -98,10 +122,15 @@ change (it is incremental and usually takes seconds).
    `relative_to` under `--json` — means the proof assumes those @trusted
    contracts or `assume(…)` facts. A `? not proved` line names what kept Lean
    from checking it (often a failing obligation elsewhere in the module or an
-   import: fix that first); a contract whose statement depends on a function
+   import: fix that first; when it is a helper that a fill calls — the
+   candidate or another hole's fill — the fills that do not call it are tried
+   next); a contract whose statement depends on a function
    that still has a hole (through calls, their bodies and `requires`; not
    through `@trusted` bodies) is reported as such: fill that function first. Synth never edits the
-   file while searching; `--write` writes only proved fills. Maps and Sets only grow in its
+   file while searching; `--write` writes only proved fills (and drops the imports, and the
+   file's own non-exported types, that only the filled `hole<T>()` calls used: Lean checks that
+   exact text). A field whose name is not an identifier (`"my-field"`) is never read (VTS has no
+   `p["my-field"]`). Maps and Sets only grow in its
    grammar (`new Map(m).set(k, v)`, `new Set(s).add(x)`): a fill that deletes is written by
    hand. The random tests are reproducible: each hole's inputs come from a seeded generator
    (`--seed N` picks another seed, default 1), so two runs test the same inputs and print the
@@ -143,6 +172,7 @@ export function ItemList(props: ItemListProps) {
 ```
 
 * Use `int` for integers (counts, ids, cents); `number` is a float the prover knows nothing about (opaque: no arithmetic, comparison or `Math.*` facts). A division `a / b` needs a divisor that is not zero (`requires(b !== 0)` or a guard `b === 0 ? … : a / b`; a nonzero literal divisor needs nothing): `1 / -0` is `-Infinity`, and VTS values do not keep the sign of zero.
+* `implies(a, b)` is a function call: JS evaluates `b` even when `a` is false. In `requires`, `invariant`, `assert` and `assume`, which run at every call or render, `b` must be safe on its own (no index, `!` or divisor that needs `a`): write `!a || b`, e.g. `requires(xs.length === 0 || xs[0] > 0)`. Only in `ensures` lambdas and the expression body of `callbackRequires` lambdas (the app never runs them; `vreact synth`'s tests evaluate an ensures' `implies(a, b)` as `!a || b`, as the prover reads it) may `b` rely on `a`: `ensures((r: T) => implies(xs.length > 0, r === xs[0]))`.
 * Helpers used at several types may be generic top-level functions:
   `<K extends int | string>` to compare keys (`===`, `includes`, `distinct`),
   `<T extends { readonly id: int }>` to read fields; values of a type parameter are
@@ -150,24 +180,36 @@ export function ItemList(props: ItemListProps) {
   No generic type aliases, components or arrows, no `@trusted` generics, and no
   callback parameters (`p: (x: T) => boolean`): use a field constraint.
 * State is immutable: spread, `filter`, `map`, `toSorted`, `with` — never `push`/`sort`/property assignment.
+* No recursion: a function may not call itself, nor a component render itself (`<Tree/>` inside
+  `Tree`): render nested data from a flat array (rows with a depth field) with one `map`.
 * Maps/Sets (`ReadonlyMap<int, Item>`, `ReadonlySet<string>`; keys int/string/boolean/enum, or
   `K extends int | string` in a generic helper such as `toggleIn<K>(s: ReadonlySet<K>, k: K)`):
   update a fresh copy — `new Map(m).set(k, v)`, or `const n = new Map(m); n.delete(k); return n;` —
   never state, props or parameters; consume iterators at once (`[...m.values()]`, `for…of`).
-* Handlers may call setters, `dispatch`, and **at most one** parent callback per path.
+* Handlers may call setters, `dispatch`, and **at most one** parent callback per path —
+  in their own statements, or in a local helper called as a statement (`bump();`) or as
+  `const v = bump();`; never inside an array callback, a functional update, or an expression
+  (`setN(bump())`). A callback implementation may ignore trailing arguments (`() => close()`).
 * `setX(v)` uses the render snapshot; two of them in one handler do not compose — use
   `setX(prev => …)` when updates must accumulate.
 * Effects/timers and continuous/default-priority handlers (`onMouseMove`,
   `onScroll`, `onTransitionEnd`, `onLoad`, …) must preserve the invariant from
   **any** state (stale closures): prefer functional updates there; effect deps
-  must be exhaustive. Cleanups only clear timers (and log / write `localStorage` /
+  must be exhaustive (and `useMemo`/`useCallback` deps): data paths — `[m]` for
+  `m.has(k)`, never `[m.has]`. Cleanups only clear timers (and log / write `localStorage` /
   `document.title`; the arguments of such writes are checked everywhere, like any
   expression; in a cleanup they and a timer's delay are data, reading methods only: no
   `xs.push`, setters or helpers). In such a component, clicks etc. must also be safe on top
   of their pending updates (React rebases): guard inside `setX(p => …)`.
 * Closures read `let`s when they run: do not reassign a `let` after creating a
   handler/helper/updater that reads it (`const xNow = x;` first), and never assign
-  an outer `let` inside a callback.
+  an outer `let` inside a callback. A helper or handler may read a `const` declared
+  after it if it is used (called, attached) after that declaration; a `useEffect`,
+  `useCallback` or `useMemo` function may not (its deps cannot list it): declare
+  what a hook reads before the hook. State, too, exists only from its `useState`
+  on (put the hooks first; an `invariant` reads only the state above it). Local
+  functions cannot be recursive. A timer callback may read the effect body's
+  `const`s declared before `setTimeout`/`setInterval`.
 * Module constants run in source order when the module loads: declare a constant
   above every constant (or `assert`) whose initialiser uses it, also through a
   function call. `export default` only a name, never an expression.
@@ -190,6 +232,10 @@ export function ItemList(props: ItemListProps) {
 * Invariants must not depend on props that can change (React keeps state across
   prop changes): clamp when rendering instead.
 * Lists need `key={…}` with provably distinct keys (usually from an invariant).
+  Keyed siblings in one element (`<Viewer key=…/><Notes key=…/>`) need distinct keys
+  too, compared as strings (`key={1}` = `key="1"`): use distinct literal prefixes or
+  suffixes (`` key={`viewer-${id}`} ``, `` key={`notes-${id}`} ``; `` key={`${id}-title`} ``,
+  `` key={`${id}-body`} ``).
 * One native event may reach only one discrete handler: no `onX` element may wrap
   a handler fired by the same native event (`onClick` around a checkbox's
   `onChange`: both run on click) or a user component, and one element may not
@@ -197,7 +243,22 @@ export function ItemList(props: ItemListProps) {
   A click's activation counts too: no `onClick` on, around or inside a submit
   button of a form with `onSubmit` (use `type="button"`) or a `<label>`, and no
   `<label>` or nested button inside such a submit button.
-  `onFocus`/`onBlur`/`onInvalid` must be robust (no parent callbacks).
+  A `<select>` holds only `<option>`/`<optgroup>` elements, an `<option>` only
+  text: no other element or user component inside (a control there would run
+  the select's `onChange`).
+  `onFocus`/`onBlur`/`onInvalid` must be robust (no parent callbacks), and the focus
+  handlers of an `autoFocus` element, or of an element around one, may not update state
+  unless every `autoFocus` element of the component is in its only `return`, not under
+  a condition or in a list, with no `key` on it or around it, and the component renders
+  no other component.
+* `name`/`id` of form controls (`<input>`, `<button>`, `<select>`, `<textarea>`,
+  `<output>`, `<fieldset>`), `<img>`, `<object>`, and `name` of `<form>`, `<iframe>`,
+  `<embed>`: no name React uses on forms or the document (`parentNode`, `removeChild`,
+  `createElement`, `value`, `type`, `length`, …; `name`, `title`, `id`, `submit` are
+  fine on controls) nor `_…`/`on…`, and statically bounded (a literal, a choice between
+  literals, an enum, or a string with a literal part holding a character other than
+  letters, digits, `_`, `$`: `` `qty-${id}` ``). A written `id` of any element may not
+  be a global React reads (`nodeName`, `type`, `jest`, …).
 
 ## Reading results
 
@@ -240,12 +301,13 @@ error stopped the file) — fix the first failure or the listed Lean build error
 and re-run.
 Each obligation has its own time budget; one that runs out fails with
 `(deterministic) timeout` at that obligation (help the prover, or raise
-`"heartbeats"` in vreact.json — default 1000000). After a timeout the report tries
+`"heartbeats"` in vreact.json — default 1000000, at most 1000000000, 0 for no limit). After a timeout the report tries
 each case of the goal alone (the branches of its `if`s and `switch`es, smallest first) and
 names the case that fails, with that case's goal (or the first that did not finish); the short
 report then shows only that goal. A case's name lists the branches that lead to it, outermost
 first: `isTrue`/`isFalse` are the two branches of an `if` (a `switch` on a number or a string is
-a chain of `if`s, one per body), `h_k` is the k-th alternative of a `match` (a `switch` on a
+a chain of `if`s, one per group of labels sharing a body, in the order written, `default`'s own
+labels too), `h_k` is the k-th alternative of a `match` (a `switch` on a
 union or an enum has one per `case` label in the order written, then one for the rest:
 `default`, wherever it is written). The lines of obligations that were not checked name each
 one's position and kind (`src/OptionsChain.tsx:150:11 [callback]: it depends on …`).
@@ -262,13 +324,16 @@ postcondition, root-precondition, unreachable, assert).
    helper, a `requires` on a child component. Facts about **constant data**
    (a seat map, a catalogue): mark the constant `/** @opaque */` and state the
    fact at module level, e.g. `assert(distinct(SEATS, (s) => s.id));` — it is
-   proved once by evaluation and supplied to every proof that mentions the
-   constant. (Transparent constants are unfolded into every goal; large ones
-   become long disjunctions that slow or defeat the prover.)
+   proved once by evaluation (every `@opaque` constant it mentions unfolded)
+   and supplied to every proof that mentions the constant (the first `@opaque`
+   constant of the module it mentions). (Transparent constants are unfolded
+   into every goal; large ones become long disjunctions that slow or defeat the
+   prover.)
 2. Split work: make a large function `@opaque` with precise `ensures`.
 3. Add an intermediate fact: `assert(cond)` (proved, then available).
-4. Write a Lean lemma in `proofs/<Module>.lean` (`import VTS.<Module>.Defs`);
-   tag it `@[vreact_simp]` if it is a rewrite rule (or `@[grind …]`). The lemma
+4. Write a Lean lemma in `proofs/<Module>.lean` (`import VTS.<Module>.Defs`;
+   `<Module>` is the Lean module name: `src/Base.ts` is `Base_`, `src/base.ts` `base_`, `src/_util.ts`
+   is `M_util`, see reference/obligations.md); tag it `@[vreact_simp]` if it is a rewrite rule (or `@[grind …]`). The lemma
    helps the module's component obligations, the `ensures` of the module's functions that no other
    function or constant of the module uses (they are proved after it, in
    `Posts.lean`), and everything (functions, contracts, components) in the
@@ -276,14 +341,19 @@ postcondition, root-precondition, unreachable, assert).
    `<Module>`, nor the `ensures` of a function that another function or
    constant of `<Module>` calls (those are proved in `Defs.lean`, before it,
    so the caller can use them). For such a lemma: state it generically in
-   `proofs/Base.lean` (imported everywhere), or move the function that needs
+   `proofs/Base.lean` (imported everywhere, so it imports no generated module), or move the function that needs
    it to a module that imports `<Module>`. Proof files may contain only lemmas
    (`theorem`/`def`/`abbrev`/`example`, `open`, `namespace`/`section`, the
    attributes `simp`/`vreact_simp`/`grind`, `grind_pattern`, resource options) and
    import only `VReact` (the whole library), `VTS.…`, `Proofs.…`:
    `vreact` rejects anything else — macros, `macro_rules`, instances, axioms,
    `VReact.assumed`, `#eval`, other options — before Lean runs, and re-checks what
-   they added with Lean's kernel after the build. See `reference/obligations.md`.
+   they added with Lean's kernel after the build. A proof file that no module
+   imports (named after no module, e.g. `proofs/model.lean` for `src/Model.ts`, and
+   imported by no such proof file) is rejected: Lean would never check it. So is a
+   proof file whose path is not a module name (every directory and file name an
+   identifier: not `proofs/x.y.lean` or `proofs/my-lemmas.lean`). See
+   `reference/obligations.md`.
 5. Never use `assume(…)` or `@trusted` to make a failure go away without telling
    the user; both are reported and keep the result from being `VERIFIED`.
 

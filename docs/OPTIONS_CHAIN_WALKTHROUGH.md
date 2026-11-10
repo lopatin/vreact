@@ -330,9 +330,8 @@ hole in midPrice: int | null   scope: q, q.bid, q.bidQty, q.ask, q.askQty
   candidate passes 400 random tests: q.bid   (1 candidate(s) tested in 0.0s)
   ✔ proved by Lean: q.bid
 hole in atmIndex: int   scope: ks, price
-  23461 candidates tested in 60.0s, up to size 8; stopped: the 60s time limit was reached at size 8
-  no verified solution for hole in atmIndex: no candidate passed the tests
-  most common failure (23461×): price: postcondition fails on [[{"strike":2,"call":{"bid":-10,"bidQty":1,"ask":null,"askQty":2},"put":{"bid":2,"bidQty":7,"ask":-5,"askQty":-5},"callTheo":7,"putTheo":4,"vol":10}],10] ↦ 10
+  candidate passes 400 random tests: 0 - 1   (7 candidate(s) tested in 0.1s)
+  ✔ proved by Lean: 0 - 1
 …
 ```
 
@@ -347,13 +346,15 @@ satisfies its contract.** The first contract only said "null when both sides are
 "within the spread", and the bid is within the spread. A verified function is only as good as
 its specification, and the synthesizer just showed that ours does not say "mid".
 
-For `atmIndex`, no candidate passed, not even the trivial `-1`. The reason is how synth tests:
-it runs the contracts as JavaScript, where `implies(a, b)` is an ordinary function call that
-evaluates `b` even when `a` is false. For `r = -1`, `ks[-1].strike` throws. (The failure printed
-above is not that case. Synth counts the failures of all candidates by kind and shows the
-first one of the most common kind. That is its first candidate, `price`: on a one-strike ladder
-and the price 10, it returns 10, which is not even an index of the ladder.) In Lean, `implies`
-is guarded. We write the same condition with `||`, which short-circuits in both languages
+For `atmIndex`, synth proves that **`return -1` ("never an ATM row") satisfies the spec**. A
+second weak spec. Synth runs the contracts as JavaScript, but it evaluates an `implies(a, b)` in
+an `ensures` the way the prover reads it, `b` only where `a` holds, so for `r = -1` it never
+reads `ks[-1]`. (Earlier versions of synth called vreact/spec's `implies`, which evaluates
+`ks[-1].strike` even when `r >= 0` is false, and that throws: then no candidate passed, not even
+`-1`.) Everywhere else `implies(a, b)` is an ordinary function call that evaluates `b` even when
+`a` is false. In a contract the app runs (a `requires`, an `invariant`, an `assert`), `ks[r]`
+would be read for `r = -1` too, and vreact would fail its index obligation. So we write the
+guard with `||`, which short-circuits in both languages and reads the same in every contract
 ([log](options-chain/03-model-synth-guard.txt)):
 
 ```ts
@@ -368,8 +369,8 @@ hole in atmIndex: int   scope: ks, price
   ✔ proved by Lean: 0 - 1
 ```
 
-Now synth proves that **`return -1` ("never an ATM row") satisfies the spec**. A second weak
-spec. Both are fixed by saying what we mean ([log](options-chain/04-model-synth-strong.txt)).
+Synth's answer is the same: `return -1`. Both weak specs are fixed by saying what we mean
+([log](options-chain/04-model-synth-strong.txt)).
 `midPrice` is the mid, rounded down, of a two-sided market (`isMid`: `r === idiv(bid + ask, 2)`
 when both sides exist), otherwise the side that is there; "within the spread" stays, as a
 property the proof must also establish. For `atmIndex`, "-1 for none" must not be an escape
@@ -4723,10 +4724,14 @@ facts about sums that need induction, and in one place (item 9) states less than
 It adds no `assume` and no `@trusted` either. Step 18 adds no lemma: it states one claim in
 other words (item 13) and replaces another with code that makes it unnecessary (item 14).
 
-1. **`implies` in synth's random tests** (steps 02–03). Synth evaluates contracts as
-   JavaScript, so `implies(r >= 0, nearest(ks, ks[r], price))` evaluates `ks[-1].strike` and
-   throws. Every candidate then fails ("no candidate passed the tests"), even `-1`, which Lean
-   proves. *Fix:* write guards that short-circuit in JavaScript too: `r < 0 || …`.
+1. **`implies` evaluates both arguments** (steps 02–03). `implies(a, b)` is a function call, so
+   JavaScript evaluates `b` even when `a` is false: in a contract the app runs (a `requires`, an
+   `invariant`, an `assert`), `implies(r >= 0, nearest(ks, ks[r], price))` reads `ks[-1]`, and
+   vreact checks the index without the guard. Only in an `ensures`, which never runs, is `b`
+   guarded by `a`, in Lean and in synth's random tests. (When this walkthrough was first written,
+   synth's tests called vreact/spec's `implies` in an `ensures` too, so every candidate for
+   `atmIndex` failed with `ks[-1].strike` throwing, even `-1`, which Lean proves.) *Fix:* write
+   guards that short-circuit in JavaScript too: `r < 0 || …`.
 2. **Existence of a nearest strike** (step 06). "A non-empty ladder has a nearest strike" needs
    induction. *Fix:* the postcondition says "an ATM row is found whenever some strike is
    nearest". That excludes the `-1` escape hatch and is provable. The remaining gap is a plain
@@ -4881,8 +4886,8 @@ app's npm dependencies (`npm ci`), and run its `command` in a shell.
 | step | command | result | snapshot | log |
 |---|---|---|---|---|
 | 01 model spec | `verify` | ◐ INCOMPLETE, 6 holes in 5 functions | [src](options-chain/steps/01-model-spec/src/) | [log](options-chain/01-model-spec.txt) |
-| 02 synth | `synth src/model.ts` | `midPrice = q.bid`: weak spec | [src](options-chain/steps/02-model-synth/src/) | [log](options-chain/02-model-synth.txt) |
-| 03 synth, JS-safe guard | `synth src/model.ts` | `atmIndex = 0 - 1`: weak spec | [src](options-chain/steps/03-model-synth-guard/src/) | [log](options-chain/03-model-synth-guard.txt) |
+| 02 synth | `synth src/model.ts` | `midPrice = q.bid`, `atmIndex = 0 - 1`: weak specs | [src](options-chain/steps/02-model-synth/src/) | [log](options-chain/02-model-synth.txt) |
+| 03 synth, JS-safe guard | `synth src/model.ts` | `atmIndex = 0 - 1` again: weak spec | [src](options-chain/steps/03-model-synth-guard/src/) | [log](options-chain/03-model-synth-guard.txt) |
 | 04 synth, strong spec | `synth src/model.ts --write` | `quotePrice` written | [src](options-chain/steps/04-model-synth-strong/src/) | [log](options-chain/04-model-synth-strong.txt) |
 | 05 hand-written model | `verify` | ✗ ATM edges, window off-by-one | [src](options-chain/steps/05-model-bugs/src/) | [log](options-chain/05-model-bugs.txt) |
 | 06 ATM as a search | `verify` | ✗ existence (induction) | [src](options-chain/steps/06-model-search/src/) | [log](options-chain/06-model-search.txt) |

@@ -16,11 +16,11 @@ first one that fails.
 | `effect-robust` | an effect / timer callback keeps the invariant from any valid state (stale closure); a timer callback may use the early returns (`if (c) return;`) and `assert`/`assume` before its top-level registration | functional update over the whole related state (one record); an early return on the captured value before `setTimeout` |
 | `init-invariant` | initial state satisfies the invariant | initial values; literal data in `useState(...)` |
 | `props-stability` | the invariant survives a re-render with new props (React keeps state) | do not tie state invariants to changeable props; clamp in render |
-| `unique-keys` | keys of a rendered list are distinct | add `distinct(...)` to the invariant or the child's `requires`; for the values of a Map, key by the Map key (`[...m].map(([k, v]) => <li key={k}>…)`) or add `[...m].every(([k, v]) => v.id === k)` to the invariant |
+| `unique-keys` | keys of a rendered list, or of the keyed children of one element or fragment (as strings: `key={1}` and `key="1"` collide), are distinct | add `distinct(...)` to the invariant or the child's `requires`; for the values of a Map, key by the Map key (`[...m].map(([k, v]) => <li key={k}>…)`) or add `[...m].every(([k, v]) => v.id === k)` to the invariant; for sibling elements, give each a key with its own literal prefix or suffix (`` key={`viewer-${id}`} ``, `` key={`notes-${id}`} ``; `` key={`${id}-title`} ``, `` key={`${id}-body`} ``) |
 | `child-precondition` | props passed to `<C/>` satisfy `C`'s `requires` | establish it from your invariant / data; or weaken `C`'s requires |
 | `callback` | the function you pass as a child's callback keeps **your** invariant, assuming the child's `callbackRequires` | strengthen the child's contract, or guard in your handler |
 | `callback-contract` | this call of a callback prop satisfies its `callbackRequires` | the arguments you pass (e.g. trim/validate first) |
-| `index` | `xs[i]` / `xs.with(i, …)` is in bounds | guard `i < xs.length` (in contracts too: `i < xs.length && xs[i] > 0`, `forall(0, xs.length, (i) => …)`), or carry bounds in an invariant |
+| `index` | `xs[i]` / `xs.with(i, …)` is in bounds (`0 <= i < xs.length`; for `xs.with(-k, …)`, an index from the end, `0 < k <= xs.length`) | guard `i < xs.length` (in contracts too: `i < xs.length && xs[i] > 0`, `forall(0, xs.length, (i) => …)`), or carry bounds in an invariant; a negative `with` index must be written `-k` (`xs.with(-1, v)`): any other index is required to be non-negative |
 | `nonzero-divisor` | `%`, `idiv`, `Math.floor(a/b)` divisor ≠ 0; a number division `a / b` (unless `b` is a nonzero literal): `b` not 0 (VTS values do not keep the sign of zero, which `1 / -0` would show) | guard (`total === 0 ? 0 : …`), `requires(b !== 0)` |
 | `non-null` | `x!` is not null | narrow with `!== null` instead |
 | `precondition` | a called function's `requires` holds; at a `dispatch(a)`, the reducer's `requires` about the action | establish it (validate before dispatching, or rely on a child's `callbackRequires`), or make the callee total |
@@ -28,7 +28,7 @@ first one that fails.
 | `root-precondition` | the root component can be mounted | root `requires` must hold for its (empty) props |
 | `unreachable` | a `throw` can never execute | guard; or prove the case impossible via invariant |
 | `assert` | an `assert(c)` holds | — |
-| `fact` | a module-level `assert(c)` about an `@opaque` constant holds | the data; it is checked by evaluation (it runs when the module loads: it, like a constant's initialiser, may not reach a constant declared below it, also through calls — rejected before any obligation). It is proved after every declaration it mentions (it may call a function declared below its constant); declarations before that point cannot use it |
+| `fact` | a module-level `assert(c)` about an `@opaque` constant holds | the data; it is checked by evaluation: every `@opaque` constant it mentions is unfolded to its value, also in the obligations inside it (an index, a divisor, a precondition), and it belongs to the first `@opaque` constant of the module it mentions (proofs get it where they mention that constant). It runs when the module loads: it, like a constant's initialiser, may not reach a constant declared below it, also through calls (rejected before any obligation). It is proved after every declaration it mentions (it may call a function declared below its constant); declarations before that point cannot use it |
 
 `index`, `non-null`, `nonzero-divisor` and `precondition` come from every
 expression JS evaluates, also where its value is not used: the arguments of
@@ -36,7 +36,14 @@ expression JS evaluates, also where its value is not used: the arguments of
 effects, timers, render and functions), a timer's delay, and the conditions and
 arguments of an effect's cleanup — checked where the effect returns it, under
 the effect's early returns and branches. Guard them as usual (`if (i <
-xs.length) console.log(xs[i].name)`).
+xs.length) console.log(xs[i].name)`). The same holds for the condition of
+`requires`, `invariant`, `assert`, `assume` and a module-level `assert`, which JS
+evaluates at every call, render or load: there `implies(a, b)` evaluates `b` even
+when `a` is false, so `b`'s obligations get no help from `a` — write `!a || b`
+(`xs.length === 0 || xs[0] > 0`). Only an `ensures` lambda and the expression
+body of a `callbackRequires` lambda never run in the app: there `b` is checked
+under `a` (and `vreact synth`'s tests evaluate an ensures' `implies` only where
+`a` holds).
 
 ## When the code and spec are right but the proof fails
 
@@ -86,11 +93,27 @@ xs.length) console.log(xs[i].name)`).
    Lean keyword or root-level Lean name gets a `'` (`function max` is
    `VTS.<module>.max'`, field `rec` is `rec'`, component `Type` is
    `VTS.<module>.Type'`; a module path segment gets a `_`: `src/end/Sort.tsx` is
-   `VTS.end_.Sort_`, its lemmas `proofs/end_/Sort_.lean`); hypotheses the translator invents
+   `VTS.end_.Sort_`, its lemmas `proofs/end_/Sort_.lean`; a segment starting with
+   a digit or `_` gets a leading `M`: `src/_util.ts` is `VTS.M_util`; and
+   `src/Base.ts` is `VTS.Base_`, its lemmas `proofs/Base_.lean` (`src/base.ts`:
+   `VTS.base_`, `proofs/base_.lean`), since `proofs/Base.lean` is the global
+   lemma file); an inline type is named after
+   where it occurs (`const config: { … }` → `VTS.<module>.Config`, a function's
+   result → `<Fn>Result`), subscripted (`Config₂`) when a type, function,
+   component or constant of the module, or a nested module (`src/m/Config.ts`),
+   has that name; hypotheses the translator invents
    are subscripted (`h₁`, `hmem₂`); all `requires` of a function form one
    hypothesis `h_pre`. Run
    `vreact explain src/<file>.tsx` to see them. `proofs/Base.lean` (no imports of
-   generated code) is visible to every module.
+   generated code, also not through other proof files: every `Defs.lean` imports
+   it, so vreact rejects such an import) is visible to every module. Any other
+   proof file counts only when one of these imports it (`import Proofs.<path>`):
+   a proof file that no module imports, directly or through other proof files, is
+   rejected, since Lean would never check it (names are case-sensitive:
+   `proofs/model.lean` does not go with `src/Model.ts`; imports in comments do not
+   count, as for Lean). The path is the module name (`proofs/a/b.lean` is
+   `Proofs.a.b`), so every directory and file name must be an identifier:
+   `proofs/x.y.lean` and `proofs/my-lemmas.lean` are rejected.
 
    `Defs.lean` holds types, constants and functions, each function followed by
    its `ensures` theorems (so later function bodies, here and in importing
@@ -213,7 +236,9 @@ xs.length) console.log(xs[i].name)`).
    xs[i] >= 0)` are split and instantiated at the indices of the goal
    automatically; in a shape that is not, an `assert` of the needed instance
    usually helps.) A timeout or error Lean reports for a whole declaration
-   leaves its obligations unproved ("not checked", with the reason). Budgets
+   leaves its obligations unproved ("not checked", with the reason), also when it
+   has only one: such an error is the declaration's, listed with its cause, never
+   a failure of the obligation. Budgets
    are per obligation also when Lean elaborates declarations in parallel; the
    one-time cost of a shared auxiliary lemma (equation lemmas of a big `match`)
    goes to whichever obligation needs it first (well under 1% in practice).
@@ -278,7 +303,9 @@ xs.length) console.log(xs[i].name)`).
     failed), the proof Lean found uses it (e.g. it unfolds a function whose
     index obligation failed: a proof through the admitted proof of a false
     statement proves nothing), or it failed on a goal that unfolds to a
-    `hole()`. Fix the failure it depends on first. (Using the *contract* of a
+    `hole()` (in a function the goal unfolds, in a component's invariant or
+    initial state, or in the `@opaque` constant of a fact). Fix the failure it
+    depends on first. (Using the *contract* of a
     function whose `ensures` failed is ordinary modular reasoning: that
     obligation counts as proved, and its item is `INCOMPLETE`.)
 

@@ -19,7 +19,23 @@ at top level.
   Vite: rejected); `react` and `vreact/spec` (also the `react/jsx-runtime` that
   JSX imports) must resolve to the installed packages, with or without `paths`.
   Bare specifiers that reach a project file (`"@/model"` through `paths`,
-  `"model"` through `baseUrl`) are rejected.
+  `"model"` through `baseUrl`) are rejected. Vite reads everything from the first
+  `?` or `#` of a path as a URL query or hash (`"./limits#v2"` loads `limits.ts`),
+  and its dev server percent-decodes a module's URL (`limits%61.ts` is served as
+  `limitsa.ts`; the browser turns `\` into `/` and drops tabs and line breaks),
+  so neither an import path nor a source's path may contain `?`, `#`, `%`, `\`,
+  a tab or a line break.
+* The sources are the `.ts`/`.tsx` files of `"src"` (vreact.json) except `.d.ts`
+  files, tests (a name containing `.test.` or `.spec.`: `order.spec.ts` is
+  skipped — a verified file importing it is rejected; rename it), files in
+  `node_modules` or a directory starting with `.`, and those in `"exclude"`; or
+  exactly the files in `"include"` (`.ts`/`.tsx` sources only: a `.js`/`.jsx` file
+  takes its types from JSDoc comments). They must be inside the project directory and
+  must not be (or be inside) a symbolic link: Vite loads a module from its real
+  path and resolves its imports from there, TypeScript from the link's path. An
+  object `"browser"` field in any package.json from a source's directory up to the
+  root of the file system is rejected (Vite maps imports through the nearest
+  package.json it can load, skipping a `null` or otherwise unloadable one).
 * Exports: `export` on declarations, `export { a, b as c }`, `export default f`
   / `export default x` (a name; `export default <expression>` is rejected —
   declare a `const` and export that), re-exports `export … from "./m"` (they load
@@ -51,7 +67,12 @@ at top level.
   types `ReadonlyArray`/`Array`, `ReactNode`/`JSX.Element`. A local, parameter,
   import or project declaration spelled like one is that binding (a local
   `const undefined = 3` is 3; `import * as Math from "./m"` is rejected where
-  `Math` is used: rename it). React's hooks must come from an import of `react`
+  `Math` is used: rename it). A namespace import of a verified module
+  (`import * as L from "./lib"`, also a namespace re-exported with
+  `export * as L from "./lib"`) gives `L.f(…)` and `L.K` exactly the meaning of
+  the named imports `f` and `K`; the namespace object itself is not data
+  (`const m = L` is rejected), and a component is rendered by its name
+  (`<L.Row/>` is rejected: `import { Row }`). React's hooks must come from an import of `react`
   (`import { useState }` or `import * as React`): React's types also declare a
   global `React`, which a module bundle does not define, so tsconfig
   `"allowUmdGlobalAccess"` is rejected.
@@ -67,13 +88,25 @@ at top level.
   result is unused, state updates included).
 
 Each file becomes the Lean module `VTS.<path>`: its path under `src` without
-`.ts`/`.tsx`, characters other than letters, digits and `_` replaced by `_`.
-Two files that map to the same module, or to names differing only in letter
-case, are rejected (`module name clash`): e.g. `limits.ts` + `limits.tsx`,
-`my-x.ts` + `my_x.ts`, `todo.ts` + `Todo.tsx`. Rename one of them. Within a
-module, types and values share Lean's one namespace: a function or constant
-named like a type of its module (`type Limits = …; const Limits: Limits = …`)
-is rejected.
+`.ts`/`.tsx`, characters other than letters, digits and `_` replaced by `_`; a
+path segment starting with a digit or `_` gets a leading `M` (`src/_util.ts` is
+`VTS.M_util`: Lean gives `_`-names meanings), and one that is a Lean keyword or
+Lean name a trailing `_` (`src/end.ts` is `VTS.end_`). A file directly in `src`
+named `Base` in any letter case also gets a trailing `_` and keeps its case:
+`src/Base.ts` is `VTS.Base_` (lemma file `proofs/Base_.lean`), `src/base.ts` is
+`VTS.base_` (lemma file `proofs/base_.lean`), since `proofs/Base.lean` is the
+global lemma file (see obligations.md). Two files that map to the same module, or to names differing
+only in letter case, are rejected (`module name clash`): e.g. `limits.ts` +
+`limits.tsx`, `my-x.ts` + `my_x.ts`, `todo.ts` + `Todo.tsx`, `end.ts` +
+`end_.ts`. Rename one of them. Within a module, types and values share Lean's
+one namespace: a function, component or constant named like a type of its
+module (`type Limits = …; const Limits: Limits = …`, `type Todo = …; function
+Todo(…)`) is rejected. Inline object and union types are named by the
+translator after where they occur (`const config: { … }` → `Config`, a
+function's result → `<Fn>Result`), with a subscript (`Config₂`) when that name
+is taken by a type, function, component or constant of the module, or by the
+namespace of a nested module (a local `x: { … }` in `src/m.ts` next to
+`src/m/X.ts` gives `X₂`).
 
 The tsconfig needs `"strict": true` (with every check of the strict family:
 `strictNullChecks`, `noImplicitAny`, `strictFunctionTypes`, … none set to false)
@@ -90,7 +123,14 @@ and output options are accepted; options that switch checks off (`"noCheck"`,
 false`) and any option vreact does not know (newer ones) are rejected with the
 option's name. The tsconfig.json read is the one in the project
 root; a `tsconfig.json` inside the source directories is rejected (the bundler
-compiles a file with the nearest one's settings, e.g. its `jsxImportSource`).
+compiles a file with the nearest one's settings, e.g. its `jsxImportSource`), and
+so is a project without a tsconfig.json that has one above it (the bundler would
+use that one). A solution-style tsconfig.json with `"references"` (Vite's react-ts
+template: `"files": []` and `tsconfig.app.json`) is rejected: put the compiler
+options in tsconfig.json itself. `"extends"` must name a file of the project by a
+relative path that TypeScript and Vite resolve to the same file — write it in full
+(`"./tsconfig.base.json"`): Vite resolves `"./base"` like Node's `require`
+(`base.js` before `base.json`); a package name (`"@tsconfig/…"`) is rejected.
 
 ## Types
 
@@ -101,7 +141,7 @@ compiles a file with the nearest one's settings, e.g. its `jsxImportSource`).
 | `"a" \| "b" \| "c"`                     | string-literal enums (`switch` on them is exhaustive) |
 | `{ readonly f: T; g?: U }`              | records (optional field = `U \| undefined`) |
 | `{ kind: "x"; … } \| { kind: "y"; … }`  | discriminated unions — any common string-literal field works |
-| `readonly T[]`, `T \| null`, `[A, B]`   | lists, options (not both null and undefined), tuples |
+| `readonly T[]`, `T \| null`, `[A, B]`   | lists, options (not both null and undefined), tuples (fixed length, at least one element; named members `[lo: A, hi: B]` too, but no optional `a?: A` or rest `...r: A[]` members) |
 | `ReadonlyMap<K, V>`, `ReadonlySet<T>`   | Maps and Sets (also `Map`/`Set`): see [Map and Set](#map-and-set) |
 | `(a: A) => void`                        | only as callback **props** (a direct field of a props type); never data: not a function's parameter or result, state, a constant, a local, a hole, an array element |
 
@@ -125,6 +165,8 @@ inherited member, not `undefined`. Such names are fine for required fields.
 * Arithmetic `+ - *` on `int` (also where `int | null` is expected: computed at
   `int`, then wrapped); `/` produces `number`; use `idiv(a, b)` or
   `Math.floor(a / b)` for integer division (obligation: `b !== 0`); `%` (obligation).
+  An `int` with a `number` (`i < xs.length / 2`, `i * 0.5`, either order) is widened
+  to a `number`, as in JS.
   Unary `+` only on numbers (`+s` on a string is rejected: ToNumber is not modelled).
 * `a / b` (a `number`) has the obligation that the divisor is not zero, unless it is
   a nonzero literal (`x / 2`, `x / -0.5`, or a `const` initialised with one): VTS
@@ -163,13 +205,22 @@ inherited member, not `undefined`. Such names are fine for required fields.
   compound assignments other than `+=`/`-=` are rejected.
 * Widening as in TypeScript: an `int[]` where `(int | null)[]` is expected
   (elementwise, also in a spread), an enum member where a `string` is expected
-  (`return k;`, `k === s`). The same inline object type or string-literal union
+  (`return k;`, `k === s`). A conditional or an array literal without an expected
+  type covers all its branches or elements: `c ? i : 0.5` and `[i, 2.5]` are numbers,
+  `c ? color : "other"` and `[color, "other"]` strings (`c ? color : "red"` stays a
+  `Color`); the others take the first one's type when it covers them (`c ? xs : []`).
+  An unannotated top-level `const` takes a numeric, string or boolean literal, typed
+  by its value (`const N = 3` is an `int`, `-2.5` and `1e400` (Infinity) are numbers);
+  annotate any other initialiser. The same inline object type or string-literal union
   in one module is one type (e.g. `hole<{ readonly v: int }>()` returned from a
   function declared to return `{ readonly v: int }`).
 * `&& || ! ?: ?? ?.` (also `a ?? b ?? 0`) and template literals. `?.` skips the whole rest
   of the chain, as in JS: `x?.tags.length ?? 0`, `m.get(k)?.has(id) ?? false`,
   `grid.get(r)?.get(c) ?? 0`, `xs?.[0]` (optional calls `f?.()` are rejected).
 * `xs[i]` (obligation: `0 <= i < xs.length`), `t[0]` on tuples, `x!` (obligation).
+  `xs.with(i, v)`: obligation `0 <= i < xs.length`; a negative index counts from the end
+  when written `-k` (`xs.with(-1, v)` writes the last element; obligation `0 < k <=
+  xs.length`), any other index must be non-negative (VTS's restriction).
 * Arrays: `length map filter some every find findIndex includes indexOf slice
   concat join reduce(f, init) toSorted(cmp) toReversed with at flatMap`, spread.
   Lambdas inline: `xs.filter((x) => x.id !== id)` (they may ignore parameters:
@@ -216,7 +267,13 @@ inherited member, not `undefined`. Such names are fine for required fields.
   `x: T | undefined` and pass it, take an array). The arguments and the result
   of an inlined helper are data: a parameter or result annotation with a
   function type or a React node is rejected (a helper that returns JSX is not
-  supported); a helper used as an event handler takes the event.
+  supported); a helper used as an event handler takes the event. A helper that
+  calls setters, `dispatch` or a parent callback is inlined into an event
+  handler or effect where it is called as a statement (`bump();`: a value it
+  returns is computed, then dropped) or as the whole initializer of a local
+  (`const v = bump();`): its updates run in order with the handler's, as in JS.
+  Called for its value anywhere else (`setN(bump())`, a loop body, an array
+  callback, the render) it is rejected.
 * Narrowing: `x !== null`, `x.kind === "add"`, `switch (x.kind)`, early returns —
   fields of the narrowed variant become available, also inside handlers created there.
   The complement narrows too when one variant is left (`if (s.kind === "a") return …;
@@ -320,11 +377,18 @@ appear: parameters, results, state, props, record fields, array elements, reduce
 `const`, `let` + reassignment (locals only), `if/else`, `return`, `switch`
 (cases end with `return`/`break`, also `case "x": { …; break; }`; no fall-through;
 `default` anywhere, also grouped `case "a": default:`; on an int/string/boolean/number:
-literal, negated-literal or constant labels compared with `===`, a non-integer label
-on an int is rejected; on an enum or `x.kind`: string literals), `for (const x of xs)` (may
+labels compared with `===` — literals, constants or other expressions of the
+discriminant's type, evaluated as in JS in the order written (`default`'s own labels
+too) until one matches, so a label's obligations hold under the negation of the labels
+before it —, a non-integer label on an int is rejected; on an enum or `x.kind`: string
+literals), `for (const x of xs)` (may
 assign outer `let`s; no `return`/`continue` inside, `break` only to end a `switch`
 case), `throw` (must be provably
-unreachable), `assert(c)`, `assume(c)`. No `while`, `try`, `var`, recursion.
+unreachable), `assert(c)`, `assume(c)`. No `while`, `try`, `var`, recursion (a function
+may not call itself in its body — a `@trusted` function's body is not translated: it may — nor
+in its `requires`, also a `@trusted` one, whose argument JS evaluates; an `ensures` lambda may:
+JS never calls it. Functions that call each other are rejected too, also when the cycle runs
+through a `@trusted` body).
 Code after a `return` in the same block never runs and is rejected (in functions,
 components, handlers, effects, timer callbacks). Async functions and generators
 are rejected everywhere (an async predicate returns a promise, which is always
@@ -347,7 +411,10 @@ that runs later (helper arrow, handler, callback prop, `setX(prev => …)`, effe
 timer, cleanup, `useCallback`) may not read a `let` that is reassigned after the
 function is created — copy it first: `const capNow = cap;`. No function or
 callback (array callbacks included) may assign a `let` declared outside it —
-use `for…of` or `reduce`. Array callbacks may read outer `let`s.
+use `for…of` or `reduce`. Array callbacks may read outer `let`s. This holds
+wherever code is translated: also in contracts, constant initialisers and
+`assert(…)` facts, and in the contracts and initial state of a `@trusted`
+declaration (its body is not checked).
 
 ## Contracts
 
@@ -373,9 +440,28 @@ a component's `requires` and `invariant`s. A reducer's `requires` may mention
 only the action (React may apply a queued action to any state): it becomes a
 `precondition` obligation at every `dispatch(…)`. Inside contracts,
 guards are in scope as JS evaluates them: the right side of `&&` / `||`, the
-branches of `?:`, the consequent of `implies(a, b)`, and quantifier bodies
+branches of `?:`, and quantifier bodies
 (`forall(0, xs.length, (i) => xs[i] >= 0)`, `xs.every((r) => r[0] > 0)`) may index
-under their guard.
+under their guard. Only `xs.every`/`xs.some` with `(x) => condition` and
+`forall`/`exists` with `(i) => condition` (an expression body) are such quantifiers;
+another callback (`(x) => { …; return c; }`, `function (x) { … }`) is read as code,
+as in a handler (where `implies(a, b)` evaluates both arguments).
+
+`implies(a, b)` is a function call, so JS evaluates `b` even when `a` is false. The
+arguments of `requires`, `invariant`, `assert`, `assume` and a module-level
+`assert` are evaluated at every call, render, dispatch or module load (also with
+contract checking off), so there `b` must be safe on its own: its indexes, `!`s,
+divisors and callee preconditions are checked without `a`
+(`requires(implies(xs.length > 0, xs[0] >= 0))` fails its `index` obligation:
+`xs[0]` of `[]` is read). Write
+`!a || b` instead (`xs.length === 0 || xs[0] >= 0`, `x === null || x.v > 0`), which
+guards and narrows as JS evaluates it. Only in an `ensures` lambda and in the
+expression body of a `callbackRequires` lambda, which the app never calls, does `b`
+see `a` as its guard (`ensures((r: int) => implies(xs.length > 0, r === xs[0]))`).
+`vreact synth`'s random tests, which do call an `ensures` lambda, evaluate such an
+`implies(a, b)` as `!a || b` (`b` only where `a` holds), as the prover reads it; an
+`implies` in code inside the lambda (a `filter` callback, an operand of `===`)
+evaluates both arguments, there as in Lean.
 
 Constants: small ones are unfolded wherever used. For large data use
 
@@ -391,7 +477,12 @@ the same module (a fact about an imported constant is stated in its module).
 They may call functions declared anywhere in the module (function declarations
 are hoisted) and mention other constants declared above them; the fact is proved
 once everything it mentions is defined, and declarations after that point can use
-it.
+it. A fact is checked by evaluation: every `@opaque` constant it mentions (also
+one of an imported module) is unfolded to its value, also in the obligations
+inside it (an index `A[0]`, a divisor, a precondition). It belongs to the first
+`@opaque` constant of the module that it mentions, and proofs get it where they
+mention that constant: for proofs about `B`, state `assert(B.length === 3)` on
+its own rather than only `assert(A.length === B.length)`.
 
 Spec helpers (usable in code and contracts): `forall(lo, hi, i => …)`,
 `exists(lo, hi, i => …)`, `distinct(xs, x => key)`, `implies(a, b)`,
@@ -509,18 +600,72 @@ Order inside the body:
 1. `requires(…)` — props precondition (what every parent must establish);
 2. `callbackRequires(props.cb, (args) => …)` — what this component guarantees
    about the arguments it passes to callback props (the parent may rely on it;
-   several for one callback are conjoined);
+   several for one callback are conjoined). JS evaluates the first argument at
+   every render: it is `props.cb` on the props parameter or a name destructured
+   from the props parameter, and the contract is the prop's that name holds
+   (`{ cb: f }` then `callbackRequires(f, …)` is cb's), never one spelled like it;
+   anything else is rejected. The body is a contract (guards in scope, as below in
+   Contracts: `implies(a, b)` may index under `a`); a block body is read as code;
 3. hooks: `const [x, setX] = useState<T>(init)`, `const [s, dispatch] =
    useReducer(reducer, init)`, `useEffect(() => {…}, [deps])`,
-   `useMemo(() => v, [deps])`, `useCallback(fn, [deps])` — top level,
-   unconditional, before any `if`/`switch`/early return (never in branches,
-   loops, handlers or closures); deps exhaustive (`{ x }` reads `x`);
-4. `invariant(…)` — over props and state;
-5. render-local `const`s, helper arrows, handlers;
+   `useMemo(() => v, [deps])`, `useCallback(fn, [deps])` — declared with `const`
+   (a `var` is one hoisted binding that a later declaration rebinds, a `let` can be
+   reassigned), a state hook as exactly `[value, setter]` (no default value, rest
+   or third element: JS would bind something else) and on its own; top level,
+   unconditional, before any top-level `if`/`switch` and any early return (a block
+   `{ … }` before them may branch, without returning; never in branches,
+   loops, handlers or closures; parentheses around the call do not matter); deps
+   exhaustive (`{ x }` reads `x`). Deps are data paths: variables, fields
+   (`item.count`, `props.item?.count`), `length`, `size`. A call `m.has(k)` reads
+   `m` and `k`: list `m` (or a prefix of a field path), never the method —
+   `[m.has]`, `[xs.slice]`, `[s.trim]` are rejected (the same function for every
+   receiver: React would never recompute), and so are library constants
+   (`[Number.MAX_SAFE_INTEGER]`) and a tuple's `length` (list the tuple). Values
+   from outside the component (`Math`, imports, top-level consts) are never
+   needed: leave them out. An effect may also list a setter or `dispatch`, or a
+   top-level function, const or component (or an import of one), which never
+   change; a local helper arrow or a JSX const (new each render: the effect runs
+   after every render); or a `useCallback` function (changes when its own deps
+   do); not a parent callback, nor `props` itself (list its fields), nor a global
+   such as `Math` (leave it out), also through a `useCallback` it lists. An
+   initial value may read the props, the state
+   declared before it and top-level declarations (not render locals): React uses
+   it at mount, when that state has its own initial value (`useState(a)` starts
+   at `a`'s initial value), but evaluates a non-lazy one at every render, so it
+   is also checked with each render's state (`useState(10 % a)` needs `a !== 0`
+   in every state; the lazy `useState(() => 10 % a)` runs at mount only). Other
+   hooks (`useLayoutEffect`, `useRef`, …) are not modelled, and a hook other than
+   `useEffect` called as a statement (its value unused) is rejected, as is a
+   `useState` / `useReducer` declared together with other variables (`const x =
+   1, [n, setN] = useState(0)`). A state value and its setter exist from their
+   declaration on: a function that runs before it (a helper called in the
+   render, an array callback, a `useMemo` function, a JSX const) may not read
+   them (a ReferenceError in JS, which TypeScript misses inside a function);
+4. `invariant(…)` — over props, the state declared before it and top-level
+   declarations (JS evaluates its argument where it stands, also inside a
+   lambda); a `requires`: props and top-level declarations only; neither may
+   read render locals;
+5. render-local `const`s, helper arrows, handlers. A local arrow function is
+   translated where it is called or attached as a handler, so it may read a
+   `const` (or a `let` nothing assigns) declared after it, as long as that use
+   comes after the declaration (`const inc = () => setN(n + step); const step:
+   int = 2; … onClick={inc}`; calling it in the render before `const step` reads
+   `step` in its temporal dead zone, a ReferenceError: rejected, and so is
+   attaching it in a JSX const declared before `step`). A `useEffect`,
+   `useCallback` or `useMemo` function may not read a local declared after the
+   hook call: the dependency array cannot list it (temporal dead zone), so React
+   would keep a stale function (the `useMemo` function runs at the call: a
+   ReferenceError). Local functions are inlined where they are called, so they
+   cannot be recursive (also not mutually);
 6. `return <JSX/>` (early returns allowed).
 
 Props: a single parameter `props: P` (or destructured `{ a, b }: P`) where `P`
 is a record whose function-typed fields are callbacks (`=> void`, required).
+The function a parent passes may declare fewer parameters than the callback
+type (`onPick={() => setOpen(false)}` for `onPick: (i: int) => void`: JS passes
+the argument, the function ignores it), and `props.cb` may be forwarded to a
+child slot with more parameters (the child's calls pass their first arguments
+to it); never to a slot with fewer.
 `key`, `ref`, `__self` and `__source` are not props: React 18 never passes them
 to the component (`props.key` is undefined; the development JSX transform uses
 `__self` and `__source`), so `P` may not have fields with these names (however
@@ -548,7 +693,9 @@ is a string only on `<input>`, `<select>`, `<textarea>`, `<button>`, `<option>`,
 `<output>`, `<data>` (undefined on a `<div>`, a number on an `<li>` or
 `<progress>`; HTML elements only, never inside `<svg>`), its `checked` only on `<input>`; `e.target` may be any element
 inside the one the handler is on, so `e.target.…` is accepted only on an
-`<input>`, a `<textarea>` and a `<select>`'s `onChange`/`onInput`; `e.key` only
+`<input>`, a `<textarea>` and a `<select>`'s `onChange` (not its `onInput`: an
+`input` event a script dispatches at an option reaches it with the option as
+`e.target`; read `e.currentTarget.value`); `e.key` only
 in `onKeyDown`/`onKeyUp`/`onKeyPress`. Read the event in the handler's own
 statements (array callbacks there may too): a function created in the handler —
 a functional update `setX(p => …)`, which React calls when it processes the
@@ -556,14 +703,26 @@ update and again when it rebases it, or a local helper — may run after the
 event's dispatch, when `e.currentTarget` is null and `e.target.value` is the
 element's value at that time. Copy it first: `const v = e.target.value;
 setX((p) => … v …)`. Setters, `dispatch`, at most
-one parent callback per path. Only React's discrete events (`onClick`,
+one parent callback per path, called by the handler's own statements or a helper
+called as above — not inside an array callback or a functional update (VTS
+translates those as values; React calls an updater while it computes the next
+state). Only React's discrete events (`onClick`,
 `onChange`, `onInput`, `onKeyDown`, `onSubmit`, …) are
 checked from the render snapshot; continuous (`onMouseMove`, `onScroll`,
 `onMouseEnter`, …) and default-priority events (`onTransitionEnd`,
 `onAnimationEnd`, `onLoad`, `onError`, media events, …) must be robust and may
 not call parent callbacks — and so must `onFocus`, `onBlur` and `onInvalid`: the
 DOM also fires them inside another event's batch (`autoFocus`, a label click
-focusing its control, form validation). In a component with such handlers or with effects /
+focusing its control, form validation). The focus handlers (`onFocus`, `onBlur`,
+the composition handlers) of an `autoFocus` element, and of an element around one,
+may not update state unless no later render of the component mounts an `autoFocus`
+element: React focuses it inside the commit that mounts it and commits their updates
+at once, and if that mounts an `autoFocus` element again (`key={n}`, a condition on
+the state) the chain ends in "Maximum update depth exceeded" thrown from the setter.
+So such updates (focus tracking: `<input autoFocus onFocus={() => setFocused(true)}
+…/>`) need every `autoFocus` element of the component written in its only `return`,
+not under a condition (`{open && …}`), in a list or a local constant, with no `key`
+on it or around it, in a component that renders no other component. In a component with such handlers or with effects /
 timers that set state, discrete handlers and callbacks passed to children must
 also be safe when React rebases them onto those pending updates (guard inside the
 functional update: `setR(p => p.lo < p.hi ? … : p)`). Rejected: unknown handler
@@ -571,8 +730,14 @@ names, `onSelect`, capture-phase handlers (`onClickCapture`).
 
 Effects: setters and timers (`setTimeout`/`setInterval` callbacks become tasks;
 register them at the top level of the effect body; a timer's callback may use the
-early returns `if (c) return;` and the `assert`/`assume` before it, as in
-`if (left <= 0) return; setTimeout(() => setLeft(left - 1), 1000)`; the delay is
+early returns `if (c) return;` (also `return undefined;`, which React treats as
+no cleanup) and the `assert`/`assume` before it, as in
+`if (left <= 0) return; setTimeout(() => setLeft(left - 1), 1000)`, and read the
+effect body's top-level `const`s declared before the registration, each bound to
+its value (`const step: int = props.fast ? 2 : 1;
+setInterval(() => setN((k) => k + step), 100)`) — but not the body's `let`s, a
+Map or Set the body mutates, or a `const` whose value has proof obligations of its
+own (`100 % props.d`: compute it in the callback); the delay is
 checked where the timer is registered; no further `setTimeout` arguments),
 external writes (`localStorage.setItem`, `document.title = …`, `console.*`) are
 allowed and have no modelled effect, but JS evaluates their arguments, so these
@@ -607,10 +772,25 @@ JSX: intrinsic elements with string/int/bool/enum attributes (`className`,
 spread), child components with all their props, `{cond && <X/>}`, ternaries,
 `xs.map(x => <El key={…}/>)` (keys `int`, `string` or a string-literal enum, distinct), text from
 strings/ints/enums (booleans render nothing, but are checked). `key={…}` outside
-lists is checked too (JS evaluates it). A JSX const (`const row = <p>{e}</p>;`)
-is checked where it is declared, even if it is rendered only under a condition or
-not at all (JS evaluates it there); JSX only appears in a component's render.
-`children` props are not supported yet.
+lists is checked too (JS evaluates it), and the keys of the children of one element or
+fragment must be distinct, compared as strings as React does (`key={1}` and `key="1"` are one
+key): two children always present with the same written key (also a JSX const rendered twice)
+are rejected, and otherwise, unless all keys are distinct strings, a `unique-keys` obligation
+covers the keys of the children present (a conditional child under its condition). A keyed list
+or a fragment is one child with keys of its own, so `<li key="head"/>` next to
+`{xs.map((x) => <li key={x}/>)}` never collide. Give siblings keys with different literal
+prefixes or suffixes (`` key={`viewer-${id}`} ``, `` key={`notes-${id}`} ``; `key={id}`,
+`` key={`${id}-edit`} ``, `key="title"`, `` key={`${id}-title`} ``): those are proved. A failing
+obligation inside a key (an index) is reported once; the `unique-keys` obligation of its siblings
+is checked once that is fixed.
+A JSX const (`const row = <p>{e}</p>;`) is checked where it is declared, even if it is
+rendered only under a condition or not at all (JS evaluates it there); JSX only appears in a
+component's render.
+`children` props are not supported yet. A component may not refer to itself: `<Tree/>`
+inside `Tree` (also in a JSX const, a map callback, a branch or a closure) is recursion and
+rejected, as is a component that renders a component rendering it (also through a `@trusted`
+one, or across modules: an import cycle). A `@trusted` component's body is not translated: it
+may render itself directly.
 Tags are plain names: a lower-case one is always the HTML element (`<p>` even
 where a variable `p` exists), a capitalised one a verified component. Rejected:
 member-expression tags (`<props.as>`, `<ui.Button>`: a dynamic element type),
@@ -624,7 +804,14 @@ element with no value, type or activation), other elements count as plain conten
 for the layout checks below (an SVG `<a href>` does not stop a label), and user
 components are rejected. React throws while rendering children of a void element
 (`<input>`, `<br>`, `<hr>`, `<img>`, …, even `{false}`) and a `<textarea>` with
-children: both are rejected (a textarea's text is `value`/`defaultValue`). Also
+children: both are rejected (a textarea's text is `value`/`defaultValue`). A
+`<select>` may contain only `<option>` and `<optgroup>` elements (and text), an
+`<optgroup>` only `<option>`s, an `<option>` only text, as react-dom's
+`validateDOMNesting` says (React only warns): no other element and no user
+component there, also through a list, a condition or a JSX const. A control inside
+a select would run the select's `onChange` (react-dom collects `onChange` from
+the control that changed up to the root) and be its `e.target`. A `<datalist>`
+may hold anything (its `<option>`s follow the same rule). Also
 rejected: a `children=` attribute (it is the element's children), `contentEditable`
 (the user could delete nodes React rendered: React's next update throws),
 `suppressContentEditableWarning`, `is=` (a customized built-in element), a
@@ -633,6 +820,28 @@ rejected: a `children=` attribute (it is the element's children), `contentEditab
 `value`/`defaultValue` other than `""` on an `<input>` that may be `type="file"`
 (setting a file input's value throws): its `type` must be a string, a choice
 between strings (`show ? "text" : "password"`) or an enum, without `"file"`.
+`name` and `id` are checked against HTML's named access, which makes a form's
+`form.x` its control named (or with id) `x`, and `document.x` an `<iframe>`, `<form>`,
+`<object>`, `<embed>` or `<img>` named `x` (an `<object>`'s, `<img>`'s id too), before
+their own properties — React reads `form.parentNode`, `form.removeChild`,
+`document.createElement`, …: on `<input>`, `<button>`, `<select>`, `<textarea>`,
+`<output>`, `<fieldset>`, `<object>`, `<img>` (`name`, `id`) and `<form>`, `<iframe>`,
+`<embed>` (`name`), a value that the app's code reads, calls or writes on forms (on
+the document, for an element the document shows: also `body`, `title`) — a property
+react, react-dom or scheduler access on some object (`parentNode`, `removeChild`,
+`createElement`, `nodeType`, `length`, `style`, `focus`, …, but not `name`, `id`,
+`action`, `target`, `location`, read only on other objects), a name react-dom reads on
+them (`value`, `type`, `data`, `checked`, `window`, `document`, …), `on…`, `aria…`, a
+vendor prefix or a name starting with `_` — is rejected, and so is a value VTS cannot
+bound: write a literal, a choice between literals (`c ? "a" : "b"`), an enum, or a
+string with a literal part that holds a character other than letters, digits, `_`
+and `$` (`` `qty-${id}` ``, `"qty-" + id`: no property name has one). Common field
+names (`name`, `title`, `id`, `email`, `submit`, `reset`, `body`, `method`, …) are
+fine on form controls. A written `id` of any element, and a `name` of an `<embed>`,
+`<form>`, `<iframe>`, `<img>` or `<object>`, may not be `nodeName`, `type`,
+`contentEditable`, `correspondingUseElement`, `IS_REACT_ACT_ENVIRONMENT`, `jest`,
+`MSApp` or start with `_` (the window exposes it as a global that the app's code
+reads); a computed id of an element that only the window exposes is not checked.
 Type keywords are matched ASCII-case-insensitively, as HTML does
 (`type="CheckBox"` is a checkbox, `type="chec&#8490;box"` with a Kelvin sign is
 not: a text input). Character
@@ -666,9 +875,10 @@ or a label (use `htmlFor`).
 
 | feature | workaround |
 |---------|-----------|
-| `useRef`, `useContext`, custom hooks | lift state up / pass props; inline hook calls |
+| `useRef`, `useContext`, `useLayoutEffect` (its updates are synchronous, during the commit), custom hooks | lift state up / pass props; `useEffect`; inline hook calls |
 | `children` / `ReactNode` props | compose in the parent |
 | recursion, `while` | `for…of`, array methods |
+| a component that renders itself (nested items, a tree) | flatten the tree into an array (rows with a depth field) and render it with one `map` |
 | generic type aliases, interfaces, components, reducers and arrows | concrete types; generic top-level functions (see Generics) |
 | a Map key / Set element of an unconstrained or field-constrained type parameter (`ReadonlySet<T>`, `ReadonlyMap<T, V>` with `T extends { readonly id: int }`) | constrain it (`K extends int \| string`), or key by a field (`ReadonlyMap<int, T>` with `x.id` as the key) |
 | Map/Set covariance (`ReadonlyMap<int, int>` passed as `ReadonlyMap<int, number>`) | give the Maps / Sets the same key, value and element types |
@@ -679,5 +889,8 @@ or a label (use `htmlFor`).
 | deleting from a Map or Set in `vreact synth` (its grammar only grows them: `new Map(m).set(k, v)`, `new Set(s).add(x)`) | write the deletion by hand (`const n = new Map(m); n.delete(k); return n;`) |
 | `vreact synth` on a function whose contract's Lean statement mentions a function that still has a hole (called in the contract, or in the body or `requires` of a function it calls; not in a `@trusted` body or a callee's `ensures`) | not searched ("the contract depends on unfinished function f"): fill or write `f` first |
 | `vreact synth` on a `/** @trusted */` function or a component | refused (Lean checks nothing in a trusted body): remove `@trusted` / move the expression into a model function |
+| `vreact synth` on a function with no `ensures` that a contract calls (directly, or in the body or `requires` of a function the contract calls) | not searched: Lean would check its fill against nothing, so any fill (`true`, `0`) would be "proved" and become part of that contract: give it an `ensures` or write it by hand |
+| `hole<T>()` inside a contract (`requires`, `ensures`, `invariant`, `decreases`, `callbackRequires`, `assert`, `assume`) in `vreact synth` | never filled, and its function is not searched (synth fills holes against the contract: a fill proved against the contract it is part of could be vacuous, e.g. `requires(false)`): write the contract by hand |
+| reading a field whose name is not an identifier (`readonly "my-field": int`) as `p["my-field"]` (rejected: indexing is only for arrays and tuples) | destructure it: `const { "my-field": v } = p;` (`vreact synth` never reads such a field; it writes its key quoted in object literals) |
 | a reducer over a discriminated union calling `@opaque` model functions | supported (contracts are instantiated inside the `switch` arms) |
-| invariants about sums (`reduce`) under filter/map | provable, but needs a Lean lemma in `proofs/` (automation handles append, filter, map, `slice`, `toSorted`, `toReversed`, `with` (also swaps `xs.with(i, xs[j]).with(j, xs[i])`), `indexOf`/`findIndex` ranges, `range`, membership, `distinct`, concatenation of string literals, and counts `xs.filter(p).length` under append, delete-by-id, map-updates and mark-all) |
+| invariants about sums (`reduce`) under filter/map | provable, but needs a Lean lemma in `proofs/` (automation handles append, filter, map, `slice`, `toSorted`, `toReversed`, `with` (also swaps `xs.with(i, xs[j]).with(j, xs[i])`), `indexOf`/`findIndex` ranges, `range`, membership, `distinct`, concatenation of string literals, closed facts about literals, decided by evaluation (`String(1 + 2) === "3"`, `" x ".trim() === "x"`, `[1, 2, 3].at(-1) === 3`, also once a test fixes a variable: ``n === 2 ? `n=${n + 1}` : …``), and counts `xs.filter(p).length` under append, delete-by-id, map-updates and mark-all) |

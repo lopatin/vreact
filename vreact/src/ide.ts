@@ -32,7 +32,8 @@ export interface EditorProject {
 export function editorProject(root: string, outDir: string, proofsDir: string, leanLib: string): EditorProject {
   root = path.resolve(root);
   const res: EditorProject = { notes: [], userLakefile: null, requiresOut: false };
-  // `"out": "."`: the generated project is the app folder itself
+  // `"out": "."` (the generated project would be the app folder itself: `vreact verify` rejects
+  // it, see checkOutDir in cli.ts): nothing to write
   if (path.resolve(outDir) === root) return res;
   for (const f of ["lakefile.lean", "lakefile.toml"]) {
     const p = path.join(root, f);

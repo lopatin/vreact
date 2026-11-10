@@ -11,6 +11,12 @@ export interface Val {
   type: VType;
 }
 
+/** The obligation and hypothesis counters of a module context at one point (`ModCtx.replay`). */
+export interface Mark {
+  n: number;
+  hyp: number;
+}
+
 /** Information about a pure top-level function. */
 export interface FnInfo {
   qname: string;
@@ -51,6 +57,10 @@ export interface DomSite {
   tag: string;
   prop: string;
   html: boolean;
+  /** the handler may not update state (a setter or dispatch call is rejected with this message) */
+  noUpdates?: string;
+  /** set when the handler updates state (a setter or dispatch call on some path) */
+  probe?: { updated: boolean };
 }
 
 /** What a parent needs to know about a child component. */
@@ -108,6 +118,9 @@ export interface HandlerAcc {
   emit: string | null;
   /** Lean name of the event parameter (if any). */
   eventVar: string | null;
+  /** `DomSite.noUpdates` / `DomSite.probe` of the handler's element */
+  noUpdates?: string;
+  probe?: { updated: boolean };
 }
 
 export type Binding =
@@ -119,7 +132,13 @@ export type Binding =
   | { k: "val"; code: string; type: VType; ts?: ts.Type }
   | { k: "setter"; sv: StateVar }
   | { k: "dispatch"; sv: StateVar }
-  | { k: "closure"; fn: ts.ArrowFunction | ts.FunctionExpression; env: Env }
+  /**
+   * a local function, translated where it is called or attached as a handler, in `env` (that of
+   * its creation) extended with the locals declared after it that are initialised there
+   * (`closureEnv`); `memo`: a `useCallback` function, which React may keep from an earlier
+   * render, so it sees only `env`
+   */
+  | { k: "closure"; fn: ts.ArrowFunction | ts.FunctionExpression; env: Env; memo?: boolean }
   | { k: "callback"; cb: CallbackInfo }
   | { k: "props" }
   /**
@@ -128,8 +147,12 @@ export type Binding =
    * the parameter's TypeScript type)
    */
   | { k: "event"; leanVar: string; fn: ts.Node; site: DomSite }
-  /** a JSX const: translated (obligations checked) at its declaration, bound to the Lean local `code` */
-  | { k: "jsx"; node: ts.Expression; env: Env; code: string }
+  /**
+   * a JSX const: translated (obligations checked) at its declaration, bound to the Lean local
+   * `code`; `key` is the translation of its element's `key={…}` there (JS evaluates it at the
+   * declaration), with the obligations of that translation, for the keys of its siblings
+   */
+  | { k: "jsx"; node: ts.Expression; env: Env; code: string; key?: Val }
   /**
    * the handle `id` of `const id = setTimeout(…)` / `setInterval(…)` in an effect body, bound once
    * that statement has run (before, `id` is in its temporal dead zone): not a VTS value, only
@@ -169,6 +192,15 @@ export interface Env {
    * state), naming it: `assume(…)` is rejected there (its fact would be a theorem for all of them).
    */
   generalized?: string;
+  /**
+   * Set only inside a contract that JS never evaluates (the body of an `ensures` lambda, the
+   * expression body of a `callbackRequires` lambda, and what they call in place): there
+   * `implies(a, b)` reads `b` under the hypothesis `a`.  Every
+   * other contract (requires, invariant, assert, assume, a module-level assert, and the
+   * callbacks run inside them) is an argument JS evaluates, and `implies` is a function: `b`
+   * is evaluated whatever `a` is, so its obligations get no hypothesis from `a` (`prop`).
+   */
+  ghost?: boolean;
   /** Lean hypotheses in scope that justify obligations (names only, for documentation). */
   fnName?: string;
   /** the key function of a keyed `.map`: its JSX consts are translated by the node function */
@@ -180,11 +212,41 @@ export interface Env {
    * needs one of them makes the translator split that arm per variant (see narrowBranch).
    */
   remaining?: Map<string, string[]>;
+  /**
+   * What a restricted environment gives access to (a contract, an initial value), for the
+   * message when code refers to a local that is not in it.
+   */
+  limits?: string;
+  /** Locals in scope in JS that the translation cannot bind here, with the reason (a timer callback's view of its effect body). */
+  unavailable?: Map<ts.Symbol, string>;
+  /**
+   * The local functions whose bodies are being translated around this point, where they are
+   * called or attached as a handler (they are inlined there): one called again inside is a
+   * recursive call, which inlining does not support.
+   */
+  inlining?: ReadonlySet<ts.Node>;
+  /**
+   * Set inside code that runs while an event handler or effect runs but that VTS translates as a
+   * value (an array-method callback, a local helper called for its value, a functional update):
+   * why a setter, `dispatch` or parent callback reached there is rejected (render code, where
+   * it is unset, gets the render-phase message).
+   */
+  valueCtx?: string;
 }
 
 /** The module of the contract functions and `int`. */
 export const SPEC_MODULE = "vreact/spec";
 /** This tool's own declarations of vreact/spec (real path). */
+/** The real directory of a file (its own path's directory when it cannot be resolved). */
+function realDir(f: string): string {
+  try {
+    return path.dirname(fs.realpathSync(f));
+  } catch {
+    return path.dirname(path.resolve(f));
+  }
+}
+/** TypeScript's lib directory (real path): where its standard library files are. */
+const TS_LIB_DIR = realDir(ts.getDefaultLibFilePath({}));
 const OWN_SPEC = (() => {
   const p = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "spec", "index.d.ts");
   try {
@@ -262,6 +324,7 @@ export class Program {
       checker,
       reg: this.reg,
       nsOf,
+      moduleNamespaces: new Set(projectFiles.map((sf) => nsOf(sf))),
       // `int` of vreact/spec, also through aliases (`import { type int as I }`, `type Count = int`
       // resolves through typeOfDecl); a project type spelled `int` is the project's
       isSpecInt: (node) => this.specName(ts.isQualifiedName(node.typeName) ? node.typeName.right : node.typeName) === "int",
@@ -282,7 +345,15 @@ export class Program {
    * vreact's own spec declarations (however the project resolves them): not the project's.
    */
   isLibraryFile(sf: ts.SourceFile): boolean {
-    return this.tsProgram.isSourceFileDefaultLibrary(sf) || this.tsProgram.isSourceFileFromExternalLibrary(sf) || path.resolve(sf.fileName) === OWN_SPEC;
+    return this.isDefaultLib(sf) || this.tsProgram.isSourceFileFromExternalLibrary(sf) || path.resolve(sf.fileName) === OWN_SPEC;
+  }
+  /**
+   * A file of TypeScript's own standard library (`lib.*.d.ts` in TypeScript's lib directory).
+   * `Program.isSourceFileDefaultLibrary` alone also answers true for any declaration file with
+   * `/// <reference no-default-lib="true"/>`, which a project file could use to pass as the library.
+   */
+  isDefaultLib(sf: ts.SourceFile): boolean {
+    return this.tsProgram.isSourceFileDefaultLibrary(sf) && realDir(sf.fileName) === TS_LIB_DIR;
   }
   isReactFile(sf: ts.SourceFile): boolean {
     return this.isLibraryFile(sf) && REACT_FILE_RE.test(sf.fileName);
@@ -296,7 +367,7 @@ export class Program {
    */
   isLibSymbol(s0: ts.Symbol | undefined): boolean {
     const s = this.resolve(s0);
-    return !!s && this.declaredIn(s, (f) => this.isLibraryFile(f)) && s.declarations!.some((d) => this.tsProgram.isSourceFileDefaultLibrary(d.getSourceFile()));
+    return !!s && this.declaredIn(s, (f) => this.isLibraryFile(f)) && s.declarations!.some((d) => this.isDefaultLib(d.getSourceFile()));
   }
   /** The symbol an import alias stands for (other symbols unchanged). */
   resolve(s: ts.Symbol | undefined): ts.Symbol | undefined {
@@ -383,9 +454,15 @@ export class ModCtx {
     this.hyp++;
     return subscripted(base, this.hyp);
   }
-  /** Emit a proof obligation discharged by `vreact_auto`, tagged with a source marker;
-   * `vreact_ob` gives it its own heartbeat budget (VReact/Budget.lean). */
-  ob(node: ts.Node, kind: string, desc: string, tactic = "vreact_auto"): string {
+  /**
+   * The tactic of the obligations emitted now (`ob`): `vreact_auto`, except while a
+   * module-level fact's statement is translated, whose obligations (an index, a divisor, a
+   * precondition) first unfold the `@opaque` constants the fact mentions (translateFact).
+   */
+  obTactic = "vreact_auto";
+  /** Emit a proof obligation discharged by `vreact_auto` (`obTactic`), tagged with a source
+   * marker; `vreact_ob` gives it its own heartbeat budget (VReact/Budget.lean). */
+  ob(node: ts.Node, kind: string, desc: string, tactic = this.obTactic): string {
     const id = ++this.counter.n;
     const sf = node.getSourceFile();
     const { line } = sf.getLineAndCharacterOfPosition(node.getStart(sf));
@@ -394,6 +471,39 @@ export class ModCtx {
   }
   obCount(): number {
     return this.obligations.length;
+  }
+  /** The obligation and hypothesis counters at this point of the translation (for `replay`). */
+  mark(): Mark {
+    return { n: this.counter.n, hyp: this.hyp };
+  }
+  /**
+   * Translate again, from the counters at `from`, what was translated between the marks `from`
+   * and `to`: the translation is deterministic, so this gives the same text — the same
+   * obligation ids (`/-⟦obN⟧-/`) and hypothesis names — and the obligations in it are copies of
+   * those registered then (one obligation may have several copies in the generated Lean: it is
+   * proved only if every copy is), which are not registered again.  `f` may translate other
+   * things around it (a term built from the same pieces) as long as it makes the same calls.
+   * Afterwards the counters are as before the replay.
+   */
+  replay<R>(from: Mark, to: Mark, f: () => R): R {
+    const n = this.counter.n;
+    const hyp = this.hyp;
+    const len = this.obligations.length;
+    const holes = this.prog.holeEnvs?.length ?? 0;
+    this.counter.n = from.n;
+    this.hyp = from.hyp;
+    try {
+      const r = f();
+      if (this.counter.n !== to.n || this.hyp !== to.hyp) {
+        throw new Error(`internal error: a replayed translation did not repeat itself (obligation counter ${from.n}→${to.n}, replayed →${this.counter.n}; hypotheses ${from.hyp}→${to.hyp}, replayed →${this.hyp})`);
+      }
+      return r;
+    } finally {
+      this.counter.n = n;
+      this.hyp = hyp;
+      this.obligations.length = len;
+      if (this.prog.holeEnvs) this.prog.holeEnvs.length = holes;
+    }
   }
   /** Run a translation only for the checks it makes (its term is discarded): the
    * obligations it registers are withdrawn, so none is left unemitted. */

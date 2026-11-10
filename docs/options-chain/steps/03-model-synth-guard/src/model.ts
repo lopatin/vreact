@@ -100,8 +100,8 @@ export function nearest(ks: readonly Strike[], s: Strike, price: int): boolean {
 /** The at-the-money row: the index of a nearest strike, or -1 for "none". */
 export function atmIndex(ks: readonly Strike[], price: int): int {
   ensures((r: int) => -1 <= r && r < ks.length);
-  // `r < 0 || …`, not `implies(r >= 0, …)`: synth runs contracts as JavaScript, where
-  // implies(a, b) is a call that evaluates b (here ks[-1].strike) even when a is false
+  // `r < 0 || …` guards ks[r] in every contract, `implies(r >= 0, …)` only in an ensures;
+  // elsewhere implies(a, b) is a call that evaluates b (ks[-1].strike) even when a is false
   ensures((r: int) => r < 0 || nearest(ks, ks[r], price));
   return hole<int>();
 }

@@ -203,15 +203,37 @@ macro "vreact_noemit" : tactic =>
              try simp (config := { zetaDelta := true, failIfUnchanged := false }) only []
              all_goals ((repeat' split) <;> (first | rfl | (simp_all; done)))))
 
-/-- A dependency value of `useEffect`.  Objects are compared by identity in
-React; the model treats them as "possibly changed" (`obj`), which only makes
-effects fire more often — harmless because effect outcomes are robust. -/
+/-- A dependency value of `useEffect`: an `int`, a string, a boolean or an enum
+value (as its string), or `obj` for any other value (an object, array, Map, Set,
+optional value or `number`), whose identity (or `NaN`, `-0`) the model does not
+record. -/
 inductive DepVal where
   | int (i : Int)
   | str (s : JS.Str)
   | bool (b : Bool)
   | obj
 deriving DecidableEq, Repr
+
+/-- React's `Object.is` on two dependency values, as far as the model's values
+decide it: `some true` (the same value), `some false` (different values), or
+`none` when they do not decide it — an `obj` (identity, `NaN` and `-0` are not
+modelled), or two int zeros (an `int` that is 0 may be `0` or `-0` in JS, one
+`Int` in the model). -/
+def DepVal.same : DepVal → DepVal → Option Bool
+  | .obj, _ => none
+  | _, .obj => none
+  | .int 0, .int 0 => none
+  | a, b => some (decide (a = b))
+
+/-- Whether React's `areHookInputsEqual(next, prev)` fails, i.e. an effect with
+dependency arrays `prev` (previous render) and `next` (this render) runs again
+(React 18.3.1 `updateEffectImpl`): `Object.is` fails at some position both arrays
+have (a change of length only warns, in development).  `rerun` is what React
+found when no position is decided to differ and some position is undecided
+(`DepVal.same … = none`): in a run of the model it is a choice (`Action.flush`). -/
+def depsChanged (prev next : List DepVal) (rerun : Bool) : Bool :=
+  let r := (next.zip prev).map (fun p => DepVal.same p.1 p.2)
+  r.contains (some false) || (r.contains none && rerun)
 
 /-- A `useEffect`.  The body runs after commit when `deps` changed (always, when
 `deps = none`).  Its synchronous updates and any asynchronous callbacks it
@@ -224,13 +246,16 @@ structure Effect (S E : Type) (inv : S → Prop) where
   tasks : List (DomEvent → Outcome S E) := []
   tasks_ok : ∀ t ∈ tasks, ∀ e, Robust inv (t e) ∧ (t e).emit = none
 
-/-- Whether an effect fires, given its previous dependency values. -/
-def Effect.fires {S E inv} (eff : Effect S E inv) (prev : Option (Option (List DepVal))) : Bool :=
+/-- Whether an effect runs after a commit (React 18.3.1 `updateEffectImpl`), given
+the dependency array the previous render gave it: `prev = none` at the first commit
+after mounting, `some none` when it had no array.  `rerun` decides the cases the
+model's values leave open (`depsChanged`). -/
+def Effect.fires {S E inv} (eff : Effect S E inv) (prev : Option (Option (List DepVal))) (rerun : Bool) : Bool :=
   match prev, eff.deps with
   | none, _ => true                      -- first commit after mount
   | some _, none => true                 -- no dependency array
-  | some none, some _ => true
-  | some (some old), some new => old != new || new.contains .obj
+  | some none, some _ => true            -- `areHookInputsEqual(next, null)` is false
+  | some (some old), some new => depsChanged old new rerun
 
 /-! ## Component specifications -/
 
@@ -315,9 +340,24 @@ def VNode.keyedMap {S E inv snap} {α : Type} (xs : List α) (key : α → Key)
 /-- An element with a `key={k}` outside a list.  JavaScript evaluates `k` on every
 render, so the term `k` (with its proof obligations) is kept; the model
 reconciles by position and component identity, and a key change (React remounts:
-fresh state, `init_inv`) is covered because both keeping and resetting the state
-are verified. -/
+fresh state, `init_inv`, and every effect runs again at the next flush) is covered
+because a run of the model may remount any instance at any time
+(`Action.remount`), and both keeping and resetting the state are verified.  Moving
+state between siblings needs their keys to be distinct, which `VList.withKeys`
+checks where two or more children of an element may have keys. -/
 def VNode.withKey {S E inv snap} {α : Type} (_k : α) (n : VNode S E inv snap) : VNode S E inv snap := n
+
+/-- The children of one element or fragment, when two or more of them may have an explicit
+`key={…}`: React reconciles them as one array and requires the keys of the elements in it to
+be pairwise distinct, compared as strings (`'' + key`, so `key={1}` and `key="1"` are one key).
+With two equal keys react-dom's `reconcileChildrenArray` keeps one old fiber per key
+(`mapRemainingChildren`), and the other is neither reused nor deleted: its DOM stays, with stale
+handlers, and it is never unmounted.  `keys` are the keys of the children present (in order;
+a child without a key, text, a fragment or a keyed list has none here: a fragment's and a list's
+keys are those of an array of their own).  Distinct keys are what makes the model's
+reconciliation by position (`withKey`) sound; the keys are only checked. -/
+def VList.withKeys {S E inv snap} (keys : List JS.Str) (_nodup : keys.Nodup) (cs : VList S E inv snap) :
+    VList S E inv snap := cs
 
 /-- A boolean JSX child `{b}`: React renders nothing, but JavaScript evaluates `b`
 (so its proof obligations are kept in the term). -/
