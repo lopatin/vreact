@@ -1,4 +1,4 @@
-// expect: reject recursion is not supported yet: the requires of f calls f
+// expect: reject recursion is not supported yet: the requires(…) of f calls f
 // The same in a @trusted function: its body is not verified, but its requires is translated (into
 // the axiom's signature) and runs on every call.
 import { requires, ensures, type int } from "vreact/spec";

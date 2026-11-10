@@ -22,7 +22,7 @@ import { T, type VType, typeOfNode, typeOfDecl, emitTypeDecl, leanType, nonValue
 import { VtsError, fail, leanIdent, leanField, leanStr, paren, capitalize, nodeText, exprText, clashesWithLean } from "./util.ts";
 import { LEAN_TYPE_AUX, LEAN_ROOT_NAMES } from "./leanNames.ts";
 import { expr, prop, propAll, valueBlock, specFn, symbolOf, bindParam, typeOf, checkParamAnnotation, checkNotThisParam, numericLiteralType, checkClosures } from "./translate.ts";
-import { translateComponent, compSignature, baseEnv } from "./component.ts";
+import { translateComponent, compSignature, baseEnv, selfRenderMsg } from "./component.ts";
 import { leanDecls, checkProofFiles, headerImports, type ProofImport } from "./lean.ts";
 import { manifestMatches } from "./ide.ts";
 
@@ -1826,7 +1826,31 @@ function usedByOthers(decls: ts.Node[], m: ModCtx): Set<ts.Node> {
 
 function sortComponents(sf: ts.SourceFile, m: ModCtx): ts.Node[] {
   const comps = sf.statements.filter((st) => ts.isFunctionDeclaration(st) && m.prog.globals.get(st)?.k === "comp");
+  for (const c of comps) rejectSelfReference(c as ts.FunctionDeclaration, m);
   return topo(comps, m, (g) => g.k === "comp");
+}
+
+/**
+ * A component that refers to itself in its own body — `<Tree …/>` inside Tree, also in a JSX
+ * constant, a map callback, a branch, a closure or as a value — is recursion, which VTS does
+ * not support (the cycle check of `topo` sees references between components, not this one;
+ * the Lean `render` of a component is defined before its `component`).  Any such reference is
+ * rejected before the translation, wherever it is (types are erased: nothing in them runs).  A
+ * `@trusted` component's body is not translated (its render is assumed), so it is not scanned.
+ */
+function rejectSelfReference(c: ts.FunctionDeclaration, m: ModCtx) {
+  const g = m.prog.globals.get(c);
+  if (g?.k !== "comp" || g.info.trusted) return;
+  const visit = (n: ts.Node) => {
+    if (isErasedType(n)) return;
+    if (ts.isIdentifier(n) && n !== c.name && m.prog.refDecl(n) === c) {
+      const p = n.parent;
+      const tag = (ts.isJsxOpeningElement(p) || ts.isJsxSelfClosingElement(p) || ts.isJsxClosingElement(p)) && p.tagName === n;
+      fail(n, selfRenderMsg(g.info.name, tag ? `<${n.text}>` : `\`${n.text}\``));
+    }
+    ts.forEachChild(n, visit);
+  };
+  ts.forEachChild(c, visit);
 }
 
 function topo(decls: ts.Node[], m: ModCtx, rel: (g: Global) => boolean): ts.Node[] {
@@ -1997,14 +2021,16 @@ function translateFunction(fn: ts.FunctionDeclaration, info: FnInfo, m: ModCtx):
     } else break;
     contractStmts.push(stmts.shift()!);
   }
-  // a call of the function in its own `requires` is recursion: JS evaluates the condition on every
-  // call (also of a @trusted function), and the precondition is part of the function's Lean
-  // signature, which cannot mention the function (by the declaration the callee resolves to)
-  const selfCall = (n: ts.Node): ts.Node | undefined =>
+  // self-recursion check (by the declaration the callee resolves to: a local helper spelled like
+  // the function is not it): in the `requires` — JS evaluates its argument on every call, so a
+  // call of the function there runs it again, and the Lean signature would mention the function
+  // it declares — also of a @trusted function (its contract is translated); in the body below.
+  // (An `ensures` lambda may call it: JS never calls it, and its theorem comes after the definition.)
+  const selfCall = (n: ts.Node): ts.CallExpression | undefined =>
     ts.isCallExpression(n) && ts.isIdentifier(n.expression) && m.prog.refDecl(n.expression) === fn ? n : ts.forEachChild(n, selfCall);
   for (const r of reqs) {
     const c = selfCall(r);
-    if (c) fail(c, `recursion is not supported yet: the requires of ${info.name} calls ${info.name} (JS evaluates it on every call)`);
+    if (c) fail(c, `recursion is not supported yet: the requires(…) of ${info.name} calls ${info.name} (JS evaluates its argument on every call); state the precondition without calling the function`);
   }
   // the contracts of a @trusted function are translated although its body is not: closures in
   // them (a block-bodied every/some callback, read as code) must agree with JS, as in a verified
@@ -2021,15 +2047,8 @@ function translateFunction(fn: ts.FunctionDeclaration, info: FnInfo, m: ModCtx):
   if (info.trusted) {
     def = `/-- @trusted: body not verified, contract assumed. -/\naxiom ${sig}\n`;
   } else {
-    // self-recursion check
-    let rec = false;
-    const visit = (n: ts.Node) => {
-      // (by the declaration the callee resolves to: a local helper spelled like the function is not it)
-      if (ts.isCallExpression(n) && ts.isIdentifier(n.expression) && m.prog.refDecl(n.expression) === fn) rec = true;
-      ts.forEachChild(n, visit);
-    };
-    stmts.forEach(visit);
-    if (rec) fail(fn, "recursion is not supported yet: use array methods or for…of");
+    // self-recursion check of the body (see `selfCall` above)
+    if (stmts.some((s) => selfCall(s))) fail(fn, "recursion is not supported yet: use array methods or for…of");
     const body = valueBlock(stmts, env, info.ret, fn);
     def = `${info.opaque ? "" : "@[vreact_simp, reducible] "}def ${sig} :=\n  ${body.code}\n`;
 

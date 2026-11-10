@@ -2144,6 +2144,15 @@ function withKey(key: string | null, node: string): string {
   return key === null ? node : `(VReact.VNode.withKey ${paren(key)}\n  ${node})`;
 }
 
+/**
+ * A component that renders (or otherwise refers to) itself: recursion, which VTS does not
+ * support. React would render one more instance per level (a recursion without a base case
+ * never ends), and the model has no recursive components.
+ */
+export function selfRenderMsg(name: string, what: string): string {
+  return `${what} inside ${name}: a component that refers to itself (renders itself, directly or through a JSX constant, a map callback or a branch) is recursion, which is not supported yet; flatten the nested data into an array (e.g. rows with a depth field) and render it with map`;
+}
+
 function componentElement(tagNode: ts.JsxTagNameExpression, e: ts.JsxElement | ts.JsxSelfClosingElement, kids: ts.NodeArray<ts.JsxChild> | undefined, env: Env): string {
   const m = env.m;
   // its elements would be created in the enclosing <svg>'s (<math>'s) namespace, while it is
@@ -2157,6 +2166,8 @@ function componentElement(tagNode: ts.JsxTagNameExpression, e: ts.JsxElement | t
   const g = sym?.declarations?.[0] ? m.prog.globals.get(sym.declarations[0]) : undefined;
   if (!g || g.k !== "comp") fail(tagNode, `<${tagNode.getText()}> is not a verified component (declare it in a VTS module, or mark it @trusted)`);
   const info = g.info;
+  // (module.ts rejects every reference of a component to itself before the translation: backstop)
+  if (env.comp?.info === info) fail(tagNode, selfRenderMsg(info.name, `<${tagNode.getText()}>`));
   if (kids && kids.some((k) => !(ts.isJsxText(k) && !jsxTextValue(k.text, k)))) fail(e, "children of user components are not supported yet");
   const given = new Map<string, ts.JsxAttribute>();
   for (const a of attrs(e)) {

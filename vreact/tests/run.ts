@@ -255,10 +255,12 @@ console.log("message attribution (judge)");
   const ob = (id: number) => ({ id, kind: "k", desc: `ob${id}`, where: `src/m.ts:${id}:1`, file: "m.ts", line: id });
   const v = judge(ids.map(ob), msgs, findMarkers(out), out);
   const st = (id: number) => (v.failed.some((f) => f.ob.id === id) ? "failed" : v.unchecked.some((u) => u.id === id) ? "unchecked" : "proved");
-  const want: Record<number, string> = { 1: "failed", 2: "unchecked", 3: "unchecked", 4: "unchecked", 5: "proved", 6: "failed", 7: "unchecked", 8: "proved" };
+  // ob1: an error of its declaration at no marker (a timeout at the declaration's start) is the
+  // declaration's, not a failure of its only obligation (round-2 finding lean-r2-1)
+  const want: Record<number, string> = { 1: "unchecked", 2: "unchecked", 3: "unchecked", 4: "unchecked", 5: "proved", 6: "failed", 7: "unchecked", 8: "proved" };
   const got = Object.fromEntries(ids.map((i) => [i, st(i)]));
   const causes = v.internal.map((i) => i.cause).join(",");
-  if (JSON.stringify(got) === JSON.stringify(want)) ok("judge: decl-level timeout fails its only obligation; a broken declaration's obligations, an unelaborated file's and one without `vreact:ok` are not proved; a failure beats a forged `vreact:ok`");
+  if (JSON.stringify(got) === JSON.stringify(want)) ok("judge: a decl-level error (a timeout) leaves its only obligation unchecked, never failed; a broken declaration's obligations, an unelaborated file's and one without `vreact:ok` are not proved; a failure beats a forged `vreact:ok`");
   else bad("judge attribution", `expected ${JSON.stringify(want)}, got ${JSON.stringify(got)}`);
   const f6 = v.failed.find((f) => f.ob.id === 6)?.message;
   if (f6 === "`grind` failed\n⊢ False") ok("judge: a `vreact_ob` failure shows Lean's text and goal");
