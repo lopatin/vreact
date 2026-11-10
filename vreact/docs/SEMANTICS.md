@@ -1164,11 +1164,17 @@ hook rules hold (static checks). For every function: its body is safe and its
   well: only `"jsx": "react-jsx"` (React 18's automatic runtime) is accepted — no
   other `jsxImportSource`, no `@jsx…` pragmas (in any comment and any letter
   case: esbuild and Babel read them anywhere in a file, TypeScript in its leading
-  comments with the name lower-cased), no `tsconfig.json` inside the source
-  directories (the bundler compiles a file with the settings of the tsconfig.json
-  nearest to it). A project without a tsconfig.json is checked with vreact's
-  defaults, and the bundler is trusted to compile it the same way (Vite reads the
-  nearest tsconfig.json above the project, if any).
+  comments with the name lower-cased). The bundler compiles a file with the
+  settings of the tsconfig.json nearest to it (Vite: looked for from the file's
+  real directory up to the root of the file system, none inside `node_modules`),
+  so for every source that must be the project's own tsconfig.json — a
+  `tsconfig.json` inside the source directories, or next to a source outside the
+  project, is rejected; a project without a tsconfig.json is checked with vreact's
+  defaults, and rejected when a tsconfig.json above it exists (the bundler would
+  compile its files with that one). A solution-style tsconfig.json (`"references"`,
+  as in Vite's react-ts template) is rejected: Vite compiles a file it does not
+  include with the referenced tsconfig that does (`tsconfig.app.json`), which
+  vreact does not read.
 * **TypeScript's checker.** VTS relies on the program type-checking without
   errors (null and undefined, the types of library and React declarations,
   imports): `@ts-ignore`, `@ts-expect-error` and `@ts-nocheck` are rejected
@@ -1203,7 +1209,21 @@ hook rules hold (static checks). For every function: its body is safe and its
   `imports` — would make them differ, and so would a `b.js` next to `b.ts` for
   `"./b"`); `react`, `vreact/spec` and the `react/jsx-runtime` of JSX must
   resolve to the installed packages' declarations, and to the same files
-  without those settings.
+  without those settings. Vite gives every module the id of its real path
+  (`resolve.preserveSymlinks` is false) and resolves its relative imports from
+  there, and it reads everything from the first `?` or `#` of a path as a URL
+  query or hash (`./limits#v2` is `./limits`): so the sources must be inside the
+  project directory, with no symbolic link below it on their path (a link in the
+  source directory, to a file or a directory, is rejected), and neither a source's
+  path nor an import path may contain `?` or `#`. Vite also maps the relative
+  imports of a package's modules through an object `"browser"` field of the
+  nearest package.json: such a field next to the sources is rejected. The
+  sources are the `.ts`/`.tsx` files of `"src"` (vreact.json), except declaration
+  files, tests (a name containing `.test.` or `.spec.`), files in `node_modules`
+  or in a directory whose name starts with `.`, and those listed in `"exclude"`
+  — or exactly the files listed in `"include"`; a verified file that imports one
+  of the skipped files is rejected (saying why it was skipped). A skipped file
+  that nothing imports is not checked and not mentioned in the report.
 * **The JS runtime model** (`JS.lean`, `JSMap.lean`): e.g. that `Array.prototype.slice` behaves
   like `JS.slice`, and that a JS `Map`/`Set` with keys of the admitted types behaves like
   `JS.JSMap`/`JS.JSSet` (insertion order, SameValueZero as Lean equality on those types). Definitions follow ECMA-262 directly; where ECMA-262 leaves a

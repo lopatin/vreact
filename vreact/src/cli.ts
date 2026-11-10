@@ -10,7 +10,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { translate, type Config, type TranslateResult } from "./module.ts";
+import { translate, isSourceName, type Config, type TranslateResult } from "./module.ts";
 import { runLake, findMarkers, judge, summarizeLeanError, type Verdict, type ErrorCause, type LeanMessage } from "./lean.ts";
 import { VtsError } from "./util.ts";
 import { editorProject } from "./ide.ts";
@@ -39,18 +39,41 @@ export function loadConfig(root: string, only?: string[]): Config {
     }
     if (typeof pc !== "object" || pc === null || Array.isArray(pc)) throw new Error(`${cfgFile}: expected an object such as { "src": "src" }`);
   }
-  if (pc.heartbeats !== undefined && !(Number.isInteger(pc.heartbeats) && pc.heartbeats >= 0)) throw new Error(`${cfgFile}: "heartbeats" must be a non-negative integer (thousands of heartbeats per obligation)`);
+  for (const k of ["src", "proofs", "out"] as const) {
+    if (pc[k] !== undefined && (typeof pc[k] !== "string" || pc[k] === "")) throw new Error(`${cfgFile}: "${k}" must be a directory name (a non-empty string)`);
+  }
+  for (const k of ["include", "exclude"] as const) {
+    if (pc[k] !== undefined && !(Array.isArray(pc[k]) && pc[k].every((x) => typeof x === "string" && x !== ""))) throw new Error(`${cfgFile}: "${k}" must be a list of file names (strings)`);
+  }
+  // (a safe integer, written as a numeral in the generated Lean: 1e21 would be written `1e+21`)
+  if (pc.heartbeats !== undefined && !(Number.isSafeInteger(pc.heartbeats) && pc.heartbeats >= 0 && pc.heartbeats <= MAX_HEARTBEATS))
+    throw new Error(`${cfgFile}: "heartbeats" must be an integer from 0 (no limit) to ${MAX_HEARTBEATS} (thousands of heartbeats per obligation; the default is 1000000)`);
   const srcDir = path.resolve(root, pc.src ?? "src");
   if (!pc.include && !(fs.existsSync(srcDir) && fs.statSync(srcDir).isDirectory()))
     throw new Error(`no source directory ${srcDir}: run vreact in the project directory (or pass --root DIR), or set "src" in vreact.json`);
+  const outDir = path.resolve(root, pc.out ?? ".vreact");
+  const proofsDir = path.resolve(root, pc.proofs ?? "proofs");
+  checkOutDir(cfgFile, root, srcDir, proofsDir, outDir);
   const exclude = new Set((pc.exclude ?? ["main.tsx", "main.ts", "vite-env.d.ts"]).map((e) => path.resolve(srcDir, e)));
   const files: string[] = [];
+  const links: string[] = [];
+  // (symbolic links are not followed, but reported: the bundler loads a module from its real
+  // path, which a link changes — see `sourcePathErrors` in module.ts)
   const walk = (d: string) => {
     for (const f of fs.readdirSync(d).sort()) {
       const p = path.join(d, f);
-      if (fs.statSync(p).isDirectory()) {
+      const st = fs.lstatSync(p);
+      if (st.isSymbolicLink()) {
+        let target: fs.Stats | null = null;
+        try {
+          target = fs.statSync(p);
+        } catch {
+          target = null;
+        }
+        if (target?.isDirectory() ? f !== "node_modules" && !f.startsWith(".") : isSourceName(f) && !exclude.has(p)) links.push(p);
+      } else if (st.isDirectory()) {
         if (f !== "node_modules" && !f.startsWith(".")) walk(p);
-      } else if (/\.(ts|tsx)$/.test(f) && !/\.d\.ts$|\.test\.|\.spec\./.test(f) && !exclude.has(p)) files.push(p);
+      } else if (isSourceName(f) && !exclude.has(p)) files.push(p);
     }
   };
   if (pc.include) for (const inc of pc.include) files.push(path.resolve(root, inc));
@@ -59,11 +82,58 @@ export function loadConfig(root: string, only?: string[]): Config {
     root,
     srcDir,
     files: only?.length ? files.filter((f) => only.some((o) => path.resolve(root, o) === f)) : files,
-    outDir: path.resolve(root, pc.out ?? ".vreact"),
-    proofsDir: path.resolve(root, pc.proofs ?? "proofs"),
+    ...(links.length ? { links } : {}),
+    outDir,
+    proofsDir,
     leanLib: LEAN_LIB,
     ...(pc.heartbeats !== undefined ? { heartbeats: pc.heartbeats } : {}),
   };
+}
+
+/** The largest "heartbeats" of vreact.json (thousands per obligation): a thousand times the default. */
+const MAX_HEARTBEATS = 1_000_000_000;
+
+/**
+ * vreact removes `<out>/VTS`, `<out>/Proofs` and `<out>/.lake` before it writes the generated Lean
+ * project: "out" must be a directory of its own — not the project directory or one containing
+ * it, and neither "src" nor "proofs", inside one of them or containing one (on a case-insensitive
+ * disk `./VTS` is `./vts`, and `./Proofs` is `./proofs`). Paths are compared through symbolic
+ * links and without regard to letter case.
+ */
+function checkOutDir(cfgFile: string, root: string, srcDir: string, proofsDir: string, outDir: string) {
+  const out = canonicalPath(outDir);
+  const within = (a: string, b: string) => a === b || a.startsWith(b.endsWith(path.sep) ? b : b + path.sep);
+  const where = `"out" (${JSON.stringify(path.relative(root, outDir) || ".")})`;
+  const why = "vreact replaces the directories VTS/, Proofs/ and .lake/ inside \"out\" with the Lean project it generates; set \"out\" to a directory of its own, such as \".vreact\"";
+  if (within(canonicalPath(root), out)) throw new Error(`${cfgFile}: ${where} is ${out === canonicalPath(root) ? "the project directory itself" : "a directory containing the project directory"}: ${why}`);
+  for (const [name, dir] of [["src", srcDir], ["proofs", proofsDir]] as const) {
+    const d = canonicalPath(dir);
+    if (within(out, d) || within(d, out)) {
+      const caseOnly = !(path.resolve(outDir) === path.resolve(dir) || path.resolve(outDir).startsWith(path.resolve(dir) + path.sep) || path.resolve(dir).startsWith(path.resolve(outDir) + path.sep));
+      throw new Error(`${cfgFile}: ${where} ${out === d ? "is the same directory as" : within(out, d) ? "is inside" : "contains"} the "${name}" directory (${JSON.stringify(path.relative(root, dir) || ".")}${caseOnly ? ", through a symbolic link or on a disk that ignores letter case" : ""}): ${why}`);
+    }
+  }
+}
+
+/**
+ * The path `p` names, for comparison: through symbolic links (its longest existing part
+ * resolved), Unicode-normalised and lower-cased (a case-insensitive disk is the default on macOS).
+ */
+function canonicalPath(p: string): string {
+  let head = path.resolve(p);
+  const tail: string[] = [];
+  for (;;) {
+    try {
+      head = fs.realpathSync(head);
+      break;
+    } catch {
+      const parent = path.dirname(head);
+      if (parent === head) break;
+      tail.unshift(path.basename(head));
+      head = parent;
+    }
+  }
+  return path.join(head, ...tail).normalize("NFC").toLowerCase();
 }
 
 const C = process.stdout.isTTY
