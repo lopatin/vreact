@@ -27,6 +27,10 @@
  * project's real location), and runs vreact on the project through the symbolic link `<dir>/app`
  * (the bundler finds files from a module's real path). A `reject` case is also met by an error of
  * vreact.json (loadConfig), with the message of that error.
+ *
+ * A file `RUNTIME.mjs` in a directory case checks what the app bundle runs: once the report meets
+ * the expectations it runs as `node RUNTIME.mjs <vreact's spec/index.js> <the case's project>`
+ * and must exit with status 0.
  */
 import fs from "node:fs";
 import os from "node:os";
@@ -647,6 +651,11 @@ for (const name of dirCases) {
     if (JSON.stringify(kinds) !== JSON.stringify(want)) why.push(`expected failures [${want.join(", ")}], got [${kinds.join(", ")}]`);
   }
   if (expect[0] === "status" && rr.failures.length) why.push(`unexpected failures: ${rr.failures.map((f) => f.where).join(", ")}`);
+  const runtime = path.join(src, "RUNTIME.mjs");
+  if (!why.length && fs.existsSync(runtime)) {
+    const p = spawnSync(process.execPath, [runtime, path.join(here, "..", "spec", "index.js"), dir], { encoding: "utf8" });
+    if (p.status !== 0) why.push(`RUNTIME.mjs failed (status ${p.status}): ${(p.stdout + p.stderr).trim().split("\n").slice(-6).join(" | ")}`);
+  }
   if (!why.length) ok(name, expect.join(" "));
   else bad(name, why.join("; "));
 }

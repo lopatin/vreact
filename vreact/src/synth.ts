@@ -1207,9 +1207,10 @@ class Sandbox {
           this.cache.set(f, m);
           this.loading.add(f);
           // a dependency's top-level code runs as plain JavaScript (outside test mode), once
-          const g = globalThis as Record<string, unknown>;
-          const test = g.__VREACT_TEST__;
-          g.__VREACT_TEST__ = undefined;
+          const g = globalThis as Record<string | symbol, unknown>;
+          const test = g[TEST_HOOK];
+          const legacy = g[LEGACY_TEST_HOOK];
+          g[TEST_HOOK] = g[LEGACY_TEST_HOOK] = undefined;
           try {
             this.evalModule(f, fs.readFileSync(f, "utf8").replace(/^\uFEFF/, ""), "", m);
           } catch (e) {
@@ -1217,7 +1218,8 @@ class Sandbox {
             throw e;
           } finally {
             this.loading.delete(f);
-            g.__VREACT_TEST__ = test;
+            g[TEST_HOOK] = test;
+            g[LEGACY_TEST_HOOK] = legacy;
           }
         }
         return m;
@@ -1357,6 +1359,15 @@ interface Runner {
   run(candidate: string, budgetMs: number): RunResult;
 }
 
+/**
+ * The global vreact/spec's runtime reads its test hook from (spec/index.js): a symbol key, which
+ * the page cannot define (HTML's named access on Window can define any string-named global the
+ * window lacks: an element with that id). The hook is a plain object with `posts` (an array) and
+ * `fill`; spec/index.js ignores anything else there.
+ */
+const TEST_HOOK = Symbol.for("vreact.spec.test");
+/** where a vreact/spec runtime before the symbol key looked for it (a project's older install) */
+const LEGACY_TEST_HOOK = "__VREACT_TEST__";
 const OWN_ENSURES = "__vreactOwnEnsures__";
 const OWN_REQUIRES = "__vreactOwnRequires__";
 const TARGET = "__vreactSynthTarget__";
@@ -1381,9 +1392,9 @@ function makeRunner(sb: Sandbox, target: string, fname: string, paramTypes: VTyp
     const inst = chooseInst(rand, tparams);
     return paramTypes.map((t) => gen(rand, t, prog, pools, 0, inst));
   });
-  const g = globalThis as Record<string, unknown>;
+  const g = globalThis as Record<string | symbol, unknown>;
   const clear = () => {
-    g.__VREACT_TEST__ = undefined;
+    g[TEST_HOOK] = g[LEGACY_TEST_HOOK] = undefined;
     g[OWN_ENSURES] = undefined;
     g[OWN_REQUIRES] = undefined;
     g[HIT] = undefined;
@@ -1405,7 +1416,7 @@ function makeRunner(sb: Sandbox, target: string, fname: string, paramTypes: VTyp
     // is never initialized: an input reading it is skipped (it cannot judge the candidate).
     let stopped: string | null = null;
     let hitAtLoad = false;
-    g.__VREACT_TEST__ = {
+    g[TEST_HOOK] = g[LEGACY_TEST_HOOK] = {
       posts: [],
       fill: () => {
         throw OTHER_HOLE;
@@ -1438,7 +1449,7 @@ function makeRunner(sb: Sandbox, target: string, fname: string, paramTypes: VTyp
       const args = structuredClone(samples[i]);
       const own: ((r: unknown) => boolean)[] = [];
       let hit = false;
-      g.__VREACT_TEST__ = {
+      g[TEST_HOOK] = g[LEGACY_TEST_HOOK] = {
         posts: [], // postconditions of called helpers: not this function's contract
         fill: () => {
           throw OTHER_HOLE;

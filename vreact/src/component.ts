@@ -12,6 +12,7 @@ import { T, type VType, type Param, type Field, leanType, showType, typeOfNode, 
 import { type Env, type Val, type Mark, ModCtx, type CompCtx, type CompInfo, type CallbackInfo, type StateVar, type FnInfo, type Binding, bind, freshLocal, refSymbol } from "./ctx.ts";
 import { expr, prop, propAll, block, branch, handlerFn, checkDeps, hookName, specFn, isGlobal, symbolOf, globalOf, bindParam, type BlockCtx, typeOf, valueBlock, contractLambda, outcome, checkClosures, topLevelHookDecls, fnParamTsTypes, stripParens, isNumeric, evalArgs, isDocumentTitle, jsxAttrText, checkPlainParams, isNullLit, ARRAY_MUTATORS, isMutatedLocal, toStr, nullishKinds } from "./translate.ts";
 import { fail, leanField, leanIdent, leanStr, jsStr, paren, nodeText, indent, VtsError, jsxTextValue, asciiLower, relLoc } from "./util.ts";
+import { reservedName, windowReserved } from "./domNames.ts";
 
 /* ─────────────────────── React 18.3.1 event model ───────────────────────
  * Native DOM events → React handler props, and their priorities, as in
@@ -1731,6 +1732,8 @@ interface Bubble {
   ns: Namespace;
   /** directly inside a `<select>`, `<optgroup>` or `<option>`: that tag, whose content is restricted (`CONTENT_RULES`); null: any content */
   content: string | null;
+  /** the nearest enclosing focus handler (focusin/focusout) that updates state (`onBlur on <div>`): no autoFocus element may be inside it (`focusesOnMount`), unless its component never mounts one again (`autoFocusRemount`) */
+  focusUpd: string | null;
 }
 interface Activation {
   /** `a <label>`, `a submit button <button> of a form with onSubmit on <form>` */
@@ -1749,7 +1752,7 @@ interface Activation {
  * the declaration is translated as HTML without the namespace's rejections.
  */
 type Namespace = "html" | "svg" | "math" | "deferred";
-const NO_BUBBLE: Bubble = { natives: new Map(), handlers: [], onClick: null, form: null, act: null, ns: "html", content: null };
+const NO_BUBBLE: Bubble = { natives: new Map(), handlers: [], onClick: null, form: null, act: null, ns: "html", content: null, focusUpd: null };
 
 /**
  * The content of a `<select>`, an `<optgroup>` and an `<option>` (HTML elements): the elements
@@ -1927,6 +1930,7 @@ function checkEvents(tag: string, e: ts.JsxElement | ts.JsxSelfClosingElement, h
     act: mine ?? passOn,
     ns: childNs,
     content: html && CONTENT_RULES.has(tag) ? tag : null,
+    focusUpd: bubble.focusUpd,
   };
 }
 
@@ -1972,6 +1976,112 @@ function namespaces(tag: string, tagNode: ts.Node): { ns: Namespace; childNs: Na
   return { ns, childNs: ns === "svg" && tag === "foreignObject" ? "html" : ns };
 }
 
+/**
+ * Why a focus handler that updates state may not run in the commit that mounts an autoFocus
+ * element: react-dom 18.3.1 focuses an autoFocus `<button>`, `<input>`, `<select>` or `<textarea>`
+ * in the commit that mounts it (`commitMount`, with React's event system enabled again), so the
+ * focusout and focusin events run onBlur on the element that had focus and onFocus on the
+ * autoFocus element and the elements around them, synchronously. Their updates are discrete
+ * (SyncLane) and React renders and commits them at once, at the end of that commit; if that
+ * commit mounts an autoFocus element again (one whose key or presence depends on the state), the
+ * chain goes on, and after 50 nested commits the setter throws "Maximum update depth exceeded"
+ * (`checkForNestedUpdates`) — inside the handler. With no updates in the focus handlers of an
+ * autoFocus element and of the elements around one, only the element that had focus before the
+ * first such commit can update state (once: it does not get focus back inside the chain), so the
+ * chain stops after one more commit. (A component inside an element with handlers is rejected, so
+ * the elements around an autoFocus element that have handlers are in its component.)
+ *
+ * Such updates are accepted in a component no render of which mounts an autoFocus element after
+ * its first (`autoFocusRemount` is null): a focus handler is robust, so it updates only its own
+ * component's state (no parent callbacks), and React renders and commits that component's
+ * subtree only, which then mounts no autoFocus element and focuses nothing (VTS has no layout
+ * effects, and the passive effects React runs at the end of such a commit have default-priority
+ * updates, which are rendered later); so inside a chain these updates add one commit that starts
+ * no further one, and the argument above still bounds the chain.
+ */
+const AUTOFOCUS_CHAIN = "React focuses an autoFocus element in the commit that mounts it, which runs the focus handlers (onFocus, onBlur) of it, of the element that loses focus and of the elements around them synchronously inside that commit; their updates are rendered and committed at once, and when that commit mounts an autoFocus element again (its key or presence depends on the state), the chain repeats until React throws \"Maximum update depth exceeded\" from the setter, after 50 nested commits";
+
+/** React 18.3.1 focuses these elements in the commit that mounts them when their `autoFocus` prop is truthy (`commitMount`). */
+const AUTOFOCUS_TAGS = new Set(["button", "input", "select", "textarea"]);
+
+/** The `autoFocus` attribute of `<tag>` when React may focus it as it mounts it (any letter case, any value but a literal false); null otherwise. */
+function focusesOnMount(tag: string, e: ts.JsxElement | ts.JsxSelfClosingElement, html: boolean): ts.JsxAttribute | null {
+  if (!html || !AUTOFOCUS_TAGS.has(tag)) return null;
+  return attrsNamed(e, "autofocus").find((a) => {
+    const v = a.initializer && ts.isJsxExpression(a.initializer) ? a.initializer.expression : undefined;
+    return !(v && stripParens(v).kind === ts.SyntaxKind.FalseKeyword);
+  }) ?? null;
+}
+
+const autoFocusRemounts = new WeakMap<ts.FunctionDeclaration, { why: string | null }>();
+
+/**
+ * Why a render of the component `decl` after its first may mount an autoFocus element (null when
+ * none does): it renders another component (which may have autoFocus elements under a condition
+ * of its props), or one of its own autoFocus elements is not created by its first render and kept
+ * by every later one (`notKept`). Only the component's own JSX matters besides: JSX occurs only in
+ * the value a component returns (with the local JSX constants and list callbacks of that value),
+ * and ReactNode props are rejected.
+ */
+function autoFocusRemount(decl: ts.FunctionDeclaration): string | null {
+  const hit = autoFocusRemounts.get(decl);
+  if (hit) return hit.why;
+  let why: string | null = null;
+  const body = decl.body;
+  /** the component's returns (not those of nested functions) */
+  const returns: ts.ReturnStatement[] = [];
+  const findReturns = (n: ts.Node) => {
+    if (ts.isReturnStatement(n)) returns.push(n);
+    if (!ts.isFunctionLike(n) && !ts.isClassLike(n)) ts.forEachChild(n, findReturns);
+  };
+  body?.statements.forEach(findReturns);
+  const only = returns.length === 1 && returns[0].parent === body ? returns[0] : null;
+  const name = decl.name?.text ?? "the component";
+  const line = (n: ts.Node) => n.getSourceFile().getLineAndCharacterOfPosition(n.getStart()).line + 1;
+  const visit = (n: ts.Node) => {
+    if (why) return;
+    if (ts.isJsxSelfClosingElement(n) || ts.isJsxOpeningElement(n)) {
+      const tag = n.tagName.getText();
+      const el = ts.isJsxOpeningElement(n) ? n.parent : n;
+      if (!ts.isIdentifier(n.tagName) || !/^[a-z]/.test(tag)) why = `${name} renders <${tag}> (line ${line(n)}), whose own autoFocus elements a render may mount`;
+      else if (focusesOnMount(tag, el, true)) {
+        const r = notKept(el, only, returns.length);
+        if (r) why = `its <${tag} autoFocus> on line ${line(n)} ${r}`;
+      }
+    }
+    ts.forEachChild(n, visit);
+  };
+  if (body) visit(body);
+  autoFocusRemounts.set(decl, { why });
+  return why;
+}
+
+/**
+ * Why the element `el` is not created by the first render of its component and kept by every
+ * later one (null when it is): it must be written in the component's only return (`ret`, a
+ * statement of the body itself), reached from the returned value through elements and fragments
+ * only — not under a condition, in a list or a local constant — with no `key` on it or on an
+ * element around it. (React matches the children of an element by key, or by index when they have
+ * none; a `{…}` child, whatever it renders, keeps the index of the children after it.)
+ */
+function notKept(el: ts.JsxElement | ts.JsxSelfClosingElement, ret: ts.ReturnStatement | null, returns: number): string | null {
+  let n: ts.Node = el;
+  for (;;) {
+    if ((ts.isJsxElement(n) || ts.isJsxSelfClosingElement(n)) && attrsNamed(n, "key").length) return n === el ? "has a key" : "is inside an element with a key";
+    const p: ts.Node = n.parent;
+    if (ts.isJsxElement(p) && p.children.some((c) => c === n)) {
+      n = p;
+      continue;
+    }
+    if (ts.isJsxFragment(p) || ts.isParenthesizedExpression(p)) {
+      n = p;
+      continue;
+    }
+    if (ts.isReturnStatement(p)) return p === ret ? null : returns > 1 ? "is in one of several returns" : "is not in the component's own return";
+    return "is rendered under a condition, in a list or through a local constant";
+  }
+}
+
 function intrinsic(tag: string, e: ts.JsxElement | ts.JsxSelfClosingElement, kids: ts.NodeArray<ts.JsxChild> | undefined, env: Env): string {
   const m = env.m;
   const comp = env.comp!;
@@ -1981,7 +2091,17 @@ function intrinsic(tag: string, e: ts.JsxElement | ts.JsxSelfClosingElement, kid
   const html = ns === "html" || ns === "deferred";
   const handlerAttrs = attrs(e).filter(ts.isJsxAttribute).filter((a) => /^on[A-Z]/.test(a.name.getText()));
   const infos = new Map(handlerAttrs.map((a) => [a, eventInfo(a.name.getText(), tag, e, a, html)] as const));
-  const inner = checkEvents(tag, e, handlerAttrs, infos, ns, childNs);
+  let inner = checkEvents(tag, e, handlerAttrs, infos, ns, childNs);
+  const autoFocus = focusesOnMount(tag, e, html);
+  /** why a later render of this component may mount an autoFocus element (AUTOFOCUS_CHAIN), or null */
+  const remount = () => autoFocusRemount(comp.info.decl);
+  const keep = `, or keep every autoFocus element of ${comp.info.name} mounted from its first render on: written in its only return, not under a condition or in a list, with no key on it or around it, in a component that renders no other component`;
+  if (autoFocus && bubble.focusUpd) {
+    const why = remount();
+    if (why) fail(autoFocus, `autoFocus on <${tag}> inside an element with ${bubble.focusUpd}, which updates state, and a later render of ${comp.info.name} may mount an autoFocus element (${why}): ${AUTOFOCUS_CHAIN} (move that handler to an element that does not contain this one, or drop autoFocus${keep})`);
+  }
+  /** focus handlers of this element that update state (on an autoFocus element only in a component that never mounts one again: `autoFocusRemount`) */
+  const focusUpd: string[] = [];
   // react-dom throws while rendering a void element with children, and a <textarea> with
   // children and a defaultValue (or several children); a textarea's children are its value
   const passed = passedChildren(kids);
@@ -2005,7 +2125,14 @@ function intrinsic(tag: string, e: ts.JsxElement | ts.JsxSelfClosingElement, kid
       if (!val) fail(a, "handler attribute needs a value");
       const info = infos.get(a)!;
       const ev = info.model;
-      const h = handlerFn(val, env, info.discrete ? "discrete" : "robust", { tag, prop: name, html });
+      // a focus handler (focusin/focusout) of an autoFocus element, or of an element around one,
+      // runs inside the commit that mounts the autoFocus element (AUTOFOCUS_CHAIN)
+      const focusSide = info.natives.some((n) => n === "focusin" || n === "focusout");
+      const probe = { updated: false };
+      const why = focusSide && autoFocus ? remount() : null;
+      const noUpdates = why ? `${name} on <${tag}> with autoFocus updates state, and a later render of ${comp.info.name} may mount an autoFocus element (${why}): ${AUTOFOCUS_CHAIN} (drop autoFocus, or the update${keep})` : undefined;
+      const h = handlerFn(val, env, info.discrete ? "discrete" : "robust", { tag, prop: name, html, ...(focusSide ? { probe, noUpdates } : {}) });
+      if (probe.updated) focusUpd.push(`${name} on <${tag}>`);
       const run = `(fun ${h.params[0] ?? "_"} => ${h.code})`;
       if (!info.discrete) {
         const ok = m.ob(a, "handler-robust", `${name} handler on <${tag}> (${info.why}) preserves the invariant of ${comp.info.name} from any state`);
@@ -2058,6 +2185,7 @@ function intrinsic(tag: string, e: ts.JsxElement | ts.JsxSelfClosingElement, kid
     }
     as.push(`⟨${leanStr(name)}, ${av}⟩`);
   }
+  if (focusUpd.length) inner = { ...inner, focusUpd: focusUpd[0] };
   const ch = kids ? withBubble(inner, () => children(kids, env, e, `<${tag}>`)) : "VReact.VList.nil";
   return withKey(key, `(VReact.VNode.elem ${leanStr(tag)} [${as.join(", ")}]\n  [${hs.join(",\n   ")}]\n  ${ch})`);
 }
@@ -2104,12 +2232,99 @@ function checkAttribute(a: ts.JsxAttribute, lname: string, tag: string, e: ts.Js
   if (lit !== null && URL_ATTRS.has(lname) && asciiLower(lit.replace(/^[\x00-\x20]+/, "").replace(/[\t\n\r]/g, "")).startsWith("javascript:")) {
     fail(a, `a javascript: URL runs its code in the page when it is followed: code outside the verified program; use a handler (onClick) instead`);
   }
+  if (lname === "name" || lname === "id") checkNamedAccess(a, lname, tag, env);
   if (tag === "input" && (lname === "value" || lname === "defaultvalue")) {
     const types = attrValues(e, "type", env);
     if ((types === undefined || types.includes("file")) && lit !== "") {
       fail(a, `${name} on an <input> that ${types === undefined ? "may be" : "is"} type="file": React sets the input's value when it renders it, which throws on a file input (its value can only be set to ""); ${types === undefined ? "give the input a type that is not \"file\" (a string, or a choice between strings)" : "remove it"}`);
     }
   }
+}
+
+/** Elements a form's named getter answers by their `name` and `id`: its listed elements (form-associated custom elements are rejected) and `<img>`. */
+const FORM_NAMED = new Set(["button", "fieldset", "input", "object", "output", "select", "textarea", "img"]);
+/** Elements the document's named getter answers by their `name` (and the window's, by name). */
+const DOC_BY_NAME = new Set(["embed", "form", "iframe", "img", "object"]);
+/** Elements the document's named getter answers by their `id` (an `<img>` when it also has a name). */
+const DOC_BY_ID = new Set(["object", "img"]);
+/** No property name of a form, the document or the window has a character other than these (domNames.ts). */
+const PROPERTY_CHARS = /^[A-Za-z0-9_$]*$/;
+
+/**
+ * `name` / `id` and HTML's named access (domNames.ts). A form answers `form.x` with its control
+ * or image named (or with id) "x", before any property of the form ([LegacyOverrideBuiltIns]),
+ * and so does the document with the names of `<embed>`, `<form>`, `<iframe>`, `<img>` and
+ * `<object>` and the ids of `<object>` and `<img>`: react-dom reads properties of forms and of
+ * the document (`parentNode`, `createElement`, …), and gets the element instead. On these
+ * elements every value the attribute may have must be no name the app's code reads, calls or
+ * writes there (`reservedName`, on the document when the document exposes the element): a literal,
+ * a choice between literals, an enum, a number, or a string built with a literal part holding a
+ * character that no property name has (`qty-${id}`); another expression is rejected. The window
+ * answers `window.x` only for names it does not define; there the global names the app bundle
+ * reads (`windowReserved`) are rejected as written ids; a computed id is not checked (a
+ * documented assumption, SEMANTICS §5). `name` on other elements is exposed nowhere.
+ */
+function checkNamedAccess(a: ts.JsxAttribute, lname: "name" | "id", tag: string, env: Env) {
+  const onDoc = (lname === "name" ? DOC_BY_NAME : DOC_BY_ID).has(tag);
+  const named = FORM_NAMED.has(tag) || onDoc;
+  if (lname === "name" && !named) return;
+  const v = attrValue(a);
+  if (!v) return; // a boolean attribute: React does not set a name or id given `true`
+  const objs = [FORM_NAMED.has(tag) ? "the form it belongs to (a <form> around it, or the one form=… names)" : "", onDoc ? "the document" : ""].filter((x) => x).join(" and of ");
+  const there = onDoc ? (FORM_NAMED.has(tag) ? "on forms or on the document" : "on the document") : "on forms";
+  const reserved = (x: string) => named && PROPERTY_CHARS.test(x) && reservedName(x, onDoc);
+  const reject = (x: string) =>
+    fail(a, reserved(x)
+      ? `${a.name.getText()}="${x}" on <${tag}>: HTML's named access makes this element the property ${x} of ${objs}, whatever they define, and the app's code uses ${x} ${there} (react-dom reads or calls it, or an effect sets document.title): it would get this element instead (with form.parentNode React loops forever after a click on a radio button, with form.removeChild or document.createElement it throws). Choose another ${lname}, e.g. one with a "-" in it`
+      : `${a.name.getText()}="${x}" on <${tag}>: HTML's named access makes this element the global ${x} (window.${x}), which the app's code reads at run time (react-dom, or vreact/spec's runtime); choose another ${lname}`);
+  const lits = namedAccessValues(v, env);
+  if (lits === undefined) {
+    if (!named) return; // a computed id of an element only the window exposes: not checked (SEMANTICS §5)
+    fail(a, `${a.name.getText()}={…} on <${tag}>: HTML's named access makes this element the property of ${objs} that its value names, whatever they define, so no value it takes may be a name the app's code uses ${there} (react-dom reads form.parentNode, document.createElement, …), and VTS cannot tell what this one may be. Use a string literal, a choice between literals (c ? "a" : "b"), an enum, a number, or a string with a literal part that holds a character other than letters, digits, _ and $ (\`qty-\${id}\`, "qty-" + id), which no property name has`);
+  }
+  // the window exposes every element by its id, and <embed>, <form>, <img>, <object> and frames by name
+  const onWindow = lname === "id" || DOC_BY_NAME.has(tag);
+  for (const x of lits) if (reserved(x) || (onWindow && windowReserved(x))) reject(x);
+}
+
+/**
+ * The strings an attribute value `x` may set (React sets no attribute for null, undefined or a
+ * boolean): the literals; "-" for a number (its decimal digits, a minus sign, "NaN", "Infinity",
+ * none of them a property name of a form or the document), and for a string built with a literal
+ * part that holds a character outside [A-Za-z0-9_$]; an enum's members. Undefined when unknown.
+ */
+function namedAccessValues(x0: ts.Expression, env: Env): string[] | undefined {
+  const x = stripParens(x0);
+  if (ts.isStringLiteral(x) && x.parent && ts.isJsxAttribute(x.parent)) return [jsxAttrText(x)];
+  if (ts.isStringLiteralLike(x)) return [x.text];
+  if (isNullLit(x, env) || x.kind === ts.SyntaxKind.TrueKeyword || x.kind === ts.SyntaxKind.FalseKeyword) return [];
+  if (ts.isConditionalExpression(x)) {
+    const l = namedAccessValues(x.whenTrue, env);
+    const r = namedAccessValues(x.whenFalse, env);
+    return l && r ? [...l, ...r] : undefined;
+  }
+  if (holdsOtherChar(x)) return ["-"];
+  let t: VType;
+  try {
+    t = typeOf(x, env);
+  } catch (err) {
+    if (err instanceof VtsError) return undefined;
+    throw err;
+  }
+  if (t.k === "int" || t.k === "num") return ["-", "NaN", "Infinity"];
+  if (t.k === "bool") return [];
+  if (t.k === "enum") return env.m.reg.enumLits(t);
+  return undefined;
+}
+
+/** Does every string `x` may be hold a character outside [A-Za-z0-9_$] (written in one of its literal parts)? */
+function holdsOtherChar(x0: ts.Expression): boolean {
+  const x = stripParens(x0);
+  if (ts.isStringLiteralLike(x)) return !PROPERTY_CHARS.test(x.text);
+  if (ts.isTemplateExpression(x)) return !PROPERTY_CHARS.test(x.head.text) || x.templateSpans.some((sp) => !PROPERTY_CHARS.test(sp.literal.text));
+  if (ts.isBinaryExpression(x) && x.operatorToken.kind === ts.SyntaxKind.PlusToken) return holdsOtherChar(x.left) || holdsOtherChar(x.right);
+  if (ts.isConditionalExpression(x)) return holdsOtherChar(x.whenTrue) && holdsOtherChar(x.whenFalse);
+  return false;
 }
 
 /** Elements returned by `xs.map(…)`, whose key is translated (as the key function) by `keyedMap`. */

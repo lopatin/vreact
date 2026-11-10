@@ -46,9 +46,13 @@ parent's snapshot is current).
 * `fireTask` — an async callback (setInterval/setTimeout) registered by an
   effect fires; it closes over an *old* snapshot, hence robust updates.
 
-Recursion through component trees is bounded by a `fuel` argument (React's own
-maximum update depth); with insufficient fuel a subtree is not mounted, which is
-safe for invariants (nothing unverified ever runs).
+Recursion through component trees is bounded by a `fuel` argument, a bound on the
+depth of the mount/reconcile walk; with insufficient fuel a subtree is not mounted,
+which is safe for invariants (nothing unverified ever runs). It is not React's
+nested-update limit ("Maximum update depth exceeded", which React throws from a setter
+after 50 nested synchronous commits): the model's setters never throw, and VTS rejects
+what makes such chains (a focus handler that updates state on or around an
+`autoFocus` element, SEMANTICS §2.2).
 
 The semantics is `noncomputable`: reconciliation decides component identity with
 classical equality on specifications (React compares element types by identity).
