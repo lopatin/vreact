@@ -522,10 +522,12 @@ Order inside the body:
    and so are library constants (`[Number.MAX_SAFE_INTEGER]`) and a tuple's
    `length` (list the tuple). Values from outside the component (`Math`,
    imports, top-level consts) are never needed: leave them out.
-   An effect may also list a setter or `dispatch` (never changes), a local
-   helper arrow (a new function each render: the effect runs after every
-   render) or a `useCallback` function (changes when its own deps do); not a
-   parent callback, nor `props` itself (list its fields);
+   An effect may also list a setter or `dispatch`, or a top-level function,
+   const or component (or an import of one), which never change; a local
+   helper arrow or a JSX const (new each render: the effect runs after every
+   render); or a `useCallback` function (changes when its own deps do); not a
+   parent callback, nor `props` itself (list its fields), nor a global such as
+   `Math` (leave it out), also through a `useCallback` it lists;
 4. `invariant(…)` — over props and state;
 5. render-local `const`s, helper arrows, handlers;
 6. `return <JSX/>` (early returns allowed).

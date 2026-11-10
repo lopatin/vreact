@@ -75,7 +75,8 @@ export function isGlobal(env: Env, n: ts.Node, name: string): boolean {
   return env.m.prog.isGlobal(n, name);
 }
 
-function globalOf(env: Env, node: ts.Node): Global | undefined {
+/** The top-level declaration of the program (a function, constant or component; through import aliases) that `node` refers to, if any. */
+export function globalOf(env: Env, node: ts.Node): Global | undefined {
   const s = resolved(env, symbolOf(env, node));
   const d = s?.declarations?.[0];
   if (!d) return undefined;

@@ -10,7 +10,7 @@
 import ts from "typescript";
 import { T, type VType, type Param, type Field, leanType, showType, typeOfNode, checkValueType, propertyName, isLibSymbol, collectionKind } from "./types.ts";
 import { type Env, ModCtx, type CompCtx, type CompInfo, type StateVar, type FnInfo, type Binding, bind, freshLocal, refSymbol } from "./ctx.ts";
-import { expr, prop, propAll, block, branch, handlerFn, checkDeps, hookName, specFn, isGlobal, symbolOf, bindParam, type BlockCtx, typeOf, valueBlock, lambda, outcome, checkClosures, topLevelHookDecls, fnParamTsTypes, stripParens, isNumeric, evalArgs, isDocumentTitle, jsxAttrText, checkPlainParams, isNullLit, ARRAY_MUTATORS } from "./translate.ts";
+import { expr, prop, propAll, block, branch, handlerFn, checkDeps, hookName, specFn, isGlobal, symbolOf, globalOf, bindParam, type BlockCtx, typeOf, valueBlock, lambda, outcome, checkClosures, topLevelHookDecls, fnParamTsTypes, stripParens, isNumeric, evalArgs, isDocumentTitle, jsxAttrText, checkPlainParams, isNullLit, ARRAY_MUTATORS } from "./translate.ts";
 import { fail, leanField, leanIdent, leanStr, jsStr, paren, nodeText, indent, VtsError, jsxTextValue, asciiLower } from "./util.ts";
 
 /* ─────────────────────── React 18.3.1 event model ───────────────────────
@@ -615,16 +615,22 @@ function stateVar(d: ts.VariableDeclaration, h: string, env: Env, m: ModCtx, pp:
 
 /**
  * The dependency values (`VReact.DepVal`) that the effect dependency `d` (translated in `env`)
- * contributes; React compares each entry with `Object.is` to the previous render's. A data value by
- * its type (an array, record, Map or optional: `obj`, "possibly changed" — effects are robust, so
- * running one more often than React does changes nothing verified, SEMANTICS §2.6); a setter or
- * `dispatch`: none (React keeps one function per hook, so it never changes); a local arrow: `obj`
- * (a new function at every render: the effect runs after every render, as in React); a
+ * contributes; React compares each entry with `Object.is` to the previous render's. A data value
+ * by its type (an array, record, Map or optional: `obj`, "possibly changed", so the effect may run
+ * more often than in React; an int as a mathematical integer, so a switch between 0 and -0, which
+ * `Object.is` sees, does not run it: both harmless, effects are robust, SEMANTICS §2.6); a setter
+ * or `dispatch`: none (React keeps one function per hook, so it never changes); a local arrow:
+ * `obj` (a new function at every render: the effect runs after every render, as in React); a
  * `useCallback` function: the values of its own dependencies (React returns the cached function
- * until one of them changes, so it changes exactly when they do); a parent callback: rejected (an
- * effect never calls one, and when the parent passes a new function is not modelled), and so is the
- * props object (its fields are the dependencies). `at` is the effect's dependency `d` comes from,
- * `via` the useCallback it was reached through.
+ * until one of them changes, so it changes when they do); a JSX const: `obj` (a new element object
+ * at every render); a path that starts at a top-level declaration of the program (a function,
+ * constant or component, or an import of one): none (created once, when its module is evaluated —
+ * top-level variables are const — so the same value at every render), and so is `undefined`; a
+ * path that starts at anything else declared outside the component (a global such as `Math`):
+ * rejected, with that reason (the dependency check never requires one; `innerWidth` would
+ * change); a parent callback: rejected (an effect never calls one, and when the parent passes a
+ * new function is not modelled), and so is the props object (its fields are the dependencies).
+ * `at` is the effect's dependency `d` comes from, `via` the useCallback it was reached through.
  */
 function effectDepVals(d: ts.Expression, env: Env, at: ts.Expression, via: string | null): string[] {
   const e = stripParens(d);
@@ -655,6 +661,27 @@ function effectDepVals(d: ts.Expression, env: Env, at: ts.Expression, via: strin
       return deps.elements.flatMap((x) => effectDepVals(x, b.env, at, via ?? `\`${nodeText(e)}\``));
     }
     return ["VReact.DepVal.obj"];
+  }
+  if (b?.k === "jsx") return ["VReact.DepVal.obj"];
+  // the variable the path starts with, when it is declared outside the component
+  let root: ts.Expression = e;
+  while (ts.isPropertyAccessExpression(root) || ts.isParenthesizedExpression(root)) root = root.expression;
+  const rs = ts.isIdentifier(root) ? symbolOf(env, root) : undefined;
+  if (rs && !env.vars.has(rs)) {
+    // (and `undefined`, a non-writable global: always the same value)
+    if (globalOf(env, root) || (root === e && isGlobal(env, root, "undefined"))) return [];
+    const decl = env.comp!.info.decl;
+    const inComp = (x: ts.Node): boolean => {
+      for (let n: ts.Node | undefined = x; n; n = n.parent) if (n === decl) return true;
+      return false;
+    };
+    const ds = rs.declarations ?? [];
+    if (ds.length && !ds.some(inComp)) {
+      const what = `${root === e ? "is" : `starts at \`${nodeText(root)}\`,`} declared outside the component, and not a top-level declaration of the program (a function, constant or component)`;
+      const why = `not supported as an effect dependency; the dependency check never requires a value from outside the component: leave it out`;
+      if (via) fail(at, `the effect depends on ${via}, a useCallback function whose dependency \`${nodeText(e)}\` ${what}: ${why} (of ${via}'s dependencies)`);
+      fail(at, `\`${nodeText(e)}\` ${what}: ${why}`);
+    }
   }
   const v = expr(d, env);
   switch (v.type.k) {
