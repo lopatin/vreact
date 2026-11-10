@@ -373,9 +373,21 @@ a component's `requires` and `invariant`s. A reducer's `requires` may mention
 only the action (React may apply a queued action to any state): it becomes a
 `precondition` obligation at every `dispatch(…)`. Inside contracts,
 guards are in scope as JS evaluates them: the right side of `&&` / `||`, the
-branches of `?:`, the consequent of `implies(a, b)`, and quantifier bodies
+branches of `?:`, and quantifier bodies
 (`forall(0, xs.length, (i) => xs[i] >= 0)`, `xs.every((r) => r[0] > 0)`) may index
 under their guard.
+
+`implies(a, b)` is a function call, so JS evaluates `b` even when `a` is false. The
+arguments of `requires`, `invariant`, `assert`, `assume` and a module-level
+`assert` are evaluated at every call, render, dispatch or module load (also with
+contract checking off), so there `b` must be safe on its own: its indexes, `!`s,
+divisors and callee preconditions are checked without `a`
+(`requires(implies(xs.length > 0, xs[0] >= 0))` fails its `index` obligation:
+`xs[0]` of `[]` is read). Write
+`!a || b` instead (`xs.length === 0 || xs[0] >= 0`, `x === null || x.v > 0`), which
+guards and narrows as JS evaluates it. Only in an `ensures` lambda, which never
+runs, does `b` see `a` as its guard (`ensures((r: int) => implies(xs.length > 0,
+r === xs[0]))`).
 
 Constants: small ones are unfolded wherever used. For large data use
 

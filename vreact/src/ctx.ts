@@ -175,6 +175,14 @@ export interface Env {
    * state), naming it: `assume(…)` is rejected there (its fact would be a theorem for all of them).
    */
   generalized?: string;
+  /**
+   * Set only inside a contract that JS never evaluates (the body of an `ensures` lambda, and
+   * what it calls in place): there `implies(a, b)` reads `b` under the hypothesis `a`.  Every
+   * other contract (requires, invariant, assert, assume, a module-level assert, and the
+   * callbacks run inside them) is an argument JS evaluates, and `implies` is a function: `b`
+   * is evaluated whatever `a` is, so its obligations get no hypothesis from `a` (`prop`).
+   */
+  ghost?: boolean;
   /** Lean hypotheses in scope that justify obligations (names only, for documentation). */
   fnName?: string;
   /** the key function of a keyed `.map`: its JSX consts are translated by the node function */

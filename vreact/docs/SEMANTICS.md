@@ -564,19 +564,38 @@ itself — gets no instance there.
 A contract is a proposition with JS's evaluation order: the right operand of
 `a && b` is translated under the hypothesis `a` (`∃ (h : a), b` when `b` has
 proof obligations, plain `a ∧ b` otherwise), `a || b` as `a ∨ ∃ (h : ¬a), b`,
-`c ? x : y` as `(∀ (h : c), x) ∧ (∀ (h : ¬c), y)`, `implies(a, b)` as
-`∀ (h : a), b`, `forall(lo, hi, i => p)` as `∀ i, ∀ (h₁ : lo ≤ i), ∀ (h₂ : i < hi), p`
+`c ? x : y` as `(∀ (h : c), x) ∧ (∀ (h : ¬c), y)`,
+`forall(lo, hi, i => p)` as `∀ i, ∀ (h₁ : lo ≤ i), ∀ (h₂ : i < hi), p`
 and `xs.every(x => p)` as `∀ x, ∀ (h : x ∈ xs), p`, so an index obligation in `b`,
-`p`, … sees its guard. (In code, `implies` is a function call: both arguments are
-evaluated.) The body of a `callbackRequires` lambda, which JS never calls, is such a
-contract too (a block body `{ …; return c; }` is read as code, its obligations
-holding for every argument). Several `requires` (or `invariant`) statements are one condition
-`c₁ && c₂ && …`: a later one may rely on the earlier ones as guards.
+`p`, … sees its guard (JS calls a quantifier body only for `lo ≤ i < hi`, or for
+the array's elements; `distinct`'s key function runs on every element, and its
+obligations are proved for every value of its parameter).
+
+`implies(a, b)` is a function call (vreact/spec: `return !a || b`), so JS evaluates
+`b` whatever `a` is. `requires(c)`, `invariant(c)`, `assert(c)`, `assume(c)` and a
+module-level `assert(c)` are calls too: JS evaluates `c` at every call, render,
+`dispatch` or module load, also with contract checking off — and with it every
+quantifier body and callback run inside `c`. In those contracts `implies(a, b)` is
+`a → b` with `b` translated where `a` is evaluated: the obligations of `b` (an index,
+a `!`, a divisor, a callee's `requires`) must hold without `a`, and `a` narrows
+nothing in `b`. Guard them with `!a || b` (`xs.length === 0 || xs[0] > 0`,
+`x === null || x.v > 0`) or `a ? b : true`. Only a contract that JS never calls — an
+`ensures` lambda, and the expression body of a `callbackRequires` lambda (vreact/spec's
+`callbackRequires` ignores it) — reads `implies(a, b)` as `∀ (h : a), b`, so that `b`
+may index (and narrow) under `a`. A block body `{ …; return c; }` of a
+`callbackRequires` lambda is read as code, its obligations holding for every argument.
+(In code, likewise, `implies` evaluates both arguments.)
+
+Several `requires` (or `invariant`) statements are one condition
+`c₁ && c₂ && …`: a later one may rely on the earlier ones as guards. (JS evaluates
+each of them in turn, but every call site, `dispatch` and `<C …/>` proves all of
+them, and every state a component renders satisfies its invariant, so the earlier
+ones hold whenever a later one is evaluated.)
 Narrowing tests in a guard narrow what JS evaluates under it, as in code — also
 in a compound guard: in `b || s.kind === "a" || s.to.length > 0` (left-associated,
 any length), `x !== null && y !== null && x + y > 0`, `!(x === null || y === null) || …`,
-`implies(x !== null && …, …)` and `c ? … : …` the later operand is translated where
-every earlier operand failed (held), each test becoming a `match`. Such a compound
+`implies(x !== null && …, …)` (in an `ensures` or a `callbackRequires` lambda) and `c ? … : …` the later operand is
+translated where every earlier operand failed (held), each test becoming a `match`. Such a compound
 guard is decomposed only when a later operand needs its narrowing; otherwise it
 stays one condition (the normal forms above).
 
@@ -732,7 +751,8 @@ destructured from it — with `{ onPick: pick }` the contract
 `callbackRequires(onA, …)` is props.onB's. Anything else (a module function or
 another object's property spelled like a callback prop, `Math.max` with a prop
 `max`) is rejected. The lambda's parameters are the callback's arguments; its
-body is a contract (§1.3: `implies(a, b)` an implication, guards in scope).
+body is a contract that JS never calls (§1.3: `implies(a, b)` an implication
+whose consequent may rely on its guard, as in an `ensures`; guards in scope).
 
 * **Guarantee (child):** every call `props.onPick(e)` (or `pick(e)`, and every
   forward of the callback to a child) must prove the contract.

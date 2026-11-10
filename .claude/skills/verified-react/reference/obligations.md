@@ -36,7 +36,12 @@ expression JS evaluates, also where its value is not used: the arguments of
 effects, timers, render and functions), a timer's delay, and the conditions and
 arguments of an effect's cleanup — checked where the effect returns it, under
 the effect's early returns and branches. Guard them as usual (`if (i <
-xs.length) console.log(xs[i].name)`).
+xs.length) console.log(xs[i].name)`). The same holds for the condition of
+`requires`, `invariant`, `assert`, `assume` and a module-level `assert`, which JS
+evaluates at every call, render or load: there `implies(a, b)` evaluates `b` even
+when `a` is false, so `b`'s obligations get no help from `a` — write `!a || b`
+(`xs.length === 0 || xs[0] > 0`). Only an `ensures` lambda never runs: there `b`
+is checked under `a`.
 
 ## When the code and spec are right but the proof fails
 
