@@ -20,7 +20,7 @@ first one that fails.
 | `child-precondition` | props passed to `<C/>` satisfy `C`'s `requires` | establish it from your invariant / data; or weaken `C`'s requires |
 | `callback` | the function you pass as a child's callback keeps **your** invariant, assuming the child's `callbackRequires` | strengthen the child's contract, or guard in your handler |
 | `callback-contract` | this call of a callback prop satisfies its `callbackRequires` | the arguments you pass (e.g. trim/validate first) |
-| `index` | `xs[i]` / `xs.with(i, …)` is in bounds | guard `i < xs.length` (in contracts too: `i < xs.length && xs[i] > 0`, `forall(0, xs.length, (i) => …)`), or carry bounds in an invariant |
+| `index` | `xs[i]` / `xs.with(i, …)` is in bounds (`0 <= i < xs.length`; for `xs.with(-k, …)`, an index from the end, `0 < k <= xs.length`) | guard `i < xs.length` (in contracts too: `i < xs.length && xs[i] > 0`, `forall(0, xs.length, (i) => …)`), or carry bounds in an invariant; a negative `with` index must be written `-k` (`xs.with(-1, v)`): any other index is required to be non-negative |
 | `nonzero-divisor` | `%`, `idiv`, `Math.floor(a/b)` divisor ≠ 0; a number division `a / b` (unless `b` is a nonzero literal): `b` not 0 (VTS values do not keep the sign of zero, which `1 / -0` would show) | guard (`total === 0 ? 0 : …`), `requires(b !== 0)` |
 | `non-null` | `x!` is not null | narrow with `!== null` instead |
 | `precondition` | a called function's `requires` holds; at a `dispatch(a)`, the reducer's `requires` about the action | establish it (validate before dispatching, or rely on a child's `callbackRequires`), or make the callee total |

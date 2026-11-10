@@ -307,9 +307,16 @@ def atOpt {α} (xs : List α) (i : Int) : Option α :=
   let k := if i < 0 then (xs.length : Int) + i else i
   if 0 ≤ k then xs[k.toNat]? else none
 
-/-- `xs.with(i, v)` (ES2023): throws RangeError when out of range, hence the obligation. -/
+/-- `xs.with(i, v)` (ES2023): throws RangeError when out of range, hence the obligation. (A
+negative index counts from the end in JS: VTS reads one written `-k` as `withEnd`, and requires
+`0 ≤ i` of any other.) -/
 def withAt {α} (xs : List α) (i : Int) (v : α) (_h : 0 ≤ i ∧ i < xs.length) : List α :=
   xs.set i.toNat v
+
+/-- `xs.with(-k, v)` with `k > 0`: a negative index counts from the end, ES2023 writes at
+`xs.length - k` and throws RangeError unless `-xs.length ≤ -k`, hence the obligation. -/
+def withEnd {α} (xs : List α) (k : Int) (v : α) (_h : 0 < k ∧ k ≤ xs.length) : List α :=
+  xs.set (xs.length - k).toNat v
 
 /-- ECMA-262 (SortIndexedProperties): `cmp` is a *consistent comparator* for the
 elements of `xs` — reflexive and symmetric `=`, transitive `=`, `<` and `>`. -/
@@ -536,6 +543,11 @@ theorem indexOf.post {α} [BEq α] (xs : List α) (x : α) :
 @[simp] theorem length_withAt {α} (xs : List α) (i : Int) (v : α) (h : 0 ≤ i ∧ i < xs.length) :
     (withAt xs i v h).length = xs.length := by simp
 attribute [grind =] length_withAt
+@[simp] theorem withEnd_eq_set {α} (xs : List α) (k : Int) (v : α) (h : 0 < k ∧ k ≤ xs.length) :
+    withEnd xs k v h = xs.set (xs.length - k).toNat v := rfl
+@[simp] theorem length_withEnd {α} (xs : List α) (k : Int) (v : α) (h : 0 < k ∧ k ≤ xs.length) :
+    (withEnd xs k v h).length = xs.length := by simp
+attribute [grind =] length_withEnd
 
 /-! A swap `xs.with(i, xs[j]).with(j, xs[i])` is a permutation (`List.set_set_perm`): keys stay
 distinct, membership and counts are unchanged. -/
