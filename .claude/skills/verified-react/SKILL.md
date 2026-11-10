@@ -285,7 +285,9 @@ postcondition, root-precondition, unreachable, assert).
    `VReact.assumed`, `#eval`, other options — before Lean runs, and re-checks what
    they added with Lean's kernel after the build. A proof file that no module
    imports (named after no module, e.g. `proofs/model.lean` for `src/Model.ts`, and
-   imported by no such proof file) is rejected: Lean would never check it. See
+   imported by no such proof file) is rejected: Lean would never check it. So is a
+   proof file whose path is not a module name (every directory and file name an
+   identifier: not `proofs/x.y.lean` or `proofs/my-lemmas.lean`). See
    `reference/obligations.md`.
 5. Never use `assume(…)` or `@trusted` to make a failure go away without telling
    the user; both are reported and keep the result from being `VERIFIED`.
