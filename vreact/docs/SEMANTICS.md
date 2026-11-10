@@ -867,13 +867,16 @@ VERIFIED (`FaDepsMemoMethod.tsx`, `FaDepsCallbackMethod.tsx`,
 list instead.
 
 An effect's dependency values (`VReact.DepVal`, compared with the previous
-render's) follow React's identities: a number, string, boolean or enum by value;
-another data value (array, record, Map, optional) as `obj`, "possibly changed"
-(the effect runs at least as often as in React, which changes nothing verified:
-it is robust, and so is every timer it registers, whichever render registered
-it); a setter or `dispatch` contributes nothing (React keeps one function per
-hook); a local helper arrow is `obj` (a new function at every render: the
-effect runs after every render, as in React); a `useCallback` function
+render's) follow React's identities: an int, string, boolean or enum by value
+(but an int that is 0 before and after is undecided: either may be `-0`, §3);
+another data value (a `number`, array, record, Map, optional) as `obj`, whose
+`Object.is` the model does not decide, so where no other dependency changed the
+run chooses whether the effect runs (§3), covering what React does (both
+choices are verified: the effect is robust, and so is every timer it registers,
+whichever render registered it); a setter or `dispatch`
+contributes nothing (React keeps one function per hook); a local helper arrow is
+`obj` (a new function at every render: in React the effect runs after every
+render, one of the runs the model allows); a `useCallback` function
 contributes the dependency values of its own dependencies (React returns the
 cached function until one of them changes, so it changes exactly when they do:
 `useCallback(f, [])` listed in an effect runs it once, as `[]` does;

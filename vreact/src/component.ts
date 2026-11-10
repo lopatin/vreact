@@ -743,10 +743,11 @@ function stateVar(d: ts.VariableDeclaration, c: ts.CallExpression, h: string, en
 /**
  * The dependency values (`VReact.DepVal`) that the effect dependency `d` (translated in `env`)
  * contributes; React compares each entry with `Object.is` to the previous render's. A data value by
- * its type (an array, record, Map or optional: `obj`, "possibly changed" — effects are robust, so
- * running one more often than React does changes nothing verified, SEMANTICS §2.6); a setter or
- * `dispatch`: none (React keeps one function per hook, so it never changes); a local arrow: `obj`
- * (a new function at every render: the effect runs after every render, as in React); a
+ * its type (a number, array, record, Map or optional: `obj`, whose `Object.is` the model does not
+ * decide — the run chooses whether the effect runs again, `depsChanged`; effects are robust, so
+ * either choice is verified, SEMANTICS §2.6); a setter or `dispatch`: none (React keeps one
+ * function per hook, so it never changes); a local arrow: `obj` (a new function at every render:
+ * in React the effect runs after every render, one of the model's choices); a
  * `useCallback` function: the values of its own dependencies (React returns the cached function
  * until one of them changes, so it changes exactly when they do); a parent callback: rejected (an
  * effect never calls one, and when the parent passes a new function is not modelled), and so is the
