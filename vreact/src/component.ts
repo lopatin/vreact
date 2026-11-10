@@ -323,21 +323,17 @@ export function translateComponent(fn: ts.FunctionDeclaration, info: CompInfo, m
       const v = expr(rc.node, { ...renv, limits: INIT_LIMITS }, rc.type);
       if (m.obligations.length > n0) lets += `let _ : ${leanType(rc.type)} := ${v.code};\n  `;
     }
-    const effects: string[] = [];
+    // (renderBlock attaches to each return the effects registered on its path)
     const bc: BlockCtx = {
       kind: "render",
       fnNode: fn,
       onReturn: (e, env2) => {
         if (!e) fail(fn, "components must return JSX or null");
-        const node = jsxNode(e, env2);
-        return effects.length ? `(VReact.VNode.withEffects [${effects.join(",\n  ")}]\n  ${paren(node)})` : node;
+        return jsxNode(e, env2);
       },
       jsxConst: jsxConstCtx(comp),
     };
-    (bc as BlockCtx & { onEffect?: (c: ts.CallExpression, env: Env) => void }).onEffect = (c, env2) => {
-      effects.push(effectCode(c, env2, info));
-    };
-    const renderBody = withBubble(NO_BUBBLE, () => renderBlock(pp.renderStmts, renv, bc));
+    const renderBody = withBubble(NO_BUBBLE, () => renderBlock(pp.renderStmts, renv, bc, (c, env2) => effectCode(c, env2, info)));
     out += `${sig} :=\n  ${lets}${renderBody}\n\n`;
   }
   out += `def component : VReact.Component spec := ⟨fun d cb s hpre hinv => render d cb s hpre hinv⟩\n\n`;
@@ -481,24 +477,28 @@ function bindStateVars(env: Env, stmts: readonly ts.Statement[], svs: StateVar[]
   return e;
 }
 
-/** Render statements: like `block`, plus useEffect handling. */
-function renderBlock(stmts: ts.Statement[], env: Env, bc: BlockCtx): string {
-  const onEffect = (bc as BlockCtx & { onEffect?: (c: ts.CallExpression, env: Env) => void }).onEffect!;
-  // peel effects off at top level (they are hooks: unconditional, before returns)
-  const rest: ts.Statement[] = [];
-  const run = (i: number, e: Env): string => {
+/**
+ * Render statements: like `block`, plus useEffect handling.  `effect` translates a top-level
+ * useEffect call in the environment where it runs.
+ */
+function renderBlock(stmts: ts.Statement[], env: Env, bc: BlockCtx, effect: (c: ts.CallExpression, env: Env) => string): string {
+  // peel effects off at top level (they are hooks: unconditional, before returns).  A statement
+  // before them may still branch without returning (`{ if (x !== null) { … } }`): the scan then
+  // goes on once per path, and each path's returns carry the effects registered on that path,
+  // each once and translated in that path's environment (its narrowings, its locals)
+  const run = (i: number, e: Env, effects: readonly string[]): string => {
     if (i >= stmts.length) fail(bc.fnNode, "component must return");
     const s = stmts[i];
     const c = ts.isExpressionStatement(s) ? hookCall(s.expression) : null;
-    if (c && hookName(e, c.expression) === "useEffect") {
-      onEffect(c, e);
-      return run(i + 1, e);
-    }
+    if (c && hookName(e, c.expression) === "useEffect") return run(i + 1, e, [...effects, effect(c, e)]);
     if (ts.isReturnStatement(s) && i < stmts.length - 1) fail(stmts[i + 1], "unreachable code after return (it never runs)");
+    const pbc: BlockCtx = effects.length
+      ? { ...bc, onReturn: (r, env2) => `(VReact.VNode.withEffects [${effects.join(",\n  ")}]\n  ${paren(bc.onReturn!(r, env2))})` }
+      : bc;
     // translate this statement with a continuation that resumes the scan
-    return block([s], 0, e, bc, (e2) => run(i + 1, e2));
+    return block([s], 0, e, pbc, (e2) => run(i + 1, e2, effects));
   };
-  return run(0, env);
+  return run(0, env, []);
 }
 
 function prepass(stmts: readonly ts.Statement[], env: Env, comp: CompCtx, m: ModCtx): Prepass {
