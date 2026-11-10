@@ -1,6 +1,7 @@
 // expect: verified
-// Guards in contracts: `&&`, `||`, `?:`, implies, forall bounds and every membership are in scope
-// for the index obligations they guard (as JS short-circuit evaluation guarantees).
+// Guards in contracts: `&&`, `||`, `?:`, forall bounds and every membership are in scope for the
+// index obligations they guard (as JS short-circuit evaluation guarantees); implies only in an
+// ensures, which JS never runs (FaImpliesRequiresFn: elsewhere it evaluates both arguments).
 import { useState } from "react";
 import { requires, ensures, invariant, implies, forall, type int } from "vreact/spec";
 

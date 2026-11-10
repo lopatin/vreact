@@ -3114,7 +3114,7 @@ function specCall(name: string, c: ts.CallExpression, env: Env): Val {
       return { code: `(VReact.JS.nodupB ${paren(xs.code)})`, type: T.bool };
     }
     case "implies": {
-      // a function call: JS evaluates both arguments (in code; contracts read it as an implication)
+      // a function call: JS evaluates both arguments (in code, as in a contract that runs: `prop`)
       arity(c, "implies", 2, 2);
       const a = expr(args[0], env, T.bool);
       const b = expr(args[1], env, T.bool);
@@ -3349,10 +3349,14 @@ function narrowBranch(nt: NarrowTest, env: Env, onTrue: (e: Env) => string, onFa
  *
  * Guards are in scope where JS evaluates under them: the right operand of `&&`
  * (`||`) under a hypothesis that the left one holds (fails), the branches of
- * `?:` and the consequent of `implies(a, b)` under the condition, a quantifier
- * body under its bounds / membership.  When the guarded part has no proof
- * obligations the plain connective is emitted (`∧`, `∨`, `→`: same normal forms);
- * otherwise a named hypothesis binds the guard (`∃ (h : a), b`, `∀ (h : a), b`).
+ * `?:` under the condition, a quantifier body under its bounds / membership (JS
+ * calls it only there).  `implies(a, b)` is a function call: JS evaluates `b`
+ * whatever `a` is, so in a contract that runs (requires, invariant, assert,
+ * assume, a module-level assert) it is `a → b` with `b` unguarded; only in an
+ * `ensures` lambda, which JS never calls (`env.ghost`), is `b` read under `a`.
+ * When the guarded part has no proof obligations the plain connective is emitted
+ * (`∧`, `∨`, `→`: same normal forms); otherwise a named hypothesis binds the
+ * guard (`∃ (h : a), b`, `∀ (h : a), b`).
  */
 export function prop(e0: ts.Expression, env: Env): string {
   const e = stripParens(e0);
@@ -3417,7 +3421,13 @@ export function prop(e0: ts.Expression, env: Env): string {
     const args = e.arguments;
     if (sf === "implies") {
       arity(e, "implies", 2, 2);
-      return propGuarded(args[0], env, "imp", (e1) => prop(args[1], e1));
+      // a function call: where the contract runs, JS evaluates b whatever a is (spec's
+      // `implies(a, b) { return !a || b }`), so b's obligations are proved without a, and b is
+      // not narrowed by a; only in an ensures lambda, which never runs, is b read under a
+      if (env.ghost) return propGuarded(args[0], env, "imp", (e1) => prop(args[1], e1));
+      // (Lean elaborates the codomain of `→` without the domain as a hypothesis)
+      const a = prop(args[0], env);
+      return `(${a} → ${prop(args[1], env)})`;
     }
     if (sf === "forall" || sf === "exists") {
       arity(e, sf, 3, 3);

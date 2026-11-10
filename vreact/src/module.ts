@@ -1567,7 +1567,8 @@ function translateFunction(fn: ts.FunctionDeclaration, info: FnInfo, m: ModCtx):
       // must be exactly the declared return type (the null/undefined checks read it)
       const retTs = m.checker.getTypeFromTypeNode(fn.type!);
       checkParamAnnotation(p, info.ret, retTs, env);
-      const e2 = { ...env, vars: new Map(env.vars) };
+      // (JS never calls an ensures lambda: `implies(a, b)` in it reads b under a, `Env.ghost`)
+      const e2 = { ...env, vars: new Map(env.vars), ghost: true };
       e2.vars.set(symbolOf(env, p.name)!, { k: "val", code: call, type: info.ret, ts: retTs });
       const body = lam.body;
       if (ts.isBlock(body)) fail(body, "ensures body must be an expression");
