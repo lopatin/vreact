@@ -493,7 +493,12 @@ Every expression maps to a Lean term whose value is the JavaScript value.
   created (a later assignment, or one in an enclosing loop), and no function —
   including immediately-run array callbacks — may assign a `let` declared
   outside it. Array-method callbacks, spec predicates and the `useMemo` factory
-  run in place and read the current values.
+  run in place and read the current values. The checks cover everything that is
+  translated: the bodies of components and functions (their contracts included),
+  constant initialisers and module-level `assert(…)` facts, and of a `@trusted`
+  declaration, whose body is not translated, its contracts (`requires`, `ensures`,
+  `invariant`, `callbackRequires`) and a component's initial state (`useState` /
+  `useReducer` arguments), since its axioms state them.
 * A DOM handler's event parameter is `DomEvent` (`e.target.value`,
   `e.currentTarget.value`, `e.target.checked`, `e.key`: arbitrary values, fixed for
   the run of the handler). This describes JS only while the handler's own
@@ -555,9 +560,10 @@ proof obligations, plain `a ∧ b` otherwise), `a || b` as `a ∨ ∃ (h : ¬a),
 `∀ (h : a), b`, `forall(lo, hi, i => p)` as `∀ i, ∀ (h₁ : lo ≤ i), ∀ (h₂ : i < hi), p`
 and `xs.every(x => p)` as `∀ x, ∀ (h : x ∈ xs), p`, so an index obligation in `b`,
 `p`, … sees its guard. (In code, `implies` is a function call: both arguments are
-evaluated. Likewise an `every`/`some` callback other than `x => p`, such as a block
-body `x => { …; return p; }` or a `function (x) { … }`, is read as code: the calls JS
-makes on the elements.) The body of a `callbackRequires` lambda, which JS never calls, is such a
+evaluated. Likewise an `every`/`some` callback other than `x => p`, and a
+`forall`/`exists` callback other than `i => p`, such as a block body
+`x => { …; return p; }` or a `function (x) { … }`, is read as code: the calls JS
+makes on the elements, or for `lo ≤ i < hi`.) The body of a `callbackRequires` lambda, which JS never calls, is such a
 contract too (a block body `{ …; return c; }` is read as code, its obligations
 holding for every argument). Several `requires` (or `invariant`) statements are one condition
 `c₁ && c₂ && …`: a later one may rely on the earlier ones as guards.

@@ -188,9 +188,13 @@ function isImmediateFn(fn: ts.ArrowFunction | ts.FunctionExpression, env: Env): 
  * The two agree exactly when (a) no function that runs later reads a `let`
  * that may be reassigned after the function was created, and (b) no function
  * assigns a `let` declared outside it.  Both are checked here for one
- * top-level function or component body (a `let` is only visible inside it).
+ * top-level function or component body (a `let` is only visible inside it), or for
+ * whatever else is translated: a constant's initialiser, a module-level fact.  Of a
+ * `@trusted` declaration only some statements are translated (its contracts, a
+ * component's initial state): `only` lists them, the writes being collected in the
+ * whole `body` (and the Map/Set rules applied to each of them on its own).
  */
-export function checkClosures(body: ts.Node, env: Env) {
+export function checkClosures(body: ts.Node, env: Env, only?: readonly ts.Node[]) {
   const checker = env.m.checker;
   const writes = new Map<ts.Symbol, ts.Node[]>();
   const collectWrites = (n: ts.Node) => {
@@ -237,8 +241,8 @@ export function checkClosures(body: ts.Node, env: Env) {
     }
     ts.forEachChild(n, visit);
   };
-  visit(body);
-  checkCollectionMutation(body, env);
+  for (const n of only ?? [body]) visit(n);
+  for (const n of only ?? [body]) checkCollectionMutation(n, env);
 }
 
 /* ───────────────────── Map / Set: mutation and aliasing ───────────────────── */
@@ -3448,17 +3452,20 @@ export function prop(e0: ts.Expression, env: Env): string {
       arity(e, "implies", 2, 2);
       return propGuarded(args[0], env, "imp", (e1) => prop(args[1], e1));
     }
-    if (sf === "forall" || sf === "exists") {
-      arity(e, sf, 3, 3);
+    // `forall(lo, hi, (i) => condition)` (an arrow with one parameter and an expression body) is a
+    // quantifier read as a contract, its body under the bounds.  Any other callback — a block body
+    // `(i) => { …; return c; }`, a `function (i) { … }`, no parameter — is left to the code reading
+    // (the calls JS makes, `rangeFrom lo hi`.all/any), as for every/some below; the bounds are not
+    // translated here first (their obligations would be registered twice)
+    const qfn = (sf === "forall" || sf === "exists") && args.length === 3 ? stripParens(args[2]) : undefined;
+    if ((sf === "forall" || sf === "exists") && qfn && ts.isArrowFunction(qfn) && qfn.parameters.length === 1 && !ts.isBlock(qfn.body)) {
       const lo = expr(args[0], env, T.int);
       const hi = expr(args[1], env, T.int);
-      const fn = args[2];
-      if (!fn || !(ts.isArrowFunction(fn) || ts.isFunctionExpression(fn)) || fn.parameters.length !== 1) fail(e, `${sf}(lo, hi, (i) => …)`);
+      const fn = qfn;
       const r = bindParam(fn.parameters[0].name, T.int, env, env.m.checker.getNumberType());
-      if (ts.isBlock(fn.body)) fail(fn.body, "quantifier body must be an expression");
       const i = r.binder;
       const before = env.m.obCount();
-      const body = prop(fn.body, r.env);
+      const body = prop(fn.body as ts.Expression, r.env);
       const guarded = env.m.obCount() > before;
       if (sf === "forall") {
         if (!guarded) return `(∀ ${i} : Int, ${paren(lo.code)} ≤ ${i} → ${i} < ${paren(hi.code)} → ${body})`;
