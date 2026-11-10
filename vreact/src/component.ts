@@ -11,7 +11,7 @@ import ts from "typescript";
 import { T, type VType, type Param, type Field, leanType, showType, typeOfNode, checkValueType, propertyName, isLibSymbol, collectionKind } from "./types.ts";
 import { type Env, type Val, type Mark, ModCtx, type CompCtx, type CompInfo, type CallbackInfo, type StateVar, type FnInfo, type Binding, bind, freshLocal, refSymbol } from "./ctx.ts";
 import { expr, prop, propAll, block, branch, handlerFn, checkDeps, hookName, specFn, isGlobal, symbolOf, globalOf, bindParam, type BlockCtx, typeOf, valueBlock, contractLambda, outcome, checkClosures, topLevelHookDecls, fnParamTsTypes, stripParens, isNumeric, evalArgs, isDocumentTitle, jsxAttrText, checkPlainParams, isNullLit, ARRAY_MUTATORS, isMutatedLocal, toStr, nullishKinds } from "./translate.ts";
-import { fail, leanField, leanIdent, leanStr, jsStr, paren, nodeText, indent, VtsError, jsxTextValue, asciiLower } from "./util.ts";
+import { fail, leanField, leanIdent, leanStr, jsStr, paren, nodeText, indent, VtsError, jsxTextValue, asciiLower, relLoc } from "./util.ts";
 
 /* ─────────────────────── React 18.3.1 event model ───────────────────────
  * Native DOM events → React handler props, and their priorities, as in
@@ -317,12 +317,20 @@ export function translateComponent(fn: ts.FunctionDeclaration, info: CompInfo, m
     for (const sv of pp.stateVars) {
       lets += `let ${leanIdent(sv.name)} := σ.${leanField(sv.field)};\n  `;
     }
-    renv = bindStateVars(renv, body.statements, pp.stateVars);
+    // The Lean names of the state values are taken for the whole render (`lets`), but each state
+    // value and setter is bound at its own declaration (`renderBlock`): before it, JS has it in
+    // its temporal dead zone, so a function called there (a helper, an array callback, the
+    // useMemo factory, a JSX const) that reads it throws a ReferenceError.
+    const sc = new Set(renv.scope);
+    for (const sv of pp.stateVars) sc.add(leanIdent(sv.name));
+    renv = { ...renv, scope: sc };
     // an initial value that reads earlier state and that React evaluates at every render (its
-    // value then unused): checked there too, against the state of the render (`stateVar`)
+    // value then unused): checked there too, against the state of the render (`stateVar`; it
+    // reads only state declared before it)
+    const allState = bindStateVars(renv, body.statements, pp.stateVars);
     for (const rc of pp.renderChecks) {
       const n0 = m.obligations.length;
-      const v = expr(rc.node, { ...renv, limits: INIT_LIMITS }, rc.type);
+      const v = expr(rc.node, { ...allState, limits: INIT_LIMITS }, rc.type);
       if (m.obligations.length > n0) lets += `let _ : ${leanType(rc.type)} := ${v.code};\n  `;
     }
     const effects: string[] = [];
@@ -458,6 +466,7 @@ function rebase(comp: CompCtx): { vary: string; x0: string; names: string } {
   return { vary, x0, names: d.map((s) => s.name).join(", ") };
 }
 
+/** `env` with the state values and setters / dispatches declared by `stmts` bound. */
 function bindStateVars(env: Env, stmts: readonly ts.Statement[], svs: StateVar[]): Env {
   let e = env;
   for (const s of stmts) {
@@ -496,6 +505,11 @@ function renderBlock(stmts: ts.Statement[], env: Env, bc: BlockCtx): string {
       onEffect(c, e);
       return run(i + 1, e);
     }
+    // `const [n, setN] = useState(…)`: from here on `n` is this render's state value (its Lean
+    // local is bound at the top of the render) and `setN` its setter
+    if (ts.isVariableStatement(s) && isStateHook(hookCall(s.declarationList.declarations[0]?.initializer), e)) {
+      return run(i + 1, bindStateVars(e, [s], e.comp!.stateVars));
+    }
     if (ts.isReturnStatement(s) && i < stmts.length - 1) fail(stmts[i + 1], "unreachable code after return (it never runs)");
     // translate this statement with a continuation that resumes the scan
     return block([s], 0, e, bc, (e2) => run(i + 1, e2));
@@ -515,6 +529,8 @@ function prepass(stmts: readonly ts.Statement[], env: Env, comp: CompCtx, m: Mod
   // the earlier ones as guards (`propAll`, as for function preconditions)
   const reqs: ts.Expression[] = [];
   const invs: ts.Expression[] = [];
+  // for each invariant, how many state values are declared before it
+  const invAt: number[] = [];
   for (const s of stmts) {
     const c = ts.isExpressionStatement(s) ? hookCall(s.expression) : null;
     if (c) {
@@ -522,6 +538,7 @@ function prepass(stmts: readonly ts.Statement[], env: Env, comp: CompCtx, m: Mod
       if (sf === "requires" || sf === "invariant") {
         if (c.arguments.length !== 1) fail(c, `${sf}(condition)`);
         (sf === "requires" ? reqs : invs).push(c.arguments[0]);
+        if (sf === "invariant") invAt.push(stateSyms.length);
         continue;
       }
       if (sf === "callbackRequires") {
@@ -570,12 +587,21 @@ function prepass(stmts: readonly ts.Statement[], env: Env, comp: CompCtx, m: Mod
       }
     }
     if (ts.isVariableStatement(s)) {
+      // every declarator: `const x = 1, [n, setN] = useState(0)` declares a hook too
+      for (const dd of s.declarationList.declarations) {
+        const ddc = hookCall(dd.initializer);
+        const hh = ddc ? hookName(env, ddc.expression) : null;
+        if (hh && UNMODELLED_HOOKS.has(hh)) fail(dd, unmodelledHook(hh));
+        if (hh === "useEffect") fail(dd, "useEffect(…) returns nothing: call it as a statement, useEffect(() => { … }, [deps]);");
+        if ((hh === "useState" || hh === "useReducer") && s.declarationList.declarations.length !== 1) {
+          fail(dd, `declare a ${hh} on its own (\`const [value, ${hh === "useState" ? "setValue" : "dispatch"}] = ${hh}(…);\`), not with other variables in one declaration`);
+        }
+      }
       const d = s.declarationList.declarations[0];
       const dc = hookCall(d?.initializer);
       const h = dc ? hookName(env, dc.expression) : null;
       if (dc && (h === "useState" || h === "useReducer")) {
         if (sawNonHook) fail(d, "hooks must run unconditionally before any early return (Rules of Hooks)");
-        if (s.declarationList.declarations.length !== 1) fail(s, "one hook per declaration");
         const sv = stateVar(d, dc, h, initEnv, m, pp, stateSyms);
         pp.stateVars.push(sv);
         const a = (d.name as ts.ArrayBindingPattern).elements[0] as ts.BindingElement;
@@ -585,10 +611,10 @@ function prepass(stmts: readonly ts.Statement[], env: Env, comp: CompCtx, m: Mod
         initEnv = bind(r.env, sym, { k: "val", code: r.name, type: sv.type });
         pp.initNames.push(r.name);
         stateSyms.push(sym);
+        // (kept in the render statements: the state value and setter are bound from here on)
+        pp.renderStmts.push(s);
         continue;
       }
-      if (h && UNMODELLED_HOOKS.has(h)) fail(d, unmodelledHook(h));
-      if (h === "useEffect") fail(d, "useEffect(…) returns nothing: call it as a statement, useEffect(() => { … }, [deps]);");
       // useMemo / useCallback: allowed only here (top level), before any early return
       for (const dd of s.declarationList.declarations) {
         const init = hookCall(dd.initializer);
@@ -602,7 +628,16 @@ function prepass(stmts: readonly ts.Statement[], env: Env, comp: CompCtx, m: Mod
     if (ts.isIfStatement(s) || ts.isReturnStatement(s) || ts.isSwitchStatement(s) || mayReturn(s)) sawNonHook = true;
     pp.renderStmts.push(s);
   }
-  // (an invariant can only mention state declared before it: TypeScript rejects the rest)
+  // An invariant may mention only the state declared before it: JS evaluates the argument of
+  // `invariant(…)` where it stands, so a later state value is in its temporal dead zone there
+  // (TypeScript rejects a direct read, not one inside a function: `forall(0, 1, (i) => b >= i)`).
+  invs.forEach((inv, i) => {
+    const later = stateSyms.slice(invAt[i]);
+    const id = firstRead(inv, later, m.checker);
+    if (id) {
+      fail(id, `this invariant reads the state \`${id.text}\`, declared after it (${relLoc(refSymbol(m.checker, id)!.valueDeclaration!, m.prog.root)}): JS evaluates invariant(…)'s argument where it stands, and there \`${id.text}\` is in its temporal dead zone (a ReferenceError); move the invariant after the declaration`);
+    }
+  });
   if (reqs.length) pp.pre.push(propAll(reqs, { ...env, limits: PRE_LIMITS }));
   if (invs.length) pp.inv.push(propAll(invs, stateEnv));
   return pp;
@@ -687,12 +722,17 @@ function actionOnlyPre(r: FnInfo, env: Env) {
 
 /** Does `n` refer to one of the variables `syms` (also as a shorthand property `{ a }`)? */
 function readsAny(n: ts.Node, syms: readonly ts.Symbol[], checker: ts.TypeChecker): boolean {
-  if (!syms.length) return false;
+  return !!firstRead(n, syms, checker);
+}
+
+/** The first identifier in `n` that refers to one of the variables `syms` (also as a shorthand property `{ a }`), or null. */
+function firstRead(n: ts.Node, syms: readonly ts.Symbol[], checker: ts.TypeChecker): ts.Identifier | null {
+  if (!syms.length) return null;
   if (ts.isIdentifier(n)) {
     const s = refSymbol(checker, n);
-    if (s && syms.includes(s)) return true;
+    if (s && syms.includes(s)) return n;
   }
-  return !!ts.forEachChild(n, (c) => (readsAny(c, syms, checker) ? true : undefined));
+  return ts.forEachChild(n, (c) => firstRead(c, syms, checker) ?? undefined) ?? null;
 }
 
 /**

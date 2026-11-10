@@ -212,6 +212,12 @@ export interface Env {
   limits?: string;
   /** Locals in scope in JS that the translation cannot bind here, with the reason (a timer callback's view of its effect body). */
   unavailable?: Map<ts.Symbol, string>;
+  /**
+   * The local functions whose bodies are being translated around this point, where they are
+   * called or attached as a handler (they are inlined there): one called again inside is a
+   * recursive call, which inlining does not support.
+   */
+  inlining?: ReadonlySet<ts.Node>;
 }
 
 /** The module of the contract functions and `int`. */
