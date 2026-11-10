@@ -150,6 +150,8 @@ export function ItemList(props: ItemListProps) {
   No generic type aliases, components or arrows, no `@trusted` generics, and no
   callback parameters (`p: (x: T) => boolean`): use a field constraint.
 * State is immutable: spread, `filter`, `map`, `toSorted`, `with` — never `push`/`sort`/property assignment.
+* No recursion: a function may not call itself, nor a component render itself (`<Tree/>` inside
+  `Tree`): render nested data from a flat array (rows with a depth field) with one `map`.
 * Maps/Sets (`ReadonlyMap<int, Item>`, `ReadonlySet<string>`; keys int/string/boolean/enum, or
   `K extends int | string` in a generic helper such as `toggleIn<K>(s: ReadonlySet<K>, k: K)`):
   update a fresh copy — `new Map(m).set(k, v)`, or `const n = new Map(m); n.delete(k); return n;` —

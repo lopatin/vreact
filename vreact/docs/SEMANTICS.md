@@ -119,7 +119,11 @@ Rejected: `any`, `as` casts, classes, `this` (also `this` parameters), mutation 
 objects/arrays (of Maps and Sets: see §1.2), `==` (except `== null`), `===` on objects,
 Maps and Sets (reference identity), generic types, components and arrows (generic
 top-level functions are supported, below), exceptions (`try`), `var`, `while`,
-recursion (for now), recursive types,
+recursion (for now: a function that calls itself in its body or in its `requires`, whose
+argument JS evaluates on every call — an `ensures` lambda, which JS never calls, may; a
+component that refers to itself in its body — renders itself, directly or in a JSX constant, a
+map callback, a branch or a closure — or renders a component that renders it; a `@trusted`
+component's body is not translated, so it may render itself), recursive types,
 `async`.
 
 **Generic functions.** A top-level function may have type parameters; each is a
