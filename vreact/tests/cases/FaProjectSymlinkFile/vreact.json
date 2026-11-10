@@ -1,0 +1,1 @@
+{ "exclude": ["main.tsx", "widgets/Counter.tsx", "widgets/model.ts"] }

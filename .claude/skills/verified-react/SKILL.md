@@ -40,7 +40,13 @@ missing. All the app needs from npm is that `vreact` (and `react`, `@types/react
 resolve from its folder — `npm i <tool>` or a symlinked `node_modules` both work. The app needs `"strict": true`, `"jsx": "react-jsx"` and `"lib": ["ES2023", "DOM"]` in tsconfig (no other
 `jsxImportSource`, no JSX pragmas, no `@ts-ignore`/`@ts-expect-error`/`@ts-nocheck` in verified files) and `vreact.json`
 (`{"src":"src","exclude":["main.tsx"],"proofs":"proofs","out":".vreact"}`).
-Keep `main.tsx` (createRoot) outside the verified program.
+Keep `main.tsx` (createRoot) outside the verified program. `"out"` must be a directory of its
+own (vreact replaces its `VTS/`, `Proofs/` and `.lake/`): not the app folder, `src` or `proofs`,
+nor containing one, nor inside `proofs` (inside `src` is fine: `"src": "."` with `.vreact`). Files
+named `*.test.*`/`*.spec.*` in `src` are skipped as tests (not verified; a verified file must not
+import one). No `"references"` in tsconfig.json (merge Vite's `tsconfig.app.json` into it),
+`"extends"` only to a project file named in full (`"./tsconfig.base.json"`), no symbolic links in
+`src`, no `?`, `#`, `%` or `\` in file paths, no object `"browser"` field in a package.json.
 
 Lean editors (WebStorm/IntelliJ with `lean4ij`, VS Code with the Lean 4 extension):
 `setup.sh /path/to/app` and every `vreact verify` write `lean-toolchain` (the tool's Lean
@@ -276,7 +282,7 @@ error stopped the file) — fix the first failure or the listed Lean build error
 and re-run.
 Each obligation has its own time budget; one that runs out fails with
 `(deterministic) timeout` at that obligation (help the prover, or raise
-`"heartbeats"` in vreact.json — default 1000000). After a timeout the report tries
+`"heartbeats"` in vreact.json — default 1000000, at most 1000000000, 0 for no limit). After a timeout the report tries
 each case of the goal alone (the branches of its `if`s and `switch`es, smallest first) and
 names the case that fails, with that case's goal (or the first that did not finish); the short
 report then shows only that goal. A case's name lists the branches that lead to it, outermost

@@ -30,6 +30,8 @@ export interface Config {
   root: string;
   srcDir: string;
   files: string[];
+  /** symbolic links found in the source directory (to a directory or a source file): rejected */
+  links?: string[];
   outDir: string;
   proofsDir: string;
   leanLib: string;
@@ -89,6 +91,193 @@ export interface TranslateResult {
   obligations: Obligation[];
 }
 
+/**
+ * The files of the source directory vreact verifies (when vreact.json has no "include"): `.ts` and
+ * `.tsx` files, except declaration files and tests — a name containing `.test.` or `.spec.` (and
+ * files in `node_modules` or in a directory whose name starts with `.`, or listed in "exclude").
+ */
+export function isSourceName(f: string): boolean {
+  return /\.(ts|tsx)$/.test(f) && !/\.d\.ts$/.test(f) && !TEST_NAME.test(f);
+}
+const TEST_NAME = /\.test\.|\.spec\./;
+
+/**
+ * Why a project file in the TypeScript program is not one of the verified sources, when it is
+ * in the source directory but was skipped (null otherwise).
+ */
+function skippedReason(cfg: Config, f: string): string | null {
+  const rel = path.relative(cfg.srcDir, path.resolve(f));
+  if (rel.startsWith("..") || path.isAbsolute(rel) || !/\.(ts|tsx)$/.test(f) || /\.d\.ts$/.test(f)) return null;
+  const parts = rel.split(path.sep);
+  const dir = parts.slice(0, -1).find((p) => p === "node_modules" || p.startsWith("."));
+  if (dir) return `it is in the directory ${dir}/, and vreact skips node_modules/ and directories whose names start with "." in "src"; move it`;
+  if (TEST_NAME.test(parts[parts.length - 1])) return `its name contains ".test." or ".spec.", and vreact skips such files in "src" (as tests); rename it`;
+  return `it is listed in "exclude" in vreact.json (or, with "include", not listed there)`;
+}
+
+/** The nearest tsconfig.json above the directory `dir`, as Vite looks for it (tsconfck's `find`: none in node_modules). */
+function viteTsconfig(dir: string): string | null {
+  if (/[\\/]node_modules[\\/]/.test(dir + path.sep)) return null;
+  for (let d = dir; ; d = path.dirname(d)) {
+    const f = path.join(d, "tsconfig.json");
+    try {
+      const st = fs.statSync(f);
+      if (st.isFile() || st.isFIFO()) return f;
+    } catch {
+      // none here
+    }
+    if (path.dirname(d) === d) return null;
+  }
+}
+
+/**
+ * The nearest `package.json` from the directory `dir` up to the root of the file system that has
+ * an object "browser" field; null when none has. Vite maps the imports of a module through the
+ * "browser" field of the package.json `findNearestPackageData` finds for it: the nearest one that
+ * `loadPackageData` reads without an error — it skips one that is not JSON (also one starting
+ * with a byte order mark), is `null`, or has a "sideEffects" list it cannot read, and takes the
+ * next one up. Which one that is depends on such details of Vite's version, so every package.json
+ * on the way is looked at (a superset: a byte order mark is skipped here, and one vreact cannot
+ * parse is one Vite cannot parse either).
+ */
+function browserFieldPackage(dir: string): string | null {
+  for (let d = dir; ; d = path.dirname(d)) {
+    const f = path.join(d, "package.json");
+    if (isFile(f)) {
+      let data: unknown = null;
+      try {
+        data = JSON.parse(fs.readFileSync(f, "utf8").replace(/^\uFEFF/, ""));
+      } catch {
+        data = null;
+      }
+      const browser = typeof data === "object" && data !== null ? (data as Record<string, unknown>).browser : undefined;
+      if (Object.prototype.toString.call(browser) === "[object Object]") return f;
+    }
+    if (path.dirname(d) === d) return null;
+  }
+}
+
+/**
+ * Characters of a path that the bundler does not read as part of the file name: Vite reads
+ * everything from the first `?` or `#` as a URL query or hash (also in `vite build`); its dev
+ * server serves a module at the URL of its path, which the browser and the server change — the
+ * server percent-decodes it (`limits%61.ts` is served as `limitsa.ts`), and the browser's URL
+ * parser turns `\` into `/` and drops tabs and line breaks. Null when `p` has none of them.
+ */
+function urlUnsafeChar(p: string): string | null {
+  const m = /[?#%\\\t\n\r]/.exec(p);
+  return m ? m[0] : null;
+}
+
+/** Why the character `c` (from `urlUnsafeChar`) of a path makes the bundler load another file. */
+function urlUnsafeWhy(c: string): string {
+  if (c === "?" || c === "#") return `the bundler (Vite) reads everything from the first "?" or "#" of a path as a URL query or hash, not as part of the file name`;
+  if (c === "%") return `the bundler's dev server (vite) serves a module at the URL of its path and percent-decodes the URL it is asked for ("%61" is "a"), not reading "%" as part of the file name`;
+  return `the bundler's dev server (vite) serves a module at the URL of its path, and the browser's URL parser ${c === "\\" ? "turns \"\\\" into \"/\"" : "drops tabs and line breaks"} in it`;
+}
+
+/** `c` (from `urlUnsafeChar`) as shown in a message. */
+const showChar = (c: string) => (c === "\t" ? "a tab" : c === "\n" || c === "\r" ? "a line break" : `"${c}"`);
+
+/**
+ * The bundler must load and compile the files TypeScript checked, the way VTS checked them. Vite
+ * (default configuration) gives every module the id of its real path, and from there resolves its
+ * relative imports and finds the tsconfig.json it compiles it with; it reads some characters of a
+ * path as URL syntax (`urlUnsafeChar`). So the sources must be inside the project directory,
+ * without a symbolic link on the way from it (a link's target is compiled and resolved from where
+ * it really is) and without those characters in their real path; the tsconfig.json nearest to
+ * each (looked for from its directory up to the root of the file system, as Vite does) must be
+ * the project's — none at all when the project has none, which vreact then checks with its
+ * defaults; and no package.json above it may have an object "browser" field (Vite maps the
+ * imports of the package's files through it: `browserFieldPackage`).
+ */
+function sourcePathErrors(cfg: Config): VtsError[] {
+  const errs: VtsError[] = [];
+  const at = (f: string, msg: string) => {
+    const e = new VtsError(undefined, msg);
+    e.file = f;
+    e.line = 1;
+    e.col = 1;
+    errs.push(e);
+  };
+  const root = path.resolve(cfg.root);
+  let realRoot = root;
+  try {
+    realRoot = fs.realpathSync(root);
+  } catch {
+    // (the project directory exists: loadConfig)
+  }
+  const rel = (f: string) => path.relative(root, f) || ".";
+  const linkWhy = "the bundler (Vite) loads a module from its real path, and resolves its relative imports and finds the tsconfig.json it compiles it with from there, while TypeScript reads it at the link's path (another file may run, compiled with other settings)";
+  for (const l of cfg.links ?? []) {
+    let to = "";
+    try {
+      to = fs.readlinkSync(l);
+    } catch {
+      to = "?";
+    }
+    at(l, `${rel(l)} is a symbolic link (to ${to}): symbolic links in the source directory are not supported: ${linkWhy}; replace the link by the file or directory itself`);
+  }
+  const rootCfg = path.join(realRoot, "tsconfig.json");
+  let hasRootCfg = false;
+  try {
+    const st = fs.statSync(rootCfg);
+    hasRootCfg = st.isFile() || st.isFIFO();
+  } catch {
+    hasRootCfg = false;
+  }
+  for (const f0 of cfg.files) {
+    const f = path.resolve(f0);
+    const r = rel(f);
+    if (r.startsWith("..") || path.isAbsolute(r)) {
+      at(f, `${r} is outside the project directory ${root}: the sources ("src", "include" in vreact.json) must be inside it (the bundler compiles each file with the tsconfig.json nearest to it, and VTS checks every source with the project's)`);
+      continue;
+    }
+    // (a file that does not exist is TypeScript's error)
+    if (!fs.existsSync(f)) continue;
+    let link: string | null = null;
+    for (let d = f; d !== root && path.dirname(d) !== d; d = path.dirname(d)) {
+      try {
+        if (fs.lstatSync(d).isSymbolicLink()) link = d;
+      } catch {
+        // checked by TypeScript
+      }
+    }
+    if (link) {
+      at(f, `${r}: ${rel(link)} is a symbolic link (to ${fs.readlinkSync(link)}): symbolic links on the path of a source are not supported: ${linkWhy}; replace the link by the file or directory itself`);
+      continue;
+    }
+    const real = fs.realpathSync(f);
+    const bad = urlUnsafeChar(real);
+    if (bad) {
+      at(f, `${r}: its path ${JSON.stringify(real).slice(1, -1)} contains ${showChar(bad)}, which is not supported: ${urlUnsafeWhy(bad)} (it would load another file, or none); rename the file or directory`);
+      continue;
+    }
+    // the bundler compiles a file with the settings of the tsconfig.json nearest to it (Vite's
+    // esbuild reads its jsx, jsxImportSource, verbatimModuleSyntax, …); VTS checks every source
+    // with the project's: a tsconfig.json in a source directory could make JSX another library's,
+    // or keep an import of a type
+    const nearest = viteTsconfig(path.dirname(real));
+    if (nearest !== (hasRootCfg ? rootCfg : null)) {
+      const shown = nearest === null ? "" : path.relative(realRoot, nearest);
+      if (nearest !== null && !shown.startsWith("..") && !path.isAbsolute(shown)) {
+        at(f, `${r}: ${shown} is not supported: the bundler compiles ${r} with the settings of the tsconfig.json nearest to it, but VTS checks it with ${hasRootCfg ? "the project's tsconfig.json; put the settings in the project's tsconfig.json" : "vreact's default options (the project has no tsconfig.json); put the settings in a tsconfig.json in the project directory"} and remove ${shown}`);
+      } else if (nearest !== null) {
+        at(f, `${r}: the project has no tsconfig.json, so VTS checks ${r} with vreact's default options, but the bundler compiles it with the settings of ${nearest} (the tsconfig.json nearest to it, above the project directory); add a tsconfig.json to the project directory`);
+      } else {
+        at(f, `${r}: the bundler compiles ${r} without a tsconfig.json (Vite looks for none inside node_modules), but VTS checks it with the project's tsconfig.json; move the project out of node_modules`);
+      }
+      continue;
+    }
+    const pkg = browserFieldPackage(path.dirname(real));
+    if (pkg) {
+      const shown = path.relative(realRoot, pkg);
+      at(f, `${r}: the "browser" field of ${shown.startsWith("..") || path.isAbsolute(shown) ? pkg : shown} is not supported: the bundler (Vite) maps the imports of a module (relative ones and "react") through the object "browser" field of the package.json nearest to it (to another file, or to an empty module), which TypeScript does not — and it skips a package.json it cannot load (not JSON, \`null\`, a byte order mark, an unreadable "sideEffects"), so every package.json above a source counts; remove the field (or make it a string)`);
+    }
+  }
+  return errs;
+}
+
 function loadProgram(cfg: Config): { program: ts.Program; diags: string[] } {
   const cfgPath = ts.findConfigFile(cfg.root, ts.sys.fileExists, "tsconfig.json");
   let options: ts.CompilerOptions = {
@@ -115,6 +304,20 @@ function loadProgram(cfg: Config): { program: ts.Program; diags: string[] } {
     for (const d of [...(raw.error ? [raw.error] : []), ...parsed.errors]) {
       if (d.category === ts.DiagnosticCategory.Error && d.code !== 18003 && d.code !== 5023) diags.push(ts.formatDiagnostic(d, host).trim());
     }
+    // a solution-style tsconfig (Vite's react-ts template: "files": [] and "references" to
+    // tsconfig.app.json, …): Vite compiles a file the tsconfig.json does not include with the
+    // settings of the referenced tsconfig that does (tsconfck), which VTS does not read
+    const refs = (raw.config as { references?: unknown } | undefined)?.references;
+    if (refs !== undefined && !(Array.isArray(refs) && refs.length === 0)) {
+      diags.push(`tsconfig: "references" (a solution-style tsconfig.json, as in Vite's react-ts template) is not supported: the bundler compiles a file that tsconfig.json does not include with the settings of the referenced tsconfig that does (e.g. tsconfig.app.json: its jsx, jsxImportSource, …), but VTS checks every source with tsconfig.json's; put the compiler options of the sources in tsconfig.json itself and remove "references"`);
+    }
+    let realRoot = cfg.root;
+    try {
+      realRoot = fs.realpathSync(cfg.root);
+    } catch {
+      // (the project directory exists: loadConfig)
+    }
+    diags.push(...extendsProblems(cfgPath, realRoot));
   }
   // A bundler compiles each file on its own (Vite: esbuild, file by file), not knowing what the
   // names a file imports are: `import { Item } from "./types"; export { Item };` of a type keeps the
@@ -162,6 +365,94 @@ function loadProgram(cfg: Config): { program: ts.Program; diags: string[] } {
     }
   }
   return { program, diags };
+}
+
+/**
+ * The tsconfig files the bundler reads through "extends" must be the ones TypeScript read: Vite
+ * compiles each file with the options of the tsconfig.json nearest to it merged with those it
+ * extends (its jsx, jsxImportSource, verbatimModuleSyntax, …). TypeScript resolves an "extends"
+ * path as the file itself, else with ".json" added; Vite's tsconfig loader (tsconfck) as Node's
+ * `require.resolve` from the extending file: the file itself, then with ".js", ".json" (and
+ * ".node") added, then a directory — so with a base.js next to base.json, `"extends": "./base"`
+ * is base.json to TypeScript and base.js (read as JSON) to Vite. Each "extends" path is resolved
+ * both ways, each tool from the extending file as it names it (Vite: in the project's real
+ * directory; then the file Node returns, at its real path or — with --preserve-symlinks — at the
+ * path itself), and must lead to the same file at every step. A package name, which TypeScript
+ * and Node look for in node_modules by different algorithms (conditions, a `tsconfig.json`
+ * inside the package), is rejected. Returns the problems found (TypeScript's own errors — a file
+ * not found, a cycle — are left to TypeScript).
+ */
+function extendsProblems(cfgPath: string, realRoot: string): string[] {
+  const out: string[] = [];
+  const fileId = (f: string) => {
+    try {
+      const s = fs.statSync(f);
+      return `${s.dev}:${s.ino}`;
+    } catch {
+      return null;
+    }
+  };
+  const real = (f: string) => {
+    try {
+      return fs.realpathSync(f);
+    } catch {
+      return path.resolve(f);
+    }
+  };
+  const shown = (f: string) => {
+    const r = path.relative(realRoot, real(f));
+    return r === "" || r.startsWith("..") || path.isAbsolute(r) ? f : r;
+  };
+  const walk = (tsFile: string, nodeFiles: string[], stack: string[]) => {
+    const raw = ts.readConfigFile(tsFile, ts.sys.readFile);
+    if (raw.error) return;
+    const ext = (raw.config as { extends?: unknown } | undefined)?.extends;
+    for (const e of typeof ext === "string" ? [ext] : Array.isArray(ext) ? ext : []) {
+      if (typeof e !== "string") continue;
+      const where = `tsconfig: "extends": ${JSON.stringify(e)} (in ${shown(tsFile)})`;
+      const n = e.replace(/\\/g, "/");
+      if (!(n.startsWith("/") || n.startsWith("./") || n.startsWith("../"))) {
+        out.push(`${where} is not supported: TypeScript looks for a package's tsconfig in node_modules by its own resolution, the bundler (Vite's tsconfig loader, tsconfck) by Node's require.resolve, and they can find different files; copy its compiler options into tsconfig.json, or extend a file of the project by its relative path ("./tsconfig.base.json")`);
+        continue;
+      }
+      // TypeScript (getExtendsConfigPath): the path, else the path with ".json" added
+      const p = path.resolve(path.dirname(tsFile), n);
+      const tsTarget = ts.sys.fileExists(p) || p.endsWith(".json") ? p : ts.sys.fileExists(p + ".json") ? p + ".json" : null;
+      const tsId = tsTarget && fileId(tsTarget);
+      if (!tsTarget || !tsId) continue;
+      const nodeTargets = nodeFiles.map((from) => nodeRequireFile(e, from));
+      const wrong = nodeTargets.find((t) => t === null || fileId(t) !== tsId);
+      if (wrong !== undefined) {
+        out.push(`${where} is not supported: TypeScript reads ${shown(tsTarget)}, but the bundler (Vite's tsconfig loader, tsconfck, which resolves it as Node's require.resolve does: the path, then with ".js", ".json", ".node" added, then a directory) reads ${wrong === null ? "another file" : shown(wrong)}, and compiles the sources with its options; name the file by its full name, ending in .json (with no file of that name plus ".js" next to it), and not through a symbolic link`);
+        continue;
+      }
+      const key = real(tsTarget);
+      if (stack.includes(key)) continue;
+      walk(tsTarget, [...new Set(nodeTargets.flatMap((t) => (t === null ? [] : [t, real(t)])))], [...stack, key]);
+    }
+  };
+  walk(cfgPath, [path.join(realRoot, "tsconfig.json")], [real(cfgPath)]);
+  return out;
+}
+
+/**
+ * The file Node's `createRequire(from).resolve(spec)` returns for a relative or absolute `spec`
+ * when it is a file (the path, then with ".js", then ".json" added: anything but a directory, as
+ * Node's module stat tells), before taking its real path; null otherwise — also for a path
+ * Node reads as a directory (ending in "/", "/." or "/..") or not as a path (a backslash).
+ */
+function nodeRequireFile(spec: string, from: string): string | null {
+  if (!(spec.startsWith("./") || spec.startsWith("../") || spec.startsWith("/"))) return null;
+  if (/\/(\.\.?)?$/.test(spec)) return null;
+  const p = path.resolve(path.dirname(from), spec);
+  for (const c of [p, p + ".js", p + ".json"]) {
+    try {
+      if (!fs.statSync(c).isDirectory()) return c;
+    } catch {
+      // next
+    }
+  }
+  return null;
 }
 
 /** TypeScript's strict checks besides strictNullChecks and noImplicitAny (each defaults to "strict"). */
@@ -300,8 +591,26 @@ function vtsImportProblem(spec: string, sf: ts.SourceFile, target: ts.SourceFile
   if (!/^\.\.?(\/|$)/.test(spec)) {
     return `VTS modules are imported by their path relative to the importing file ("./model", "../model.ts"): "${spec}" resolves to ${rel(target.fileName)} only through TypeScript's settings (tsconfig "paths"/"baseUrl", package "imports"), which the bundler does not share`;
   }
-  const runtime = bundlerResolve(path.dirname(sf.fileName), spec);
-  if (runtime && path.resolve(runtime) === path.resolve(target.fileName)) return null;
+  // (Vite: everything from the first ? or # is a URL query or hash — `./m?raw` is the text of
+  // ./m, `./limits#v2` is ./limits —, not part of the file name TypeScript looks for; and the
+  // dev server's URLs are percent-decoded, `\` is `/` in a URL, tabs and line breaks are dropped.
+  // TypeScript also reads `\` as `/`.)
+  const bad = urlUnsafeChar(spec);
+  if (bad) return `${showChar(bad)} in an import path is not supported: TypeScript resolves it to ${rel(target.fileName)}, but ${urlUnsafeWhy(bad)} (it may load another file, or the file's text); import the file by a path without ${bad === "?" || bad === "#" ? "them" : "it"}`;
+  // (Vite resolves from the importer's real path, and gives the module the real path of the file
+  // it finds; the sources have no symbolic link below the project directory: sourcePathErrors)
+  const real = (f: string) => {
+    try {
+      return fs.realpathSync(f);
+    } catch {
+      return path.resolve(f);
+    }
+  };
+  const realDir = real(path.dirname(sf.fileName));
+  const found = bundlerResolve(realDir, spec);
+  if (found && real(found) === real(target.fileName)) return null;
+  // (shown relative to the importing file's directory as TypeScript names it)
+  const runtime = found && path.join(path.dirname(sf.fileName), path.relative(realDir, found));
   let full = path.relative(path.dirname(sf.fileName), target.fileName).split(path.sep).join("/");
   if (!full.startsWith("../")) full = "./" + full;
   const own = /\.tsx?$/.test(spec) ? full : full.replace(/\.tsx?$/, "");
@@ -476,6 +785,9 @@ export function translate(cfg: Config): TranslateResult {
 }
 
 function translateAll(cfg: Config): TranslateResult {
+  // (where the sources are decides what the bundler loads and how it compiles them: checked first)
+  const pathErrors = sourcePathErrors(cfg);
+  if (pathErrors.length) return { ok: false, tsDiagnostics: [], errors: pathErrors, modules: [], obligations: [] };
   const { program, diags } = loadProgram(cfg);
   const res: TranslateResult = { ok: false, tsDiagnostics: diags, errors: [], modules: [], obligations: [] };
   if (diags.length) return res;
@@ -494,7 +806,10 @@ function translateAll(cfg: Config): TranslateResult {
   // on, without being checked ----
   for (const f of program.getSourceFiles()) {
     if (prog.isLibraryFile(f) || fileSet.has(path.resolve(f.fileName))) continue;
-    res.errors.push(new VtsError(f, `${path.relative(cfg.root, f.fileName)} is part of the TypeScript program (through a \`/// <reference>\`, an import or the tsconfig) but is not a VTS source: declarations outside the verified program (\`declare global\`, ambient declarations, interfaces merged with library types) could change what library code means, unchecked; remove it from the program`));
+    const skipped = skippedReason(cfg, f.fileName);
+    res.errors.push(new VtsError(f, skipped
+      ? `${path.relative(cfg.root, f.fileName)} is part of the TypeScript program (through an import or a \`/// <reference>\`) but is not one of the verified sources: ${skipped}`
+      : `${path.relative(cfg.root, f.fileName)} is part of the TypeScript program (through a \`/// <reference>\`, an import or the tsconfig) but is not a VTS source: declarations outside the verified program (\`declare global\`, ambient declarations, interfaces merged with library types) could change what library code means, unchecked; remove it from the program`));
   }
   for (const sf of sfs) {
     const rel = path.relative(cfg.root, sf.fileName);
@@ -502,14 +817,7 @@ function translateAll(cfg: Config): TranslateResult {
       res.errors.push(new VtsError(sf, `${rel} is not a module (it has no import or export): TypeScript makes the declarations of such a file global, and merges its interfaces with the libraries' (\`interface Math { … }\`); add an import or an export`));
     }
     res.errors.push(...commentDirectiveErrors(sf, rel));
-    // the bundler compiles a file with the settings of the tsconfig.json nearest to it (Vite's
-    // esbuild reads its jsx, jsxImportSource, verbatimModuleSyntax, …); VTS checks every source
-    // with the project's: a tsconfig.json in a source directory could make JSX another library's,
-    // or keep an import of a type
-    const nearest = ts.findConfigFile(path.dirname(sf.fileName), ts.sys.fileExists, "tsconfig.json");
-    if (nearest && path.dirname(path.resolve(nearest)) !== path.resolve(cfg.root) && !path.relative(cfg.root, nearest).startsWith("..")) {
-      res.errors.push(new VtsError(sf, `${rel}: ${path.relative(cfg.root, nearest)} is not supported: the bundler compiles ${rel} with the settings of the tsconfig.json nearest to it, but VTS checks it with the project's tsconfig.json; put the settings in the project's tsconfig.json and remove ${path.relative(cfg.root, nearest)}`));
-    }
+    // (the tsconfig.json the bundler compiles each source with: sourcePathErrors)
 
     // (`/// <reference path>` to anything but a VTS source is rejected above; `lib` and `types`
     // references add TypeScript's and installed libraries)
@@ -913,7 +1221,19 @@ function translateAll(cfg: Config): TranslateResult {
     paths.set(f.rel.toLowerCase(), f.rel);
   }
   if (res.errors.length) return res;
-  // write, removing stale generated files
+  // write, removing stale generated files — only generated ones: "out" is a directory of its own
+  // (loadConfig), and what is removed holds nothing but Lean files (never a user's file, whatever
+  // "out" is)
+  for (const d of ["VTS", "Proofs"]) {
+    const foreign = notGenerated(path.join(cfg.outDir, d));
+    if (foreign) {
+      const shown = (f: string) => path.relative(cfg.root, f) || ".";
+      const e = new VtsError(undefined, `${shown(foreign)} is not a file vreact generated: vreact replaces ${shown(path.join(cfg.outDir, d))}${path.sep} with the generated Lean project, and removes nothing but generated files (Lean files); set "out" in vreact.json to a directory of its own (such as ".vreact"), or move the file`);
+      e.file = foreign;
+      res.errors.push(e);
+    }
+  }
+  if (res.errors.length) return res;
   fs.rmSync(path.join(cfg.outDir, "VTS"), { recursive: true, force: true });
   fs.rmSync(path.join(cfg.outDir, "Proofs"), { recursive: true, force: true });
   for (const f of leanFiles) {
@@ -928,6 +1248,30 @@ function translateAll(cfg: Config): TranslateResult {
   if (fs.existsSync(manifest) && !manifestMatches(manifest, { VReact: cfg.leanLib })) fs.rmSync(manifest, { force: true });
   res.ok = true;
   return res;
+}
+
+/**
+ * A file or link under `dir` (a directory of generated Lean files: `<out>/VTS`, `<out>/Proofs`)
+ * that vreact did not write — anything but directories, `.lean` files and macOS's `.DS_Store` —,
+ * or `dir` itself when it is not a directory; null when there is none.
+ */
+function notGenerated(dir: string): string | null {
+  let st: fs.Stats;
+  try {
+    st = fs.lstatSync(dir);
+  } catch {
+    return null;
+  }
+  if (!st.isDirectory()) return dir;
+  for (const f of fs.readdirSync(dir)) {
+    const p = path.join(dir, f);
+    const s = fs.lstatSync(p);
+    if (s.isDirectory()) {
+      const inner = notGenerated(p);
+      if (inner) return inner;
+    } else if (!(s.isFile() && (f.endsWith(".lean") || f === ".DS_Store"))) return p;
+  }
+  return null;
 }
 
 /**
@@ -1072,9 +1416,11 @@ function withBudget(text: string, perOb = OB_HEARTBEATS): string {
     const body = lines.slice(d.start - 1, d.end).join("\n");
     most = Math.max(most, (body.match(/\/-⟦ob\d+⟧-\//g) ?? []).length);
   }
-  // 0 = no limit (for obligations, hence also for their declarations)
-  const outer = perOb === 0 ? 0 : DECL_HEARTBEATS + 2 * perOb * most;
-  return text.replace(BUDGET_SLOT, `set_option maxHeartbeats ${outer}\nset_option vreact.heartbeats ${perOb}`);
+  // 0 = no limit (for obligations, hence also for their declarations); as decimal numerals (a
+  // BigInt: a large Number would be written in exponent notation, which Lean does not parse)
+  const n = BigInt(perOb);
+  const outer = n === 0n ? 0n : BigInt(DECL_HEARTBEATS) + 2n * n * BigInt(most);
+  return text.replace(BUDGET_SLOT, `set_option maxHeartbeats ${outer}\nset_option vreact.heartbeats ${n}`);
 }
 
 function header(imports: string[]): string {
