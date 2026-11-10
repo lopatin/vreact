@@ -119,7 +119,13 @@ export type Binding =
   | { k: "val"; code: string; type: VType; ts?: ts.Type }
   | { k: "setter"; sv: StateVar }
   | { k: "dispatch"; sv: StateVar }
-  | { k: "closure"; fn: ts.ArrowFunction | ts.FunctionExpression; env: Env }
+  /**
+   * a local function, translated where it is called or attached as a handler, in `env` (that of
+   * its creation) extended with the locals declared after it that are initialised there
+   * (`closureEnv`); `memo`: a `useCallback` function, which React may keep from an earlier
+   * render, so it sees only `env`
+   */
+  | { k: "closure"; fn: ts.ArrowFunction | ts.FunctionExpression; env: Env; memo?: boolean }
   | { k: "callback"; cb: CallbackInfo }
   | { k: "props" }
   /**
@@ -180,6 +186,13 @@ export interface Env {
    * needs one of them makes the translator split that arm per variant (see narrowBranch).
    */
   remaining?: Map<string, string[]>;
+  /**
+   * What a restricted environment gives access to (a contract, an initial value), for the
+   * message when code refers to a local that is not in it.
+   */
+  limits?: string;
+  /** Locals in scope in JS that the translation cannot bind here, with the reason (a timer callback's view of its effect body). */
+  unavailable?: Map<ts.Symbol, string>;
 }
 
 /** The module of the contract functions and `int`. */

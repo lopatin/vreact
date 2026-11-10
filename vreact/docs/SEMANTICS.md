@@ -493,7 +493,20 @@ Every expression maps to a Lean term whose value is the JavaScript value.
   created (a later assignment, or one in an enclosing loop), and no function —
   including immediately-run array callbacks — may assign a `let` declared
   outside it. Array-method callbacks, spec predicates and the `useMemo` factory
-  run in place and read the current values.
+  run in place and read the current values. A local arrow function (a helper or
+  handler, not `useCallback`) is translated where it is called or attached as a
+  handler, in the environment of its creation extended with the `const`s and
+  `let`s declared after it that are initialised at that point: JS reads them when
+  the function runs, which is then or later (a handler runs after the render),
+  and each has a single value from its initialisation on (a `let` declared after
+  a function that reads it cannot be assigned at all, by the first check);
+  variables are identified by their TypeScript symbols, so a name resolves as in
+  JS. A use before the declaration (a call in the render, a JSX const) is rejected
+  (the call would read it in its temporal dead zone). A `useEffect`, `useCallback`
+  or `useMemo` function that reads a local declared after the hook call is
+  rejected: its dependency array cannot list it (temporal dead zone), so React
+  could keep the function of an earlier render (the `useMemo` factory runs at the
+  call: a ReferenceError).
 * A DOM handler's event parameter is `DomEvent` (`e.target.value`,
   `e.currentTarget.value`, `e.target.checked`, `e.key`: arbitrary values, fixed for
   the run of the handler). This describes JS only while the handler's own
@@ -724,6 +737,13 @@ compose two parent outcomes that were only checked separately). Several
 ### 2.5 Lifecycle obligations
 
 * `init_inv` — mounting (`useState(init)`, `useReducer(r, init)`) establishes the invariant.
+  An initial value may read the props, the state declared before it and top-level
+  declarations. React evaluates `useState(x)` in every render but uses `x` only at
+  mount, when every earlier state value is its own initial value: so `init` binds
+  an earlier state value to its initial value. A non-lazy initial value that reads
+  earlier state is also translated in the render, against that render's state (its
+  value unused, its obligations checked): JS evaluates it there too (`useState(10 %
+  a)` after `a` became 0). A lazy `useState(() => …)` runs at mount only.
 * `stable` — when the parent re-renders with new props, React keeps the state:
   `inv props s → pre props' → inv props' s`. An invariant like
   `count <= props.max` is rejected (`PropsStability.tsx`): the parent may lower `max`.
@@ -770,7 +790,15 @@ Running a robust effect any number of times (StrictMode) is safe.
 
 A timer is registered only by a statement at the top level of the effect body
 (`setTimeout(…)` / `const id = setInterval(…)`, with at most a delay argument,
-which is evaluated — checked — at that statement). Its callback is checked under the
+which is evaluated — checked — at that statement). Its callback is translated in
+the environment of the effect body at the registration: each top-level `const`
+declared before it is translated again inside the task, as the effect body
+translates it — JS evaluated it once, before the registration, from the snapshot
+and the effect's earlier consts, and it keeps that value. Not bound there, and
+rejected if the callback reads them: the body's `let`s, a local Map or Set the body
+mutates (re-translating its declaration would give its value before the
+mutations), and a `const` whose value has obligations of its own (they are checked
+in the effect body, not repeated). The callback is checked under the
 path condition of that registration. That condition is made of the top-level
 early returns `if (c) return;` (no `else`) and the `assert(c)` / `assume(c)`
 statements before it. The callback captures the same snapshot as the effect: an
@@ -781,15 +809,19 @@ skip` for an assert or assume. The `skip` branch stands for a timer the program
 never registers, and it does nothing. A condition about the snapshot says nothing
 about the state the timer fires against, so `setLeft(l => l - 1)` still needs its
 own guard (`CxTimerGuardFail.tsx`). A condition is used only if it translates in
-the component's scope without obligations of its own: one that reads a const
-local to the effect body is left out, which only weakens the facts.
+that environment without obligations of its own (it may read the consts bound
+there); others are left out, which only weakens the facts.
 (`CxTimerGuard.tsx`: the guarded countdown
 `if (left <= 0) return; setTimeout(() => setLeft(left - 1), …)`.)
 
 Hooks (`useState`, `useReducer`, `useEffect`, `useMemo`, `useCallback`) are
 matched by React by call order, so they must be top-level statements of the
 component, before any statement that may return (an `if`, a `switch`, …); a hook
-in a branch, loop, handler or closure is rejected.
+in a branch, loop, handler or closure is rejected. Parentheses around a hook call
+(`(useEffect(…))`, `const [n, setN] = (useState(0))`) do not change it. The other
+React hooks (`useLayoutEffect`, whose updates are synchronous during the commit,
+`useRef`, `useContext`, …) are not modelled and are rejected, as is a hook other
+than `useEffect` called as a statement with its value unused.
 
 ---
 
