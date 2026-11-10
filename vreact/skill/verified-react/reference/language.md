@@ -375,7 +375,10 @@ only the action (React may apply a queued action to any state): it becomes a
 guards are in scope as JS evaluates them: the right side of `&&` / `||`, the
 branches of `?:`, the consequent of `implies(a, b)`, and quantifier bodies
 (`forall(0, xs.length, (i) => xs[i] >= 0)`, `xs.every((r) => r[0] > 0)`) may index
-under their guard.
+under their guard. Only `xs.every`/`xs.some` with `(x) => condition` (an expression
+body) is such a quantifier; another callback (`(x) => { …; return c; }`,
+`function (x) { … }`) is read as code, as in a handler (where `implies(a, b)`
+evaluates both arguments).
 
 Constants: small ones are unfolded wherever used. For large data use
 

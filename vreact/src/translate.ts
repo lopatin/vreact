@@ -3496,30 +3496,36 @@ export function prop(e0: ts.Expression, env: Env): string {
       }
     }
     if (ts.isPropertyAccessExpression(e.expression) && ["every", "some", "includes"].includes(e.expression.name.text)) {
-      const xs = expr(e.expression.expression, env);
-      if (xs.type.k === "arr") {
-        const mname = e.expression.name.text;
-        if (mname === "includes") {
-          arity(e, "includes", 1, 1, "a fromIndex is not supported: write xs.slice(k).includes(v)");
-          if (nullishSearch(e, e.expression.expression, xs.type.elem, args[0], "includes", env)) return `(none ∈ ${paren(xs.code)})`;
-          checkPrimitiveElems(e, e.expression.expression, xs.type.elem, "includes", env);
-          return `(${expr(args[0], env, xs.type.elem).code} ∈ ${paren(xs.code)})`;
+      const mname = e.expression.name.text;
+      // `xs.every((x) => condition)` (one argument: an arrow with one parameter and an expression
+      // body) is a quantifier read as a contract, its body under the membership.  Any other
+      // callback — a block body `(x) => { …; return c; }`, a `function (x) { … }`, no parameter,
+      // an index parameter, a thisArg — is left to the code reading below (as in a handler: the
+      // calls JS makes on the elements; `implies` in it evaluates both arguments), which also
+      // rejects what it does not model; the receiver is not translated here first (its
+      // obligations would be registered twice)
+      const fn = args.length === 1 ? stripParens(args[0]) : undefined;
+      const quantifier = !!fn && ts.isArrowFunction(fn) && fn.parameters.length === 1 && !ts.isBlock(fn.body);
+      if (mname === "includes" || quantifier) {
+        const xs = expr(e.expression.expression, env);
+        if (xs.type.k === "arr") {
+          if (mname === "includes") {
+            arity(e, "includes", 1, 1, "a fromIndex is not supported: write xs.slice(k).includes(v)");
+            if (nullishSearch(e, e.expression.expression, xs.type.elem, args[0], "includes", env)) return `(none ∈ ${paren(xs.code)})`;
+            checkPrimitiveElems(e, e.expression.expression, xs.type.elem, "includes", env);
+            return `(${expr(args[0], env, xs.type.elem).code} ∈ ${paren(xs.code)})`;
+          }
+          const f = fn as ts.ArrowFunction;
+          const r = bindParam(f.parameters[0].name, xs.type.elem, env, elemTsType(e.expression.expression, env) ?? undefined);
+          const before = env.m.obCount();
+          const body = prop(f.body as ts.Expression, r.env);
+          const x = r.binder;
+          if (env.m.obCount() === before) return mname === "every" ? `(∀ ${x} ∈ ${paren(xs.code)}, ${body})` : `(∃ ${x} ∈ ${paren(xs.code)}, ${body})`;
+          const hm = env.m.fresh("hmem");
+          return mname === "every"
+            ? `(∀ ${x}, ∀ (${hm} : ${x} ∈ ${paren(xs.code)}), ${body})`
+            : `(∃ ${x}, ∃ (${hm} : ${x} ∈ ${paren(xs.code)}), ${body})`;
         }
-        arity(e, mname, 1, 1, "a thisArg argument is not supported");
-        const fn = args[0];
-        noIndexParam(mname, fn);
-        if (!fn || !(ts.isArrowFunction(fn) || ts.isFunctionExpression(fn)) || fn.parameters.length !== 1 || ts.isBlock(fn.body)) {
-          fail(e, `${mname}((x) => condition) with an expression body`);
-        }
-        const r = bindParam(fn.parameters[0].name, xs.type.elem, env, elemTsType(e.expression.expression, env) ?? undefined);
-        const before = env.m.obCount();
-        const body = prop(fn.body as ts.Expression, r.env);
-        const x = r.binder;
-        if (env.m.obCount() === before) return mname === "every" ? `(∀ ${x} ∈ ${paren(xs.code)}, ${body})` : `(∃ ${x} ∈ ${paren(xs.code)}, ${body})`;
-        const hm = env.m.fresh("hmem");
-        return mname === "every"
-          ? `(∀ ${x}, ∀ (${hm} : ${x} ∈ ${paren(xs.code)}), ${body})`
-          : `(∃ ${x}, ∃ (${hm} : ${x} ∈ ${paren(xs.code)}), ${body})`;
       }
     }
   }

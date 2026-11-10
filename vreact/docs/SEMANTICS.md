@@ -555,7 +555,9 @@ proof obligations, plain `a ∧ b` otherwise), `a || b` as `a ∨ ∃ (h : ¬a),
 `∀ (h : a), b`, `forall(lo, hi, i => p)` as `∀ i, ∀ (h₁ : lo ≤ i), ∀ (h₂ : i < hi), p`
 and `xs.every(x => p)` as `∀ x, ∀ (h : x ∈ xs), p`, so an index obligation in `b`,
 `p`, … sees its guard. (In code, `implies` is a function call: both arguments are
-evaluated.) The body of a `callbackRequires` lambda, which JS never calls, is such a
+evaluated. Likewise an `every`/`some` callback other than `x => p`, such as a block
+body `x => { …; return p; }` or a `function (x) { … }`, is read as code: the calls JS
+makes on the elements.) The body of a `callbackRequires` lambda, which JS never calls, is such a
 contract too (a block body `{ …; return c; }` is read as code, its obligations
 holding for every argument). Several `requires` (or `invariant`) statements are one condition
 `c₁ && c₂ && …`: a later one may rely on the earlier ones as guards.
