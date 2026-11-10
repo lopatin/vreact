@@ -125,6 +125,8 @@ inherited member, not `undefined`. Such names are fine for required fields.
 * Arithmetic `+ - *` on `int` (also where `int | null` is expected: computed at
   `int`, then wrapped); `/` produces `number`; use `idiv(a, b)` or
   `Math.floor(a / b)` for integer division (obligation: `b !== 0`); `%` (obligation).
+  An `int` with a `number` (`i < xs.length / 2`, `i * 0.5`, either order) is widened
+  to a `number`, as in JS.
   Unary `+` only on numbers (`+s` on a string is rejected: ToNumber is not modelled).
 * `a / b` (a `number`) has the obligation that the divisor is not zero, unless it is
   a nonzero literal (`x / 2`, `x / -0.5`, or a `const` initialised with one): VTS
@@ -163,13 +165,22 @@ inherited member, not `undefined`. Such names are fine for required fields.
   compound assignments other than `+=`/`-=` are rejected.
 * Widening as in TypeScript: an `int[]` where `(int | null)[]` is expected
   (elementwise, also in a spread), an enum member where a `string` is expected
-  (`return k;`, `k === s`). The same inline object type or string-literal union
+  (`return k;`, `k === s`). A conditional or an array literal without an expected
+  type covers all its branches or elements: `c ? i : 0.5` and `[i, 2.5]` are numbers,
+  `c ? color : "other"` and `[color, "other"]` strings (`c ? color : "red"` stays a
+  `Color`); the others take the first one's type when it covers them (`c ? xs : []`).
+  An unannotated top-level `const` takes a numeric, string or boolean literal, typed
+  by its value (`const N = 3` is an `int`, `-2.5` and `1e400` (Infinity) are numbers);
+  annotate any other initialiser. The same inline object type or string-literal union
   in one module is one type (e.g. `hole<{ readonly v: int }>()` returned from a
   function declared to return `{ readonly v: int }`).
 * `&& || ! ?: ?? ?.` (also `a ?? b ?? 0`) and template literals. `?.` skips the whole rest
   of the chain, as in JS: `x?.tags.length ?? 0`, `m.get(k)?.has(id) ?? false`,
   `grid.get(r)?.get(c) ?? 0`, `xs?.[0]` (optional calls `f?.()` are rejected).
 * `xs[i]` (obligation: `0 <= i < xs.length`), `t[0]` on tuples, `x!` (obligation).
+  `xs.with(i, v)`: obligation `0 <= i < xs.length`; a negative index counts from the end
+  when written `-k` (`xs.with(-1, v)` writes the last element; obligation `0 < k <=
+  xs.length`), any other index must be non-negative (VTS's restriction).
 * Arrays: `length map filter some every find findIndex includes indexOf slice
   concat join reduce(f, init) toSorted(cmp) toReversed with at flatMap`, spread.
   Lambdas inline: `xs.filter((x) => x.id !== id)` (they may ignore parameters:
@@ -747,4 +758,4 @@ or a label (use `htmlFor`).
 | `vreact synth` on a function whose contract's Lean statement mentions a function that still has a hole (called in the contract, or in the body or `requires` of a function it calls; not in a `@trusted` body or a callee's `ensures`) | not searched ("the contract depends on unfinished function f"): fill or write `f` first |
 | `vreact synth` on a `/** @trusted */` function or a component | refused (Lean checks nothing in a trusted body): remove `@trusted` / move the expression into a model function |
 | a reducer over a discriminated union calling `@opaque` model functions | supported (contracts are instantiated inside the `switch` arms) |
-| invariants about sums (`reduce`) under filter/map | provable, but needs a Lean lemma in `proofs/` (automation handles append, filter, map, `slice`, `toSorted`, `toReversed`, `with` (also swaps `xs.with(i, xs[j]).with(j, xs[i])`), `indexOf`/`findIndex` ranges, `range`, membership, `distinct`, concatenation of string literals, and counts `xs.filter(p).length` under append, delete-by-id, map-updates and mark-all) |
+| invariants about sums (`reduce`) under filter/map | provable, but needs a Lean lemma in `proofs/` (automation handles append, filter, map, `slice`, `toSorted`, `toReversed`, `with` (also swaps `xs.with(i, xs[j]).with(j, xs[i])`), `indexOf`/`findIndex` ranges, `range`, membership, `distinct`, concatenation of string literals, closed facts about literals, decided by evaluation (`String(1 + 2) === "3"`, `" x ".trim() === "x"`, `[1, 2, 3].at(-1) === 3`, also once a test fixes a variable: ``n === 2 ? `n=${n + 1}` : …``), and counts `xs.filter(p).length` under append, delete-by-id, map-updates and mark-all) |

@@ -21,7 +21,7 @@ import { Program, ModCtx, SPEC_MODULE, moduleFile, isErasedType, type Obligation
 import { T, type VType, typeOfNode, typeOfDecl, emitTypeDecl, leanType, nonValuePart, checkValueType, registerTypeParams, showType } from "./types.ts";
 import { VtsError, fail, leanIdent, leanField, leanStr, paren, capitalize, nodeText, exprText, clashesWithLean } from "./util.ts";
 import { LEAN_TYPE_AUX, LEAN_ROOT_NAMES } from "./leanNames.ts";
-import { expr, prop, propAll, valueBlock, specFn, symbolOf, bindParam, typeOf, checkParamAnnotation, checkNotThisParam } from "./translate.ts";
+import { expr, prop, propAll, valueBlock, specFn, symbolOf, bindParam, typeOf, checkParamAnnotation, checkNotThisParam, numericLiteralType } from "./translate.ts";
 import { translateComponent, compSignature, baseEnv } from "./component.ts";
 import { leanDecls, checkProofFiles } from "./lean.ts";
 import { manifestMatches } from "./ide.ts";
@@ -1129,8 +1129,10 @@ function collect(st: ts.Statement, m: ModCtx, ns: string, res: TranslateResult) 
       if (t) checkValueType(d.type!, t, prog.reg, `constant ${d.name.text}`);
       if (!t) {
         const init = d.initializer;
-        if (ts.isNumericLiteral(init)) t = /[.eE]/.test(init.text) ? T.num : T.int;
-        else if (ts.isPrefixUnaryExpression(init) && ts.isNumericLiteral(init.operand)) t = T.int;
+        // (a numeric literal by its value: `2.5`, `-2.5` and `1e400`, which TypeScript reads as
+        // Infinity, are numbers)
+        if (ts.isNumericLiteral(init)) t = numericLiteralType(init.text);
+        else if (ts.isPrefixUnaryExpression(init) && (init.operator === ts.SyntaxKind.MinusToken || init.operator === ts.SyntaxKind.PlusToken) && ts.isNumericLiteral(init.operand)) t = numericLiteralType(init.operand.text);
         else if (ts.isStringLiteralLike(init)) t = T.str;
         else if (init.kind === ts.SyntaxKind.TrueKeyword || init.kind === ts.SyntaxKind.FalseKeyword) t = T.bool;
         else fail(d, "annotate the type of this constant");

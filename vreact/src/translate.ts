@@ -11,7 +11,7 @@
  * duplicate the continuation; `for…of` loops become folds.
  */
 import ts from "typescript";
-import { T, type VType, type TypeEnv, type Field, type Param, sameType, showType, leanType, sharedFields, type Variant, typeOfNode, kindsOfType, nullShape, checkValueType, propertyNameText, propertyName, isEqType, mentionsTVar, substType, type TField, type NamedType, collectionKind, collectionTypeArgs, isLibSymbol, mapType, setType, nonValuePart } from "./types.ts";
+import { T, type VType, type TypeEnv, type Field, type Param, type TParam, sameType, showType, leanType, sharedFields, type Variant, typeOfNode, kindsOfType, nullShape, checkValueType, propertyNameText, propertyName, isEqType, mentionsTVar, substType, type TField, type NamedType, collectionKind, collectionTypeArgs, isLibSymbol, mapType, setType, nonValuePart } from "./types.ts";
 import { type Env, type Val, ModCtx, type Binding, type StateVar, type CompCtx, type HandlerAcc, type FnInfo, type CompInfo, type Global, type Narrowed, type DomSite, bind, extend, freshLocal, refSymbol } from "./ctx.ts";
 import { VtsError, fail, leanField, leanAccessor, leanIdent, leanStr, jsStr, leanInt, paren, nodeText, argText, exprText, capitalize, relLoc, decodeJsxEntities } from "./util.ts";
 
@@ -543,6 +543,90 @@ function hasNullLeaf(e: ts.Expression, env: Env): boolean {
   e = stripParens(e);
   if (isNullLit(e, env)) return true;
   return ts.isConditionalExpression(e) && (hasNullLeaf(e.whenTrue, env) || hasNullLeaf(e.whenFalse, env));
+}
+
+/**
+ * The type of a conditional `c ? a : b` that has no expected type, when its branches' own types
+ * (each typed in its narrowed environment, nothing emitted) widen to a type wider than the first
+ * branch's: an int and a number give a number (`c ? i : 0.5`), an enum member and a string a
+ * string (`c ? color : name`, `c ? color : "zzz"`), elementwise for arrays and options.
+ * undefined otherwise: the second branch is then read at the first one's type, as before
+ * (`c ? xs : []`, `c ? color : "red"`).  See `widerJoin`.
+ */
+function conditionalJoin(c: ts.ConditionalExpression, env: Env): VType | undefined {
+  const dry = { ...env, m: dryCtx(env.m) };
+  const own: VType[] = [];
+  const ctx: ts.Expression[] = [];
+  // (`first`: the type of the branch translated first, which the others were read at: the
+  // second one for a negated test, `u.kind !== "a" ? … : …`)
+  let first: VType | undefined;
+  let seenFirst = false;
+  let ok = true;
+  const visit = (x: ts.Expression, e1: Env): string => {
+    let t: VType | undefined;
+    try {
+      t = expr(x, e1).type;
+    } catch (err) {
+      if (!(err instanceof VtsError)) throw err;
+    }
+    if (!seenFirst) {
+      seenFirst = true;
+      first = t;
+    }
+    if (needsContext(x, e1)) ctx.push(x);
+    else if (t) own.push(t);
+    else ok = false;
+    return "_";
+  };
+  try {
+    branch(c.condition, dry, (e1) => visit(c.whenTrue, e1), (e2) => visit(c.whenFalse, e2));
+  } catch (err) {
+    if (!(err instanceof VtsError)) throw err;
+    return undefined;
+  }
+  return ok ? widerJoin(first, own, ctx, env) : undefined;
+}
+
+/**
+ * The type that the values of several expressions (a conditional's branches, an array literal's
+ * elements) all widen to, TypeScript's union of their types, when it is wider than `first`, the
+ * type of the first expression on its own (by which they were typed before), or when that has
+ * none (`[[], [1]]`): the join (`joinTypes`) of the types of the expressions in `own`, where a
+ * string literal in `ctx` (expressions typed by their context: literals, `null`, `[]`) that is not
+ * a member of an enum join makes it a string.  An int is widened to a number with `Num.ofInt`,
+ * an enum member to its string: the same JS values.
+ */
+function widerJoin(first: VType | undefined, own: VType[], ctx: ts.Expression[], env: Env): VType | undefined {
+  let j: VType | null = own[0] ?? null;
+  for (const t of own.slice(1)) j = j && joinTypes(j, t);
+  if (!j) return undefined;
+  const en = j.k === "enum" ? j : j.k === "opt" && j.elem.k === "enum" ? j.elem : null;
+  if (en) {
+    const lits = env.m.reg.enumLits(en);
+    if (ctx.some((x) => strLitLeaves(x).some((l) => !lits.includes(l)))) j = j.k === "opt" ? T.opt(T.str) : T.str;
+  }
+  const to = j;
+  if (!own.every((t) => widensTo(t, to))) return undefined;
+  if (!first) return j;
+  return !sameType(first, j) && widensTo(first, j) ? j : undefined;
+}
+
+/** Whether `widen` turns a value of type `t` into one of type `j` (the same JS value). */
+function widensTo(t: VType, j: VType): boolean {
+  if (sameType(t, j)) return true;
+  if (j.k === "num") return t.k === "int";
+  if (j.k === "str") return t.k === "enum";
+  if (j.k === "opt" && t.k !== "opt") return widensTo(t, j.elem);
+  if (j.k === "arr" && t.k === "arr") return widensTo(t.elem, j.elem);
+  return false;
+}
+
+/** The string literals among the leaves of an expression (through parentheses and conditionals). */
+function strLitLeaves(e: ts.Expression): string[] {
+  e = stripParens(e);
+  if (ts.isStringLiteralLike(e)) return [e.text];
+  if (ts.isConditionalExpression(e)) return [...strLitLeaves(e.whenTrue), ...strLitLeaves(e.whenFalse)];
+  return [];
 }
 
 /** The type of some non-null leaf of a conditional (typed in its narrowed environment, nothing emitted). */
@@ -1088,7 +1172,7 @@ function expr0(e: ts.Expression, env: Env, expected?: VType): Val {
       // (TypeScript normalises a literal beyond the doubles, `1e400`, to "Infinity": that number
       // is what JS reads it as, the Lean literal 1e400 stands for it)
       if (!Number.isFinite(Number(text))) return { code: "(1e400 : VReact.JS.Num)", type: T.num };
-      if (expected?.k === "num" || /[.eE]/.test(text)) {
+      if (expected?.k === "num" || numericLiteralType(text).k === "num") {
         // an integer literal as a number is `Num.ofInt n`, the form of an int used as a number
         // (`x === 0` with `x : number` and a divisor's `x !== 0` obligation are then one term)
         if (/^\d+$/.test(text)) return { code: `(VReact.JS.Num.ofInt ${leanInt(BigInt(text))})`, type: T.num };
@@ -1135,6 +1219,9 @@ function expr0(e: ts.Expression, env: Env, expected?: VType): Val {
         const ot = nonNullLeafType(c, env);
         if (ot) ty = ot.k === "opt" ? ot : T.opt(ot);
       }
+      // `c ? i : 0.5` (an int and a number): both branches at the type that covers both, as
+      // TypeScript's type of the conditional does, not the second at the first one's type
+      if (!ty) ty = conditionalJoin(c, env);
       const code = branch(c.condition, env, (e1) => {
         const v = expr(c.whenTrue, e1, ty);
         ty = ty ?? v.type;
@@ -1151,7 +1238,7 @@ function expr0(e: ts.Expression, env: Env, expected?: VType): Val {
       const parts: string[] = [];
       if (te.head.text) parts.push(jsStr(te.head.text));
       for (const span of te.templateSpans) {
-        parts.push(toStr(expr(span.expression, env), span.expression));
+        parts.push(toStr(expr(span.expression, env), span.expression, env));
         if (span.literal.text) parts.push(jsStr(span.literal.text));
       }
       return { code: parts.length ? `(${parts.join(" ++ ")})` : jsStr(""), type: T.str };
@@ -1184,6 +1271,15 @@ function expr0(e: ts.Expression, env: Env, expected?: VType): Val {
     default:
       fail(e, `expression not supported in VTS: ${nodeText(e)}`);
   }
+}
+
+/**
+ * The type a numeric literal has of its own, from its value (TypeScript's text of it, normalised:
+ * `2.0` is "2", `1e3` "1000", `1e21` "1e+21", `1e400` "Infinity"): an integer is an int, any other
+ * value (`2.5`, `1e+21`, Infinity) a number.
+ */
+export function numericLiteralType(text: string): VType {
+  return /^\d+$/.test(text) ? T.int : T.num;
 }
 
 /**
@@ -1267,8 +1363,8 @@ function narrowAdvice(x: ts.Expression | undefined, env: Env): string {
     : `use ?. (${what}?.… ?? default), or name it and narrow: const v = ${what}; if (v ${test}) …`;
 }
 
-/** Conversion to string (template literals, JSX text, string concatenation). */
-export function toStr(v: Val, node: ts.Node): string {
+/** Conversion to string (template literals, JSX text, string concatenation, `String(x)`) of the value `v` of `node`. */
+export function toStr(v: Val, node: ts.Expression, env: Env): string {
   switch (v.type.k) {
     case "str":
       return paren(v.code);
@@ -1280,7 +1376,9 @@ export function toStr(v: Val, node: ts.Node): string {
     case "tvar":
       fail(node, abstractMsg(v.type, "converting to a string"));
     default:
-      fail(node, `cannot convert ${showType(v.type)} to a string`);
+      // (an optional type shown with the nullish value TypeScript gives it: `m.get(k)` is
+      // `int | undefined`)
+      fail(node, `cannot convert ${showWithKinds(v.type, tsTypeOf(node, env), env)} to a string`);
   }
 }
 
@@ -1565,6 +1663,18 @@ function numericExpected(expected?: VType): VType | undefined {
 }
 
 /**
+ * The expected type of the right operand of an ordering comparison or of `+ - *` from the type
+ * `lt` of the left operand (where the context expects no numeric type of the result): a number
+ * left operand reads an integer literal on the right as a number (`x < 1`: `Num.ofInt 1`), while
+ * an int one gives the right operand no expected type: JS widens the int where the other operand
+ * is a number (`i < xs.length / 2`, `i * 0.5`, `i - y`), and so does the operator (`Num.ofInt i`),
+ * where an expected int would reject the number.
+ */
+function rightOperandExpected(lt: VType): VType | undefined {
+  return lt.k === "int" ? undefined : lt;
+}
+
+/**
  * The expected type `t` for an operand of an arithmetic operator, unless TypeScript types the
  * operand with a type parameter (`x + 1` on `x : T extends int`): then the operand keeps its own
  * type, and the operator rejects it (its values are abstract) instead of a type mismatch.
@@ -1693,7 +1803,7 @@ function binary(b: ts.BinaryExpression, env: Env, expected?: VType): Val {
   };
   if (cmp[op]) {
     let l = expr(b.left, env);
-    let r = expr(b.right, env, l.type);
+    let r = expr(b.right, env, rightOperandExpected(l.type));
     if (l.type.k === "int" && r.type.k === "num") l = coerce(l, T.num, b, env);
     if (l.type.k === "tvar") fail(b, abstractMsg(l.type, "an ordering comparison (<, <=, >, >=) on"));
     if (!isNumeric(l.type) && l.type.k !== "str") fail(b, "ordering comparison on non-numbers");
@@ -1717,18 +1827,20 @@ function binary(b: ts.BinaryExpression, env: Env, expected?: VType): Val {
     if (isStringTyped(b.left, env) || isStringTyped(b.right, env)) {
       const l = expr(b.left, env);
       const r = expr(b.right, env);
-      return { code: `(${concatPart(l, b.left, b)} ++ ${concatPart(r, b.right, b)})`, type: T.str };
+      return { code: `(${concatPart(l, b.left, b, env)} ++ ${concatPart(r, b.right, b, env)})`, type: T.str };
     }
-    const l = expr(b.left, env, operandExpected(b.left, env, numericExpected(expected)));
-    const r = expr(b.right, env, operandExpected(b.right, env, isNumeric(l.type) ? l.type : undefined));
+    const ne = numericExpected(expected);
+    const l = expr(b.left, env, operandExpected(b.left, env, ne));
+    const r = expr(b.right, env, operandExpected(b.right, env, !isNumeric(l.type) ? undefined : ne ? l.type : rightOperandExpected(l.type)));
     if (l.type.k === "str" || r.type.k === "str") {
-      return { code: `(${concatPart(l, b.left, b)} ++ ${concatPart(r, b.right, b)})`, type: T.str };
+      return { code: `(${concatPart(l, b.left, b, env)} ++ ${concatPart(r, b.right, b, env)})`, type: T.str };
     }
     return arith("+", l, r, b, env);
   }
   if (op === K.MinusToken || op === K.AsteriskToken) {
-    const l = expr(b.left, env, operandExpected(b.left, env, numericExpected(expected)));
-    const r = expr(b.right, env, operandExpected(b.right, env, isNumeric(l.type) ? l.type : undefined));
+    const ne = numericExpected(expected);
+    const l = expr(b.left, env, operandExpected(b.left, env, ne));
+    const r = expr(b.right, env, operandExpected(b.right, env, !isNumeric(l.type) ? undefined : ne ? l.type : rightOperandExpected(l.type)));
     return arith(op === K.MinusToken ? "-" : "*", l, r, b, env);
   }
   if (op === K.SlashToken) {
@@ -1861,13 +1973,13 @@ function isStringTyped(e: ts.Expression, env: Env): boolean {
 }
 
 /** An operand of a string concatenation `a + b`, as a string. */
-function concatPart(v: Val, e: ts.Expression, node: ts.Node): string {
+function concatPart(v: Val, e: ts.Expression, node: ts.Node, env: Env): string {
   if (v.type.k === "tvar") fail(node, abstractMsg(v.type, "`+` (string concatenation) on"));
   if (v.type.k === "num") {
     fail(node, `\`+\` converts the number \`${nodeText(e, 30)}\` to a string with JS's Number::toString (shortest round-trip form), which VTS models only as an opaque function: use an int, or a template literal \`\${…}\` (where the conversion is opaque too)`);
   }
   if (v.type.k === "opt") fail(node, `\`${nodeText(e, 30)}\` may be null or undefined, which \`+\` would turn into the text "null" / "undefined": narrow it first`);
-  return toStr(v, e);
+  return toStr(v, e, env);
 }
 
 /**
@@ -1990,6 +2102,10 @@ function arrayLiteral(a: ts.ArrayLiteralExpression, env: Env, expected?: VType):
     return { code: `(${a.elements.map((e, i) => expr(e, env, expected.elems[i]).code).join(", ")})`, type: expected };
   }
   let elemT: VType | undefined = expected?.k === "arr" ? expected.elem : expected?.k === "opt" && expected.elem.k === "arr" ? expected.elem.elem : undefined;
+  // `[i, 2.5]` (an int and a number), `[c, "zzz"]` (an enum member and a string outside it):
+  // every element at the type that covers all of them, TypeScript's element type, not the first
+  // element's type
+  if (!elemT) elemT = elementsJoin(a, env);
   const pieces: string[] = [];
   let group: string[] = [];
   const flush = () => {
@@ -2016,6 +2132,34 @@ function arrayLiteral(a: ts.ArrayLiteralExpression, env: Env, expected?: VType):
   const code = pieces.length === 0 ? "[]" : pieces.length === 1 ? pieces[0] : `(${pieces.join(" ++ ")})`;
   // ascribed, so that Lean never re-infers the element type (e.g. a fold over a literal)
   return { code: `(${code} : List ${leanType(elemT)})`, type: T.arr(elemT) };
+}
+
+/**
+ * The element type of an array literal without an expected type when its elements' own types
+ * (a spread's: its elements') widen to a type wider than the first element's (see `widerJoin`),
+ * undefined otherwise (each element is then read at the first one's type, as before).
+ */
+function elementsJoin(a: ts.ArrayLiteralExpression, env: Env): VType | undefined {
+  const dry = { ...env, m: dryCtx(env.m) };
+  const own: VType[] = [];
+  const ctx: ts.Expression[] = [];
+  let first: VType | undefined;
+  for (const [i, el] of a.elements.entries()) {
+    let t: VType | undefined;
+    try {
+      if (ts.isSpreadElement(el)) {
+        const v = iterated(el.expression, dry).v;
+        t = v.type.k === "arr" ? v.type.elem : undefined;
+      } else t = expr(el, dry).type;
+    } catch (err) {
+      if (!(err instanceof VtsError)) throw err;
+    }
+    if (i === 0) first = t;
+    if (!ts.isSpreadElement(el) && needsContext(el, env)) ctx.push(el);
+    else if (t) own.push(t);
+    else return undefined;
+  }
+  return widerJoin(first, own, ctx, env);
 }
 
 /* ───────────────────────────── Map / Set ───────────────────────────── */
@@ -2457,7 +2601,7 @@ function call(c: ts.CallExpression, env: Env, expected?: VType): Val {
       m.deps.add(info.qname);
       return { code: `(${info.qname}${as.map((a) => " " + a).join("")}${ob})`, type: info.ret };
     }
-    if (isGlobal(env, callee, "String") && args.length === 1) return { code: toStr(expr(args[0], env), args[0]), type: T.str };
+    if (isGlobal(env, callee, "String") && args.length === 1) return { code: toStr(expr(args[0], env), args[0], env), type: T.str };
     fail(c, `call to \`${callee.text}\` is not supported (only verified top-level functions, local helper arrows, and modelled library methods)`);
   }
   if (ts.isPropertyAccessExpression(callee)) {
@@ -2699,6 +2843,18 @@ function fieldTsTypeOf(t: VType, name: string, env: Env): ts.Type | null {
 }
 
 /**
+ * The field `f` of the constraint of `p` as the program writes it (`{ readonly note?: string }`),
+ * or else with the nullish value TypeScript gives it (`{ note: string | undefined }`).
+ */
+function constraintFieldText(p: TParam, f: TField, env: Env): string {
+  const c = p.decl.constraint;
+  const m = c && ts.isTypeLiteralNode(c) ? c.members.find((x) => ts.isPropertySignature(x) && propertyNameText(x.name) === f.name) : undefined;
+  if (m) return `{ ${nodeText(m, 60).replace(/[;,]\s*$/, "")} }`;
+  const want = p.fieldTs.get(f.name);
+  return `{ ${f.name}: ${showWithKinds(f.type, want ?? null, env)} }`;
+}
+
+/**
  * The instantiation must be a closed value type that is never null or undefined (JS has one
  * nullish value, where `T | null` with `T = X | null` would be `Option (Option X)` in Lean), a type
  * JS compares by value for an equality constraint (never `number`: TypeScript cannot tell it from
@@ -2733,9 +2889,11 @@ function checkInstantiation(info: FnInfo, σ: Map<number, VType>, c: ts.CallExpr
       const ft = fieldTypeOf(t, f.name, env);
       if (!ft) {
         const where = t.k === "union" ? ` (it must be a field of every variant)` : "";
-        fail(c, `${at}, which has no field ${f.name}${where}, but ${p.name} extends { ${f.name}: ${showType(f.type)} }`);
+        fail(c, `${at}, which has no field ${f.name}${where}, but ${p.name} extends ${constraintFieldText(p, f, env)}`);
       }
-      if (!sameType(ft, f.type)) fail(c, `${at}: its field ${f.name} has the type ${showType(ft)}, and the constraint of ${p.name} says ${showType(f.type)} (they must be the same type)`);
+      // (optional types shown with the nullish value TypeScript gives them: `note?: string` is
+      // `string | undefined`)
+      if (!sameType(ft, f.type)) fail(c, `${at}: its field ${f.name} has the type ${showWithKinds(ft, fieldTsTypeOf(t, f.name, env), env)}, and the constraint of ${p.name} says ${showWithKinds(f.type, p.fieldTs.get(f.name) ?? null, env)} (they must be the same type)`);
       if (hasOptPart(f.type)) {
         const want = p.fieldTs.get(f.name);
         const got = fieldTsTypeOf(t, f.name, env);
@@ -3117,9 +3275,24 @@ function arrayMethod(name: string, xs: Val, c: ts.CallExpression, env: Env, expe
       return { code: `(${X}.reverse)`, type: xs.type };
     case "with": {
       arity(c, "with", 2, 2);
+      // a negative index counts from the end (ES2023: `xs.with(-1, v)` writes the last element,
+      // RangeError outside [-length, length)): one written `-k` is `withEnd xs k` (obligation
+      // 0 < k ≤ length); any other index must be non-negative (stronger than JS for a negative
+      // value: the obligation says so)
+      const a0 = stripParens(args[0]);
+      const negLit = ts.isPrefixUnaryExpression(a0) && a0.operator === ts.SyntaxKind.MinusToken;
+      const zeroLit = negLit && ts.isNumericLiteral(stripParens(a0.operand)) && Number((stripParens(a0.operand) as ts.NumericLiteral).text) === 0;
+      if (negLit && !zeroLit) {
+        const k = expr(a0.operand, env, T.int);
+        const v = expr(args[1], env, elem);
+        const ob = m.ob(c, "index", `index ${nodeText(args[0])} is within bounds for .with (counted from the end: -${nodeText((c.expression as ts.PropertyAccessExpression).expression, 30)}.length ≤ ${nodeText(args[0])} < 0)`);
+        return { code: `(VReact.JS.withEnd ${X} ${paren(k.code)} ${paren(v.code)} ${ob})`, type: xs.type };
+      }
       const i = expr(args[0], env, T.int);
       const v = expr(args[1], env, elem);
-      const ob = m.ob(c, "index", `index ${nodeText(args[0])} is within bounds for .with`);
+      // (a literal index is not negative: no note)
+      const note = ts.isNumericLiteral(a0) || zeroLit ? "" : ` (0 ≤ ${nodeText(args[0])} < length: VTS counts an index from the end only when it is written -k)`;
+      const ob = m.ob(c, "index", `index ${nodeText(args[0])} is within bounds for .with${note}`);
       return { code: `(VReact.JS.withAt ${X} ${paren(i.code)} ${paren(v.code)} ${ob})`, type: xs.type };
     }
     case "at": {
@@ -3498,7 +3671,7 @@ export function prop(e0: ts.Expression, env: Env): string {
     const cmp: Record<number, string> = { [K.LessThanToken]: "<", [K.LessThanEqualsToken]: "≤", [K.GreaterThanToken]: ">", [K.GreaterThanEqualsToken]: "≥" };
     if (cmp[op]) {
       let l = expr(e.left, env);
-      let r = expr(e.right, env, l.type);
+      let r = expr(e.right, env, rightOperandExpected(l.type));
       if (l.type.k === "int" && r.type.k === "num") l = coerce(l, T.num, e, env);
       if (l.type.k === "tvar") fail(e, abstractMsg(l.type, "an ordering comparison (<, <=, >, >=) on"));
       if (!isNumeric(l.type)) fail(e, "ordering comparison on non-numbers");
@@ -4038,7 +4211,7 @@ function exprStatement(e: ts.Expression, env: Env, bc: BlockCtx, rest: (e: Env) 
       const op = k === ts.SyntaxKind.PlusEqualsToken ? "+" : "-";
       return assignLocal(e.left, (old) => {
         const r = expr(e.right, env, isNumeric(old.type) ? old.type : undefined);
-        if (old.type.k === "str" && op === "+") return { code: `(${old.code} ++ ${concatPart(r, e.right, e)})`, type: T.str };
+        if (old.type.k === "str" && op === "+") return { code: `(${old.code} ++ ${concatPart(r, e.right, e, env)})`, type: T.str };
         return arith(op, old, r, e, env);
       }, env, rest, e);
     }
@@ -4307,7 +4480,7 @@ function caseTest(dv: Val, l: CaseLabel, discNode: ts.Expression, env: Env): str
     const v = expr(e, env, T.num);
     return `(VReact.JS.Num.eq ${paren(dv.code)} ${paren(v.code)})`;
   }
-  if (t.k !== "int" && t.k !== "str" && t.k !== "bool") fail(discNode, `switch on a value of type ${showType(t)} is not supported (only ints, strings, booleans, string-literal enums and discriminants x.kind)`);
+  if (t.k !== "int" && t.k !== "str" && t.k !== "bool") fail(discNode, `switch on a value of type ${showWithKinds(t, tsTypeOf(discNode, env), env)} is not supported (only ints, strings, booleans, string-literal enums and discriminants x.kind)`);
   const v = expr(e, env, t);
   if (!sameType(v.type, t)) fail(e, `case label of type ${showType(v.type)} in a switch on ${showType(t)}`);
   return `VReact.JS.eq ${paren(dv.code)} ${paren(v.code)}`;

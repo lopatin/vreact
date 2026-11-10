@@ -71,7 +71,19 @@ TypeScript checks it. Inline object types and string-literal unions are structur
 inline type in one module is one Lean type (`hole<{ readonly v: int }>()` in a
 function returning `{ readonly v: int }`). A value is widened where TypeScript
 allows it: an `int` to a `number`, a present value to an optional one, an array
-elementwise (`int[]` to `(int | null)[]`), an enum member to its string.
+elementwise (`int[]` to `(int | null)[]`), an enum member to its string. An
+ordering comparison or `+ - *` of an `int` with a `number`, in either order, widens
+the `int` (`i < xs.length / 2`, `i * 0.5`: JS computes on the same values); two
+`int`s stay integer arithmetic. A conditional and an array literal without an
+expected type have the type that covers all their branches or elements, as
+TypeScript's does (`c ? i : 0.5` and `[i, 2.5]` are numbers, `c ? color : "other"`
+and `[color, "other"]` strings, `[[], [1]]` is `int[][]`) where that is wider than
+the first one's; otherwise the others are read at the first one's type (`c ? xs :
+[]`, `c ? color : "red"` is a `Color`). An unannotated top-level constant may be
+initialised with a numeric, string or boolean literal (other initialisers need an
+annotation); a numeric literal, possibly negated, is typed by its value: an
+integer is an `int` (`2.0` and `1e3` are the ints 2 and 1000), any other value a
+`number` (`-2.5`, `1e21`, `1e400`, which JS reads as Infinity).
 
 Function types and React nodes have no Lean value type: a function parameter or
 result, constant, state, local, data prop, callback parameter, `hole<T>()`, type argument
@@ -185,7 +197,11 @@ Every expression maps to a Lean term whose value is the JavaScript value.
 * Array methods `map filter some every find findIndex includes indexOf slice
   concat join reduce toSorted toReversed with at flatMap` and spread `[...xs, x]`
   map to their exact list counterparts (`slice` implements JS's negative-index
-  clamping, `with` carries a bounds obligation). `toSorted(cmp)` follows
+  clamping, `with` carries a bounds obligation: `0 ≤ i < xs.length`; an index
+  written `-k`, which JS counts from the end, is `JS.withEnd xs k v` with the
+  obligation `0 < k ≤ xs.length`, writing at `xs.length - k`; any other index must
+  be non-negative, stronger than JS, which would count a negative one from the end:
+  its obligation then fails). `toSorted(cmp)` follows
   ECMA-262: for a comparator that is *consistent* on the elements (`JS.Consistent`:
   reflexive, symmetric and transitive `=`, transitive `<` and `>`) the result is the
   unique stable sort; otherwise the order is implementation-defined (V8 and a

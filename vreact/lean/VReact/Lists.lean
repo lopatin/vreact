@@ -158,7 +158,7 @@ end MemMap
 reversal, `with` a pointwise update, `flatMap` a concatenation (the facts are in `JS.lean`). -/
 attribute [vreact_simp] JS.length_toSorted JS.mem_toSorted JS.nodup_map_toSorted JS.nodup_toSorted
   JS.length_filter_toSorted JS.toSorted_nil JS.toSorted_singleton JS.nodup_range
-  JS.withAt_eq_set List.length_set List.mem_reverse List.length_reverse List.map_reverse
+  JS.withAt_eq_set JS.withEnd_eq_set List.length_set List.mem_reverse List.length_reverse List.map_reverse
   List.mem_flatMap
   JS.nodup_map_set_swap JS.nodup_set_swap JS.mem_set_swap JS.length_filter_set_swap
 

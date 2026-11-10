@@ -1484,11 +1484,11 @@ function keyString(a: ts.JsxAttribute, env: Env): string {
   const val = attrValue(a)!;
   const v = expr(val, env);
   const scalar = (t: VType) => ["str", "int", "num", "bool", "enum"].includes(t.k);
-  if (scalar(v.type)) return `[${toStr(v, val)}]`;
+  if (scalar(v.type)) return `[${toStr(v, val, env)}]`;
   if (v.type.k === "opt" && scalar(v.type.elem)) {
     const kinds = nullishKinds(val, env);
     const x = env.m.fresh("key");
-    return `(match ${v.code} with | some ${x} => [${toStr({ code: x, type: v.type.elem }, val)}] | none => [${!kinds || kinds.null ? jsStr("null") : ""}])`;
+    return `(match ${v.code} with | some ${x} => [${toStr({ code: x, type: v.type.elem }, val, env)}] | none => [${!kinds || kinds.null ? jsStr("null") : ""}])`;
   }
   fail(val, `a key of type ${showType(v.type)} next to other keyed children: React compares the keys of the children of one element as strings ('' + key), which VTS models for string, int, number, boolean and string-enum keys (and their optional forms); key by one of these`);
 }
