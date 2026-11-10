@@ -719,6 +719,12 @@ export function typeOfNode(node: ts.TypeNode, env: TypeEnv, hint: string): VType
       return T.arr(typeOfNode((node as ts.ArrayTypeNode).elementType, env, hint + "Item"));
     case ts.SyntaxKind.TupleType: {
       const tt = node as ts.TupleTypeNode;
+      // (a tuple is its elements: `[]` would be Lean's `()`, not a type; `[a?: int]` and
+      // `[...r: int[]]` admit arrays of other lengths, `[a?: int]` also `[]`, where `t[0]` is undefined)
+      if (!tt.elements.length) fail(node, `the empty tuple type ${node.getText()} is not supported in VTS (a tuple type needs at least one element)`);
+      for (const e of tt.elements) {
+        if (ts.isNamedTupleMember(e) && (e.questionToken || e.dotDotDotToken)) fail(e, `${e.questionToken ? "optional" : "rest"} tuple elements are not supported in VTS (${e.getText()}): a VTS tuple has a fixed length`);
+      }
       return { k: "tuple", elems: tt.elements.map((e, i) => typeOfNode(ts.isNamedTupleMember(e) ? e.type : e, env, hint + i)) };
     }
     case ts.SyntaxKind.TypeLiteral:
@@ -773,7 +779,7 @@ function typeRef(node: ts.TypeReferenceNode, env: TypeEnv, hint: string): VType 
   let sym = env.checker.getSymbolAtLocation(node.typeName);
   if (!sym) fail(node, `cannot resolve type ${name}`);
   if (sym.flags & ts.SymbolFlags.Alias) sym = env.checker.getAliasedSymbol(sym);
-  const decl = sym.declarations?.[0];
+  const decl = typeDeclOf(sym);
   if (!decl) fail(node, `cannot resolve type ${name}`);
   if (ts.isTypeParameterDeclaration(decl)) {
     const p = env.reg.tparams.get(decl);
@@ -785,6 +791,16 @@ function typeRef(node: ts.TypeReferenceNode, env: TypeEnv, hint: string): VType 
   if (env.isLibraryFile(decl.getSourceFile())) fail(node, `type ${name} (declared by a library, ${path.basename(decl.getSourceFile().fileName)}) is not supported in VTS`);
   if (inProgress.has(decl)) fail(node, `type ${name} refers to itself: recursive types are not supported in VTS (use an array of records with ids, e.g. a parent id field)`);
   return typeOfDecl(decl, env);
+}
+
+/**
+ * The declaration that gives a type name its meaning: TypeScript merges a type and a value of one
+ * name into one symbol (`type Todo = …` next to `function Todo`, rejected for the name clash by
+ * `checkValueNameFree`), whose first declaration may be the value's.
+ */
+function typeDeclOf(sym: ts.Symbol): ts.Declaration | undefined {
+  const ds = sym.declarations ?? [];
+  return ds.find((d) => ts.isTypeAliasDeclaration(d) || ts.isInterfaceDeclaration(d) || ts.isTypeParameterDeclaration(d) || ts.isClassDeclaration(d) || ts.isEnumDeclaration(d)) ?? ds[0];
 }
 
 /** Why a reference to a type parameter that is not a (registered) generic function's is rejected. */
@@ -1073,21 +1089,45 @@ function recordFromMembers(
 }
 
 /**
- * The Lean name of an inline type, after the hint `name` (e.g. `MkResult`): subscripted when
- * the name is taken (by another type, or by a type declared in the module), so that two
- * different inline types never share a name.
+ * The Lean name of an inline type, after the hint `name` (e.g. `MkResult`, `Config` for a
+ * constant `Config: { … }`): subscripted when the name is taken — by another type, by a type
+ * declared in the module, or by a function, component or constant of the module (the Lean
+ * declaration `VTS.<module>.Config`, or the namespace of a component's Props, State, init, …,
+ * which the type's fields would share) — so that an inline type never shares its name with
+ * another generated name of the module (subscripts are not in TypeScript identifiers).
  */
 function inlineTypeName(hint: string, env: TypeEnv, sf: ts.SourceFile): string {
   const ns = env.nsOf(sf);
   // (never of the shape of an instance name, see `declTypeIdent`)
   const name = INSTANCE_NAME_RE.test(hint) ? capitalize(hint) : hint;
   const declared = sf.statements.some((st) => (ts.isTypeAliasDeclaration(st) || ts.isInterfaceDeclaration(st)) && st.name.text === name);
+  const taken = (short: string) => env.reg.byName.has(`${ns}.${short}`);
   let short = leanIdent(name);
-  for (let k = 2; declared || env.reg.byName.has(`${ns}.${short}`); k++) {
-    short = leanIdent(subscripted(name, k));
-    if (!env.reg.byName.has(`${ns}.${short}`)) break;
+  if (declared || moduleValueNames(sf).has(name) || taken(short)) {
+    for (let k = 2; ; k++) {
+      short = leanIdent(subscripted(name, k));
+      if (!taken(short)) break;
+    }
   }
   return short;
+}
+
+/** The names of a module's top-level functions, components and constants (by source file). */
+const valueNamesCache = new WeakMap<ts.SourceFile, Set<string>>();
+function moduleValueNames(sf: ts.SourceFile): Set<string> {
+  let names = valueNamesCache.get(sf);
+  if (names) return names;
+  names = new Set<string>();
+  const bind = (n: ts.BindingName) => {
+    if (ts.isIdentifier(n)) names!.add(n.text);
+    else for (const el of n.elements) if (!ts.isOmittedExpression(el)) bind(el.name);
+  };
+  for (const st of sf.statements) {
+    if (ts.isFunctionDeclaration(st) && st.name) names.add(st.name.text);
+    else if (ts.isVariableStatement(st)) for (const d of st.declarationList.declarations) bind(d.name);
+  }
+  valueNamesCache.set(sf, names);
+  return names;
 }
 
 /**
@@ -1167,7 +1207,7 @@ function unionOf(
     else if (ts.isTypeReferenceNode(m)) {
       let sym = env.checker.getSymbolAtLocation(m.typeName);
       if (sym && sym.flags & ts.SymbolFlags.Alias) sym = env.checker.getAliasedSymbol(sym);
-      const d = sym?.declarations?.[0];
+      const d = sym && typeDeclOf(sym);
       if (d && ts.isTypeAliasDeclaration(d) && ts.isTypeLiteralNode(d.type)) objs.push({ members: d.type.members, at: d });
       else if (d && ts.isInterfaceDeclaration(d)) objs.push({ members: d.members, at: d });
       else fail(m, `union members must be object types with a common literal discriminant (or string literals)`);
@@ -1182,11 +1222,10 @@ function unionOf(
     objs.every((o) => o.members.some((p) => ts.isPropertySignature(p) && propertyName(p.name) === c && p.type && ts.isLiteralTypeNode(p.type) && ts.isStringLiteral(p.type.literal))),
   );
   if (!tag) fail(node, `union of object types needs a common string-literal discriminant property (e.g. kind: "add")`);
-  const short = decl ? declTypeIdent(name, decl) : leanIdent(INSTANCE_NAME_RE.test(name) ? capitalize(name) : name);
-  const qname = `${env.nsOf(sf)}.${short}`;
   const key = decl ?? node;
   const existing = env.reg.byDecl.get(key);
   if (existing) return { k: "union", name: existing.qname };
+  const declShort = decl ? declTypeIdent(name, decl) : undefined;
   const variants: Variant[] = [];
   for (const o of objs) {
     const tagProp = o.members.find((p) => ts.isPropertySignature(p) && propertyName(p.name) === tag) as ts.PropertySignature;
@@ -1205,6 +1244,10 @@ function unionOf(
     }
     variants.push({ lit, ctor: lit, fields });
   }
+  // an inline union is named like an inline record, after its variants' inline types (whose hints
+  // extend its own): never another generated name of the module
+  const short = declShort ?? inlineTypeName(name, env, sf);
+  const qname = `${env.nsOf(sf)}.${short}`;
   env.reg.add({ qname, short, module: env.nsOf(sf), def: { k: "union", tag, variants }, decl: key });
   return { k: "union", name: qname };
 }

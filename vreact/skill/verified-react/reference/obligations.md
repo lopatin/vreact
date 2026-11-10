@@ -91,15 +91,22 @@ body of a `callbackRequires` lambda never run: there `b` is checked under `a`.
    Lean keyword or root-level Lean name gets a `'` (`function max` is
    `VTS.<module>.max'`, field `rec` is `rec'`, component `Type` is
    `VTS.<module>.Type'`; a module path segment gets a `_`: `src/end/Sort.tsx` is
-   `VTS.end_.Sort_`, its lemmas `proofs/end_/Sort_.lean`); hypotheses the translator invents
+   `VTS.end_.Sort_`, its lemmas `proofs/end_/Sort_.lean`; a segment starting with
+   a digit or `_` gets a leading `M`: `src/_util.ts` is `VTS.M_util`; and
+   `src/Base.ts` is `VTS.Base_`, its lemmas `proofs/Base_.lean`, since
+   `proofs/Base.lean` is the global lemma file); an inline type is named after
+   where it occurs (`const config: { … }` → `VTS.<module>.Config`, a function's
+   result → `<Fn>Result`), subscripted (`Config₂`) when a type, function,
+   component or constant of the module has that name; hypotheses the translator invents
    are subscripted (`h₁`, `hmem₂`); all `requires` of a function form one
    hypothesis `h_pre`. Run
    `vreact explain src/<file>.tsx` to see them. `proofs/Base.lean` (no imports of
-   generated code) is visible to every module. Any other proof file counts only
-   when one of these imports it (`import Proofs.<path>`): a proof file that no
-   module imports, directly or through other proof files, is rejected, since Lean
-   would never check it (names are case-sensitive: `proofs/model.lean` does not go
-   with `src/Model.ts`).
+   generated code, also not through other proof files: every `Defs.lean` imports
+   it, so vreact rejects such an import) is visible to every module. Any other
+   proof file counts only when one of these imports it (`import Proofs.<path>`):
+   a proof file that no module imports, directly or through other proof files, is
+   rejected, since Lean would never check it (names are case-sensitive:
+   `proofs/model.lean` does not go with `src/Model.ts`).
 
    `Defs.lean` holds types, constants and functions, each function followed by
    its `ensures` theorems (so later function bodies, here and in importing

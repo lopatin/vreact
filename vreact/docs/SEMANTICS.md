@@ -36,7 +36,7 @@ exact, total meaning in Lean, while still covering what real React code uses.
 | `{kind:"a",…} \| {kind:"b",…}`               | `inductive`, one constructor per variant | discriminated unions |
 | `readonly T[]`, `T[]`                        | `List T`                                | immutable |
 | `T \| null`, `T \| undefined`, `f?: T`       | `Option T`                              | not both null and undefined |
-| `[A, B]`                                     | `A × B`                                 | |
+| `[A, B]`                                     | `A × B`                                 | fixed length, at least one element (`[A]` is `A`); named members `[lo: A, hi: B]` too; the empty tuple `[]` and optional (`a?: A`) or rest (`...r: A[]`) members are rejected: they admit other lengths (`[a?: A]` admits `[]`, where `t[0]` is `undefined`) |
 | `ReadonlyMap<K, V>`, `Map<K, V>`             | `JS.JSMap K V`: entries in insertion order, keys distinct | keys `boolean`/`int`/`string`/enum or an equality-constrained type parameter; values not optional |
 | `ReadonlySet<T>`, `Set<T>`                   | `JS.JSSet T`: elements in insertion order, distinct | elements as Map keys |
 | `(x: A) => void` (props only)                | callback with a contract                | see §2.4; never data (a function's parameter or result, state, a constant, a local, a hole, an array element or a non-props field: rejected) |
@@ -131,7 +131,8 @@ Rejected: `any`, `as` casts, classes, `this` (also `this` parameters), mutation 
 objects/arrays (of Maps and Sets: see §1.2), `==` (except `== null`), `===` on objects,
 Maps and Sets (reference identity), generic types, components and arrows (generic
 top-level functions are supported, below), exceptions (`try`), `var`, `while`,
-recursion (for now), recursive types,
+recursion (for now; also a call of a function in its own `requires`, which JS evaluates
+on every call, also in a `@trusted` function), recursive types,
 `async`.
 
 **Generic functions.** A top-level function may have type parameters; each is a
@@ -1064,15 +1065,31 @@ hook rules hold (static checks). For every function: its body is safe and its
   it when the Lean toolchain or the VReact library changes.
   Each source file is one Lean module `VTS.<path>` (`Defs.lean`: types,
   constants, functions each followed by its `ensures` theorems; `View.lean`:
-  components and certificates); files whose module names coincide, also up to
+  components and certificates). A path segment is made a Lean name component
+  that is a plain identifier: other characters than letters, digits and `_`
+  become `_`; a segment starting with a digit or `_` gets a leading `M` (Lean
+  gives `_`-names meanings: declarations in a namespace `VTS._hyg`, a
+  macro-scoped name, are lost); a Lean token or root name (`end`, `List`) or a
+  generated name (`VTS`, `Proofs`, `VReact`, …) gets a trailing `_`, and so does a
+  module `src/Base.ts` (in any letter case: `VTS.Base_`), whose lemma file would
+  otherwise be `proofs/Base.lean`, the global lemma file every `Defs.lean`
+  imports (`proofs/Base.lean` reaching a generated module through its imports,
+  also through other proof files, would close an import cycle, and is rejected
+  with that explanation); files whose module names coincide, also up to
   letter case, are rejected, and so are modules whose generated directories
   differ only in case (`src/lib.ts` and `src/Lib/x.ts`) and modules that would
   generate the same Lean name (`src/a/b.ts` declaring `post` next to a function
   `b` of `src/a.ts` with an `ensures`: both `VTS.a.b.post`; also the names Lean
   derives from a structure or inductive — fields, constructors, `rec`, … —
   and, below another module's function `f`, `f.post`, `f.post2`, …, `f.eq_1`,
-  …), and within a module a function or constant named like a type of the
-  module (TypeScript keeps the two apart; both would be `VTS.m.Limits`).
+  …), and within a module a function, component or constant named like a type
+  of the module (TypeScript keeps the two apart; both would be `VTS.m.Limits`,
+  for a component the namespace of its `Props`, `State`, `init`, … beside the
+  type's fields). An inline object type, string-literal union or discriminated
+  union is named after the place it occurs (a constant `config` or `Config`:
+  `Config`; a function's result: `<Fn>Result`; a state `timer`: `Timer`), with a
+  subscript (`Config₂`, which no TypeScript identifier contains) when a type,
+  function, component or constant of the module has that name.
   Namespaces may otherwise nest (`src/ui/Board.tsx` next to a component
   `Board` of `src/ui.tsx`). User lemmas `proofs/<path>.lean` are imported by
   that module's `View.lean` and by the `Defs.lean` of every module importing it
