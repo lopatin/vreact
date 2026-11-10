@@ -95,7 +95,11 @@ body of a `callbackRequires` lambda never run: there `b` is checked under `a`.
    are subscripted (`h₁`, `hmem₂`); all `requires` of a function form one
    hypothesis `h_pre`. Run
    `vreact explain src/<file>.tsx` to see them. `proofs/Base.lean` (no imports of
-   generated code) is visible to every module.
+   generated code) is visible to every module. Any other proof file counts only
+   when one of these imports it (`import Proofs.<path>`): a proof file that no
+   module imports, directly or through other proof files, is rejected, since Lean
+   would never check it (names are case-sensitive: `proofs/model.lean` does not go
+   with `src/Model.ts`).
 
    `Defs.lean` holds types, constants and functions, each function followed by
    its `ensures` theorems (so later function bodies, here and in importing
