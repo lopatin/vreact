@@ -82,6 +82,41 @@ function globalOf(env: Env, node: ts.Node): Global | undefined {
   return env.m.prog.globals.get(d);
 }
 
+/**
+ * The verified module that `id` names as a module namespace object — an import binding
+ * (`import * as L from "./lib"`, or a name another VTS module re-exports with
+ * `export * as L from "./lib"`) that resolves to a module of the program — or null.  A
+ * namespace spelled like a global VTS gives a meaning (`import * as Math from "./m"`) is not
+ * one here: it is rejected where it is used (rename it, see `identifier`).
+ */
+function vtsNamespace(env: Env, id: ts.Expression): ts.SourceFile | null {
+  if (!ts.isIdentifier(id) || BUILTIN_NAMES.has(id.text)) return null;
+  const s = symbolOf(env, id);
+  if (!s || !(s.flags & ts.SymbolFlags.Alias) || env.vars.has(s)) return null;
+  const r = resolved(env, s);
+  const d = r?.valueDeclaration;
+  if (!r || !(r.flags & ts.SymbolFlags.ValueModule) || !d || !ts.isSourceFile(d) || env.m.prog.isLibraryFile(d)) return null;
+  return d;
+}
+
+/**
+ * `L.x` with `L` a namespace of a verified module (`vtsNamespace`): what the member `x` is, as
+ * the same name imported with `import { x } from "./lib"` (JS reads the module's export `x`,
+ * a live binding that is initialised before this module runs: imports are acyclic), or null.
+ * `g` is the verified declaration it resolves to (through re-exports), if any.
+ */
+export function nsMember(env: Env, pa: ts.Expression): { ns: ts.Identifier; g: Global | undefined } | null {
+  if (!ts.isPropertyAccessExpression(pa) || pa.questionDotToken || !ts.isIdentifier(pa.expression) || !vtsNamespace(env, pa.expression)) return null;
+  const d = env.m.prog.refDecl(pa.name);
+  return { ns: pa.expression, g: d ? env.m.prog.globals.get(d) : undefined };
+}
+
+/** The message for a member `L.x` of a verified module's namespace that is neither a verified function nor a constant. */
+function nsMemberMsg(pa: ts.PropertyAccessExpression, g: Global | undefined): string {
+  const what = g?.k === "comp" ? "a component: render it as a JSX element, imported by name" : "not a verified function or constant of that module";
+  return `\`${nodeText(pa, 40)}\` is ${what} (through a module namespace, only \`${pa.expression.getText()}.f(…)\` calls of verified functions and \`${pa.expression.getText()}.K\` reads of verified constants are supported)`;
+}
+
 /** Array methods that mutate the array (rejected everywhere: VTS data is immutable). */
 export const ARRAY_MUTATORS = new Set(["push", "pop", "shift", "unshift", "splice", "sort", "reverse", "fill", "copyWithin"]);
 
@@ -531,6 +566,16 @@ function narrowedSome(env: Env, e: ts.Expression): boolean {
 /** `null`, or the global `undefined` (not a binding spelled `undefined`). */
 export function isNullLit(e: ts.Expression, env: Env): boolean {
   return e.kind === ts.SyntaxKind.NullKeyword || isGlobal(env, e, "undefined");
+}
+
+/**
+ * Is the returned expression `e` the value undefined, with nothing to evaluate — the global
+ * `undefined` (not a binding spelled like it), or `void 0`?  Then `return e;` is `return;`.
+ */
+export function isUndefinedReturn(e: ts.Expression, env: Env): boolean {
+  const x = stripParens(e);
+  if (isGlobal(env, x, "undefined")) return true;
+  return ts.isVoidExpression(x) && ts.isNumericLiteral(stripParens(x.expression));
 }
 
 export function stripParens(e: ts.Expression): ts.Expression {
@@ -1414,6 +1459,7 @@ function identifier(id: ts.Identifier, env: Env, expected?: VType, symOverride?:
   }
   const local = s && unboundLocal(id, s, env);
   if (local) fail(id, local);
+  if (vtsNamespace(env, id)) fail(id, `\`${id.text}\` is the namespace object of a verified module: it can only be used through its members (\`${id.text}.f(…)\` calls a verified function, \`${id.text}.K\` reads a verified constant)`);
   fail(id, `unknown or unsupported identifier \`${id.text}\` (only locals, props, state, and verified top-level declarations can be referenced)`);
 }
 
@@ -1456,6 +1502,16 @@ function propertyAccess(pa: ts.PropertyAccessExpression, env: Env): Val {
   // event fields: e.target.value / e.currentTarget.value / e.target.checked / e.key
   const evVar = eventBase(pa, env);
   if (evVar) return evVar;
+  // L.K, L a verified module's namespace: the constant K, as `import { K }` gives it
+  const nm = nsMember(env, pa);
+  if (nm) {
+    if (nm.g?.k === "const") {
+      m.deps.add(nm.g.info.qname);
+      return { code: nm.g.info.qname, type: nm.g.info.type };
+    }
+    if (nm.g?.k === "fn") fail(pa, "functions are not first-class in VTS; call the function instead");
+    fail(pa, nsMemberMsg(pa, nm.g));
+  }
   // props.x
   if (ts.isIdentifier(pa.expression)) {
     const s = symbolOf(env, pa.expression);
@@ -2456,8 +2512,10 @@ export function lambda(
   paramTs?: readonly (ts.Type | null | undefined)[],
 ): { binders: string[]; typed: string[]; body: Val; obligations: boolean; env: Env } {
   if (!ts.isArrowFunction(fn) && !ts.isFunctionExpression(fn)) fail(fn, "expected an inline arrow function `(x) => …`");
-  // (Lean checks the callback for any value of its parameters: `generalized`)
-  const { env: e2, binders, typed } = lambdaParams(fn, { ...env, generalized: "an array-method callback: Lean checks it for every value of its parameters, not only the array's elements (and the program's accumulators or indexes)" }, paramTypes, paramTs);
+  // (Lean checks the callback for any value of its parameters: `generalized`; inside a handler or
+  // effect, a state update in it is rejected for what it is: `valueCtx`)
+  const e1: Env = { ...env, generalized: "an array-method callback: Lean checks it for every value of its parameters, not only the array's elements (and the program's accumulators or indexes)", valueCtx: env.handler || env.valueCtx ? CALLBACK_UPDATE_MSG : undefined };
+  const { env: e2, binders, typed } = lambdaParams(fn, e1, paramTypes, paramTs);
   const before = env.m.obCount();
   // (a predicate's result is tested for truthiness by JS: `xs.filter((x) => x)`)
   const body = ts.isBlock(fn.body) ? valueBlock(fn.body.statements, e2, expectedRet, fn) : expectedRet?.k === "bool" ? boolOperand(fn.body, e2) : expr(fn.body, e2, expectedRet);
@@ -2589,24 +2647,19 @@ function call(c: ts.CallExpression, env: Env, expected?: VType): Val {
     if (b?.k === "closure") return inlineClosure(b, c, env, expected);
     if (b && b.k !== "val") fail(c, `\`${callee.text}\` can only be called as a statement inside an event handler or effect`);
     const g = globalOf(env, callee);
-    if (g?.k === "fn") {
-      const info = g.info;
-      if (args.length !== info.params.length) fail(c, `${info.name} expects ${info.params.length} arguments`);
-      if (env.curState && info.hasPre) {
-        fail(c, `${info.name} has a precondition and cannot be called inside a functional update / reducer argument (its argument is the *current* state, about which nothing is known); make it total`);
-      }
-      if (info.tparams.length) return genericCall(info, c, env, expected);
-      const as = args.map((a, i) => paren(expr(a, env, info.params[i].type).code));
-      const ob = info.hasPre ? " " + m.ob(c, "precondition", `precondition of ${info.name}(${args.map((a) => argText(a)).join(", ")})`) : "";
-      m.deps.add(info.qname);
-      return { code: `(${info.qname}${as.map((a) => " " + a).join("")}${ob})`, type: info.ret };
-    }
+    if (g?.k === "fn") return fnCall(g.info, c, env, expected);
     if (isGlobal(env, callee, "String") && args.length === 1) return { code: toStr(expr(args[0], env), args[0], env), type: T.str };
     fail(c, `call to \`${callee.text}\` is not supported (only verified top-level functions, local helper arrows, and modelled library methods)`);
   }
   if (ts.isPropertyAccessExpression(callee)) {
     const mname = callee.name.text;
     const objE = callee.expression;
+    // L.f(…), L a verified module's namespace: the function f, as `import { f }` gives it
+    const nm = nsMember(env, callee);
+    if (nm) {
+      if (nm.g?.k === "fn") return fnCall(nm.g.info, c, env, expected);
+      fail(c, nsMemberMsg(callee, nm.g));
+    }
     // Math.*
     if (isGlobal(env, objE, "Math")) return mathCall(mname, c, env, expected);
     // Array.from(it): an array of what `it` iterates (the library's Array, not a user binding)
@@ -2635,6 +2688,21 @@ function call(c: ts.CallExpression, env: Env, expected?: VType): Val {
     fail(c, `method ${mname} not supported on ${showType(obj.type)}`);
   }
   fail(c, `unsupported call ${nodeText(c)}`);
+}
+
+/** A call `c` of the verified top-level function `info` (named, or through a module namespace). */
+function fnCall(info: FnInfo, c: ts.CallExpression, env: Env, expected?: VType): Val {
+  const m = env.m;
+  const args = c.arguments;
+  if (args.length !== info.params.length) fail(c, `${info.name} expects ${info.params.length} arguments`);
+  if (env.curState && info.hasPre) {
+    fail(c, `${info.name} has a precondition and cannot be called inside a functional update / reducer argument (its argument is the *current* state, about which nothing is known); make it total`);
+  }
+  if (info.tparams.length) return genericCall(info, c, env, expected);
+  const as = args.map((a, i) => paren(expr(a, env, info.params[i].type).code));
+  const ob = info.hasPre ? " " + m.ob(c, "precondition", `precondition of ${info.name}(${args.map((a) => argText(a)).join(", ")})`) : "";
+  m.deps.add(info.qname);
+  return { code: `(${info.qname}${as.map((a) => " " + a).join("")}${ob})`, type: info.ret };
 }
 
 /**
@@ -3058,7 +3126,10 @@ function inlineClosure(b: Extract<Binding, { k: "closure" }>, c: ts.CallExpressi
   if (fn.parameters.length !== c.arguments.length) fail(c, "arity mismatch");
   // Evaluate the arguments in the caller env, bind them in the closure's env.
   let lets = "";
-  let e2: Env = { ...closureEnv(b, env), scope: env.scope, narrow: b.env.narrow, curState: env.curState, generalized: env.generalized ?? b.env.generalized };
+  // (called for its value inside a handler or effect: a state update in it cannot run in order
+  // with the handler's, `valueCtx`)
+  const valueCtx = env.handler || env.valueCtx ? HELPER_VALUE_MSG(nodeText(c.expression, 30)) : undefined;
+  let e2: Env = { ...closureEnv(b, env), scope: env.scope, narrow: b.env.narrow, curState: env.curState, generalized: env.generalized ?? b.env.generalized, valueCtx };
   fn.parameters.forEach((p, i) => {
     if (!p.type) fail(p, "helper function parameters need type annotations");
     const t = helperValueType(p.type, env, "Arg", `parameter \`${p.name.getText()}\` of ${nodeText(c.expression, 30)}`);
@@ -3913,6 +3984,11 @@ export interface BlockCtx {
   onCleanup?: (e: ts.Expression, env: Env) => string;
   /** an effect body: statements it translates itself (timer registrations), or null */
   onStmt?: (s: ts.Statement, env: Env, rest: (e: Env) => string) => string | null;
+  /**
+   * a local helper inlined into a handler or effect body (`inlineHandlerCall`): its `return`
+   * (with the returned expression, if any), which ends the helper and continues the caller
+   */
+  onValue?: (e: ts.Expression | undefined, env: Env) => string;
   fnNode: ts.Node;
 }
 
@@ -3966,8 +4042,13 @@ export function block(stmts: readonly ts.Statement[], i: number, env: Env, bc: B
       fail(stmts[i + 1], "unreachable code after return");
     }
     if (bc.kind === "handler") {
-      if (s.expression && bc.onCleanup) return bc.onCleanup(s.expression, env);
-      if (s.expression) fail(s, "event handlers return nothing");
+      if (bc.onValue) return bc.onValue(s.expression, env);
+      // `return undefined;` is `return;`: React calls an effect's result as its cleanup only
+      // when it is not undefined (react-dom 18.3.1 commitHookEffectListUnmount), and ignores
+      // what an event handler or timer callback returns
+      const x = s.expression && !isUndefinedReturn(s.expression, env) ? s.expression : undefined;
+      if (x && bc.onCleanup) return bc.onCleanup(x, env);
+      if (x) fail(s, "event handlers return nothing");
       return bc.onDone!(env);
     }
     return bc.onReturn!(s.expression, env);
@@ -4050,22 +4131,46 @@ function varDecls(decls: ts.NodeArray<ts.VariableDeclaration>, j: number, env: E
     const { env: e1, name: ln } = freshLocal(env, leanIdent(d.name.text));
     return `(let ${ln} : ${bc.jsxConst.type} := ${code};\n${next(bind(e1, s, { k: "jsx", node: init, env, code: ln }))})`;
   }
-  if (ts.isObjectBindingPattern(d.name)) {
-    const v = expr(init, env, declT);
-    const { env: e1, name: tmp } = freshLocal(env, "tmp");
-    const r = bindParam(d.name, v.type, e1);
-    // bindParam created its own local name; re-bind to tmp
-    return `(let ${r.binder}${letType(v.type)} := ${v.code};\n${next(r.env)})`;
+  /** Bind the declared name (or pattern) to the value `v`, computed in `e`; then the next declaration. */
+  const bindInit = (v: Val, e: Env): string => {
+    if (ts.isObjectBindingPattern(d.name)) {
+      const { env: e1 } = freshLocal(e, "tmp");
+      const r = bindParam(d.name, v.type, e1);
+      // bindParam created its own local name; re-bind to tmp
+      return `(let ${r.binder}${letType(v.type)} := ${v.code};\n${next(r.env)})`;
+    }
+    if (ts.isArrayBindingPattern(d.name)) {
+      // `const [k, v] = pair` on a tuple
+      const r = bindParam(d.name, v.type, e);
+      return `(let ${r.binder}${letType(v.type)} := ${v.code};\n${next(r.env)})`;
+    }
+    if (!ts.isIdentifier(d.name)) fail(d, "unsupported destructuring");
+    return bindLocal(d.name, v, e, next, declT);
+  };
+  // `const v = f(…)` among the statements of an event handler or effect, `f` a local function
+  // that updates state or calls a parent callback: its statements run there, in order with the
+  // handler's (as for the statement `f(…);`, `inlineHandlerCall`), then `v` is the value it returns
+  if (bc.kind === "handler" && ts.isCallExpression(init) && ts.isIdentifier(init.expression)) {
+    const callee = init.expression;
+    const s = symbolOf(env, callee);
+    const b = s ? env.vars.get(s) : undefined;
+    if (b?.k === "closure" && ts.isBlock(b.fn.body) && closureUpdates(b, env)) {
+      // (the result type: the helper's annotation, else the declaration's, else the first return's)
+      let rt = b.fn.type ? helperValueType(b.fn.type, env, "Ret", `the result of ${callee.text}`) : declT;
+      return inlineHandlerCall(b, init, env, bc, next, (x, e3, back) => {
+        if (!x) fail(b.fn, "missing return value");
+        const v = expr(x, e3, rt);
+        rt = rt ?? v.type;
+        // (at the declared type, as `expr(init, env, declT)` gives it; a present value of an
+        // optional declared type is bound as present, `bindLocal`)
+        const narrowed = declT?.k === "opt" && sameType(v.type, declT.elem);
+        return bindInit(declT && !narrowed ? coerce(v, declT, x, e3) : v, back(e3));
+      });
+    }
   }
-  if (ts.isArrayBindingPattern(d.name)) {
-    // `const [k, v] = pair` on a tuple
-    const v = expr(init, env, declT);
-    const r = bindParam(d.name, v.type, env);
-    return `(let ${r.binder}${letType(v.type)} := ${v.code};\n${next(r.env)})`;
-  }
+  if (ts.isObjectBindingPattern(d.name) || ts.isArrayBindingPattern(d.name)) return bindInit(expr(init, env, declT), env);
   if (!ts.isIdentifier(d.name)) fail(d, "unsupported destructuring");
-  const v = declT?.k === "opt" ? exprPreferElem(init, env, declT) : expr(init, env, declT);
-  return bindLocal(d.name, v, env, next, declT);
+  return bindInit(declT?.k === "opt" ? exprPreferElem(init, env, declT) : expr(init, env, declT), env);
 }
 
 /** ` : T` for a `let` (every local is type-ascribed, so Lean never re-infers, e.g. defaults to Nat). */
@@ -4192,6 +4297,17 @@ function withFact(h: string, env: Env, bc: BlockCtx, rest: (e: Env) => string): 
   return `(open Classical in if ${env.m.fresh("hfact")} : type_of% ${h} then ${paren(rest(env))}\n  else ${skip})`;
 }
 
+/**
+ * Can evaluating `e` do anything but compute a value: call or construct, assign, delete, await,
+ * yield, or throw (`x!` of a nullish `x`)?  (By the program text.)
+ */
+function mayHaveEffect(e: ts.Node): boolean {
+  if (ts.isCallExpression(e) || ts.isNewExpression(e) || ts.isTaggedTemplateExpression(e) || ts.isDeleteExpression(e) || ts.isAwaitExpression(e) || ts.isYieldExpression(e) || ts.isNonNullExpression(e)) return true;
+  if (ts.isBinaryExpression(e) && e.operatorToken.kind >= ts.SyntaxKind.FirstAssignment && e.operatorToken.kind <= ts.SyntaxKind.LastAssignment) return true;
+  if ((ts.isPrefixUnaryExpression(e) || ts.isPostfixUnaryExpression(e)) && (e.operator === ts.SyntaxKind.PlusPlusToken || e.operator === ts.SyntaxKind.MinusMinusToken)) return true;
+  return !!ts.forEachChild(e, (c) => (mayHaveEffect(c) ? true : undefined));
+}
+
 function exprStatement(e: ts.Expression, env: Env, bc: BlockCtx, rest: (e: Env) => string): string {
   const m = env.m;
   e = stripParens(e);
@@ -4227,7 +4343,8 @@ function exprStatement(e: ts.Expression, env: Env, bc: BlockCtx, rest: (e: Env) 
       return { code: `(${old.code} ${op} ${one})`, type: old.type };
     }, env, rest, e);
   }
-  if (!ts.isCallExpression(e)) fail(e, "expression statement has no effect");
+  if (ts.isDeleteExpression(e)) fail(e, `\`${nodeText(e, 40)}\` removes the property from the object, which its other users see (VTS data is immutable): build a new object without it instead`);
+  if (!ts.isCallExpression(e)) fail(e, mayHaveEffect(e) ? `this expression statement is not supported in VTS: a statement expression is a call, an assignment (x = e, x += e, x -= e) or x++ / x-- of a local \`let\`, or document.title = …` : "expression statement has no effect");
   const callee = e.expression;
   const sf = specFn(env, callee);
   if (sf) {
@@ -4275,9 +4392,7 @@ function exprStatement(e: ts.Expression, env: Env, bc: BlockCtx, rest: (e: Env) 
   const target = updateTarget(callee, env);
   if (target) {
     if (bc.kind !== "handler" || !env.handler) {
-      fail(e, target.k === "callback"
-        ? "a parent callback can only be invoked inside an event handler"
-        : "state updates during render are not allowed (setState in render causes re-render loops); move it into an event handler or effect");
+      fail(e, env.valueCtx ?? (target.k === "callback" ? "a parent callback can only be invoked inside an event handler" : RENDER_UPDATE_MSG));
     }
     return handlerEffect(target, e, env, rest);
   }
@@ -4285,29 +4400,10 @@ function exprStatement(e: ts.Expression, env: Env, bc: BlockCtx, rest: (e: Env) 
   if (ts.isIdentifier(callee)) {
     const s = symbolOf(env, callee);
     const b = s ? env.vars.get(s) : undefined;
-    if (b?.k === "closure" && bc.kind === "handler") {
-      const fn = b.fn;
-      checkPlainParams(fn.parameters, `the local function ${callee.text}`);
-      if (fn.parameters.length !== e.arguments.length) fail(e, `${callee.text} takes ${fn.parameters.length} argument(s), not ${e.arguments.length}`);
-      let e2: Env = { ...closureEnv(b, env), handler: env.handler, scope: env.scope, curState: undefined, generalized: env.generalized ?? b.env.generalized };
-      let lets = "";
-      fn.parameters.forEach((p, i) => {
-        if (!p.type) fail(p, "helper parameters need type annotations");
-        const t = helperValueType(p.type, env, "Arg", `parameter \`${p.name.getText()}\` of ${callee.text}`);
-        const a = expr(e.arguments[i], env, t);
-        const r = bindParam(p.name, t, e2, "declared");
-        e2 = r.env;
-        lets += `let ${r.binder} := ${a.code};\n`;
-      });
-      const stmts = ts.isBlock(fn.body) ? fn.body.statements : [ts.factory.createExpressionStatement(fn.body)];
-      if (!ts.isBlock(fn.body)) {
-        // expression-bodied: treat as a single statement
-        return lets + exprStatement(fn.body, e2, bc, (e3) => rest({ ...env, handler: e3.handler, scope: e3.scope }));
-      }
-      // (a `return` in the helper ends the helper: its value is not an effect's cleanup)
-      const inner: BlockCtx = { ...bc, onCleanup: undefined, onStmt: undefined, onDone: (e3) => rest({ ...env, handler: e3.handler, scope: e3.scope }) };
-      return `(${lets}${block(stmts, 0, e2, inner, (e3) => rest({ ...env, handler: e3.handler, scope: e3.scope }))})`;
-    }
+    if (b?.k === "closure" && bc.kind === "handler") return inlineHandlerCall(b, e, env, bc, rest, null);
+    // (elsewhere — the render, a loop body, a callback VTS translates as a value — its updates
+    // cannot be the handler's)
+    if (b?.k === "closure" && closureUpdates(b, env)) fail(e, env.handler || env.valueCtx ? HELPER_VALUE_MSG(callee.text) : RENDER_UPDATE_MSG);
   }
   // `n.set(k, v)` / `n.add(x)` / `n.delete(k)` / `n.clear()` on a fresh local Map / Set
   if (ts.isPropertyAccessExpression(callee) && (MUTATORS.has(callee.name.text) || callee.name.text === "forEach")) {
@@ -4320,6 +4416,89 @@ function exprStatement(e: ts.Expression, env: Env, bc: BlockCtx, rest: (e: Env) 
   }
   if (ts.isCallExpression(e) && hookName(env, callee)) fail(e, "hooks must be called at the top level of a component, unconditionally (Rules of Hooks)");
   fail(e, `this call has no modelled effect: ${nodeText(e)}`);
+}
+
+const RENDER_UPDATE_MSG = "state updates during render are not allowed (setState in render causes re-render loops); move it into an event handler or effect";
+/** Why a setter, `dispatch` or parent callback in a callback that a handler or effect runs is rejected (`Env.valueCtx`). */
+const CALLBACK_UPDATE_MSG = "setters, dispatch and parent callbacks may only be called by the statements of an event handler or effect (or of a local helper it calls as a statement or as `const v = helper(…)`), not inside a callback that VTS translates as a value, such as an array method's: compute the values first, then update";
+/** … in a local helper whose call VTS cannot run in order with the handler's own updates. */
+const HELPER_VALUE_MSG = (name: string) =>
+  `\`${name}\` updates state or calls a parent callback: VTS inlines such a helper only where it is called as a statement (\`${name}(…);\`) or as the whole initializer of a local (\`const v = ${name}(…);\`) among the statements of an event handler or effect — not inside an expression, a loop or a callback — so that its updates run in order with the handler's`;
+/** … in a functional update. */
+const UPDATER_MSG = "a functional update `setX((prev) => …)` may not update state or call a parent callback: React calls it when it computes the next state — possibly during the next render, and twice under StrictMode — not as a statement of the handler; compute the new value from `prev` only, and update in the handler";
+
+/**
+ * Does the local function `b` (a closure of `env`) call a setter, `dispatch` or parent callback:
+ * in its body (also in a function created there), or through a local function it calls?  By the
+ * program text: a call that never runs counts too.
+ */
+function closureUpdates(b: Extract<Binding, { k: "closure" }>, env: Env, seen = new Set<ts.Node>()): boolean {
+  if (seen.has(b.fn)) return false;
+  seen.add(b.fn);
+  const e = closureEnv(b, env);
+  let found = false;
+  const visit = (n: ts.Node) => {
+    if (found) return;
+    if (ts.isCallExpression(n)) {
+      const callee = stripParens(n.expression);
+      if (updateTarget(callee, e)) found = true;
+      else if (ts.isIdentifier(callee)) {
+        const s = symbolOf(e, callee);
+        const c = s ? e.vars.get(s) : undefined;
+        if (c?.k === "closure" && closureUpdates(c, e, seen)) found = true;
+      }
+    }
+    if (!found) ts.forEachChild(n, visit);
+  };
+  visit(b.fn.body);
+  return found;
+}
+
+/**
+ * A call `c` of the local function `b` among the statements of an event handler or effect body
+ * (`bc` of kind "handler"): its statements are inlined there, so its updates, parent callback and
+ * facts are the handler's, in order, and `rest` continues the handler after the call.  As a
+ * statement (`onValue` null) a value the helper returns is evaluated — JS computes it, with its
+ * obligations — and discarded; as the initializer of a local, `onValue` binds it (`varDecls`),
+ * given the helper's environment at the `return` and `back`, which makes the caller's from it.
+ * A `return` in the helper ends the helper: its value is never an effect's cleanup.
+ */
+function inlineHandlerCall(
+  b: Extract<Binding, { k: "closure" }>,
+  c: ts.CallExpression,
+  env: Env,
+  bc: BlockCtx,
+  rest: (e: Env) => string,
+  onValue: ((x: ts.Expression | undefined, e3: Env, back: (e3: Env) => Env) => string) | null,
+): string {
+  const fn = b.fn;
+  const name = nodeText(c.expression, 30);
+  checkPlainParams(fn.parameters, `the local function ${name}`);
+  if (fn.parameters.length !== c.arguments.length) fail(c, `${name} takes ${fn.parameters.length} argument(s), not ${c.arguments.length}`);
+  let e2: Env = { ...closureEnv(b, env), handler: env.handler, scope: env.scope, curState: undefined, generalized: env.generalized ?? b.env.generalized, valueCtx: undefined };
+  let lets = "";
+  fn.parameters.forEach((p, i) => {
+    if (!p.type) fail(p, "helper parameters need type annotations");
+    const t = helperValueType(p.type, env, "Arg", `parameter \`${p.name.getText()}\` of ${name}`);
+    const a = expr(c.arguments[i], env, t);
+    const r = bindParam(p.name, t, e2, "declared");
+    e2 = r.env;
+    lets += `let ${r.binder} := ${a.code};\n`;
+  });
+  // back in the caller: its environment, with the handler's updates and the Lean names in scope
+  const back = (e3: Env): Env => ({ ...env, handler: e3.handler, scope: e3.scope });
+  const done = (e3: Env) => rest(back(e3));
+  if (!ts.isBlock(fn.body)) {
+    // expression-bodied: treat as a single statement
+    return lets + exprStatement(fn.body, e2, bc, done);
+  }
+  if (onValue) {
+    const noValue = (): never => fail(fn, "function may finish without returning a value");
+    const inner: BlockCtx = { kind: "handler", fnNode: fn, onDone: noValue, onValue: (x, e3) => onValue(x, e3, back) };
+    return `(${lets}${block(fn.body.statements, 0, e2, inner, noValue)})`;
+  }
+  const inner: BlockCtx = { ...bc, onCleanup: undefined, onStmt: undefined, onDone: done, onValue: (x, e3) => (x ? evalArgs([x], e3, done) : done(e3)) };
+  return `(${lets}${block(fn.body.statements, 0, e2, inner, done)})`;
 }
 
 // (`console`, `localStorage`, `document`, `JSON` and the timer functions are recognised as the
@@ -4412,7 +4591,7 @@ function handlerEffect(t: UpdTarget, c: ts.CallExpression, env: Env, rest: (e: E
       if (a.parameters.length !== 1) fail(a, "functional updates take one parameter");
       const tau = "τ";
       const r = bindParam(a.parameters[0].name, sv.type, { ...env, curState: tau });
-      const e2: Env = { ...r.env, curState: tau, generalized: "a functional update: Lean checks it for every value of its parameter (any state), not only the states React passes" };
+      const e2: Env = { ...r.env, curState: tau, generalized: "a functional update: Lean checks it for every value of its parameter (any state), not only the states React passes", valueCtx: UPDATER_MSG };
       const body = ts.isBlock(a.body) ? valueBlock(a.body.statements, e2, sv.type, a) : expr(a.body, e2, sv.type);
       upd = `(fun ${tau} => { ${tau} with ${leanField(sv.field)} := (let ${r.binder} := ${tau}.${leanField(sv.field)}; ${body.code}) })`;
     } else {
@@ -4748,7 +4927,7 @@ export function handlerFn(fnExpr: ts.Expression, env: Env, kind: "discrete" | "r
   }
   if (!ts.isArrowFunction(fnExpr) && !ts.isFunctionExpression(fnExpr)) fail(fnExpr, "expected a function");
   const acc: HandlerAcc = { kind, updates: [], emit: null, eventVar: null };
-  let e1: Env = { ...env, handler: acc, curState: undefined };
+  let e1: Env = { ...env, handler: acc, curState: undefined, valueCtx: undefined };
   const params: string[] = [];
   if (!Array.isArray(argTypes)) {
     if (fnExpr.parameters.length > 1) fail(fnExpr, "DOM event handlers take at most one parameter (the event)");
@@ -4772,9 +4951,12 @@ export function handlerFn(fnExpr: ts.Expression, env: Env, kind: "discrete" | "r
       params.push("_");
     }
   } else {
-    if (fnExpr.parameters.length !== argTypes.length) fail(fnExpr, `callback expects ${argTypes.length} parameters`);
-    fnExpr.parameters.forEach((p, i) => {
-      const r = bindParam(p.name, argTypes[i].type, e1, paramTs?.[i] ?? null);
+    // the child passes every argument; a function declaring fewer parameters ignores the
+    // others (TypeScript accepts it for the callback type): they get names the body cannot read
+    if (fnExpr.parameters.length > argTypes.length) fail(fnExpr, `callback expects ${argTypes.length} parameters`);
+    argTypes.forEach((a, i) => {
+      const p = fnExpr.parameters[i];
+      const r = p ? bindParam(p.name, a.type, e1, paramTs?.[i] ?? null) : (({ env: e, name }) => ({ env: e, binder: name }))(freshLocal(e1, leanIdent(a.name)));
       e1 = r.env;
       params.push(r.binder);
     });
@@ -4803,7 +4985,10 @@ function forwardCallback(cb: { name: string; params: Param[] }, node: ts.Node, e
   if (kind === "robust") fail(node, "parent callbacks cannot be invoked from effects, timers, continuous/default-priority events or onFocus/onBlur/onInvalid (robust handlers)");
   const ps = !Array.isArray(argTypes) ? [] : argTypes;
   if (!Array.isArray(argTypes) && cb.params.length) fail(node, `${cb.name} needs arguments; wrap it: () => ${cb.name}(…)`);
-  if (Array.isArray(argTypes) && ps.length !== cb.params.length) fail(node, `callback arity mismatch forwarding ${cb.name}`);
+  // the slot's caller passes all its arguments to the forwarded function, which reads only as
+  // many as `cb` has (it was given for `cb`'s type: TypeScript accepts a callback with fewer
+  // parameters for a slot, never one with more): the first ones go to `cb`, the others are ignored
+  if (Array.isArray(argTypes) && ps.length < cb.params.length) fail(node, `callback arity mismatch forwarding ${cb.name}: the slot passes ${ps.length} argument(s), ${cb.name} takes ${cb.params.length}`);
   let e1 = env;
   const names: string[] = [];
   for (const p of ps) {
@@ -4812,7 +4997,7 @@ function forwardCallback(cb: { name: string; params: Param[] }, node: ts.Node, e
     names.push(r.name);
   }
   const ob = env.m.ob(node, "callback-contract", `contract of forwarded callback ${cb.name}${calledAs(node, cb.name)}`);
-  const emit = `(${comp.cbVar}.${leanField(cb.name)}${names.map((n) => " " + n).join("")} ${ob})`;
+  const emit = `(${comp.cbVar}.${leanField(cb.name)}${names.slice(0, cb.params.length).map((n) => " " + n).join("")} ${ob})`;
   return { code: `(VReact.Outcome.mk (S := ${comp.stateType}) (E := E) [] (some ${emit}))`, params: !Array.isArray(argTypes) ? ["_"] : names };
 }
 

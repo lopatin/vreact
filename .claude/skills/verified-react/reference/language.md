@@ -51,7 +51,12 @@ at top level.
   types `ReadonlyArray`/`Array`, `ReactNode`/`JSX.Element`. A local, parameter,
   import or project declaration spelled like one is that binding (a local
   `const undefined = 3` is 3; `import * as Math from "./m"` is rejected where
-  `Math` is used: rename it). React's hooks must come from an import of `react`
+  `Math` is used: rename it). A namespace import of a verified module
+  (`import * as L from "./lib"`, also a namespace re-exported with
+  `export * as L from "./lib"`) gives `L.f(…)` and `L.K` exactly the meaning of
+  the named imports `f` and `K`; the namespace object itself is not data
+  (`const m = L` is rejected), and a component is rendered by its name
+  (`<L.Row/>` is rejected: `import { Row }`). React's hooks must come from an import of `react`
   (`import { useState }` or `import * as React`): React's types also declare a
   global `React`, which a module bundle does not define, so tsconfig
   `"allowUmdGlobalAccess"` is rejected.
@@ -236,7 +241,13 @@ inherited member, not `undefined`. Such names are fine for required fields.
   `x: T | undefined` and pass it, take an array). The arguments and the result
   of an inlined helper are data: a parameter or result annotation with a
   function type or a React node is rejected (a helper that returns JSX is not
-  supported); a helper used as an event handler takes the event.
+  supported); a helper used as an event handler takes the event. A helper that
+  calls setters, `dispatch` or a parent callback is inlined into an event
+  handler or effect where it is called as a statement (`bump();`: a value it
+  returns is computed, then dropped) or as the whole initializer of a local
+  (`const v = bump();`): its updates run in order with the handler's, as in JS.
+  Called for its value anywhere else (`setN(bump())`, a loop body, an array
+  callback, the render) it is rejected.
 * Narrowing: `x !== null`, `x.kind === "add"`, `switch (x.kind)`, early returns —
   fields of the narrowed variant become available, also inside handlers created there.
   The complement narrows too when one variant is left (`if (s.kind === "a") return …;
@@ -586,6 +597,11 @@ Order inside the body:
 
 Props: a single parameter `props: P` (or destructured `{ a, b }: P`) where `P`
 is a record whose function-typed fields are callbacks (`=> void`, required).
+The function a parent passes may declare fewer parameters than the callback
+type (`onPick={() => setOpen(false)}` for `onPick: (i: int) => void`: JS passes
+the argument, the function ignores it), and `props.cb` may be forwarded to a
+child slot with more parameters (the child's calls pass their first arguments
+to it); never to a slot with fewer.
 `key`, `ref`, `__self` and `__source` are not props: React 18 never passes them
 to the component (`props.key` is undefined; the development JSX transform uses
 `__self` and `__source`), so `P` may not have fields with these names (however
@@ -623,7 +639,10 @@ update and again when it rebases it, or a local helper — may run after the
 event's dispatch, when `e.currentTarget` is null and `e.target.value` is the
 element's value at that time. Copy it first: `const v = e.target.value;
 setX((p) => … v …)`. Setters, `dispatch`, at most
-one parent callback per path. Only React's discrete events (`onClick`,
+one parent callback per path, called by the handler's own statements or a helper
+called as above — not inside an array callback or a functional update (VTS
+translates those as values; React calls an updater while it computes the next
+state). Only React's discrete events (`onClick`,
 `onChange`, `onInput`, `onKeyDown`, `onSubmit`, …) are
 checked from the render snapshot; continuous (`onMouseMove`, `onScroll`,
 `onMouseEnter`, …) and default-priority events (`onTransitionEnd`,
@@ -638,7 +657,8 @@ names, `onSelect`, capture-phase handlers (`onClickCapture`).
 
 Effects: setters and timers (`setTimeout`/`setInterval` callbacks become tasks;
 register them at the top level of the effect body; a timer's callback may use the
-early returns `if (c) return;` and the `assert`/`assume` before it, as in
+early returns `if (c) return;` (also `return undefined;`, which React treats as
+no cleanup) and the `assert`/`assume` before it, as in
 `if (left <= 0) return; setTimeout(() => setLeft(left - 1), 1000)`, and read the
 effect body's top-level `const`s declared before the registration, each bound to
 its value (`const step: int = props.fast ? 2 : 1;

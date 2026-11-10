@@ -344,7 +344,14 @@ Every expression maps to a Lean term whose value is the JavaScript value.
   are the standard library's. A local, parameter, import or project declaration
   spelled like one of them is that binding (`const undefined = 3` is 3; a project
   `type int = number` is `number`; `import * as Math from "./m"` is not
-  JavaScript's Math, and a use of it is rejected). A hook is React's only when
+  JavaScript's Math, and a use of it is rejected). A namespace import of a
+  verified module (`import * as L from "./lib"`, or a namespace another module
+  re-exports, `export * as L from "./lib"`) makes `L.f(…)` and `L.K` the
+  module's verified function `f` and constant `K`, resolved through the import
+  alias exactly as the named imports `f` and `K` are: JS reads the module's
+  exports, which are initialised before the importing module runs (imports are
+  acyclic). The namespace object itself is not data (a bare use of `L` is
+  rejected), and so is `<L.Row/>` (a component tag is a plain name). A hook is React's only when
   its name, or the namespace before the dot, is bound by an import: React's
   types also declare a UMD global `React`, which a module bundle does not define
   (tsconfig `allowUmdGlobalAccess`, which lets a module use it, is rejected).
@@ -356,7 +363,21 @@ Every expression maps to a Lean term whose value is the JavaScript value.
   so default values, rest parameters, optional (`x?`) and `this` parameters —
   each would give the parameter another value — are rejected, and so are
   parameter and result annotations with a function type or a React node (no
-  Lean value type: the argument and the result are data).
+  Lean value type: the argument and the result are data). Among the statements
+  of an event handler or effect, a helper called as a statement (`f(…);`), or as
+  the whole initializer of a local (`const v = f(…);`) when it calls a setter,
+  `dispatch` or parent callback, is inlined as statements of the handler: its
+  updates, parent callback and facts are the handler's, in the order JS runs
+  them, and at its `return` the handler goes on (the returned value is
+  evaluated, with its obligations, and dropped, or bound to `v`). Anywhere else a
+  helper is called for its value — inside an expression, a loop body, a callback,
+  the render — and translated as a value, so one that reaches a setter,
+  `dispatch` or parent callback there is rejected; so is such a call inside an
+  array-method callback (a value) or a functional update (React calls it while it
+  computes the next state). In an effect, an event handler or a timer callback,
+  `return undefined;` and `return void 0;` are `return;` (React runs an
+  effect's result as its cleanup only when it is not undefined, react-dom 18.3.1
+  `commitHookEffectListUnmount`, and ignores what a handler returns).
 * Module initialisation: a module's top-level code runs in source order when it
   is loaded (after the modules it imports, and re-exports `export … from` are
   imports: no cycles), and a `const` read before its declaration has run throws a
@@ -821,7 +842,16 @@ whose consequent may rely on its guard, as in an `ensures`; guards in scope).
   against the parent's (current) snapshot.
 
 A handler may invoke at most one parent callback per execution path (two would
-compose two parent outcomes that were only checked separately). Several
+compose two parent outcomes that were only checked separately).
+
+The parent's function may declare fewer parameters than the callback type, as
+TypeScript allows: the child passes every argument and the function ignores the
+others, which get Lean names its body cannot read (the contract is still assumed
+for all of them). A parent callback forwarded to a child slot (`<GC onX={props.onPick}/>`)
+whose type has more parameters receives the slot's first arguments — the
+function `props.onPick` holds was given for its own type, so it reads no more —
+and the forward must prove the forwarded contract on them from the slot's
+(`FaRejCallbackForwardPrefix.tsx`); a slot with fewer parameters is rejected. Several
 `callbackRequires` for one callback are conjoined, also when one names a parameter
 another ignores (`(a) => a > 0` and `(x, y) => y > 0`).
 
@@ -932,7 +962,7 @@ mutates (re-translating its declaration would give its value before the
 mutations), and a `const` whose value has obligations of its own (they are checked
 in the effect body, not repeated). The callback is checked under the
 path condition of that registration. That condition is made of the top-level
-early returns `if (c) return;` (no `else`) and the `assert(c)` / `assume(c)`
+early returns `if (c) return;` (no `else`; also `return undefined;`) and the `assert(c)` / `assume(c)`
 statements before it. The callback captures the same snapshot as the effect: an
 effect cannot assign a variable it captures, and a captured `let` is not
 reassigned after the effect is created. So the model's task is

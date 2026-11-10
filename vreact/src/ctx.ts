@@ -202,6 +202,13 @@ export interface Env {
   limits?: string;
   /** Locals in scope in JS that the translation cannot bind here, with the reason (a timer callback's view of its effect body). */
   unavailable?: Map<ts.Symbol, string>;
+  /**
+   * Set inside code that runs while an event handler or effect runs but that VTS translates as a
+   * value (an array-method callback, a local helper called for its value, a functional update):
+   * why a setter, `dispatch` or parent callback reached there is rejected (render code, where
+   * it is unset, gets the render-phase message).
+   */
+  valueCtx?: string;
 }
 
 /** The module of the contract functions and `int`. */

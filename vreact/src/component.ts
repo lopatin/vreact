@@ -10,7 +10,7 @@
 import ts from "typescript";
 import { T, type VType, type Param, type Field, leanType, showType, typeOfNode, checkValueType, propertyName, isLibSymbol, collectionKind } from "./types.ts";
 import { type Env, ModCtx, type CompCtx, type CompInfo, type CallbackInfo, type StateVar, type FnInfo, type Binding, bind, freshLocal, refSymbol } from "./ctx.ts";
-import { expr, prop, propAll, block, branch, handlerFn, checkDeps, hookName, specFn, isGlobal, symbolOf, bindParam, type BlockCtx, typeOf, valueBlock, contractLambda, outcome, checkClosures, topLevelHookDecls, fnParamTsTypes, stripParens, isNumeric, evalArgs, isDocumentTitle, jsxAttrText, checkPlainParams, isNullLit, ARRAY_MUTATORS, isMutatedLocal, toStr, nullishKinds } from "./translate.ts";
+import { expr, prop, propAll, block, branch, handlerFn, checkDeps, hookName, specFn, isGlobal, symbolOf, bindParam, type BlockCtx, typeOf, valueBlock, contractLambda, outcome, checkClosures, topLevelHookDecls, fnParamTsTypes, stripParens, isNumeric, evalArgs, isDocumentTitle, jsxAttrText, checkPlainParams, isNullLit, ARRAY_MUTATORS, isMutatedLocal, toStr, nullishKinds, nsMember, isUndefinedReturn } from "./translate.ts";
 import { fail, leanField, leanIdent, leanStr, jsStr, paren, nodeText, indent, VtsError, jsxTextValue, asciiLower } from "./util.ts";
 
 /* ─────────────────────── React 18.3.1 event model ───────────────────────
@@ -900,7 +900,7 @@ function returnsUndefined(e0: ts.Expression, env: Env): boolean {
   if (!ts.isBlock(body)) return returnsUndefined(body, b.env);
   let value = false;
   const visit = (n: ts.Node) => {
-    if (ts.isReturnStatement(n) && n.expression) value = true;
+    if (ts.isReturnStatement(n) && n.expression && !isUndefinedReturn(n.expression, b.env)) value = true;
     if (!ts.isFunctionLike(n)) ts.forEachChild(n, visit);
   };
   body.statements.forEach(visit);
@@ -920,7 +920,8 @@ interface TimerGuard {
 function timerGuard(s: ts.Statement, env: Env): TimerGuard | null {
   if (ts.isIfStatement(s) && !s.elseStatement) {
     const t = s.thenStatement;
-    const bare = (x: ts.Statement) => ts.isReturnStatement(x) && !x.expression;
+    // (`return undefined;` is `return;`: no cleanup)
+    const bare = (x: ts.Statement) => ts.isReturnStatement(x) && (!x.expression || isUndefinedReturn(x.expression, env));
     if (bare(t) || (ts.isBlock(t) && t.statements.length === 1 && bare(t.statements[0]))) return { cond: s.expression, holds: false };
     return null;
   }
@@ -1238,7 +1239,8 @@ function pureCleanupExpr(n: ts.Node, env: Env, rule = CLEANUP_RULE, who = "effec
       const d = s && (s.flags & ts.SymbolFlags.Alias ? env.m.checker.getAliasedSymbol(s) : s).declarations?.[0];
       ok = !env.vars.get(s!) && (isGlobal(env, callee, "String") || !!specFn(env, callee) || (!!d && env.m.prog.globals.get(d)?.k === "fn"));
     } else if (ts.isPropertyAccessExpression(callee)) {
-      ok = isPureLibMethod(callee, env);
+      // (a verified function through a module namespace, `L.f(…)`, is the module's function f)
+      ok = isPureLibMethod(callee, env) || nsMember(env, callee)?.g?.k === "fn";
     }
     if (!ok) {
       const mut = ts.isPropertyAccessExpression(callee) && (ARRAY_MUTATORS.has(callee.name.text) || ["set", "add", "delete", "clear"].includes(callee.name.text)) ? ` (it mutates ${nodeText(callee.expression, 30)})` : "";
@@ -1513,6 +1515,12 @@ function element(e: ts.JsxElement | ts.JsxSelfClosingElement, env: Env): string 
   const tag = tagNode.getText();
   const kids = ts.isJsxElement(e) ? e.children : undefined;
   if (ts.isJsxNamespacedName(tagNode)) fail(tagNode, `namespaced JSX tags (<${tag}>) are not supported: use an HTML element (<div>, <button>, …) or a verified component`);
+  // (`<L.Row>`, L a verified module's namespace, is not dynamic, but VTS reads a component tag only as a name)
+  const nm = ts.isPropertyAccessExpression(tagNode) ? nsMember(env, tagNode) : null;
+  if (nm && ts.isPropertyAccessExpression(tagNode)) {
+    const x = tagNode.name.text;
+    fail(tagNode, `<${tag}> names ${nm.g?.k === "comp" ? "the component " : ""}\`${x}\` through the module namespace \`${tagNode.expression.getText()}\`: VTS reads a component tag only as a plain name; import it by name (\`import { ${x} } from …\`) and write <${x} …/>`);
+  }
   if (!ts.isIdentifier(tagNode)) fail(tagNode, `<${tag}> is a dynamic element type: JSX renders whatever \`${tag}\` holds (an HTML tag name or a component), which VTS does not model. Write the element (<button>) or the component (<Row>, imported by name) directly, e.g. under a condition`);
   if (tagNode.text !== tag) fail(tagNode, `<${tag}>: write the tag name without escapes`);
   if (tag.includes("-")) fail(tagNode, `<${tag}> is a custom element: its behaviour (events, activation, form submission) is defined by script outside the verified program; use HTML elements and verified components`);
