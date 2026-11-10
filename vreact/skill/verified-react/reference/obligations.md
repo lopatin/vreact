@@ -213,7 +213,9 @@ xs.length) console.log(xs[i].name)`).
    xs[i] >= 0)` are split and instantiated at the indices of the goal
    automatically; in a shape that is not, an `assert` of the needed instance
    usually helps.) A timeout or error Lean reports for a whole declaration
-   leaves its obligations unproved ("not checked", with the reason). Budgets
+   leaves its obligations unproved ("not checked", with the reason), also when it
+   has only one: such an error is the declaration's, listed with its cause, never
+   a failure of the obligation. Budgets
    are per obligation also when Lean elaborates declarations in parallel; the
    one-time cost of a shared auxiliary lemma (equation lemmas of a big `match`)
    goes to whichever obligation needs it first (well under 1% in practice).

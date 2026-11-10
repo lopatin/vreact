@@ -818,8 +818,8 @@ export function judge(obligations: Obligation[], messages: LeanMessage[], marker
   const sorries: LeanMessage[] = [];
   const declErrors = new Map<string, string>();
   /** per declaration: unattributed errors, and whether a runtime limit aborted it */
-  const bad = new Map<LeanDecl, { errs: LeanMessage[]; aborted: boolean; failedObs: number }>();
-  const badOf = (d: LeanDecl) => bad.get(d) ?? (bad.set(d, { errs: [], aborted: false, failedObs: 0 }), bad.get(d)!);
+  const bad = new Map<LeanDecl, { errs: LeanMessage[]; aborted: boolean }>();
+  const badOf = (d: LeanDecl) => bad.get(d) ?? (bad.set(d, { errs: [], aborted: false }), bad.get(d)!);
   const generated = (rel: string) => decls.has(rel);
   const known = new Set(obligations.map((ob) => ob.id));
   const firstErr = new Map<string, LeanMessage>();
@@ -843,7 +843,7 @@ export function judge(obligations: Obligation[], messages: LeanMessage[], marker
   };
   const failAt = (mk: Marker, d: LeanDecl | undefined, text: string) => {
     if (!failedIds.has(mk.id)) failedIds.set(mk.id, text);
-    if (d) failedDecls.add(d), badOf(d).failedObs++;
+    if (d) failedDecls.add(d);
   };
   for (const msg of messages) {
     const rel = msg.file ? path.normalize(path.isAbsolute(msg.file) ? path.relative(outDir, msg.file) : msg.file) : msg.file;
@@ -990,20 +990,22 @@ export function judge(obligations: Obligation[], messages: LeanMessage[], marker
     }
     proved.push(ob);
   }
-  // obligations of declarations that failed for a reason Lean did not report at a marker
+  // obligations of declarations that failed for a reason Lean did not report at a marker: not
+  // checked, never failed — also the only obligation of its declaration. Such an error is the
+  // declaration's (a translator bug, a runtime limit outside `vreact_ob`, an environment a proof
+  // file changed), listed with its cause; it is not a failure of the obligation, whose proof
+  // Lean may not even have run (e.g. an unknown identifier elsewhere in the declaration).
   for (const [d, obs] of pending) {
     const b = bad.get(d)!;
     // (an error of the declaration itself before the re-check's verdict on its whole file)
     const err = b.errs.find((e) => !e.wholeFile) ?? b.errs[0];
     const why = err ? err.text.split("\n")[0] : "a runtime limit aborted the declaration";
-    const where = err ? `${err.file}:${err.line}:${err.col}` : d.file;
     const dn = d.name ?? `the declaration at ${d.file}:${d.start}`;
     if (err?.wholeFile)
       for (const ob of obs) {
         unchecked.push(ob);
         reasons.set(ob.id, `${why}, so this obligation is not counted as proved`);
       }
-    else if (obs.length === 1 && b.failedObs === 0 && err) failed.push({ ob: obs[0], message: `error in the declaration of this obligation (${dn}) at ${where}:\n${err.text}` });
     else
       for (const ob of obs) {
         unchecked.push(ob);
