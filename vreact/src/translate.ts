@@ -3921,8 +3921,12 @@ export interface BlockCtx {
   onReturn?: (e: ts.Expression | undefined, env: Env) => string;
   /** handler: produce the outcome term */
   onDone?: (env: Env) => string;
-  /** render: translate a JSX const at its declaration (`code`), of Lean type `type` */
-  jsxConst?: { code: (e: ts.Expression, env: Env) => string; type: string };
+  /**
+   * render: translate a JSX const at its declaration (`code`), of Lean type `type`; `key`, read
+   * right after `code`, is the translation of its element's `key={…}` (undefined for none, or a key
+   * written as a string)
+   */
+  jsxConst?: { code: (e: ts.Expression, env: Env) => string; type: string; key: (e: ts.Expression) => Val | undefined };
   /** an effect body: `return cleanup` (the cleanup's evaluation, then the outcome) */
   onCleanup?: (e: ts.Expression, env: Env) => string;
   /** an effect body: statements it translates itself (timer registrations), or null */
@@ -4061,8 +4065,9 @@ function varDecls(decls: ts.NodeArray<ts.VariableDeclaration>, j: number, env: E
     if (env.keyFn) return next(bind(env, s, { k: "jsx", node: init, env, code: "" }));
     if (bc.kind !== "render" || !bc.jsxConst) fail(init, "JSX is only allowed in a component's render (not in functions, handlers, effects or loops)");
     const code = bc.jsxConst.code(init, env);
+    const key = bc.jsxConst.key(init);
     const { env: e1, name: ln } = freshLocal(env, leanIdent(d.name.text));
-    return `(let ${ln} : ${bc.jsxConst.type} := ${code};\n${next(bind(e1, s, { k: "jsx", node: init, env, code: ln }))})`;
+    return `(let ${ln} : ${bc.jsxConst.type} := ${code};\n${next(bind(e1, s, { k: "jsx", node: init, env, code: ln, key }))})`;
   }
   if (ts.isObjectBindingPattern(d.name)) {
     const v = expr(init, env, declT);

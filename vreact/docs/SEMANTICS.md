@@ -798,9 +798,17 @@ function returning a view tree in which
   rendered twice) are rejected; keys written as strings that no two children share need no
   proof; every other case is a `unique-keys` obligation over the keys as strings (string,
   `int`, number, boolean and string-enum keys and their optional forms; another key type next
-  to other keyed children is rejected).  The automation proves keys that differ in a literal
-  prefix (`` `viewer-${id}` `` / `` `notes-${id}` ``), an `int` key next to a string key that
-  is no integer's rendering (`key={id}` / `key="title"`), and different `int` keys,
+  to other keyed children is rejected).  The keys in it are the terms already translated for
+  the elements (a conditional child's conditions are translated again with the same
+  obligation ids, `ModCtx.replay`), so a key's or a condition's obligations are not new
+  obligations: a failing one is reported once, and the `unique-keys` goal, which contains
+  its admitted proof, is not checked until it is fixed.  The automation proves keys that
+  differ in a literal prefix (`` `viewer-${id}` `` / `` `notes-${id}` ``) or a literal end
+  (`` `${id}-title` `` / `` `${id}-body` ``, `key={id}` / `` `${id}-edit` ``,
+  `` `${id}-title` `` / `key="title"`: a common first part and a common literal end cancel, and
+  the last code units then differ or one side is left non-empty), an `int` key next to a
+  string key that is no integer's rendering (`key={id}` / `key="title"`; an integer's
+  rendering starts and ends with a digit or `-`), and different `int` keys,
 * every expression JavaScript evaluates during render is kept in the term with
   its obligations, including `key={…}` outside lists (`VNode.withKey`; a key
   change remounts, which is covered because both keeping the state and

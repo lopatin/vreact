@@ -701,7 +701,10 @@ are rejected, and otherwise, unless all keys are distinct strings, a `unique-key
 covers the keys of the children present (a conditional child under its condition). A keyed list
 or a fragment is one child with keys of its own, so `<li key="head"/>` next to
 `{xs.map((x) => <li key={x}/>)}` never collide. Give siblings keys with different literal
-prefixes (`` key={`viewer-${id}`} ``, `` key={`notes-${id}`} ``): those are proved.
+prefixes or suffixes (`` key={`viewer-${id}`} ``, `` key={`notes-${id}`} ``; `key={id}`,
+`` key={`${id}-edit`} ``, `key="title"`, `` key={`${id}-title`} ``): those are proved. A failing
+obligation inside a key (an index) is reported once; the `unique-keys` obligation of its siblings
+is checked once that is fixed.
 A JSX const (`const row = <p>{e}</p>;`) is checked where it is declared, even if it is
 rendered only under a condition or not at all (JS evaluates it there); JSX only appears in a
 component's render.

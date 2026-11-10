@@ -11,6 +11,12 @@ export interface Val {
   type: VType;
 }
 
+/** The obligation and hypothesis counters of a module context at one point (`ModCtx.replay`). */
+export interface Mark {
+  n: number;
+  hyp: number;
+}
+
 /** Information about a pure top-level function. */
 export interface FnInfo {
   qname: string;
@@ -134,8 +140,12 @@ export type Binding =
    * the parameter's TypeScript type)
    */
   | { k: "event"; leanVar: string; fn: ts.Node; site: DomSite }
-  /** a JSX const: translated (obligations checked) at its declaration, bound to the Lean local `code` */
-  | { k: "jsx"; node: ts.Expression; env: Env; code: string }
+  /**
+   * a JSX const: translated (obligations checked) at its declaration, bound to the Lean local
+   * `code`; `key` is the translation of its element's `key={…}` there (JS evaluates it at the
+   * declaration), with the obligations of that translation, for the keys of its siblings
+   */
+  | { k: "jsx"; node: ts.Expression; env: Env; code: string; key?: Val }
   /**
    * the handle `id` of `const id = setTimeout(…)` / `setInterval(…)` in an effect body, bound once
    * that statement has run (before, `id` is in its temporal dead zone): not a VTS value, only
@@ -416,6 +426,39 @@ export class ModCtx {
   }
   obCount(): number {
     return this.obligations.length;
+  }
+  /** The obligation and hypothesis counters at this point of the translation (for `replay`). */
+  mark(): Mark {
+    return { n: this.counter.n, hyp: this.hyp };
+  }
+  /**
+   * Translate again, from the counters at `from`, what was translated between the marks `from`
+   * and `to`: the translation is deterministic, so this gives the same text — the same
+   * obligation ids (`/-⟦obN⟧-/`) and hypothesis names — and the obligations in it are copies of
+   * those registered then (one obligation may have several copies in the generated Lean: it is
+   * proved only if every copy is), which are not registered again.  `f` may translate other
+   * things around it (a term built from the same pieces) as long as it makes the same calls.
+   * Afterwards the counters are as before the replay.
+   */
+  replay<R>(from: Mark, to: Mark, f: () => R): R {
+    const n = this.counter.n;
+    const hyp = this.hyp;
+    const len = this.obligations.length;
+    const holes = this.prog.holeEnvs?.length ?? 0;
+    this.counter.n = from.n;
+    this.hyp = from.hyp;
+    try {
+      const r = f();
+      if (this.counter.n !== to.n || this.hyp !== to.hyp) {
+        throw new Error(`internal error: a replayed translation did not repeat itself (obligation counter ${from.n}→${to.n}, replayed →${this.counter.n}; hypotheses ${from.hyp}→${to.hyp}, replayed →${this.hyp})`);
+      }
+      return r;
+    } finally {
+      this.counter.n = n;
+      this.hyp = hyp;
+      this.obligations.length = len;
+      if (this.prog.holeEnvs) this.prog.holeEnvs.length = holes;
+    }
   }
   /** Run a translation only for the checks it makes (its term is discarded): the
    * obligations it registers are withdrawn, so none is left unemitted. */
